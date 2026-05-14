@@ -1,0 +1,6 @@
+CONFIG_DIR = ".aha"
+RUNS_DIR = "runs"
+PLAN_FILE = "plan.json"
+CONFIG_FILE = "config.json"
+EVENTS_FILE = "events.jsonl"
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
