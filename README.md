@@ -119,6 +119,8 @@ task-main: run:<run-id>:task:<task-id>:agent:main
 sub-agent: run:<run-id>:task:<task-id>:agent:<sub-id>
 ```
 
+`run-main` is currently a reserved identity. AHA stores run-level metadata for it, but the active team model today is task-scoped: one `task-main` plus optional sub-agents. AHA itself handles run-level orchestration until a real run-main project-manager workflow is implemented.
+
 Every task has one `task-main`. Sub-agents are optional and can be 0..n per task. Backend sessions are scoped to task/agent boundaries so task context does not bleed across unrelated work.
 
 Creating a task automatically dispatches an AHA-mode assignment to that task's `task-main`. The assignment asks `task-main` to judge complexity and, if needed, return structured `spawn_sub` actions. AHA executes those actions by creating sub-agents scoped to the current task.

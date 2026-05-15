@@ -19,6 +19,10 @@ Run
 
 `run-main` decides whether work is simple enough to handle directly, should become one task, or should be split into multiple tasks. `task-main` owns local task context. Sub-agents execute bounded work inside one task.
 
+Current implementation note: `run-main` is reserved, not active. The plan stores a `main_agent` and a run-scoped session for future compatibility, but AHA does not currently dispatch prompts to a run-level agent. The active team unit today is one task: `task-main` owns the task outcome and may request sub-agents for bounded workstreams. AHA itself currently performs the run-level orchestration: task creation, routing, status, backend lifecycle, and result collection.
+
+Activate `run-main` only when the product needs a real project-manager role that can decompose a user goal into multiple tasks, monitor task-main progress, manage cross-task dependencies, and produce a run-level final answer from task finals. Until then, avoid adding behavior that makes users think run-main is already participating.
+
 Task creation is an execution event, not just metadata insertion. When a task is created, AHA writes an AHA-mode assignment to that task's `task-main` inbox. The task-main may answer directly or return structured actions such as `spawn_sub`.
 
 ## Module Boundaries
@@ -50,7 +54,7 @@ Current user message
 
 Each task also records a `workspace_path`. Backend agents execute from that workspace when starting a new scoped session, so task context points at the project being worked on rather than the AHA tool repository.
 
-`run-main` should work from summaries and decision records, not every task's full message history.
+If run-main is activated later, it should work from summaries and decision records, not every task's full message history.
 
 ## Backend Model
 
