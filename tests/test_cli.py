@@ -27,7 +27,7 @@ from aha_cli.store.filesystem import (
     update_agent_runtime,
     write_task_result,
 )
-from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, workspace_options
+from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, web_status_snapshot, workspace_options
 
 
 class CliTests(unittest.TestCase):
@@ -623,6 +623,33 @@ class CliTests(unittest.TestCase):
                 self.assertIn("command-menu", html)
                 self.assertIn("conversation-filters", html)
                 self.assertIn('data-tab="final"', html)
+
+    def test_web_status_snapshot_includes_agent_backend_process_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Backend badges", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+
+                def fake_backend_status(_root: Path, _run_id: str, target: str = "main") -> dict:
+                    return {
+                        "target": target,
+                        "status": "running" if target == "main" else "stopped",
+                        "pid": 1234 if target == "main" else None,
+                        "last_reply_at": "2026-05-15T00:00:00+00:00" if target == "main" else None,
+                    }
+
+                with mock.patch("aha_cli.web.server.backend_status", side_effect=fake_backend_status):
+                    snapshot = web_status_snapshot(root, run_id)
+
+        agents = {agent["id"]: agent for agent in snapshot["tasks"][0]["agents"]}
+        self.assertEqual(agents["main"]["backend_process_status"], "running")
+        self.assertEqual(agents["main"]["backend_process_pid"], 1234)
+        self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
+        self.assertIsNone(agents["sub-001"]["backend_process_pid"])
 
     def test_workspace_options_include_multiple_project_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -495,11 +495,34 @@ button {
   border-color: #1f6feb;
   background: #eef5ff;
 }
+.agent-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
 .agent-card strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.agent-process {
+  min-width: 72px;
+  border-radius: 999px;
+  padding: 3px 7px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.agent-process.running {
+  background: #dcfce7;
+  color: #14532d;
+}
+.agent-process.stopped {
+  background: #f2f4f7;
+  color: #475467;
 }
 .agent-permissions {
   display: grid;

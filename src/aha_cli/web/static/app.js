@@ -91,6 +91,16 @@ function backendTarget() {
   return agentTargetEl.value || "main";
 }
 
+function agentBackendProcessStatus(agent) {
+  const raw = String(agent?.backend_process_status || "stopped").toLowerCase();
+  if (raw === "running" || raw === "busy") return "running";
+  return "stopped";
+}
+
+function agentBackendProcessLabel(agent) {
+  return agentBackendProcessStatus(agent).toUpperCase();
+}
+
 function visibleTasks() {
   const tasks = statusData?.tasks || [];
   return showHiddenEl.checked ? tasks : tasks.filter(task => !task.hidden);
@@ -584,6 +594,13 @@ function renderAgents() {
   for (const agent of task.agents || []) {
     const sandbox = agent.sandbox || task.preferred_sandbox || "workspace-write";
     const approval = agent.approval || task.preferred_approval || "never";
+    const processStatus = agentBackendProcessStatus(agent);
+    const rawProcessStatus = agent.backend_process_status || processStatus;
+    const processDetail = [
+      `process=${rawProcessStatus}`,
+      agent.backend_process_pid ? `pid=${agent.backend_process_pid}` : "pid=-",
+      agent.backend_process_last_reply_at ? `last_reply=${agent.backend_process_last_reply_at}` : ""
+    ].filter(Boolean).join(" | ");
     const opt = document.createElement("option");
     opt.value = agent.id;
     opt.textContent = `${agent.id} (${agent.backend})`;
@@ -596,14 +613,18 @@ function renderAgents() {
       `model=${agent.model || "default"}`,
       `sandbox=${sandbox}`,
       `approval=${approval}`,
+      processDetail,
       `session=${agent.backend_session_id || "-"}`,
       `workspace=${agent.workspace_path || task.workspace_path || "-"}`
     ].join("\n");
     card.innerHTML = `
-      <strong>${escapeHtml(agent.id)}</strong>
+      <div class="agent-card-head">
+        <strong>${escapeHtml(agent.id)}</strong>
+        <span class="agent-process ${escapeHtml(processStatus)}" title="${escapeHtml(processDetail)}">${escapeHtml(agentBackendProcessLabel(agent))}</span>
+      </div>
       <div class="meta truncate">${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
-      <div class="meta truncate">session=${escapeHtml(agent.backend_session_id || "-")}</div>
+      <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
         <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
         <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>
@@ -647,7 +668,7 @@ function renderSelectedAgentInfo() {
     return;
   }
   selectedAgentInfoEl.textContent =
-    `To ${agent.id} | role=${agent.role} | backend=${agent.backend} | model=${agent.model || "default"} | sandbox=${agent.sandbox || task.preferred_sandbox || "process default"} | approval=${agent.approval || task.preferred_approval || "process default"} | session=${agent.backend_session_id || "-"} | scope=${agent.session_scope || "-"} | workspace=${agent.workspace_path || task.workspace_path || "-"}`;
+    `To ${agent.id} | process=${agent.backend_process_status || "stopped"} | pid=${agent.backend_process_pid || "-"} | role=${agent.role} | backend=${agent.backend} | model=${agent.model || "default"} | sandbox=${agent.sandbox || task.preferred_sandbox || "process default"} | approval=${agent.approval || task.preferred_approval || "process default"} | session=${agent.backend_session_id || "-"} | scope=${agent.session_scope || "-"} | workspace=${agent.workspace_path || task.workspace_path || "-"}`;
 }
 
 function renderBackendStatus() {

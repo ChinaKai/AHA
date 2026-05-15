@@ -104,6 +104,21 @@ def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
     return options
 
 
+def web_status_snapshot(root: Path, run_id: str) -> dict:
+    snapshot = status_snapshot(root, run_id)
+    backend_cache: dict[str, dict] = {}
+    for task in snapshot.get("tasks", []):
+        for agent in task.get("agents", []):
+            target = str(agent.get("id") or "main")
+            if target not in backend_cache:
+                backend_cache[target] = backend_status(root, run_id, target)
+            state = backend_cache[target]
+            agent["backend_process_status"] = state.get("status") or "stopped"
+            agent["backend_process_pid"] = state.get("pid")
+            agent["backend_process_last_reply_at"] = state.get("last_reply_at")
+    return snapshot
+
+
 def format_backend_command(root: Path, run_id: str, command: str, target: str = "main") -> str:
     parts = command.split()
     action = parts[2] if len(parts) > 2 else "status"
@@ -279,7 +294,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             else:
                 writer.write(static_response(STATIC_DIR / static_name, method))
         elif method in {"GET", "HEAD"} and path == "/api/status":
-            response = json_response(status_snapshot(root, run_id))
+            response = json_response(web_status_snapshot(root, run_id))
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/backends":
             response = json_response({"backends": agent_backends()})
