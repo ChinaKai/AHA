@@ -10,6 +10,13 @@ from aha_cli.backends.codex import codex_runner_command
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, backend_names
 from aha_cli.domain.models import default_config
 from aha_cli.services.chat import auto_reply, codex_chat
+from aha_cli.services.backend_runtime import (
+    backend_status,
+    format_backend_status,
+    restart_backend,
+    start_backend,
+    stop_backend,
+)
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
 from aha_cli.services.run_tasks import run_pending_tasks
@@ -224,6 +231,49 @@ def cmd_codex_chat(args: argparse.Namespace) -> int:
     return codex_chat(root, run_id, args)
 
 
+def cmd_backend(args: argparse.Namespace) -> int:
+    root = find_project_root()
+    run_id = resolve_run_id(root, args.run_id)
+    target = args.target or "main"
+    if args.backend_cmd == "status":
+        state = backend_status(root, run_id, target)
+    elif args.backend_cmd == "start":
+        state = start_backend(
+            root,
+            run_id,
+            target,
+            codex_bin=args.codex_bin,
+            model=args.model,
+            sandbox=args.sandbox,
+            approval=args.approval,
+            interval=args.interval,
+            no_json=args.no_json,
+            extra_args=args.extra_arg,
+            prompt_prefix=args.prompt_prefix,
+        )
+    elif args.backend_cmd == "stop":
+        state = stop_backend(root, run_id, target, timeout=args.timeout)
+    elif args.backend_cmd == "restart":
+        state = restart_backend(
+            root,
+            run_id,
+            target,
+            codex_bin=args.codex_bin,
+            model=args.model,
+            sandbox=args.sandbox,
+            approval=args.approval,
+            interval=args.interval,
+            no_json=args.no_json,
+            extra_args=args.extra_arg,
+            prompt_prefix=args.prompt_prefix,
+            timeout=args.timeout,
+        )
+    else:
+        raise SystemExit(f"Unknown backend command: {args.backend_cmd}")
+    print(format_backend_status(state))
+    return 0
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     root = find_project_root()
     run_id = resolve_run_id(root, args.run_id)
@@ -417,6 +467,43 @@ def build_parser() -> argparse.ArgumentParser:
     codex_chat_p.add_argument("--no-json", action="store_true")
     codex_chat_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
     codex_chat_p.set_defaults(func=cmd_codex_chat)
+
+    backend_p = sub.add_parser("backend")
+    backend_sub = backend_p.add_subparsers(dest="backend_cmd", required=True)
+    backend_status_p = backend_sub.add_parser("status")
+    backend_status_p.add_argument("run_id", nargs="?")
+    backend_status_p.add_argument("--target", default="main")
+    backend_status_p.set_defaults(func=cmd_backend)
+    backend_start_p = backend_sub.add_parser("start")
+    backend_start_p.add_argument("run_id", nargs="?")
+    backend_start_p.add_argument("--target", default="main")
+    backend_start_p.add_argument("--codex-bin", default="codex")
+    backend_start_p.add_argument("--model", default=None)
+    backend_start_p.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default="workspace-write")
+    backend_start_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
+    backend_start_p.add_argument("--interval", type=float, default=1.0)
+    backend_start_p.add_argument("--extra-arg", action="append", default=[])
+    backend_start_p.add_argument("--no-json", action="store_true")
+    backend_start_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
+    backend_start_p.set_defaults(func=cmd_backend)
+    backend_stop_p = backend_sub.add_parser("stop")
+    backend_stop_p.add_argument("run_id", nargs="?")
+    backend_stop_p.add_argument("--target", default="main")
+    backend_stop_p.add_argument("--timeout", type=float, default=5.0)
+    backend_stop_p.set_defaults(func=cmd_backend)
+    backend_restart_p = backend_sub.add_parser("restart")
+    backend_restart_p.add_argument("run_id", nargs="?")
+    backend_restart_p.add_argument("--target", default="main")
+    backend_restart_p.add_argument("--codex-bin", default="codex")
+    backend_restart_p.add_argument("--model", default=None)
+    backend_restart_p.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default="workspace-write")
+    backend_restart_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
+    backend_restart_p.add_argument("--interval", type=float, default=1.0)
+    backend_restart_p.add_argument("--extra-arg", action="append", default=[])
+    backend_restart_p.add_argument("--no-json", action="store_true")
+    backend_restart_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
+    backend_restart_p.add_argument("--timeout", type=float, default=5.0)
+    backend_restart_p.set_defaults(func=cmd_backend)
 
     task_p = sub.add_parser("task")
     task_sub = task_p.add_subparsers(dest="task_cmd", required=True)

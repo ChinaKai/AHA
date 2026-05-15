@@ -7,6 +7,13 @@ import textwrap
 from urllib.parse import parse_qs, unquote, urlparse
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
+from aha_cli.services.backend_runtime import (
+    backend_status,
+    format_backend_status,
+    restart_backend,
+    start_backend,
+    stop_backend,
+)
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
@@ -23,6 +30,8 @@ from aha_cli.store.filesystem import (
 
 STATIC_DIR = Path(__file__).parent / "static"
 HL_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/hl_project")
+MY_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/my_project")
+WORKSPACE_ROOTS = [HL_PROJECT_ROOT, MY_PROJECT_ROOT]
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 
@@ -77,15 +86,40 @@ def parse_json_body(body: bytes) -> dict:
     return json.loads(body.decode("utf-8") or "{}")
 
 
-def workspace_options() -> list[dict]:
-    options: list[dict] = []
-    if HL_PROJECT_ROOT.is_dir():
-        for path in sorted(item for item in HL_PROJECT_ROOT.iterdir() if item.is_dir()):
-            options.append({"name": path.name, "path": str(path)})
+def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+    workspace_roots = WORKSPACE_ROOTS if roots is None else roots
+    for root in workspace_roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(item for item in root.iterdir() if item.is_dir()):
+            options.append(
+                {
+                    "name": path.name,
+                    "label": f"{root.name}/{path.name}",
+                    "path": str(path),
+                    "root": str(root),
+                }
+            )
     return options
 
 
-def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str) -> str:
+def format_backend_command(root: Path, run_id: str, command: str, target: str = "main") -> str:
+    parts = command.split()
+    action = parts[2] if len(parts) > 2 else "status"
+    command_target = parts[3] if len(parts) > 3 else target or "main"
+    if action == "status":
+        return format_backend_status(backend_status(root, run_id, command_target))
+    if action == "start":
+        return format_backend_status(start_backend(root, run_id, command_target))
+    if action == "stop":
+        return format_backend_status(stop_backend(root, run_id, command_target))
+    if action == "restart":
+        return format_backend_status(restart_backend(root, run_id, command_target))
+    return "Usage: /aha backend status|start|stop|restart [target]"
+
+
+def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
     parts = command.split()
     name = parts[1] if len(parts) > 1 else "help"
     if name == "help":
@@ -97,11 +131,15 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha agents: list selected task agents",
                 "- /aha final: ask task-main to generate or update the Final",
                 "- /aha finalize: alias for /aha final",
+                "- /aha backend status: show selected backend process status",
+                "- /aha backend start|stop|restart: manage selected backend process",
                 "",
                 "Agent command:",
                 "- /agent <command>: route /<command> to the selected agent",
             ]
         )
+    if name == "backend":
+        return format_backend_command(root, run_id, command, target)
     if not task_id:
         return "No task is selected."
     try:
@@ -206,7 +244,8 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         if name in {"final", "finalize"}:
             reply = request_task_finalization(root, run_id, task_id, stripped)
         else:
-            reply = format_aha_command(root, run_id, task_id, stripped)
+            target = str(payload.get("to_agent", "") or payload.get("target", "") or "main")
+            reply = format_aha_command(root, run_id, task_id, stripped, target)
     else:
         reply = f"Unknown command: {stripped.split()[0]}. Use /aha help or /agent <command>."
 
@@ -253,7 +292,18 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 response = json_response({"backend": backend, "models": model_options(backend)})
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/workspaces":
-            response = json_response({"root": str(HL_PROJECT_ROOT), "workspaces": workspace_options()})
+            response = json_response(
+                {
+                    "root": str(HL_PROJECT_ROOT),
+                    "roots": [str(root) for root in WORKSPACE_ROOTS if root.is_dir()],
+                    "workspaces": workspace_options(),
+                }
+            )
+            writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method in {"GET", "HEAD"} and path == "/api/backend":
+            query = parse_qs(parsed.query)
+            target = query.get("target", ["main"])[0] or "main"
+            response = json_response(backend_status(root, run_id, target))
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/events":
             query = parse_qs(parsed.query)
@@ -371,6 +421,26 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"ok": True, "agent": agent}))
                 except SystemExit as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
+        elif method == "POST" and path == "/api/backend":
+            payload = parse_json_body(body)
+            action = str(payload.get("action", "status") or "status")
+            target = str(payload.get("target", "main") or "main")
+            sandbox = str(payload.get("sandbox", "workspace-write") or "workspace-write")
+            approval = str(payload.get("approval", "never") or "never")
+            if sandbox not in SANDBOX_OPTIONS:
+                writer.write(json_response({"error": f"unknown sandbox: {sandbox}"}, "400 Bad Request"))
+            elif approval not in APPROVAL_OPTIONS:
+                writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
+            elif action == "status":
+                writer.write(json_response({"ok": True, "backend": backend_status(root, run_id, target)}))
+            elif action == "start":
+                writer.write(json_response({"ok": True, "backend": start_backend(root, run_id, target, sandbox=sandbox, approval=approval)}))
+            elif action == "stop":
+                writer.write(json_response({"ok": True, "backend": stop_backend(root, run_id, target)}))
+            elif action == "restart":
+                writer.write(json_response({"ok": True, "backend": restart_backend(root, run_id, target, sandbox=sandbox, approval=approval)}))
+            else:
+                writer.write(json_response({"error": f"unknown backend action: {action}"}, "400 Bad Request"))
         elif method == "POST" and path == "/api/send":
             payload = parse_json_body(body)
             message = str(payload.get("message", "")).strip()

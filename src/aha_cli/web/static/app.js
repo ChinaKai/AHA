@@ -6,6 +6,8 @@ let activeTab = "conversation";
 let backendModels = new Map();
 let backendCommands = new Map();
 let taskActionInFlight = false;
+let backendActionInFlight = false;
+let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
 const allEvents = [];
@@ -13,6 +15,22 @@ const taskDetails = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
+const collapsedMessageCharLimit = 900;
+const collapsedMessageLineLimit = 2;
+const conversationFilters = {
+  chat: true,
+  system: false,
+  runtime: false,
+  commands: false,
+  usage: false
+};
+const conversationFilterOptions = [
+  { key: "chat", label: "Chat" },
+  { key: "system", label: "System" },
+  { key: "runtime", label: "Runtime" },
+  { key: "commands", label: "Commands" },
+  { key: "usage", label: "Usage" }
+];
 
 const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
@@ -34,7 +52,8 @@ const taskApprovalEl = document.getElementById("task-approval");
 const workspaceSelectEl = document.getElementById("workspace-select");
 const workspaceCustomEl = document.getElementById("workspace-custom");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
-const liveActivityEl = document.getElementById("live-activity");
+const backendStatusEl = document.getElementById("backend-status");
+const conversationFiltersEl = document.getElementById("conversation-filters");
 const commandMenuEl = document.getElementById("command-menu");
 let commandSelection = 0;
 const ahaSlashCommands = [
@@ -42,7 +61,11 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
   { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
   { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate or update the Final." },
-  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." }
+  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
+  { scope: "aha", name: "/aha backend status", insert: "/aha backend status", desc: "Show selected backend process status." },
+  { scope: "aha", name: "/aha backend start", insert: "/aha backend start", desc: "Start selected backend process." },
+  { scope: "aha", name: "/aha backend stop", insert: "/aha backend stop", desc: "Stop selected backend process." },
+  { scope: "aha", name: "/aha backend restart", insert: "/aha backend restart", desc: "Restart selected backend process." }
 ];
 
 function escapeHtml(value) {
@@ -61,6 +84,10 @@ function selectedTask() {
 function selectedAgent() {
   const task = selectedTask();
   return (task?.agents || []).find(item => item.id === agentTargetEl.value) || null;
+}
+
+function backendTarget() {
+  return agentTargetEl.value || "main";
 }
 
 function visibleTasks() {
@@ -174,9 +201,50 @@ function taskTimelineEvents(taskId) {
   return taskEvents(taskId).filter(event => visibleTypes.has(event.type));
 }
 
+function dedupedConversationEvents(taskId) {
+  let latestAgentMessage = "";
+  return taskTimelineEvents(taskId).filter(event => {
+    const data = eventData(event);
+    if (event.type === "agent_message") {
+      latestAgentMessage = String(data.text || "").trim();
+      return true;
+    }
+    if (
+      event.type === "message" &&
+      data.sender === "main" &&
+      (data.to_agent || data.target) === "browser" &&
+      latestAgentMessage &&
+      String(data.message || "").trim() === latestAgentMessage
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function conversationEventCategory(event) {
+  const data = eventData(event);
+  if (event.type === "agent_message") return "chat";
+  if (event.type === "agent_usage") return "usage";
+  if (event.type === "agent_command_started" || event.type === "agent_command_finished") return "commands";
+  if (event.type === "message") {
+    if (data.sender === "browser") return "chat";
+    if (data.sender === "main" && (data.to_agent || data.target) === "browser") return "chat";
+    return "system";
+  }
+  return "runtime";
+}
+
 function taskConversationEvents(taskId) {
-  const hiddenTypes = new Set(["agent_message", "agent_usage", "agent_thread"]);
-  return taskTimelineEvents(taskId).filter(event => !hiddenTypes.has(event.type));
+  return dedupedConversationEvents(taskId).filter(event => conversationFilters[conversationEventCategory(event)]);
+}
+
+function conversationFilterCounts(taskId) {
+  const counts = Object.fromEntries(conversationFilterOptions.map(item => [item.key, 0]));
+  for (const event of dedupedConversationEvents(taskId)) {
+    counts[conversationEventCategory(event)] += 1;
+  }
+  return counts;
 }
 
 function parseTimestamp(value) {
@@ -332,7 +400,7 @@ async function loadWorkspaces() {
   for (const workspace of payload.workspaces || []) {
     const opt = document.createElement("option");
     opt.value = workspace.path;
-    opt.textContent = workspace.name;
+    opt.textContent = workspace.label || workspace.name;
     workspaceSelectEl.appendChild(opt);
   }
   const custom = document.createElement("option");
@@ -360,6 +428,12 @@ async function loadStatus(options = {}) {
   } else {
     renderSelectedAgentInfo();
   }
+}
+
+async function loadBackendStatus() {
+  const res = await fetch(`/api/backend?target=${encodeURIComponent(backendTarget())}`);
+  backendStatusData = await res.json();
+  renderBackendStatus();
 }
 
 async function refreshTaskDetail(taskId) {
@@ -416,6 +490,7 @@ async function selectTask(taskId) {
   renderTaskList();
   renderSelectedHeader();
   renderAgents();
+  await loadBackendStatus();
   await refreshTaskDetail(selectedTaskId);
   renderPanel();
 }
@@ -535,6 +610,38 @@ function renderSelectedAgentInfo() {
     `To ${agent.id} | role=${agent.role} | backend=${agent.backend} | model=${agent.model || "default"} | sandbox=${agent.sandbox || task.preferred_sandbox || "process default"} | approval=${agent.approval || task.preferred_approval || "process default"} | session=${agent.backend_session_id || "-"} | scope=${agent.session_scope || "-"} | workspace=${agent.workspace_path || task.workspace_path || "-"}`;
 }
 
+function renderBackendStatus() {
+  if (!backendStatusEl) return;
+  const state = backendStatusData;
+  if (!state) {
+    backendStatusEl.className = "backend-status pending";
+    backendStatusEl.innerHTML = `
+      <span class="activity-dot"></span>
+      <strong>Backend</strong>
+      <code>loading</code>
+    `;
+    return;
+  }
+  const status = state.status || "stopped";
+  const detail = [
+    state.target || "main",
+    state.backend || "codex-chat",
+    state.pid ? `pid=${state.pid}` : "pid=-",
+    state.last_reply_at ? `last reply ${state.last_reply_at}` : ""
+  ].filter(Boolean).join(" | ");
+  backendStatusEl.className = `backend-status ${escapeHtml(status)}`;
+  backendStatusEl.innerHTML = `
+    <span class="activity-dot"></span>
+    <strong>${escapeHtml(status)}</strong>
+    <code title="${escapeHtml(detail)}">${escapeHtml(detail)}</code>
+    <div class="backend-actions">
+      <button type="button" data-backend-action="start" ${status === "running" || status === "busy" || backendActionInFlight ? "disabled" : ""}>Start</button>
+      <button type="button" data-backend-action="stop" ${status === "stopped" || backendActionInFlight ? "disabled" : ""}>Stop</button>
+      <button type="button" data-backend-action="restart" ${backendActionInFlight ? "disabled" : ""}>Restart</button>
+    </div>
+  `;
+}
+
 async function updateAgentConfig(agentId, field, value) {
   const task = selectedTask();
   if (!task || !agentId || !field) return;
@@ -560,97 +667,49 @@ function compactText(value, limit = 180) {
   return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
 }
 
-function activitySummary(event, task) {
-  const data = eventData(event);
-  if (event.type === "agent_command_started") {
-    return { title: "running command", body: compactText(data.command), state: "running" };
-  }
-  if (event.type === "agent_command_finished") {
-    const state = data.exit_code === 0 ? "completed" : "failed";
-    return { title: `command finished exit=${data.exit_code ?? "-"}`, body: compactText(data.command), state };
-  }
-  if (event.type === "agent_message") {
-    return { title: "agent replied", body: compactText(data.text), state: task?.status || "session" };
-  }
-  if (event.type === "agent_started") {
-    return { title: "agent started", body: `${data.target || "main"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, state: "running" };
-  }
-  if (event.type === "agent_thread") {
-    return { title: "codex session", body: data.thread_id || "-", state: "session" };
-  }
-  if (event.type === "task_status_changed") {
-    return { title: `task ${data.status}`, body: `exit=${data.exit_code ?? "-"}`, state: data.status || "session" };
-  }
-  if (event.type === "agent_error") {
-    return { title: "agent error", body: compactText(data.message || JSON.stringify(data)), state: "failed" };
-  }
-  if (event.type === "workspace_missing") {
-    return { title: "workspace missing", body: data.workspace_path || "-", state: "blocked" };
-  }
-  if (event.type === "task_dispatched") {
-    return { title: "task dispatched", body: `target=${data.target || "-"}`, state: "session" };
-  }
-  if (event.type === "task_final_requested") {
-    return { title: "final requested", body: `target=${data.target || "main"}`, state: "running" };
-  }
-  if (event.type === "task_result_written") {
-    return { title: "final written", body: `${data.chars || 0} chars`, state: "completed" };
-  }
-  if (event.type === "agent_config_updated") {
-    return { title: "agent permission updated", body: `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, state: "session" };
-  }
-  if (event.type === "agent_usage") {
-    const usage = data.usage || {};
-    return { title: "usage", body: `input=${usage.input_tokens ?? "-"} output=${usage.output_tokens ?? "-"}`, state: "usage" };
-  }
-  if (event.type === "message") {
-    return { title: `${data.sender || "-"} message`, body: compactText(data.message), state: data.sender === "browser" ? "session" : task?.status || "session" };
-  }
-  return { title: event.type, body: compactText(JSON.stringify(data)), state: "session" };
+function shouldCollapseMessage(value) {
+  const text = String(value ?? "");
+  return text.length > collapsedMessageCharLimit || text.split("\n").length > collapsedMessageLineLimit;
 }
 
-function latestActivityEvent(taskId) {
-  const events = taskTimelineEvents(taskId).filter(event => {
-    const data = eventData(event);
-    return !(event.type === "message" && data.sender === "browser");
-  });
-  return events.at(-1) || null;
-}
-
-function renderLiveActivity() {
-  const task = selectedTask();
-  if (!task) {
-    liveActivityEl.className = "live-activity empty-activity";
-    liveActivityEl.innerHTML = '<span>Select a task to see live backend activity.</span>';
-    return;
+function renderMessageBody(body) {
+  const text = String(body || "");
+  if (!shouldCollapseMessage(text)) {
+    return `<div class="message-body">${escapeHtml(text)}</div>`;
   }
-  const event = latestActivityEvent(task.id);
-  if (!event) {
-    liveActivityEl.className = "live-activity pending";
-    liveActivityEl.innerHTML = `
-      <span class="activity-dot"></span>
-      <strong>No backend activity yet</strong>
-      <code>${escapeHtml(task.id)}</code>
-      <time></time>
-    `;
-    return;
-  }
-  const summary = activitySummary(event, task);
-  const eventCount = taskTimelineEvents(task.id).length;
-  const timing = latestTurnTiming(task.id) || taskTiming(task.id, task);
-  const duration = timing ? `${timing.running ? "elapsed" : "duration"} ${formatDuration(timing.elapsedMs)}` : "";
-  liveActivityEl.className = `live-activity ${escapeHtml(summary.state || "session")}`;
-  liveActivityEl.innerHTML = `
-    <span class="activity-dot"></span>
-    <strong>${escapeHtml(summary.title)}</strong>
-    <code title="${escapeHtml(summary.body)}">${escapeHtml(summary.body || "-")}</code>
-    <span class="activity-count">${escapeHtml([duration, `${eventCount} events`].filter(Boolean).join(" | "))}</span>
-    <time>${escapeHtml(event.ts || "")}</time>
+  const lines = text.split("\n").length;
+  const summary = compactText(text, 220);
+  return `
+    <details class="message-body collapsed-message">
+      <summary>
+        <span>${escapeHtml(summary || "(empty message)")}</span>
+        <em>${escapeHtml(`${text.length} chars | ${lines} lines`)}</em>
+      </summary>
+      <div class="message-body-full">${escapeHtml(text)}</div>
+    </details>
   `;
 }
 
 function selectedWorkspacePath() {
   return workspaceSelectEl.value === "__custom__" ? workspaceCustomEl.value.trim() : workspaceSelectEl.value;
+}
+
+function renderConversationFilters() {
+  if (!conversationFiltersEl) return;
+  conversationFiltersEl.classList.toggle("hidden", activeTab !== "conversation");
+  if (activeTab !== "conversation") return;
+  const task = selectedTask();
+  const counts = task ? conversationFilterCounts(task.id) : {};
+  conversationFiltersEl.innerHTML = `
+    <span>Show</span>
+    ${conversationFilterOptions.map(item => `
+      <label class="filter-chip ${conversationFilters[item.key] ? "active" : ""}">
+        <input type="checkbox" data-conversation-filter="${escapeHtml(item.key)}" ${conversationFilters[item.key] ? "checked" : ""}>
+        <span>${escapeHtml(item.label)}</span>
+        <code>${escapeHtml(counts[item.key] ?? 0)}</code>
+      </label>
+    `).join("")}
+  `;
 }
 
 function renderConversation(taskId) {
@@ -730,7 +789,7 @@ function renderTimelineCard(title, body, ts, cls) {
         <span>${escapeHtml(title)}</span>
         <span>${escapeHtml(ts || "")}</span>
       </div>
-      <div class="message-body">${escapeHtml(body || "")}</div>
+      ${renderMessageBody(body)}
     </div>
   `;
 }
@@ -746,7 +805,7 @@ function renderTimelineStatus(title, body, status, ts = "") {
 }
 
 function renderPanel() {
-  renderLiveActivity();
+  renderConversationFilters();
   const task = selectedTask();
   if (!task) {
     panelEl.innerHTML = '<div class="empty">No task selected.</div>';
@@ -879,6 +938,15 @@ commandMenuEl.addEventListener("mousedown", event => {
   applySlashCommand(Number(target.dataset.commandIndex || "0"));
 });
 
+conversationFiltersEl.addEventListener("change", event => {
+  const input = event.target instanceof HTMLInputElement ? event.target : null;
+  const key = input?.dataset.conversationFilter;
+  if (!key || !(key in conversationFilters)) return;
+  conversationFilters[key] = input.checked;
+  conversationAutoFollow = true;
+  renderPanel();
+});
+
 tasksEl.addEventListener("pointerdown", event => {
   const target = event.target instanceof Element ? event.target : null;
   const button = target?.closest("[data-action]");
@@ -900,6 +968,38 @@ agentsEl.addEventListener("change", () => markAgentsPanelEditing(1500));
 agentTargetEl.addEventListener("change", () => {
   syncAgentCards();
   renderSelectedAgentInfo();
+  loadBackendStatus();
+});
+backendStatusEl.addEventListener("click", async event => {
+  const button = event.target instanceof Element ? event.target.closest("[data-backend-action]") : null;
+  if (!button || backendActionInFlight) return;
+  backendActionInFlight = true;
+  renderBackendStatus();
+  try {
+    const task = selectedTask();
+    const agent = selectedAgent();
+    const res = await fetch("/api/backend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: button.dataset.backendAction,
+        target: backendTarget(),
+        sandbox: agent?.sandbox || task?.preferred_sandbox || "workspace-write",
+        approval: agent?.approval || task?.preferred_approval || "never"
+      })
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(payload.error || "Backend action failed");
+      return;
+    }
+    backendStatusData = payload.backend;
+    await pollEvents();
+  } finally {
+    backendActionInFlight = false;
+    await loadBackendStatus();
+    renderPanel();
+  }
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
 showHiddenEl.addEventListener("change", () => {
@@ -908,7 +1008,7 @@ showHiddenEl.addEventListener("change", () => {
   renderTaskList();
   renderSelectedHeader();
   renderAgents();
-  renderLiveActivity();
+  renderConversationFilters();
   renderPanel();
 });
 workspaceSelectEl.addEventListener("change", () => {
@@ -921,6 +1021,7 @@ async function tick() {
   try {
     if (taskActionInFlight) return;
     await loadStatus();
+    await loadBackendStatus();
     await pollEvents();
     if (selectedTaskId && activeTab !== "conversation") await refreshTaskDetail(selectedTaskId);
     renderPanel();

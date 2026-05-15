@@ -22,7 +22,7 @@ from aha_cli.store.filesystem import (
     update_agent_config,
     write_task_result,
 )
-from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command
+from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, workspace_options
 
 
 class CliTests(unittest.TestCase):
@@ -363,9 +363,38 @@ class CliTests(unittest.TestCase):
                 self.assertIn('id="task-approval"', html)
                 self.assertIn("selected-task-meta", html)
                 self.assertIn("selected-agent-info", html)
+                self.assertIn("backend-status", html)
                 self.assertIn("command-menu", html)
-                self.assertIn("live-activity", html)
+                self.assertIn("conversation-filters", html)
                 self.assertIn('data-tab="final"', html)
+
+    def test_workspace_options_include_multiple_project_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            hl_root = base / "hl_project"
+            my_root = base / "my_project"
+            (hl_root / "fw_omni_builder").mkdir(parents=True)
+            (my_root / "aha").mkdir(parents=True)
+
+            options = workspace_options([hl_root, my_root])
+
+        self.assertEqual(
+            options,
+            [
+                {
+                    "name": "fw_omni_builder",
+                    "label": "hl_project/fw_omni_builder",
+                    "path": str(hl_root / "fw_omni_builder"),
+                    "root": str(hl_root),
+                },
+                {
+                    "name": "aha",
+                    "label": "my_project/aha",
+                    "path": str(my_root / "aha"),
+                    "root": str(my_root),
+                },
+            ],
+        )
 
     def test_aha_status_command_formats_task_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -379,6 +408,10 @@ class CliTests(unittest.TestCase):
                 output = format_aha_command(root, run_id, "task-001", "/aha status")
                 self.assertIn("Task: task-001", output)
                 self.assertIn("Status: pending", output)
+
+                backend_output = format_aha_command(root, run_id, "task-001", "/aha backend status")
+                self.assertIn("Backend: stopped", backend_output)
+                self.assertIn("Target: main", backend_output)
 
                 handled, agent_message, payload = handle_slash_command(
                     root,
@@ -410,6 +443,21 @@ class CliTests(unittest.TestCase):
                 self.assertTrue(handled)
                 self.assertIsNone(agent_message)
                 self.assertIn("Usage: /agent <command>", reply or "")
+
+    def test_backend_status_cli_reports_stopped_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Backend lifecycle", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                code, output = self.run_cli("backend", "status", run_id)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Backend: stopped", output)
+        self.assertIn("Target: main", output)
 
     def test_agent_permission_update_is_in_status_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

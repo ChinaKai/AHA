@@ -132,7 +132,7 @@ button, input, select { font: inherit; }
 .status.hidden { background: #f2f4f7; color: #475467; }
 .workspace {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto auto;
   min-width: 0;
   min-height: 0;
 }
@@ -200,6 +200,34 @@ button, input, select { font: inherit; }
   font-size: 12px;
 }
 .message-body { white-space: pre-wrap; line-height: 1.5; }
+.collapsed-message {
+  white-space: normal;
+}
+.collapsed-message summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  color: #344054;
+}
+.collapsed-message summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collapsed-message summary em {
+  color: #98a2b3;
+  font-style: normal;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.message-body-full {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e4e7ec;
+  white-space: pre-wrap;
+}
 .timeline-status {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -266,50 +294,54 @@ button, input, select { font: inherit; }
 .turn-timer.completed .activity-dot { background: #16a34a; }
 .turn-timer.failed .activity-dot { background: #dc2626; }
 .turn-timer.blocked .activity-dot { background: #d97706; }
-.live-activity {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+.conversation-filters {
+  display: flex;
   align-items: center;
   gap: 8px;
   min-height: 42px;
-  padding: 8px 18px;
+  padding: 7px 18px;
   border-bottom: 1px solid #e4e7ec;
   background: #ffffff;
-  color: #475467;
-  font-size: 12px;
-}
-.live-activity strong {
-  color: #344054;
-  white-space: nowrap;
-}
-.live-activity code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: #667085;
+  font-size: 12px;
+  overflow-x: auto;
 }
-.live-activity time,
-.activity-count {
-  color: #98a2b3;
+.conversation-filters > span {
+  color: #475467;
+  font-weight: 600;
   white-space: nowrap;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475467;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-chip.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+.filter-chip input {
+  min-width: auto;
+  min-height: auto;
+  margin: 0;
+}
+.filter-chip code {
+  color: #98a2b3;
 }
 .activity-dot {
   width: 8px;
   height: 8px;
   border-radius: 999px;
   background: #98a2b3;
-}
-.live-activity.running .activity-dot {
-  background: #2563eb;
-  box-shadow: 0 0 0 4px #dbeafe;
-}
-.live-activity.completed .activity-dot { background: #16a34a; }
-.live-activity.failed .activity-dot { background: #dc2626; }
-.live-activity.blocked .activity-dot { background: #d97706; }
-.live-activity.session .activity-dot,
-.live-activity.usage .activity-dot { background: #7c3aed; }
-.live-activity.empty-activity {
-  grid-template-columns: minmax(0, 1fr);
 }
 pre {
   margin: 0;
@@ -340,6 +372,52 @@ pre {
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+.backend-status {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 7px 18px;
+  border-top: 1px solid #e4e7ec;
+  background: #fbfcfd;
+  color: #475467;
+  font-size: 12px;
+}
+.backend-status strong {
+  color: #344054;
+  text-transform: uppercase;
+}
+.backend-status code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+}
+.backend-status.running .activity-dot {
+  background: #16a34a;
+}
+.backend-status.busy .activity-dot {
+  background: #2563eb;
+  box-shadow: 0 0 0 4px #dbeafe;
+}
+.backend-status.stopped .activity-dot,
+.backend-status.pending .activity-dot {
+  background: #98a2b3;
+}
+.backend-actions {
+  display: flex;
+  gap: 6px;
+}
+.backend-actions button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.backend-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 .command-menu {
   display: grid;
