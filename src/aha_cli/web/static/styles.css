@@ -715,21 +715,9 @@ button {
   .turn-timer code {
     grid-column: 1 / -1;
   }
-  .selected-agent-info {
-    min-height: auto;
-    padding: 8px 12px;
-  }
+  .selected-agent-info,
   .backend-status {
-    grid-template-columns: auto minmax(0, 1fr);
-    padding: 8px 12px;
-  }
-  .backend-status code,
-  .backend-actions {
-    grid-column: 1 / -1;
-  }
-  .backend-actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: none;
   }
   .command-menu {
     padding: 8px 12px;
