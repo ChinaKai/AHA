@@ -19,6 +19,7 @@ from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     append_message,
+    conversation_events_page,
     delete_task,
     event_path,
     iter_jsonl_from,
@@ -324,9 +325,28 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         elif method in {"GET", "HEAD"} and path == "/api/events":
             query = parse_qs(parsed.query)
             offset = int(query.get("offset", ["0"])[0] or "0")
-            events, new_offset = iter_jsonl_from(event_path(root, run_id), offset)
+            if offset < 0:
+                events_path = event_path(root, run_id)
+                events, new_offset = [], events_path.stat().st_size if events_path.exists() else 0
+            else:
+                events, new_offset = iter_jsonl_from(event_path(root, run_id), offset)
             response = json_response({"offset": new_offset, "events": events})
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method in {"GET", "HEAD"} and path == "/api/conversation-events":
+            query = parse_qs(parsed.query)
+            task_id = query.get("task_id", [""])[0]
+            target = query.get("target", ["main"])[0] or "main"
+            limit = int(query.get("limit", ["50"])[0] or "50")
+            before_values = query.get("before", [])
+            try:
+                before = int(before_values[0]) if before_values and before_values[0] else None
+            except ValueError:
+                before = None
+            if not task_id:
+                writer.write(json_response({"error": "task_id required"}, "400 Bad Request"))
+            else:
+                response = json_response(conversation_events_page(root, run_id, task_id, target, limit=limit, before=before))
+                writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path.startswith("/api/task/"):
             task_id = unquote(path.removeprefix("/api/task/"))
             try:

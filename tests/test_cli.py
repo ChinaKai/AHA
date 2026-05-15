@@ -14,6 +14,8 @@ from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offse
 from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
 from aha_cli.store.filesystem import (
     add_agent,
+    append_event,
+    conversation_events_page,
     delete_task,
     inbox_path,
     iter_jsonl_from,
@@ -650,6 +652,24 @@ class CliTests(unittest.TestCase):
         self.assertEqual(agents["main"]["backend_process_pid"], 1234)
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
+
+    def test_conversation_events_page_filters_and_pages_by_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "to_agent": "main", "message": "one"})
+            append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "two"})
+            append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "sub-001", "text": "sub"})
+            append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "other task"})
+
+            latest = conversation_events_page(root, run_id, "task-001", "main", limit=1)
+            older = conversation_events_page(root, run_id, "task-001", "main", limit=1, before=latest["before"])
+
+        self.assertEqual(latest["total"], 2)
+        self.assertTrue(latest["has_more"])
+        self.assertEqual(latest["events"][0]["data"]["text"], "two")
+        self.assertFalse(older["has_more"])
+        self.assertEqual(older["events"][0]["data"]["message"], "one")
 
     def test_workspace_options_include_multiple_project_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

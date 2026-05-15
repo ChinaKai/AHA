@@ -1,5 +1,5 @@
 const pollInterval = Number(new URLSearchParams(location.search).get("poll") || "1000");
-let offset = 0;
+let offset = -1;
 let statusData = null;
 let selectedTaskId = null;
 let activeTab = "conversation";
@@ -10,7 +10,10 @@ let backendActionInFlight = false;
 let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
+let legacyEventsLoaded = false;
 const allEvents = [];
+const conversationPageLimit = 50;
+const conversationStates = new Map();
 const expandedMessageKeys = new Set();
 const taskDetails = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
@@ -240,16 +243,57 @@ function eventAgentRefs(event) {
 }
 
 function eventMatchesSelectedAgent(event) {
-  return eventAgentRefs(event).has(backendTarget());
+  return eventMatchesAgent(event, backendTarget());
+}
+
+function eventMatchesAgent(event, target) {
+  return eventAgentRefs(event).has(target || "main");
 }
 
 function agentTimelineEvents(taskId) {
   return taskTimelineEvents(taskId).filter(eventMatchesSelectedAgent);
 }
 
+function conversationKey(taskId = selectedTaskId, target = backendTarget()) {
+  return `${taskId || ""}::${target || "main"}`;
+}
+
+function parseConversationKey(key) {
+  const index = key.indexOf("::");
+  return index < 0 ? { taskId: key, target: "main" } : { taskId: key.slice(0, index), target: key.slice(index + 2) || "main" };
+}
+
+function eventIdentity(event) {
+  return `${event.ts || ""}|${event.type || ""}|${JSON.stringify(eventData(event))}`;
+}
+
+function mergeConversationEvents(current, incoming, prepend = false) {
+  const merged = prepend ? [...incoming, ...current] : [...current, ...incoming];
+  const seen = new Set();
+  return merged.filter(event => {
+    const id = eventIdentity(event);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function conversationState(taskId = selectedTaskId, target = backendTarget()) {
+  const key = conversationKey(taskId, target);
+  if (!conversationStates.has(key)) {
+    conversationStates.set(key, { events: [], before: null, hasMore: true, initialized: false, loading: false });
+  }
+  return conversationStates.get(key);
+}
+
+function conversationSourceEvents(taskId) {
+  const state = conversationStates.get(conversationKey(taskId));
+  return state?.initialized ? state.events : agentTimelineEvents(taskId);
+}
+
 function dedupedConversationEvents(taskId) {
   let latestAgentMessage = "";
-  return agentTimelineEvents(taskId).filter(event => {
+  return conversationSourceEvents(taskId).filter(event => {
     const data = eventData(event);
     if (event.type === "agent_message") {
       latestAgentMessage = String(data.text || "").trim();
@@ -519,8 +563,109 @@ async function refreshTaskDetail(taskId) {
   return detail;
 }
 
+function assignConversationKeys(events, start = 0) {
+  events.forEach((event, index) => {
+    if (!event._uiKey) event._uiKey = `conversation-${start + index}-${event.type || "event"}`;
+  });
+  return events;
+}
+
+async function loadConversationPage(taskId = selectedTaskId, target = backendTarget(), older = false) {
+  if (!taskId) return null;
+  const state = conversationState(taskId, target);
+  if (state.loading || (!older && state.initialized) || (older && !state.hasMore)) return state;
+  state.loading = true;
+  try {
+    const params = new URLSearchParams({
+      task_id: taskId,
+      target,
+      limit: String(conversationPageLimit)
+    });
+    if (older && state.before !== null && state.before !== undefined) params.set("before", String(state.before));
+    let res;
+    try {
+      res = await fetch(`/api/conversation-events?${params.toString()}`);
+    } catch (err) {
+      await loadLegacyEvents();
+      state.events = agentTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
+      state.before = null;
+      state.hasMore = false;
+      state.initialized = true;
+      return state;
+    }
+    if (!res.ok) {
+      await loadLegacyEvents();
+      state.events = agentTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
+      state.before = null;
+      state.hasMore = false;
+      state.initialized = true;
+      return state;
+    }
+    const payload = await res.json();
+    const events = assignConversationKeys(payload.events || [], payload.start || 0);
+    state.events = older ? mergeConversationEvents(state.events, events, true) : mergeConversationEvents(events, state.events, false);
+    state.before = payload.before ?? null;
+    state.hasMore = Boolean(payload.has_more);
+    state.initialized = true;
+    return state;
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function loadLegacyEvents() {
+  if (legacyEventsLoaded) return;
+  const res = await fetch("/api/events?offset=0");
+  const payload = await res.json();
+  offset = payload.offset;
+  const events = payload.events || [];
+  events.forEach((event, index) => {
+    if (!event._uiKey) event._uiKey = `event-0-${index}`;
+  });
+  allEvents.push(...events);
+  legacyEventsLoaded = true;
+}
+
+async function ensureConversationLoaded() {
+  if (activeTab !== "conversation" || !selectedTaskId) return;
+  await loadConversationPage(selectedTaskId, backendTarget(), false);
+}
+
+async function loadOlderConversation() {
+  if (activeTab !== "conversation" || !selectedTaskId) return;
+  const state = conversationState(selectedTaskId, backendTarget());
+  if (!state.initialized || !state.hasMore || state.loading) return;
+  const previousHeight = panelEl.scrollHeight;
+  const previousTop = panelEl.scrollTop;
+  await loadConversationPage(selectedTaskId, backendTarget(), true);
+  renderPanel({ preserveScroll: true, previousHeight, previousTop });
+}
+
+function appendRealtimeConversationEvents(events) {
+  if (!events.length) return;
+  for (const [key, state] of conversationStates.entries()) {
+    if (!state.initialized) continue;
+    const { taskId, target } = parseConversationKey(key);
+    const matching = events.filter(event => isTaskEvent(event, taskId) && taskTimelineEvents(taskId).includes(event) && eventMatchesAgent(event, target));
+    if (matching.length) state.events = mergeConversationEvents(state.events, matching, false);
+  }
+}
+
 async function pollEvents() {
-  const res = await fetch(`/api/events?offset=${offset}`);
+  let res;
+  try {
+    res = await fetch(`/api/events?offset=${offset}`);
+  } catch (err) {
+    if (offset < 0) {
+      await loadLegacyEvents();
+      return;
+    }
+    throw err;
+  }
+  if (!res.ok) {
+    if (offset < 0) await loadLegacyEvents();
+    return;
+  }
   const payload = await res.json();
   const startOffset = offset;
   offset = payload.offset;
@@ -529,6 +674,7 @@ async function pollEvents() {
     if (!event._uiKey) event._uiKey = `event-${startOffset}-${index}`;
   });
   allEvents.push(...events);
+  appendRealtimeConversationEvents(events);
 }
 
 function renderTaskList() {
@@ -572,6 +718,7 @@ async function selectTask(taskId) {
   renderAgents();
   await loadBackendStatus();
   await refreshTaskDetail(selectedTaskId);
+  await ensureConversationLoaded();
   renderPanel();
 }
 
@@ -806,10 +953,15 @@ function renderConversationFilters() {
 }
 
 function renderConversation(taskId) {
+  const state = conversationState(taskId);
+  if (!state.initialized || state.loading && !state.events.length) {
+    return `<div class="empty">Loading conversation...</div>`;
+  }
   const events = taskConversationEvents(taskId);
-  if (!events.length) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
+  if (!events.length && !state.hasMore) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
+  const older = state.hasMore ? `<button class="load-older" type="button" data-load-older="true">${state.loading ? "Loading..." : "Load older"}</button>` : "";
   const timer = renderTurnTimer(taskId);
-  return `<div class="conversation timeline">${events.map(renderTimelineEvent).join("")}${timer}</div>`;
+  return `<div class="conversation timeline">${older}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
 }
 
 function renderTimelineEvent(event) {
@@ -906,7 +1058,7 @@ function renderTimelineStatus(title, body, status, ts = "") {
   `;
 }
 
-function renderPanel() {
+function renderPanel(options = {}) {
   renderConversationFilters();
   const task = selectedTask();
   if (!task) {
@@ -915,10 +1067,15 @@ function renderPanel() {
   }
   const detail = taskDetails.get(task.id);
   if (activeTab === "conversation") {
-    const previousTop = panelEl.scrollTop;
+    const previousTop = options.previousTop ?? panelEl.scrollTop;
+    const previousHeight = options.previousHeight ?? panelEl.scrollHeight;
     const shouldFollow = conversationAutoFollow || isPanelNearBottom();
     panelEl.innerHTML = renderConversation(task.id);
-    panelEl.scrollTop = shouldFollow ? panelEl.scrollHeight : previousTop;
+    if (options.preserveScroll) {
+      panelEl.scrollTop = panelEl.scrollHeight - previousHeight + previousTop;
+    } else {
+      panelEl.scrollTop = shouldFollow ? panelEl.scrollHeight : previousTop;
+    }
     return;
   }
   if (!detail) {
@@ -954,7 +1111,11 @@ document.querySelectorAll(".tab").forEach(button => {
     activeTab = button.dataset.tab;
     if (activeTab === "conversation") conversationAutoFollow = true;
     document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === button));
-    if (activeTab !== "conversation") await refreshTaskDetail(selectedTaskId);
+    if (activeTab === "conversation") {
+      await ensureConversationLoaded();
+    } else {
+      await refreshTaskDetail(selectedTaskId);
+    }
     renderPanel();
   });
 });
@@ -1061,7 +1222,14 @@ tasksEl.addEventListener("pointerdown", event => {
 });
 
 panelEl.addEventListener("scroll", () => {
-  if (activeTab === "conversation") conversationAutoFollow = isPanelNearBottom();
+  if (activeTab === "conversation") {
+    conversationAutoFollow = isPanelNearBottom();
+    if (panelEl.scrollTop < 48) loadOlderConversation();
+  }
+});
+panelEl.addEventListener("click", event => {
+  const button = event.target instanceof Element ? event.target.closest("[data-load-older]") : null;
+  if (button) loadOlderConversation();
 });
 panelEl.addEventListener("toggle", event => {
   const details = event.target instanceof HTMLDetailsElement ? event.target : null;
@@ -1077,12 +1245,13 @@ panelEl.addEventListener("toggle", event => {
 agentsEl.addEventListener("pointerdown", () => markAgentsPanelEditing());
 agentsEl.addEventListener("focusin", () => markAgentsPanelEditing());
 agentsEl.addEventListener("change", () => markAgentsPanelEditing(1500));
-agentTargetEl.addEventListener("change", () => {
+agentTargetEl.addEventListener("change", async () => {
   syncAgentCards();
   renderSelectedAgentInfo();
-  loadBackendStatus();
+  await loadBackendStatus();
   conversationAutoFollow = true;
   renderConversationFilters();
+  await ensureConversationLoaded();
   renderPanel();
 });
 backendStatusEl.addEventListener("click", async event => {
@@ -1137,6 +1306,7 @@ async function tick() {
   try {
     if (taskActionInFlight) return;
     await loadStatus();
+    await ensureConversationLoaded();
     await loadBackendStatus();
     await pollEvents();
     if (selectedTaskId && activeTab !== "conversation") await refreshTaskDetail(selectedTaskId);

@@ -209,6 +209,90 @@ def iter_jsonl_from(path: Path, start: int = 0) -> tuple[list[dict], int]:
         return events, f.tell()
 
 
+TIMELINE_EVENT_TYPES = {
+    "message",
+    "task_dispatched",
+    "task_started",
+    "task_finished",
+    "task_result_written",
+    "task_final_requested",
+    "task_waiting_for_subagents",
+    "task_status_changed",
+    "agent_started",
+    "agent_status_changed",
+    "agent_thread",
+    "agent_command_started",
+    "agent_command_finished",
+    "agent_message",
+    "agent_usage",
+    "agent_error",
+    "agent_delegated",
+    "agent_message_routed",
+    "sub_agent_reported",
+    "sub_agent_report_ignored",
+    "sub_agent_backend_recovered",
+    "sub_agent_backend_failed",
+    "agent_created",
+    "agent_config_updated",
+    "agent_finished",
+    "workspace_missing",
+}
+
+
+def event_task_id(event: dict) -> str | None:
+    data = event.get("data") or {}
+    if data.get("task_id"):
+        return str(data["task_id"])
+    target = str(data.get("target") or "")
+    if event.get("type") == "message" and target.startswith("task-") and target[5:].isdigit():
+        return target
+    return None
+
+
+def event_agent_refs(event: dict) -> set[str]:
+    data = event.get("data") or {}
+    refs: set[str] = set()
+
+    def add(value: object) -> None:
+        text = str(value or "").strip()
+        if text and text not in {"browser", "system", "aha"}:
+            refs.add(text)
+
+    add(data.get("target"))
+    add(data.get("to_agent"))
+    add(data.get("from_agent"))
+    add(data.get("agent_id"))
+    if event.get("type") == "message":
+        add(data.get("sender"))
+    event_type = str(event.get("type") or "")
+    if not refs and (event_type.startswith("agent_") or event_type.startswith("task_") or event_type == "workspace_missing"):
+        refs.add("main")
+    return refs
+
+
+def conversation_events_page(root: Path, run_id: str, task_id: str, target: str, limit: int = 50, before: int | None = None) -> dict:
+    events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+    filtered = [
+        event
+        for event in events
+        if event.get("type") in TIMELINE_EVENT_TYPES
+        and event_task_id(event) == task_id
+        and (target or "main") in event_agent_refs(event)
+    ]
+    total = len(filtered)
+    safe_limit = max(1, min(limit, 200))
+    end = total if before is None else max(0, min(before, total))
+    start = max(0, end - safe_limit)
+    return {
+        "events": filtered[start:end],
+        "start": start,
+        "end": end,
+        "before": start if start > 0 else None,
+        "has_more": start > 0,
+        "total": total,
+    }
+
+
 def ensure_session(
     root: Path,
     run_id: str,
