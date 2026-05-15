@@ -165,6 +165,7 @@ def _codex_chat_command(
     sandbox: str = "workspace-write",
     approval: str = "never",
     interval: float = 1.0,
+    from_start: bool = False,
     no_json: bool = False,
     extra_args: list[str] | None = None,
     prompt_prefix: str = "You are connected to AHA as the real backend agent.",
@@ -191,6 +192,8 @@ def _codex_chat_command(
     ]
     if model:
         command.extend(["--model", model])
+    if from_start:
+        command.append("--from-start")
     if no_json:
         command.append("--no-json")
     for item in extra_args or []:
@@ -208,6 +211,7 @@ def start_backend(
     sandbox: str = "workspace-write",
     approval: str = "never",
     interval: float = 1.0,
+    from_start: bool = False,
     no_json: bool = False,
     extra_args: list[str] | None = None,
     prompt_prefix: str = "You are connected to AHA as the real backend agent.",
@@ -225,6 +229,7 @@ def start_backend(
         sandbox=sandbox,
         approval=approval,
         interval=interval,
+        from_start=from_start,
         no_json=no_json,
         extra_args=extra_args,
         prompt_prefix=prompt_prefix,
@@ -256,6 +261,7 @@ def start_backend(
         "sandbox": sandbox,
         "approval": approval,
         "model": model,
+        "from_start": from_start,
     }
     _write_state(root, run_id, target, state)
     append_event(root, run_id, "backend_started", {"target": target, "pid": process.pid, "log_path": str(log_path)})

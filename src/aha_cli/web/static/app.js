@@ -11,6 +11,7 @@ let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
 const allEvents = [];
+const expandedMessageKeys = new Set();
 const taskDetails = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
@@ -184,8 +185,10 @@ function taskTimelineEvents(taskId) {
     "task_finished",
     "task_result_written",
     "task_final_requested",
+    "task_waiting_for_subagents",
     "task_status_changed",
     "agent_started",
+    "agent_status_changed",
     "agent_thread",
     "agent_command_started",
     "agent_command_finished",
@@ -193,6 +196,11 @@ function taskTimelineEvents(taskId) {
     "agent_usage",
     "agent_error",
     "agent_delegated",
+    "agent_message_routed",
+    "sub_agent_reported",
+    "sub_agent_report_ignored",
+    "sub_agent_backend_recovered",
+    "sub_agent_backend_failed",
     "agent_created",
     "agent_config_updated",
     "agent_finished",
@@ -201,9 +209,37 @@ function taskTimelineEvents(taskId) {
   return taskEvents(taskId).filter(event => visibleTypes.has(event.type));
 }
 
+function addAgentRef(refs, value) {
+  const text = String(value || "").trim();
+  if (!text || text === "browser" || text === "system" || text === "aha") return;
+  refs.add(text);
+}
+
+function eventAgentRefs(event) {
+  const data = eventData(event);
+  const refs = new Set();
+  addAgentRef(refs, data.target);
+  addAgentRef(refs, data.to_agent);
+  addAgentRef(refs, data.from_agent);
+  addAgentRef(refs, data.agent_id);
+  if (event.type === "message") addAgentRef(refs, data.sender);
+  if (!refs.size && (event.type.startsWith("agent_") || event.type.startsWith("task_") || event.type === "workspace_missing")) {
+    refs.add("main");
+  }
+  return refs;
+}
+
+function eventMatchesSelectedAgent(event) {
+  return eventAgentRefs(event).has(backendTarget());
+}
+
+function agentTimelineEvents(taskId) {
+  return taskTimelineEvents(taskId).filter(eventMatchesSelectedAgent);
+}
+
 function dedupedConversationEvents(taskId) {
   let latestAgentMessage = "";
-  return taskTimelineEvents(taskId).filter(event => {
+  return agentTimelineEvents(taskId).filter(event => {
     const data = eventData(event);
     if (event.type === "agent_message") {
       latestAgentMessage = String(data.text || "").trim();
@@ -228,9 +264,8 @@ function conversationEventCategory(event) {
   if (event.type === "agent_usage") return "usage";
   if (event.type === "agent_command_started" || event.type === "agent_command_finished") return "commands";
   if (event.type === "message") {
-    if (data.sender === "browser") return "chat";
-    if (data.sender === "main" && (data.to_agent || data.target) === "browser") return "chat";
-    return "system";
+    if (data.sender === "system" || data.sender === "aha") return "system";
+    return "chat";
   }
   return "runtime";
 }
@@ -318,7 +353,7 @@ function taskTiming(taskId, task) {
 }
 
 function latestTurnTiming(taskId) {
-  const events = taskEvents(taskId);
+  const events = taskEvents(taskId).filter(eventMatchesSelectedAgent);
   let startIndex = -1;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     if (events[index].type === "agent_started") {
@@ -447,8 +482,13 @@ async function refreshTaskDetail(taskId) {
 async function pollEvents() {
   const res = await fetch(`/api/events?offset=${offset}`);
   const payload = await res.json();
+  const startOffset = offset;
   offset = payload.offset;
-  allEvents.push(...payload.events);
+  const events = payload.events || [];
+  events.forEach((event, index) => {
+    if (!event._uiKey) event._uiKey = `event-${startOffset}-${index}`;
+  });
+  allEvents.push(...events);
 }
 
 function renderTaskList() {
@@ -672,15 +712,16 @@ function shouldCollapseMessage(value) {
   return text.length > collapsedMessageCharLimit || text.split("\n").length > collapsedMessageLineLimit;
 }
 
-function renderMessageBody(body) {
+function renderMessageBody(body, key = "") {
   const text = String(body || "");
   if (!shouldCollapseMessage(text)) {
     return `<div class="message-body">${escapeHtml(text)}</div>`;
   }
   const lines = text.split("\n").length;
   const summary = compactText(text, 220);
+  const open = key && expandedMessageKeys.has(key) ? " open" : "";
   return `
-    <details class="message-body collapsed-message">
+    <details class="message-body collapsed-message" data-message-key="${escapeHtml(key)}"${open}>
       <summary>
         <span>${escapeHtml(summary || "(empty message)")}</span>
         <em>${escapeHtml(`${text.length} chars | ${lines} lines`)}</em>
@@ -714,7 +755,7 @@ function renderConversationFilters() {
 
 function renderConversation(taskId) {
   const events = taskConversationEvents(taskId);
-  if (!events.length) return '<div class="empty">No task conversation yet.</div>';
+  if (!events.length) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
   const timer = renderTurnTimer(taskId);
   return `<div class="conversation timeline">${events.map(renderTimelineEvent).join("")}${timer}</div>`;
 }
@@ -727,16 +768,17 @@ function renderTimelineEvent(event) {
       `${data.sender || "-"} -> ${data.to_agent || data.role || data.target || "-"}`,
       data.message || "",
       event.ts || data.ts || "",
-      cls
+      cls,
+      event._uiKey
     );
   }
-  if (event.type === "agent_message") return renderTimelineCard("agent update", data.text || "", event.ts, "agent-update");
-  if (event.type === "agent_command_started") return renderTimelineCard("running command", data.command || "", event.ts, "agent-command");
+  if (event.type === "agent_message") return renderTimelineCard(`agent update (${data.target || "main"})`, data.text || "", event.ts, "agent-update", event._uiKey);
+  if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", event.ts, "agent-command", event._uiKey);
   if (event.type === "agent_command_finished") {
     const output = data.output_tail ? `\n\nOutput tail:\n${data.output_tail}` : "";
-    return renderTimelineCard(`command finished exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, event.ts, data.exit_code === 0 ? "agent-command" : "event-error");
+    return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, event.ts, data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey);
   }
-  if (event.type === "agent_error") return renderTimelineCard("agent error", data.message || JSON.stringify(data), event.ts, "event-error");
+  if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), event.ts, "event-error", event._uiKey);
   if (event.type === "agent_usage") {
     const usage = data.usage || {};
     return renderTimelineStatus(
@@ -751,13 +793,20 @@ function renderTimelineEvent(event) {
   if (event.type === "task_finished") return renderTimelineStatus(`task ${data.status || "finished"}`, `exit=${data.exit_code ?? "-"}`, data.status || "completed", event.ts);
   if (event.type === "task_result_written") return renderTimelineStatus("final written", `${data.chars || 0} chars`, "completed", event.ts);
   if (event.type === "task_final_requested") return renderTimelineStatus("final requested", `target=${data.target || "main"}`, "running", event.ts);
+  if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", event.ts);
   if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "running", event.ts);
+  if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", event.ts);
   if (event.type === "agent_config_updated") return renderTimelineStatus("agent permission updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "session", event.ts);
   if (event.type === "agent_thread") return renderTimelineStatus("codex session", data.thread_id || "-", "session", event.ts);
   if (event.type === "agent_finished") return renderTimelineStatus("agent finished", `exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", event.ts);
   if (event.type === "task_dispatched") return renderTimelineStatus("task dispatched", `target=${data.target || "-"}`, "session", event.ts);
   if (event.type === "agent_created") return renderTimelineStatus("sub-agent created", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", event.ts);
   if (event.type === "agent_delegated") return renderTimelineStatus("delegated", `${data.count || 0} action(s)`, "session", event.ts);
+  if (event.type === "agent_message_routed") return renderTimelineStatus("routed to agent", `${data.target || "-"} ${data.reason || ""}`, "running", event.ts);
+  if (event.type === "sub_agent_reported") return renderTimelineStatus("sub-agent reported", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", event.ts);
+  if (event.type === "sub_agent_report_ignored") return renderTimelineStatus("sub-agent report ignored", `${data.agent_id || "-"} ${data.reason || ""}`, "session", event.ts);
+  if (event.type === "sub_agent_backend_recovered") return renderTimelineStatus("sub-agent backend recovered", `${data.agent_id || "-"} attempt=${data.attempt || "-"}`, "running", event.ts);
+  if (event.type === "sub_agent_backend_failed") return renderTimelineStatus("sub-agent backend failed", `${data.agent_id || "-"} attempts=${data.attempts || "-"}`, "failed", event.ts);
   if (event.type === "workspace_missing") return renderTimelineStatus("workspace missing", data.workspace_path || "-", "blocked", event.ts);
   return renderTimelineStatus(event.type, JSON.stringify(data), "session", event.ts);
 }
@@ -782,14 +831,14 @@ function renderTurnTimer(taskId) {
   `;
 }
 
-function renderTimelineCard(title, body, ts, cls) {
+function renderTimelineCard(title, body, ts, cls, key = "") {
   return `
     <div class="message ${cls}">
       <div class="message-head">
         <span>${escapeHtml(title)}</span>
         <span>${escapeHtml(ts || "")}</span>
       </div>
-      ${renderMessageBody(body)}
+      ${renderMessageBody(body, key)}
     </div>
   `;
 }
@@ -961,6 +1010,16 @@ tasksEl.addEventListener("pointerdown", event => {
 panelEl.addEventListener("scroll", () => {
   if (activeTab === "conversation") conversationAutoFollow = isPanelNearBottom();
 });
+panelEl.addEventListener("toggle", event => {
+  const details = event.target instanceof HTMLDetailsElement ? event.target : null;
+  const key = details?.dataset.messageKey;
+  if (!key) return;
+  if (details.open) {
+    expandedMessageKeys.add(key);
+  } else {
+    expandedMessageKeys.delete(key);
+  }
+}, true);
 
 agentsEl.addEventListener("pointerdown", () => markAgentsPanelEditing());
 agentsEl.addEventListener("focusin", () => markAgentsPanelEditing());
@@ -969,6 +1028,9 @@ agentTargetEl.addEventListener("change", () => {
   syncAgentCards();
   renderSelectedAgentInfo();
   loadBackendStatus();
+  conversationAutoFollow = true;
+  renderConversationFilters();
+  renderPanel();
 });
 backendStatusEl.addEventListener("click", async event => {
   const button = event.target instanceof Element ? event.target.closest("[data-backend-action]") : null;
@@ -985,7 +1047,8 @@ backendStatusEl.addEventListener("click", async event => {
         action: button.dataset.backendAction,
         target: backendTarget(),
         sandbox: agent?.sandbox || task?.preferred_sandbox || "workspace-write",
-        approval: agent?.approval || task?.preferred_approval || "never"
+        approval: agent?.approval || task?.preferred_approval || "never",
+        from_start: false
       })
     });
     const payload = await res.json().catch(() => ({}));

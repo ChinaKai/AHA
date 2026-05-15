@@ -247,6 +247,7 @@ def cmd_backend(args: argparse.Namespace) -> int:
             sandbox=args.sandbox,
             approval=args.approval,
             interval=args.interval,
+            from_start=args.from_start,
             no_json=args.no_json,
             extra_args=args.extra_arg,
             prompt_prefix=args.prompt_prefix,
@@ -263,6 +264,7 @@ def cmd_backend(args: argparse.Namespace) -> int:
             sandbox=args.sandbox,
             approval=args.approval,
             interval=args.interval,
+            from_start=args.from_start,
             no_json=args.no_json,
             extra_args=args.extra_arg,
             prompt_prefix=args.prompt_prefix,
@@ -482,6 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
     backend_start_p.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default="workspace-write")
     backend_start_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     backend_start_p.add_argument("--interval", type=float, default=1.0)
+    backend_start_p.add_argument("--from-start", action="store_true")
     backend_start_p.add_argument("--extra-arg", action="append", default=[])
     backend_start_p.add_argument("--no-json", action="store_true")
     backend_start_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
@@ -499,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
     backend_restart_p.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default="workspace-write")
     backend_restart_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     backend_restart_p.add_argument("--interval", type=float, default=1.0)
+    backend_restart_p.add_argument("--from-start", action="store_true")
     backend_restart_p.add_argument("--extra-arg", action="append", default=[])
     backend_restart_p.add_argument("--no-json", action="store_true")
     backend_restart_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")

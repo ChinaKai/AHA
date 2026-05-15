@@ -6,7 +6,16 @@ import time
 import uuid
 
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
-from aha_cli.services.orchestrator import execute_actions
+from aha_cli.domain.models import utc_now
+from aha_cli.services.orchestrator import (
+    action_response_text,
+    execute_actions,
+    monitor_task_coordination,
+    record_sub_agent_report,
+    request_final_summary_if_ready,
+    task_has_incomplete_sub_agents,
+    waiting_for_subagents_message,
+)
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -14,12 +23,16 @@ from aha_cli.store.filesystem import (
     event_path,
     inbox_path,
     iter_jsonl_from,
+    mark_task_coordination,
+    read_json,
     require_plan,
     run_dir,
     save_session,
+    set_agent_status,
     set_task_status,
     status_snapshot,
     task_snapshot,
+    write_json,
     write_task_result,
 )
 from aha_cli.services.messages import format_event
@@ -37,6 +50,32 @@ BLOCKED_REPLY_MARKERS = (
     "Permission denied",
     "Read-only file system",
 )
+
+
+def safe_target_name(target: str) -> str:
+    return (target or "main").replace("/", "_")
+
+
+def chat_offset_path(run: Path, target: str) -> Path:
+    return run / "runtime" / f"chat-offset-{safe_target_name(target)}.json"
+
+
+def load_chat_offset(inbox: Path, offset_file: Path, from_start: bool) -> int:
+    if from_start:
+        return 0
+    if offset_file.exists():
+        try:
+            offset = int(read_json(offset_file).get("offset") or 0)
+            if not inbox.exists() or offset <= inbox.stat().st_size:
+                return max(0, offset)
+        except (OSError, TypeError, ValueError):
+            pass
+    _, offset = iter_jsonl_from(inbox, 0)
+    return offset
+
+
+def save_chat_offset(offset_file: Path, offset: int) -> None:
+    write_json(offset_file, {"offset": offset, "updated_at": utc_now()})
 
 
 def status_from_agent_result(exit_code: int, reply: str) -> str:
@@ -151,6 +190,18 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
                 - role selected by user: {item.get("role", "")}
                 - agents: {detail["task"].get("agents", [])}
                 {final_context.rstrip()}
+
+                Ownership and routing policy:
+                - Each sub-agent owns its assigned scope (`assignment` / `created_reason`).
+                - If a user follow-up is about a scope owned by an existing sub-agent, do not handle that work yourself.
+                - Return a JSON action `route_to_agent` with the responsible `agent_id`, a concrete `message`, and a short user-facing `response`.
+                - Handle the message yourself only when it is clearly task-main coordination, cross-agent summary, or no sub-agent owns the scope.
+
+                Commit ownership policy:
+                - Commit, revert, and repository-change finalization requests are ownership-sensitive.
+                - When you are `task-main`, route commit work to the sub-agent that owns the changed scope when one exists.
+                - When you are a sub-agent, commit only files covered by your `assignment` / `created_reason`; if the requested commit is outside your scope, report back to `task-main`.
+                - Before any commit, inspect `git status`, avoid unrelated or user changes, and make the commit message identify the AHA task, agent, and scope, for example `AHA task={task_id} agent={target} scope=<short-scope>`.
                 """
             )
         except KeyError:
@@ -196,13 +247,16 @@ def codex_chat(root: Path, run_id: str, args) -> int:
     inbox = inbox_path(root, run_id, args.target)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
-    offset = 0
-    if not args.from_start:
-        _, offset = iter_jsonl_from(inbox, 0)
+    offset_file = chat_offset_path(run, args.target)
+    offset = load_chat_offset(inbox, offset_file, args.from_start)
+    last_coordination_check = 0.0
     print(f"Codex chat backend listening to {args.target} in run {run_id}. Ctrl-C to exit.")
     try:
         while True:
-            messages, offset = iter_jsonl_from(inbox, offset)
+            if args.target == "main" and not args.once and time.monotonic() - last_coordination_check >= max(10.0, args.interval):
+                monitor_task_coordination(root, run_id)
+                last_coordination_check = time.monotonic()
+            messages, next_offset = iter_jsonl_from(inbox, offset)
             for item in messages:
                 original_sender = str(item.get("sender", "") or "")
                 if original_sender == args.sender:
@@ -219,6 +273,29 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                 manages_task_status = bool(item_task_id and not is_agent_command)
                 writes_task_final = bool(item_task_id and is_finalization)
                 agent = next((entry for entry in task.get("agents", []) if entry.get("id") == agent_id), None)
+                if args.target == "main" and original_sender.startswith("sub-") and item_task_id:
+                    result = record_sub_agent_report(root, run_id, item_task_id, original_sender, original_message)
+                    if result.get("handled"):
+                        if args.once:
+                            return 0
+                        continue
+                coordination = task.get("coordination") or {}
+                if args.target.startswith("sub-") and (
+                    task.get("status") in {"completed", "failed", "blocked"} or coordination.get("final_summary_requested_at")
+                ):
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_message_skipped",
+                        {
+                            "source": "codex-chat",
+                            "target": args.target,
+                            "task_id": item_task_id,
+                            "sender": original_sender,
+                            "reason": "task final summary already requested or task is terminal",
+                        },
+                    )
+                    continue
                 if agent and agent.get("backend") != "codex":
                     append_event(
                         root,
@@ -241,7 +318,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     model=(agent or {}).get("model") or task.get("preferred_model"),
                     workspace_path=(agent or {}).get("workspace_path") or task.get("workspace_path"),
                 )
-                reply_target = args.reply_target or original_sender or "browser"
+                reply_target = args.reply_target or item.get("reply_target") or original_sender or "browser"
                 output_file = run / "chat" / f"{args.target}-{uuid.uuid4().hex[:8]}.md"
                 requested_sandbox = (agent or {}).get("sandbox") or task.get("preferred_sandbox") or args.sandbox
                 requested_approval = (agent or {}).get("approval") or task.get("preferred_approval") or args.approval
@@ -252,6 +329,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     workspace = root
                 if manages_task_status:
                     set_task_status(root, run_id, item_task_id, "running")
+                    set_agent_status(root, run_id, item_task_id, agent_id, "running")
                 append_event(
                     root,
                     run_id,
@@ -279,17 +357,19 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     run_id=run_id,
                     task_id=item_task_id,
                     source="codex-chat",
+                    target=args.target,
                     session=session,
                 )
                 if session:
                     save_session(root, session)
                 if exit_code == 0 and reply.strip():
                     executed = execute_actions(root, run_id, item_task_id, reply)
+                    display_reply = action_response_text(reply)
                     append_message(
                         root,
                         run_id,
                         reply_target,
-                        reply.strip(),
+                        display_reply,
                         sender=args.sender,
                         task_id=item_task_id,
                         role=item.get("role") or "main",
@@ -298,19 +378,56 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     )
                     if executed:
                         append_event(root, run_id, "agent_delegated", {"task_id": item_task_id, "count": len(executed)})
+                        detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
+                        if detail:
+                            append_message(
+                                root,
+                                run_id,
+                                "browser",
+                                waiting_for_subagents_message(detail["task"]),
+                                sender="main",
+                                task_id=item_task_id,
+                                role="main",
+                                from_agent="main",
+                                to_agent="browser",
+                                coordination="waiting_for_subagents",
+                            )
                     if manages_task_status:
                         final_status = status_from_agent_result(exit_code, reply)
                         if writes_task_final and agent_id == "main":
                             write_task_result(root, run_id, item_task_id, reply.strip())
-                        set_task_status(root, run_id, item_task_id, final_status, exit_code)
-                    print(f"{args.sender} -> {reply_target}: {reply.strip()}", flush=True)
+                            mark_task_coordination(root, run_id, item_task_id, final_summary_completed_at=utc_now())
+                            set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
+                            set_task_status(root, run_id, item_task_id, final_status, exit_code)
+                        elif agent_id != "main":
+                            set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
+                            request_final_summary_if_ready(root, run_id, item_task_id)
+                            set_task_status(root, run_id, item_task_id, "running")
+                        else:
+                            detail = task_snapshot(root, run_id, item_task_id)
+                            if executed or task_has_incomplete_sub_agents(detail["task"]):
+                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting")
+                                set_task_status(root, run_id, item_task_id, "running")
+                            else:
+                                set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
+                                set_task_status(root, run_id, item_task_id, final_status, exit_code)
+                    print(f"{args.sender} -> {reply_target}: {display_reply}", flush=True)
                 else:
                     if manages_task_status:
-                        set_task_status(root, run_id, item_task_id, "failed", exit_code)
+                        if agent_id != "main":
+                            set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
+                            request_final_summary_if_ready(root, run_id, item_task_id)
+                            set_task_status(root, run_id, item_task_id, "running")
+                        else:
+                            set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
+                            set_task_status(root, run_id, item_task_id, "failed", exit_code)
                     append_event(root, run_id, "agent_error", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 append_event(root, run_id, "agent_finished", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if args.once:
                     return exit_code
+            if messages:
+                offset = next_offset
+                save_chat_offset(offset_file, offset)
             if args.once:
                 return 0
             time.sleep(args.interval)

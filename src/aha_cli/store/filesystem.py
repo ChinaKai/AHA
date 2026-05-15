@@ -157,6 +157,8 @@ def append_message(
     command_namespace: str | None = None,
     original_command: str | None = None,
     result_policy: str | None = None,
+    reply_target: str | None = None,
+    coordination: str | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -179,6 +181,10 @@ def append_message(
         payload["original_command"] = original_command
     if result_policy:
         payload["result_policy"] = result_policy
+    if reply_target:
+        payload["reply_target"] = reply_target
+    if coordination:
+        payload["coordination"] = coordination
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)
@@ -486,6 +492,83 @@ def update_agent_config(
     return agent
 
 
+def set_agent_status(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    status: str,
+    exit_code: int | None = None,
+) -> dict:
+    now = utc_now()
+    with PLAN_LOCK:
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), None)
+        if agent is None:
+            raise SystemExit(f"Agent not found: {agent_id}")
+        agent["status"] = status
+        agent["last_active_at"] = now
+        if status == "running":
+            agent["started_at"] = now
+            agent["finished_at"] = None
+            agent["exit_code"] = None
+        elif status in {"completed", "failed", "blocked"}:
+            agent["finished_at"] = now
+            agent["exit_code"] = exit_code
+        plan["updated_at"] = now
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "agent_status_changed",
+        {"task_id": task_id, "agent_id": agent_id, "status": status, "exit_code": exit_code},
+    )
+    return agent
+
+
+def update_agent_runtime(root: Path, run_id: str, task_id: str, agent_id: str, **fields: object) -> dict:
+    now = utc_now()
+    with PLAN_LOCK:
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), None)
+        if agent is None:
+            raise SystemExit(f"Agent not found: {agent_id}")
+        for key, value in fields.items():
+            agent[key] = value
+        agent["last_active_at"] = now
+        plan["updated_at"] = now
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(root, run_id, "agent_runtime_updated", {"task_id": task_id, "agent_id": agent_id, **fields})
+    return agent
+
+
+def mark_task_coordination(root: Path, run_id: str, task_id: str, **fields: object) -> dict:
+    now = utc_now()
+    with PLAN_LOCK:
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        coordination = task.setdefault("coordination", {})
+        for key, value in fields.items():
+            if value is not None:
+                coordination[key] = value
+        coordination["updated_at"] = now
+        plan["updated_at"] = now
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(root, run_id, "task_coordination_updated", {"task_id": task_id, **fields})
+    return task
+
+
 def set_task_hidden(root: Path, run_id: str, task_id: str, hidden: bool) -> dict:
     with PLAN_LOCK:
         plan = require_plan(root, run_id)
@@ -526,7 +609,7 @@ def set_task_status(root: Path, run_id: str, task_id: str, status: str, exit_cod
             raise SystemExit(f"Task not found: {task_id}")
         task["status"] = status
         if status == "running":
-            task["started_at"] = now
+            task["started_at"] = task.get("started_at") or now
             task["finished_at"] = None
             task["exit_code"] = None
         elif status in {"completed", "failed", "blocked"}:

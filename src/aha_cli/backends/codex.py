@@ -30,6 +30,7 @@ def handle_codex_event(
     run_id: str,
     task_id: str | None,
     source: str,
+    target: str | None = None,
     session: dict | None = None,
 ) -> None:
     try:
@@ -40,6 +41,8 @@ def handle_codex_event(
     data: dict = {"source": source, "raw_type": raw_type}
     if task_id:
         data["task_id"] = task_id
+    if target:
+        data["target"] = target
     if raw_type == "thread.started":
         thread_id = event.get("thread_id")
         data["thread_id"] = thread_id
@@ -87,6 +90,7 @@ def run_codex_exec(
     run_id: str = "",
     task_id: str | None = None,
     source: str = "codex",
+    target: str | None = None,
     session: dict | None = None,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +136,7 @@ def run_codex_exec(
             run_id=run_id,
             task_id=task_id,
             source=source,
+            target=target,
             session=session,
         )
     exit_code = process.wait()

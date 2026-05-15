@@ -162,7 +162,8 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
             lines.append(
                 f"- {agent.get('id')} role={agent.get('role')} backend={agent.get('backend')} "
                 f"sandbox={agent.get('sandbox') or task.get('preferred_sandbox') or '-'} "
-                f"approval={agent.get('approval') or task.get('preferred_approval') or '-'}"
+                f"approval={agent.get('approval') or task.get('preferred_approval') or '-'} "
+                f"assignment={agent.get('assignment') or agent.get('created_reason') or '-'}"
             )
         return "\n".join(lines)
     if name in {"final", "finalize"}:
@@ -427,6 +428,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             target = str(payload.get("target", "main") or "main")
             sandbox = str(payload.get("sandbox", "workspace-write") or "workspace-write")
             approval = str(payload.get("approval", "never") or "never")
+            from_start = bool(payload.get("from_start", False))
             if sandbox not in SANDBOX_OPTIONS:
                 writer.write(json_response({"error": f"unknown sandbox: {sandbox}"}, "400 Bad Request"))
             elif approval not in APPROVAL_OPTIONS:
@@ -434,11 +436,11 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             elif action == "status":
                 writer.write(json_response({"ok": True, "backend": backend_status(root, run_id, target)}))
             elif action == "start":
-                writer.write(json_response({"ok": True, "backend": start_backend(root, run_id, target, sandbox=sandbox, approval=approval)}))
+                writer.write(json_response({"ok": True, "backend": start_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start)}))
             elif action == "stop":
                 writer.write(json_response({"ok": True, "backend": stop_backend(root, run_id, target)}))
             elif action == "restart":
-                writer.write(json_response({"ok": True, "backend": restart_backend(root, run_id, target, sandbox=sandbox, approval=approval)}))
+                writer.write(json_response({"ok": True, "backend": restart_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start)}))
             else:
                 writer.write(json_response({"error": f"unknown backend action: {action}"}, "400 Bad Request"))
         elif method == "POST" and path == "/api/send":

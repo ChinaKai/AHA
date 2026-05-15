@@ -10,16 +10,21 @@ from unittest import mock
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event
 from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
-from aha_cli.services.chat import chat_prompt, status_from_agent_result
+from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
+from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
 from aha_cli.store.filesystem import (
+    add_agent,
     delete_task,
     inbox_path,
     iter_jsonl_from,
     run_dir,
+    mark_task_coordination,
+    set_agent_status,
     set_task_hidden,
     set_task_status,
     status_snapshot,
     update_agent_config,
+    update_agent_runtime,
     write_task_result,
 )
 from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, workspace_options
@@ -52,6 +57,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status_from_agent_result(0, "文件没有落盘，因为 read-only sandbox"), "blocked")
         self.assertEqual(status_from_agent_result(0, "当前沙箱是只读，写入被拦截"), "blocked")
 
+    def test_running_status_keeps_original_task_start_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Timing", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                with mock.patch(
+                    "aha_cli.store.filesystem.utc_now",
+                    side_effect=[
+                        "2026-05-15T00:00:00+00:00",
+                        "2026-05-15T00:00:01+00:00",
+                        "2026-05-15T00:05:00+00:00",
+                        "2026-05-15T00:05:01+00:00",
+                    ],
+                ):
+                    set_task_status(root, run_id, "task-001", "running")
+                    set_task_status(root, run_id, "task-001", "running")
+
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["started_at"], "2026-05-15T00:00:00+00:00")
+
+    def test_chat_offset_persists_unprocessed_messages_across_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Offsets", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main")
+                initial_offset = load_chat_offset(inbox, offset_file, from_start=False)
+                append_message(root, run_id, "main", "queued while stopped", sender="browser", task_id="task-001", role="main")
+                save_chat_offset(offset_file, initial_offset)
+
+                self.assertEqual(load_chat_offset(inbox, offset_file, from_start=False), initial_offset)
+                self.assertGreater(inbox.stat().st_size, initial_offset)
+
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
             codex_bin="codex",
@@ -76,6 +121,7 @@ class CliTests(unittest.TestCase):
                 run_id="run",
                 task_id="task-001",
                 source="codex-chat",
+                target="sub-001",
             )
             handle_codex_event(
                 json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "pwd", "status": "completed", "exit_code": 0, "aggregated_output": "x" * 1300}}),
@@ -83,11 +129,13 @@ class CliTests(unittest.TestCase):
                 run_id="run",
                 task_id="task-001",
                 source="codex-chat",
+                target="sub-001",
             )
             rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(rows[0]["type"], "agent_command_started")
             self.assertEqual(rows[1]["type"], "agent_command_finished")
             self.assertEqual(rows[1]["data"]["command"], "pwd")
+            self.assertEqual(rows[1]["data"]["target"], "sub-001")
             self.assertEqual(len(rows[1]["data"]["output_tail"]), 1200)
 
     def test_plan_run_merge_with_stub_runner(self) -> None:
@@ -273,6 +321,45 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("Recent events:", prompt)
                 self.assertNotIn("旧任务结果", prompt)
 
+    def test_prompts_include_commit_ownership_policy(self) -> None:
+        assignment_prompt = task_assignment_prompt(
+            {
+                "id": "task-001",
+                "title": "Commit work",
+                "workspace_path": "/tmp/project",
+                "max_sub_agents": 2,
+                "delegation_policy": "auto",
+                "preferred_backend": "codex",
+            }
+        )
+        self.assertIn("Commit ownership policy:", assignment_prompt)
+        self.assertIn("route it to that sub-agent with `route_to_agent`", assignment_prompt)
+        self.assertIn("Never ask a sub-agent to commit files outside its assignment", assignment_prompt)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Commit routing", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                update_agent_runtime(root, run_id, "task-001", "sub-001", assignment="UI routing changes")
+                main_message = append_message(root, run_id, "main", "提交代码", sender="browser", task_id="task-001", role="main")
+                main_prompt = chat_prompt(root, run_id, "main", main_message, "")
+
+                self.assertIn("Commit ownership policy:", main_prompt)
+                self.assertIn("route commit work to the sub-agent that owns the changed scope", main_prompt)
+                self.assertIn("AHA task=task-001 agent=main scope=<short-scope>", main_prompt)
+                self.assertIn("UI routing changes", main_prompt)
+
+                sub_message = append_message(root, run_id, "sub-001", "提交你负责的部分", sender="main", task_id="task-001", role="sub")
+                sub_prompt = chat_prompt(root, run_id, "sub-001", sub_message, "")
+
+                self.assertIn("commit only files covered by your `assignment` / `created_reason`", sub_prompt)
+                self.assertIn("report back to `task-main`", sub_prompt)
+                self.assertIn("AHA task=task-001 agent=sub-001 scope=<short-scope>", sub_prompt)
+
     def test_raw_result_file_without_final_metadata_is_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -334,6 +421,175 @@ class CliTests(unittest.TestCase):
                 code, agents = self.run_cli("agent", "list", run_id, "task-001")
                 self.assertEqual(code, 0)
                 self.assertIn("sub-001 role=sub backend=stub", agents)
+                self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "running")
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                self.assertIn("等待子 agent 完成", browser_messages[-1]["message"])
+
+    def test_codex_chat_autostarts_codex_sub_agent_from_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Spawn codex sub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "delegate this", sender="browser", task_id="task-001", role="main")
+                reply = '{"complexity":"complex","actions":[{"type":"spawn_sub","title":"Inspect one slice","backend":"codex","reason":"parallel research"}],"response":"delegating"}'
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                start_backend.assert_called_once()
+                self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "sub-001"))
+                self.assertTrue(start_backend.call_args.kwargs["from_start"])
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                self.assertEqual(messages[-1]["message"], "Inspect one slice")
+                detail = task_snapshot(root, run_id, "task-001")
+                sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
+                self.assertEqual(sub_agent["assignment"], "Inspect one slice")
+
+    def test_main_routes_followup_to_responsible_sub_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Owned follow-up", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_agent_status(root, run_id, "task-001", "sub-001", "completed", 0)
+                mark_task_coordination(
+                    root,
+                    run_id,
+                    "task-001",
+                    final_summary_requested_at="2026-05-15T00:00:00+00:00",
+                    final_summary_completed_at="2026-05-15T00:01:00+00:00",
+                )
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                append_message(root, run_id, "main", "这个范围继续调整", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps(
+                    {
+                        "complexity": "simple",
+                        "actions": [
+                            {
+                                "type": "route_to_agent",
+                                "agent_id": "sub-001",
+                                "message": "请继续调整你负责的范围",
+                                "reason": "sub-001 owns this scope",
+                            }
+                        ],
+                        "response": "已转给 sub-001 处理。",
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                self.assertIn("main -> browser: 已转给 sub-001 处理。", output)
+                self.assertNotIn("route_to_agent", output)
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                self.assertEqual(sub_messages[-1]["message"], "请继续调整你负责的范围")
+                self.assertEqual(sub_messages[-1]["coordination"], "routed_by_main")
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["status"], "running")
+                self.assertEqual(detail["task"]["coordination"]["final_summary_requested_at"], "")
+                self.assertEqual(detail["task"]["coordination"]["final_summary_completed_at"], "")
+                start_backend.assert_called_once()
+
+    def test_sub_agent_reports_wait_then_request_main_final_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub reports", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_task_status(root, run_id, "task-001", "running")
+
+                first = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sub-001 done")
+                self.assertTrue(first["handled"])
+                self.assertFalse(first.get("final_requested"))
+                detail = task_snapshot(root, run_id, "task-001")
+                statuses = {agent["id"]: agent["status"] for agent in detail["task"]["agents"]}
+                self.assertEqual(statuses["sub-001"], "completed")
+                self.assertEqual(statuses["sub-002"], "pending")
+
+                second = record_sub_agent_report(root, run_id, "task-001", "sub-002", "sub-002 done")
+                self.assertTrue(second["final_requested"])
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                self.assertEqual(main_messages[-1]["sender"], "aha")
+                self.assertEqual(main_messages[-1]["coordination"], "subagents_complete")
+                self.assertEqual(main_messages[-1]["result_policy"], "finalize")
+                self.assertEqual(main_messages[-1]["reply_target"], "browser")
+
+    def test_coordination_watchdog_recovers_stopped_pending_sub_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Watchdog", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_task_status(root, run_id, "task-001", "running")
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend:
+                    actions = monitor_task_coordination(root, run_id)
+
+                self.assertIn({"type": "agent_recovered", "task_id": "task-001", "agent_id": "sub-001"}, actions)
+                start_backend.assert_called_once()
+                self.assertFalse(start_backend.call_args.kwargs["from_start"])
+                detail = task_snapshot(root, run_id, "task-001")
+                sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
+                self.assertEqual(sub_agent["recovery_attempts"], 1)
+
+    def test_main_does_not_reply_to_sub_agent_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "No loops", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                append_message(root, run_id, "main", "done", sender="sub-001", task_id="task-001", role="sub", from_agent="sub-001", to_agent="main")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec") as run_agent:
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                run_agent.assert_not_called()
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                self.assertEqual(sub_messages, [])
+
+    def test_sub_agent_skips_messages_after_final_summary_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Terminal sub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                append_message(root, run_id, "sub-001", "no-op ack", sender="main", task_id="task-001", role="sub", from_agent="main", to_agent="sub-001")
+
+                mark_task_coordination(root, run_id, "task-001", final_summary_requested_at="2026-05-15T00:00:00+00:00")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec") as run_agent:
+                    code, _ = self.run_cli("codex-chat", run_id, "sub-001", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                run_agent.assert_not_called()
 
     def test_task_dashboard_and_metadata_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
