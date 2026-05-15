@@ -298,6 +298,35 @@ function parseTimestamp(value) {
   return Number.isNaN(millis) ? null : millis;
 }
 
+function formatLocalTimestamp(value, fallback = "-") {
+  const millis = parseTimestamp(value);
+  if (millis === null) return fallback;
+  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
+}
+
+function eventTimeLabel(event) {
+  const value = event?.ts || eventData(event).ts;
+  return formatLocalTimestamp(value, value || "");
+}
+
+function localizeTimestampFields(value, key = "") {
+  if (Array.isArray(value)) return value.map(item => localizeTimestampFields(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([itemKey, itemValue]) => [itemKey, localizeTimestampFields(itemValue, itemKey)]));
+  }
+  if ((key === "ts" || key.endsWith("_at")) && typeof value === "string") {
+    return formatLocalTimestamp(value, value);
+  }
+  return value;
+}
+
+function localizeTimestampText(value) {
+  return String(value ?? "").replace(
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b/g,
+    match => formatLocalTimestamp(match, match)
+  );
+}
+
 function formatDuration(millis) {
   const totalSeconds = Math.max(0, Math.floor((millis || 0) / 1000));
   const seconds = String(totalSeconds % 60).padStart(2, "0");
@@ -399,12 +428,13 @@ function latestTurnTiming(taskId) {
 
 function formatEvent(event) {
   const data = eventData(event);
-  if (event.type === "log") return `[${event.ts}] ${data.task_id || "-"}: ${data.line || ""}`;
+  const ts = eventTimeLabel(event);
+  if (event.type === "log") return `[${ts}] ${data.task_id || "-"}: ${data.line || ""}`;
   if (event.type === "message") {
     const task = data.task_id ? ` task=${data.task_id}` : "";
-    return `[${event.ts}] message${task} ${data.sender || "main"} -> ${data.target || "-"}: ${data.message || ""}`;
+    return `[${ts}] message${task} ${data.sender || "main"} -> ${data.target || "-"}: ${data.message || ""}`;
   }
-  return `[${event.ts}] ${event.type}: ${JSON.stringify(data)}`;
+  return `[${ts}] ${event.type}: ${JSON.stringify(data)}`;
 }
 
 async function loadBackends() {
@@ -462,7 +492,7 @@ async function loadStatus(options = {}) {
   const res = await fetch("/api/status");
   statusData = await res.json();
   runIdEl.textContent = statusData.run_id;
-  runStateEl.textContent = `${statusData.mode} | updated ${statusData.updated_at}`;
+  runStateEl.textContent = `${statusData.mode} | updated ${formatLocalTimestamp(statusData.updated_at, statusData.updated_at || "-")}`;
   summaryEl.textContent = statusData.goal;
   const tasks = visibleTasks();
   if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = tasks[0]?.id || null;
@@ -596,10 +626,11 @@ function renderAgents() {
     const approval = agent.approval || task.preferred_approval || "never";
     const processStatus = agentBackendProcessStatus(agent);
     const rawProcessStatus = agent.backend_process_status || processStatus;
+    const lastReply = formatLocalTimestamp(agent.backend_process_last_reply_at, agent.backend_process_last_reply_at || "");
     const processDetail = [
       `process=${rawProcessStatus}`,
       agent.backend_process_pid ? `pid=${agent.backend_process_pid}` : "pid=-",
-      agent.backend_process_last_reply_at ? `last_reply=${agent.backend_process_last_reply_at}` : ""
+      agent.backend_process_last_reply_at ? `last_reply=${lastReply}` : ""
     ].filter(Boolean).join(" | ");
     const opt = document.createElement("option");
     opt.value = agent.id;
@@ -688,7 +719,7 @@ function renderBackendStatus() {
     state.target || "main",
     state.backend || "codex-chat",
     state.pid ? `pid=${state.pid}` : "pid=-",
-    state.last_reply_at ? `last reply ${state.last_reply_at}` : ""
+    state.last_reply_at ? `last reply ${formatLocalTimestamp(state.last_reply_at, state.last_reply_at)}` : ""
   ].filter(Boolean).join(" | ");
   backendStatusEl.className = `backend-status ${escapeHtml(status)}`;
   backendStatusEl.innerHTML = `
@@ -788,48 +819,49 @@ function renderTimelineEvent(event) {
     return renderTimelineCard(
       `${data.sender || "-"} -> ${data.to_agent || data.role || data.target || "-"}`,
       data.message || "",
-      event.ts || data.ts || "",
+      eventTimeLabel(event),
       cls,
       event._uiKey
     );
   }
-  if (event.type === "agent_message") return renderTimelineCard(`agent update (${data.target || "main"})`, data.text || "", event.ts, "agent-update", event._uiKey);
-  if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", event.ts, "agent-command", event._uiKey);
+  if (event.type === "agent_message") return renderTimelineCard(`agent update (${data.target || "main"})`, data.text || "", eventTimeLabel(event), "agent-update", event._uiKey);
+  if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey);
   if (event.type === "agent_command_finished") {
     const output = data.output_tail ? `\n\nOutput tail:\n${data.output_tail}` : "";
-    return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, event.ts, data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey);
+    return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey);
   }
-  if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), event.ts, "event-error", event._uiKey);
+  if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey);
   if (event.type === "agent_usage") {
     const usage = data.usage || {};
     return renderTimelineStatus(
       "usage",
       `input=${usage.input_tokens ?? "-"} cached=${usage.cached_input_tokens ?? "-"} output=${usage.output_tokens ?? "-"} reasoning=${usage.reasoning_output_tokens ?? "-"}`,
       "usage",
-      event.ts
+      eventTimeLabel(event)
     );
   }
-  if (event.type === "task_status_changed") return renderTimelineStatus(`task ${data.status}`, `exit=${data.exit_code ?? "-"}`, data.status, event.ts);
-  if (event.type === "task_started") return renderTimelineStatus("task started", data.title || "", "running", event.ts);
-  if (event.type === "task_finished") return renderTimelineStatus(`task ${data.status || "finished"}`, `exit=${data.exit_code ?? "-"}`, data.status || "completed", event.ts);
-  if (event.type === "task_result_written") return renderTimelineStatus("final written", `${data.chars || 0} chars`, "completed", event.ts);
-  if (event.type === "task_final_requested") return renderTimelineStatus("final requested", `target=${data.target || "main"}`, "running", event.ts);
-  if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", event.ts);
-  if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "running", event.ts);
-  if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", event.ts);
-  if (event.type === "agent_config_updated") return renderTimelineStatus("agent permission updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "session", event.ts);
-  if (event.type === "agent_thread") return renderTimelineStatus("codex session", data.thread_id || "-", "session", event.ts);
-  if (event.type === "agent_finished") return renderTimelineStatus("agent finished", `exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", event.ts);
-  if (event.type === "task_dispatched") return renderTimelineStatus("task dispatched", `target=${data.target || "-"}`, "session", event.ts);
-  if (event.type === "agent_created") return renderTimelineStatus("sub-agent created", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", event.ts);
-  if (event.type === "agent_delegated") return renderTimelineStatus("delegated", `${data.count || 0} action(s)`, "session", event.ts);
-  if (event.type === "agent_message_routed") return renderTimelineStatus("routed to agent", `${data.target || "-"} ${data.reason || ""}`, "running", event.ts);
-  if (event.type === "sub_agent_reported") return renderTimelineStatus("sub-agent reported", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", event.ts);
-  if (event.type === "sub_agent_report_ignored") return renderTimelineStatus("sub-agent report ignored", `${data.agent_id || "-"} ${data.reason || ""}`, "session", event.ts);
-  if (event.type === "sub_agent_backend_recovered") return renderTimelineStatus("sub-agent backend recovered", `${data.agent_id || "-"} attempt=${data.attempt || "-"}`, "running", event.ts);
-  if (event.type === "sub_agent_backend_failed") return renderTimelineStatus("sub-agent backend failed", `${data.agent_id || "-"} attempts=${data.attempts || "-"}`, "failed", event.ts);
-  if (event.type === "workspace_missing") return renderTimelineStatus("workspace missing", data.workspace_path || "-", "blocked", event.ts);
-  return renderTimelineStatus(event.type, JSON.stringify(data), "session", event.ts);
+  const ts = eventTimeLabel(event);
+  if (event.type === "task_status_changed") return renderTimelineStatus(`task ${data.status}`, `exit=${data.exit_code ?? "-"}`, data.status, ts);
+  if (event.type === "task_started") return renderTimelineStatus("task started", data.title || "", "running", ts);
+  if (event.type === "task_finished") return renderTimelineStatus(`task ${data.status || "finished"}`, `exit=${data.exit_code ?? "-"}`, data.status || "completed", ts);
+  if (event.type === "task_result_written") return renderTimelineStatus("final written", `${data.chars || 0} chars`, "completed", ts);
+  if (event.type === "task_final_requested") return renderTimelineStatus("final requested", `target=${data.target || "main"}`, "running", ts);
+  if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", ts);
+  if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "running", ts);
+  if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
+  if (event.type === "agent_config_updated") return renderTimelineStatus("agent permission updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "session", ts);
+  if (event.type === "agent_thread") return renderTimelineStatus("codex session", data.thread_id || "-", "session", ts);
+  if (event.type === "agent_finished") return renderTimelineStatus("agent finished", `exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", ts);
+  if (event.type === "task_dispatched") return renderTimelineStatus("task dispatched", `target=${data.target || "-"}`, "session", ts);
+  if (event.type === "agent_created") return renderTimelineStatus("sub-agent created", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", ts);
+  if (event.type === "agent_delegated") return renderTimelineStatus("delegated", `${data.count || 0} action(s)`, "session", ts);
+  if (event.type === "agent_message_routed") return renderTimelineStatus("routed to agent", `${data.target || "-"} ${data.reason || ""}`, "running", ts);
+  if (event.type === "sub_agent_reported") return renderTimelineStatus("sub-agent reported", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
+  if (event.type === "sub_agent_report_ignored") return renderTimelineStatus("sub-agent report ignored", `${data.agent_id || "-"} ${data.reason || ""}`, "session", ts);
+  if (event.type === "sub_agent_backend_recovered") return renderTimelineStatus("sub-agent backend recovered", `${data.agent_id || "-"} attempt=${data.attempt || "-"}`, "running", ts);
+  if (event.type === "sub_agent_backend_failed") return renderTimelineStatus("sub-agent backend failed", `${data.agent_id || "-"} attempts=${data.attempts || "-"}`, "failed", ts);
+  if (event.type === "workspace_missing") return renderTimelineStatus("workspace missing", data.workspace_path || "-", "blocked", ts);
+  return renderTimelineStatus(event.type, JSON.stringify(data), "session", ts);
 }
 
 function renderTurnTimer(taskId) {
@@ -896,18 +928,18 @@ function renderPanel() {
   if (activeTab === "final") {
     panelEl.innerHTML = `<pre>${escapeHtml(detail.result || "No Final yet. Use /aha final to generate it.")}</pre>`;
   } else if (activeTab === "logs") {
-    const logs = detail.log || taskEvents(task.id).map(formatEvent).join("\n") || "No logs yet.";
+    const logs = detail.log ? localizeTimestampText(detail.log) : taskEvents(task.id).map(formatEvent).join("\n") || "No logs yet.";
     panelEl.innerHTML = `<pre>${escapeHtml(logs)}</pre>`;
   } else {
     const context = [
       "Task:",
-      JSON.stringify(detail.task, null, 2),
+      JSON.stringify(localizeTimestampFields(detail.task), null, 2),
       "",
       "Sessions:",
-      JSON.stringify(detail.sessions || [], null, 2),
+      JSON.stringify(localizeTimestampFields(detail.sessions || []), null, 2),
       "",
       "Prompt:",
-      detail.prompt || "No prompt file."
+      detail.prompt ? localizeTimestampText(detail.prompt) : "No prompt file."
     ].join("\n");
     panelEl.innerHTML = `<pre>${escapeHtml(context)}</pre>`;
   }

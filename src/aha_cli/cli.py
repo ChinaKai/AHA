@@ -577,7 +577,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ui_p = sub.add_parser("ui")
     ui_p.add_argument("run_id", nargs="?")
-    ui_p.add_argument("--host", default="127.0.0.1")
+    ui_p.add_argument("--host", default="0.0.0.0")
     ui_p.add_argument("--port", type=int, default=8766)
     ui_p.add_argument("--poll-interval", type=int, default=1000)
     ui_p.set_defaults(func=cmd_ui)

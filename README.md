@@ -239,13 +239,13 @@ This WebSocket server is intentionally minimal and dependency-free. It is suitab
 Start the browser dashboard:
 
 ```bash
-aha ui <run-id> --host 127.0.0.1 --port 8766
+aha ui <run-id> --host 0.0.0.0 --port 8766
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:8766
+http://<host-lan-ip>:8766
 ```
 
 The dashboard uses local HTTP endpoints:
