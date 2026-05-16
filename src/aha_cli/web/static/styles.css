@@ -1053,6 +1053,13 @@ button {
     font-size: 22px;
     line-height: 1;
   }
+  .mobile-actions-toggle.sending {
+    border-color: #1f6feb;
+    background: #1f6feb;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 700;
+  }
   input,
   select,
   button:not(.mobile-task-summary) {

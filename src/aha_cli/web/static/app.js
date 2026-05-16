@@ -65,6 +65,7 @@ const selectedTitleEl = document.getElementById("selected-title");
 const selectedStatusEl = document.getElementById("selected-status");
 const selectedTaskMetaEl = document.getElementById("selected-task-meta");
 const panelEl = document.getElementById("panel");
+const sendFormEl = document.getElementById("send-form");
 const messageEl = document.getElementById("message");
 const agentTargetEl = document.getElementById("agent-target");
 const agentsEl = document.getElementById("agents");
@@ -183,6 +184,9 @@ function closeMobileSheets() {
 
 function setMobileActionPanel(open) {
   if (!mobileActionPanelEl) return;
+  if (open && messageEl.value.trim()) {
+    open = false;
+  }
   mobileActionPanelEl.hidden = !open;
   document.body.classList.toggle("mobile-actions-open", open);
   mobileActionsToggleEl?.setAttribute("aria-expanded", String(open));
@@ -221,6 +225,16 @@ function syncMobileActionPanel() {
   });
 }
 
+function syncMobileComposerAction() {
+  if (!mobileActionsToggleEl) return;
+  const hasMessage = Boolean(messageEl.value.trim());
+  mobileActionsToggleEl.classList.toggle("sending", hasMessage);
+  mobileActionsToggleEl.textContent = hasMessage ? "发送" : "+";
+  mobileActionsToggleEl.setAttribute("aria-label", hasMessage ? "发送消息" : "打开工具面板");
+  mobileActionsToggleEl.title = hasMessage ? "发送消息" : "打开工具面板";
+  if (hasMessage) closeMobileActionPanel();
+}
+
 function initMobileSheets() {
   const mobileQuery = window.matchMedia("(max-width: 640px)");
   mobileTaskSummaryEl?.addEventListener("click", () => setMobileSheet("tasks"));
@@ -249,7 +263,16 @@ function initMobileSheets() {
 }
 
 function initMobileActionPanel() {
-  mobileActionsToggleEl?.addEventListener("click", () => {
+  mobileActionsToggleEl?.addEventListener("click", event => {
+    if (messageEl.value.trim()) {
+      event.preventDefault();
+      if (sendFormEl.requestSubmit) {
+        sendFormEl.requestSubmit();
+      } else {
+        sendFormEl.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      }
+      return;
+    }
     setMobileActionPanel(Boolean(mobileActionPanelEl?.hidden));
   });
   mobileActionPanelEl?.addEventListener("click", event => {
@@ -258,6 +281,7 @@ function initMobileActionPanel() {
     handleMobileAction(button.dataset.mobileAction || "");
   });
   syncMobileActionPanel();
+  syncMobileComposerAction();
 }
 
 function selectedTask() {
@@ -388,6 +412,7 @@ function applySlashCommand(index) {
   messageEl.value = command.insert;
   messageEl.focus();
   commandMenuEl.classList.add("hidden");
+  syncMobileComposerAction();
 }
 
 function markAgentsPanelEditing(durationMs = 10000) {
@@ -1577,7 +1602,7 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   closeMobileSheets();
 });
 
-document.getElementById("send-form").addEventListener("submit", async event => {
+sendFormEl.addEventListener("submit", async event => {
   event.preventDefault();
   const task = selectedTask();
   const message = messageEl.value.trim();
@@ -1598,6 +1623,7 @@ document.getElementById("send-form").addEventListener("submit", async event => {
     })
   });
   messageEl.value = "";
+  syncMobileComposerAction();
   commandMenuEl.classList.add("hidden");
   closeMobileActionPanel();
   await pollEvents();
@@ -1607,6 +1633,7 @@ document.getElementById("send-form").addEventListener("submit", async event => {
 
 messageEl.addEventListener("input", () => {
   commandSelection = 0;
+  syncMobileComposerAction();
   renderCommandMenu();
 });
 messageEl.addEventListener("focus", renderCommandMenu);
