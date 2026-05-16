@@ -1177,11 +1177,10 @@ function renderMobileTaskSummary(task) {
     return;
   }
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
-  const title = `${task.id} / ${task.title}`;
-  mobileTaskTitleEl.textContent = title;
+  mobileTaskTitleEl.textContent = task.id;
   mobileTaskStatusEl.textContent = displayStatus;
   mobileTaskStatusEl.className = `status ${displayStatus}`;
-  mobileTaskSummaryEl.title = title;
+  mobileTaskSummaryEl.title = `${task.id} / ${task.title}`;
 }
 
 function renderAgents() {
