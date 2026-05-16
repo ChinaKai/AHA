@@ -29,6 +29,23 @@ main {
   height: calc(100vh - 64px);
 }
 h1 { margin: 0; font-size: 20px; }
+.header-workspace-dir {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(28vw, 320px);
+  overflow: hidden;
+  color: #667085;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+.header-workspace-dir:not(:empty)::before {
+  content: " · ";
+  color: #98a2b3;
+  font-weight: 500;
+}
 h2 { margin: 0 0 10px; font-size: 15px; }
 button, input, select { font: inherit; }
 .meta { color: #667085; font-size: 12px; }
@@ -784,6 +801,10 @@ button {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 15px;
+  }
+  .header-workspace-dir {
+    max-width: 72px;
+    font-size: 12px;
   }
   #run-state {
     display: none;

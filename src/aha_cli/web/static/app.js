@@ -42,6 +42,7 @@ const conversationFilterOptions = [
 
 const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
+const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
 const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
 const mobileTaskTitleEl = document.getElementById("mobile-task-title");
 const mobileTaskStatusEl = document.getElementById("mobile-task-status");
@@ -1136,6 +1137,7 @@ async function updateTaskVisibility(taskId, action) {
 function renderSelectedHeader() {
   const task = selectedTask();
   if (!task) {
+    renderHeaderWorkspace(null);
     renderMobileTaskSummary(null);
     selectedIdEl.textContent = "";
     selectedTitleEl.textContent = "No tasks";
@@ -1144,6 +1146,7 @@ function renderSelectedHeader() {
     selectedStatusEl.className = "status pending";
     return;
   }
+  renderHeaderWorkspace(task);
   renderMobileTaskSummary(task);
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
@@ -1155,6 +1158,13 @@ function renderSelectedHeader() {
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
   selectedStatusEl.textContent = displayStatus;
   selectedStatusEl.className = `status ${displayStatus}`;
+}
+
+function renderHeaderWorkspace(task) {
+  if (!headerWorkspaceDirEl) return;
+  const workspace = task?.workspace_path || "";
+  headerWorkspaceDirEl.textContent = workspace ? pathName(workspace) : "";
+  headerWorkspaceDirEl.title = workspace;
 }
 
 function renderMobileTaskSummary(task) {
