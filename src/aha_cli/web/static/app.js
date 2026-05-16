@@ -568,12 +568,17 @@ function latestTurnTiming(taskId) {
       break;
     }
   }
-  const finishedAt = finishedEvent ? eventTimestamp(finishedEvent) : null;
+  const task = (statusData?.tasks || []).find(item => item.id === taskId);
+  const agent = (task?.agents || []).find(item => item.id === backendTarget());
+  let finishedAt = finishedEvent ? eventTimestamp(finishedEvent) : null;
+  if (!finishedAt && terminalAgentStatuses.has(agent?.status || "")) {
+    finishedAt = parseTimestamp(agent.finished_at) || parseTimestamp(agent.last_active_at) || parseTimestamp(task?.finished_at) || startedAt;
+  }
   const running = !finishedAt;
   const endAt = running ? Date.now() : finishedAt;
   const finishedData = eventData(finishedEvent || {});
   const exitCode = finishedData.exit_code;
-  const status = finishedData.status || (exitCode === 0 ? "completed" : "failed");
+  const status = finishedData.status || agent?.status || (exitCode === 0 ? "completed" : "failed");
   return {
     startedAt,
     finishedAt,
