@@ -25,6 +25,11 @@ TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked"}
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 
 
+def task_has_active_followup(task: dict) -> bool:
+    coordination = task.get("coordination") or {}
+    return bool(coordination.get("followup_started_at") and not coordination.get("final_summary_completed_at"))
+
+
 def task_assignment_prompt(task: dict) -> str:
     commit_policy = textwrap.indent(commit_message_policy_prompt(str(task.get("id") or "<task-id>"), "<agent-id>").rstrip(), "        ")
     return textwrap.dedent(
@@ -335,7 +340,7 @@ def request_final_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
             },
         )
         return False
-    if task.get("status") in TERMINAL_AGENT_STATUSES:
+    if task.get("status") in TERMINAL_AGENT_STATUSES and not task_has_active_followup(task):
         return False
     task = mark_task_coordination(root, run_id, task_id, final_summary_requested_at=utc_now())
     prompt = textwrap.dedent(
@@ -384,7 +389,7 @@ def record_sub_agent_report(
         task = task_snapshot(root, run_id, task_id)["task"]
     except KeyError:
         return {"handled": False}
-    if task.get("status") in TERMINAL_AGENT_STATUSES:
+    if task.get("status") in TERMINAL_AGENT_STATUSES and not task_has_active_followup(task):
         append_event(root, run_id, "sub_agent_report_ignored", {"task_id": task_id, "agent_id": agent_id, "reason": "task already terminal"})
         return {"handled": True, "ignored": True}
     current = next((agent for agent in sub_agents(task) if agent.get("id") == agent_id), None)
@@ -404,7 +409,7 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
     actions: list[dict] = []
     snapshot = status_snapshot(root, run_id)
     for task in snapshot.get("tasks", []):
-        if task.get("status") in TERMINAL_AGENT_STATUSES:
+        if task.get("status") in TERMINAL_AGENT_STATUSES and not task_has_active_followup(task):
             continue
         agents = sub_agents(task)
         if not agents:

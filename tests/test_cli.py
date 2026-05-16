@@ -104,6 +104,24 @@ class CliTests(unittest.TestCase):
                 detail = task_snapshot(root, run_id, "task-001")
                 self.assertEqual(detail["task"]["started_at"], "2026-05-15T00:00:00+00:00")
 
+    def test_running_status_does_not_reopen_terminal_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "No reopen", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                completed = task_snapshot(root, run_id, "task-001")["task"]
+
+                set_task_status(root, run_id, "task-001", "running")
+                detail = task_snapshot(root, run_id, "task-001")
+
+        self.assertEqual(detail["task"]["status"], "completed")
+        self.assertEqual(detail["task"]["exit_code"], 0)
+        self.assertEqual(detail["task"]["finished_at"], completed["finished_at"])
+
     def test_parallel_plan_writers_do_not_collide_on_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -536,6 +554,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertIn("main -> aha: new final", output)
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["result"].strip(), "new final")
+                self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "completed")
+                self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["exit_code"], 0)
 
     def test_final_summary_stops_task_scoped_backends(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -672,11 +692,15 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(sub_messages[-1]["message"], "请继续调整你负责的范围")
                 self.assertEqual(sub_messages[-1]["coordination"], "routed_by_main")
                 detail = task_snapshot(root, run_id, "task-001")
-                self.assertEqual(detail["task"]["status"], "running")
+                self.assertEqual(detail["task"]["status"], "completed")
+                self.assertEqual(detail["task"]["exit_code"], 0)
                 self.assertEqual(detail["task"]["coordination"]["final_summary_requested_at"], "")
                 self.assertEqual(detail["task"]["coordination"]["final_summary_completed_at"], "")
                 self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
                 start_backend.assert_called_once()
+
+                report = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sub follow-up done")
+                self.assertTrue(report["final_requested"])
 
     def test_sub_agent_reports_wait_then_request_main_final_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -846,8 +870,8 @@ class CliTests(unittest.TestCase):
                     snapshot = web_status_snapshot(root, run_id)
 
         task = snapshot["tasks"][0]
-        self.assertEqual(task["status"], "running")
-        self.assertEqual(task["current_status"], "running")
+        self.assertEqual(task["status"], "completed")
+        self.assertEqual(task["current_status"], "completed")
         self.assertEqual(task["outcome_status"], "completed")
         self.assertEqual(task["display_status"], "completed")
         self.assertEqual(task["activity_status"], "busy")

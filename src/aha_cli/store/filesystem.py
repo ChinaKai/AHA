@@ -25,6 +25,7 @@ from aha_cli.domain.models import (
 
 PLAN_LOCK = threading.RLock()
 EVENT_LOCK = threading.Lock()
+TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
 
 def read_json(path: Path) -> dict:
@@ -864,25 +865,32 @@ def delete_task(root: Path, run_id: str, task_id: str) -> dict:
 
 def set_task_status(root: Path, run_id: str, task_id: str, status: str, exit_code: int | None = None) -> dict:
     now = utc_now()
+    should_append = True
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
             raise SystemExit(f"Task not found: {task_id}")
-        task["status"] = status
+        if task.get("status") in TERMINAL_TASK_STATUSES and status in {"running", *TERMINAL_TASK_STATUSES}:
+            should_append = False
+        else:
+            task["status"] = status
         if status == "running":
-            task["started_at"] = task.get("started_at") or now
-            task["finished_at"] = None
-            task["exit_code"] = None
-        elif status in {"completed", "failed", "blocked"}:
-            if not task.get("started_at"):
-                task["started_at"] = now
-            task["finished_at"] = now
-            task["exit_code"] = exit_code
+            if should_append:
+                task["started_at"] = task.get("started_at") or now
+                task["finished_at"] = None
+                task["exit_code"] = None
+        elif status in TERMINAL_TASK_STATUSES:
+            if should_append:
+                if not task.get("started_at"):
+                    task["started_at"] = now
+                task["finished_at"] = now
+                task["exit_code"] = exit_code
         plan["updated_at"] = now
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(root, run_id, "task_status_changed", {"task_id": task_id, "status": status, "exit_code": exit_code})
+    if should_append:
+        append_event(root, run_id, "task_status_changed", {"task_id": task_id, "status": status, "exit_code": exit_code})
     return task
 
 
