@@ -765,7 +765,10 @@ async function loadStatus(options = {}) {
   const res = await fetch("/api/status");
   statusData = await res.json();
   runIdEl.textContent = statusData.run_id;
-  runStateEl.textContent = `${statusData.mode} | updated ${formatLocalTimestamp(statusData.updated_at, statusData.updated_at || "-")}`;
+  const runStateText = `${statusData.mode} | updated ${formatLocalTimestamp(statusData.updated_at, statusData.updated_at || "-")}`;
+  runStateEl.textContent = runStateText;
+  runStateEl.dataset.mobileLabel = statusData.mode || "run";
+  runStateEl.title = runStateText;
   summaryEl.textContent = statusData.goal;
   const tasks = visibleTasks();
   if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
