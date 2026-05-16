@@ -769,8 +769,14 @@ button {
     grid-template-columns: 1fr;
   }
   .task-list {
-    grid-auto-columns: minmax(240px, 86vw);
+    grid-template-columns: 1fr;
+    grid-auto-columns: auto;
+    grid-auto-flow: row;
+    overflow-x: visible;
     padding: 8px 12px 12px;
+  }
+  #agents {
+    grid-template-columns: 1fr;
   }
   .task-list-tools {
     padding: 8px 12px;
