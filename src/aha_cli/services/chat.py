@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import textwrap
 import time
@@ -7,6 +8,7 @@ import uuid
 
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
 from aha_cli.domain.models import utc_now
+from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.orchestrator import (
     action_response_text,
@@ -51,6 +53,8 @@ BLOCKED_REPLY_MARKERS = (
     "Permission denied",
     "Read-only file system",
 )
+
+TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
 
 def safe_target_name(target: str) -> str:
@@ -267,6 +271,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                 last_coordination_check = time.monotonic()
             messages, next_offset = iter_jsonl_from(inbox, offset)
             for item in messages:
+                exit_after_message = False
                 item_task_id = str(item.get("task_id", "") or "") or None
                 if worker_task_id and item_task_id != worker_task_id:
                     continue
@@ -307,6 +312,10 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             "reason": "task final summary already requested or task is terminal",
                         },
                     )
+                    if worker_task_id:
+                        save_chat_offset(offset_file, next_offset)
+                        mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                        return 0
                     continue
                 if agent and agent.get("backend") != "codex":
                     append_event(
@@ -411,10 +420,14 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             mark_task_coordination(root, run_id, item_task_id, final_summary_completed_at=utc_now())
                             set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                             set_task_status(root, run_id, item_task_id, final_status, exit_code)
+                            if final_status in TERMINAL_TASK_STATUSES:
+                                stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
+                                exit_after_message = bool(worker_task_id)
                         elif agent_id != "main":
                             set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                             request_final_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")
+                            exit_after_message = bool(worker_task_id)
                         else:
                             detail = task_snapshot(root, run_id, item_task_id)
                             if executed or task_has_incomplete_sub_agents(detail["task"]):
@@ -423,6 +436,9 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             else:
                                 set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                                 set_task_status(root, run_id, item_task_id, final_status, exit_code)
+                                if final_status in TERMINAL_TASK_STATUSES:
+                                    stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
+                                    exit_after_message = bool(worker_task_id)
                     print(f"{args.sender} -> {reply_target}: {display_reply}", flush=True)
                 else:
                     if manages_task_status:
@@ -430,11 +446,18 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
                             request_final_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")
+                            exit_after_message = bool(worker_task_id)
                         else:
                             set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
                             set_task_status(root, run_id, item_task_id, "failed", exit_code)
+                            stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
+                            exit_after_message = bool(worker_task_id)
                     append_event(root, run_id, "agent_error", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 append_event(root, run_id, "agent_finished", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                if exit_after_message and worker_task_id:
+                    save_chat_offset(offset_file, next_offset)
+                    mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                    return exit_code
                 if args.once:
                     save_chat_offset(offset_file, next_offset)
                     return exit_code

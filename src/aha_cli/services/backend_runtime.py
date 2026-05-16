@@ -151,7 +151,8 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     target = target or "main"
     task_id = task_id or None
     state = _read_state(root, run_id, target, task_id)
-    pid = int(state.get("pid") or 0) or None
+    state_pid = int(state.get("pid") or 0) or None
+    pid = None if state.get("status") == "stopped" else state_pid
     managed = bool(state.get("managed")) if state else False
     running = pid_is_running(pid)
     discovered_pid = None if running else _discover_backend_process(run_id, target, task_id)
@@ -167,7 +168,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "backend": state.get("backend", "codex-chat"),
         "status": status,
         "pid": pid if running else None,
-        "last_pid": pid if not running else None,
+        "last_pid": state_pid if not running else None,
         "managed": managed,
         "started_at": state.get("started_at"),
         "stopped_at": state.get("stopped_at"),
@@ -175,6 +176,58 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "command": state.get("command", []),
         **activity,
     }
+
+
+def mark_backend_stopped(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, pid: int | None = None) -> dict:
+    task_id = task_id or None
+    target = target or "main"
+    state = _read_state(root, run_id, target, task_id)
+    previous_pid = int(pid or state.get("pid") or 0) or None
+    state.update(
+        {
+            "target": target,
+            "task_id": task_id,
+            "backend": state.get("backend", "codex-chat"),
+            "status": "stopped",
+            "pid": previous_pid,
+            "managed": bool(state),
+            "stopped_at": utc_now(),
+            "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
+            "command": state.get("command", []),
+        }
+    )
+    _write_state(root, run_id, target, state, task_id)
+    append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": previous_pid})
+    return backend_status(root, run_id, target, task_id) | {"stopped": True}
+
+
+def stop_task_backends(root: Path, run_id: str, task_id: str, *, exclude_pid: int | None = None, timeout: float = 5.0) -> list[dict]:
+    plan = require_plan(root, run_id)
+    task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
+    if not task:
+        return []
+    stopped: list[dict] = []
+    for agent in task.get("agents", []):
+        target = str(agent.get("id") or "main")
+        state = backend_status(root, run_id, target, task_id)
+        pid = int(state.get("pid") or 0) or None
+        if not pid or state.get("status") == "stopped":
+            continue
+        if exclude_pid and pid == int(exclude_pid):
+            continue
+        stopped.append(stop_backend(root, run_id, target, task_id=task_id, timeout=timeout))
+    if stopped:
+        append_event(
+            root,
+            run_id,
+            "task_backends_stopped",
+            {
+                "task_id": task_id,
+                "count": len(stopped),
+                "targets": [item.get("target") for item in stopped],
+            },
+        )
+    return stopped
 
 
 def _codex_chat_command(

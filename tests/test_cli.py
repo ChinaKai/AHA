@@ -13,7 +13,7 @@ from aha_cli.backends.registry import agent_backend_names, agent_backends, backe
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
-from aha_cli.services.backend_runtime import backend_status
+from aha_cli.services.backend_runtime import backend_status, stop_task_backends
 from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
 from aha_cli.store.filesystem import (
     add_agent,
@@ -530,6 +530,43 @@ class CliTests(unittest.TestCase):
                 self.assertIn("main -> aha: new final", output)
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["result"].strip(), "new final")
 
+    def test_final_summary_stops_task_scoped_backends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Final cleanup", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_agent_status(root, run_id, "task-001", "sub-001", "completed", 0)
+                set_task_status(root, run_id, "task-001", "running")
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "Produce final summary",
+                    sender="aha",
+                    task_id="task-001",
+                    role="main",
+                    result_policy="finalize",
+                    reply_target="browser",
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "final summary", None)),
+                    mock.patch("aha_cli.services.chat.stop_task_backends", return_value=[]) as stop_backends,
+                    mock.patch("aha_cli.services.chat.mark_backend_stopped") as mark_stopped,
+                ):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                stop_backends.assert_called_once()
+                self.assertEqual(stop_backends.call_args.args[:3], (root, run_id, "task-001"))
+                self.assertIn("exclude_pid", stop_backends.call_args.kwargs)
+                mark_stopped.assert_called_once()
+                self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "completed")
+
     def test_codex_chat_executes_spawn_sub_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -991,6 +1028,34 @@ class CliTests(unittest.TestCase):
 
         self.assertFalse(task_one["busy"])
         self.assertTrue(task_two["busy"])
+
+    def test_stop_task_backends_skips_current_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Stop task workers", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+
+                def fake_status(_root: Path, _run_id: str, target: str = "main", task_id: str | None = None) -> dict:
+                    return {
+                        "target": target,
+                        "task_id": task_id,
+                        "status": "running",
+                        "pid": 111 if target == "main" else 222,
+                    }
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.backend_status", side_effect=fake_status),
+                    mock.patch("aha_cli.services.backend_runtime.stop_backend", side_effect=lambda _root, _run_id, target, **_kwargs: {"target": target, "stopped": True}) as stop_backend,
+                ):
+                    stopped = stop_task_backends(root, run_id, "task-001", exclude_pid=111)
+
+        self.assertEqual(stopped, [{"target": "sub-001", "stopped": True}])
+        stop_backend.assert_called_once()
+        self.assertEqual(stop_backend.call_args.args[:3], (root, run_id, "sub-001"))
 
     def test_agent_permission_update_is_in_status_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
