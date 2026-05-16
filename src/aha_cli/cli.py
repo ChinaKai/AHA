@@ -4,12 +4,15 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 from aha_cli.backends.codex import codex_runner_command
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, backend_names
 from aha_cli.domain.models import default_config
 from aha_cli.services.chat import auto_reply, codex_chat
+from aha_cli.services.commit_policy import CONVENTIONAL_TYPES, format_commit_message, validate_commit_message
 from aha_cli.services.backend_runtime import (
     backend_status,
     format_backend_status,
@@ -361,6 +364,57 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_commit(args: argparse.Namespace) -> int:
+    try:
+        message = format_commit_message(
+            args.type,
+            args.summary,
+            args.task_id,
+            args.agent,
+            scope=args.scope,
+            aha_scope=args.aha_scope,
+        )
+    except ValueError as exc:
+        print(f"Commit message error: {exc}", file=sys.stderr)
+        return 2
+    if args.dry_run:
+        print(message, end="")
+        return 0
+    root = find_project_root()
+    add_paths = [path for group in args.add for path in group]
+    if add_paths:
+        subprocess.run(["git", "add", "--", *add_paths], cwd=root, check=True)
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=root)
+    if staged.returncode == 0:
+        print("No staged changes to commit. Stage files first or pass --add <path>.", file=sys.stderr)
+        return 1
+    if staged.returncode != 1:
+        print("Unable to inspect staged changes with git diff --cached.", file=sys.stderr)
+        return staged.returncode
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(message)
+        message_file = handle.name
+    try:
+        subprocess.run(["git", "commit", "-F", message_file], cwd=root, check=True)
+    finally:
+        Path(message_file).unlink(missing_ok=True)
+    return 0
+
+
+def cmd_commit_check(args: argparse.Namespace) -> int:
+    if args.message_file == "-":
+        message = sys.stdin.read()
+    else:
+        message = Path(args.message_file).read_text(encoding="utf-8")
+    errors = validate_commit_message(message)
+    if errors:
+        for error in errors:
+            print(f"commit message error: {error}", file=sys.stderr)
+        return 1
+    print("Commit message OK")
+    return 0
+
+
 def add_codex_options(parser: argparse.ArgumentParser, prefix: str = "codex") -> None:
     parser.add_argument(f"--{prefix}-bin", default=None if prefix == "codex" else "codex")
     parser.add_argument("--model" if prefix != "codex" else "--codex-model", default=None)
@@ -443,6 +497,21 @@ def build_parser() -> argparse.ArgumentParser:
     auto_p.add_argument("--from-start", action="store_true")
     auto_p.add_argument("--once", action="store_true")
     auto_p.set_defaults(func=cmd_auto_reply)
+
+    commit_p = sub.add_parser("commit", help="Commit staged or selected files with AHA Conventional Commit metadata")
+    commit_p.add_argument("--type", choices=CONVENTIONAL_TYPES, required=True)
+    commit_p.add_argument("--scope", default=None)
+    commit_p.add_argument("--summary", required=True)
+    commit_p.add_argument("--task-id", required=True)
+    commit_p.add_argument("--agent", required=True)
+    commit_p.add_argument("--aha-scope", default=None)
+    commit_p.add_argument("--add", nargs="+", action="append", default=[], help="Path(s) to stage before committing; repeatable")
+    commit_p.add_argument("--dry-run", action="store_true", help="Print the generated commit message without committing")
+    commit_p.set_defaults(func=cmd_commit)
+
+    commit_check_p = sub.add_parser("commit-check", help="Validate an AHA commit message file")
+    commit_check_p.add_argument("message_file", help="Commit message file path, or '-' for stdin")
+    commit_check_p.set_defaults(func=cmd_commit_check)
 
     codex_runner_p = sub.add_parser("codex-runner")
     codex_runner_p.add_argument("--codex-bin", default="codex")

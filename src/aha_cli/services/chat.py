@@ -7,6 +7,7 @@ import uuid
 
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
 from aha_cli.domain.models import utc_now
+from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.orchestrator import (
     action_response_text,
     execute_actions,
@@ -181,6 +182,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
             final_context = ""
             if is_finalization and existing_final:
                 final_context = f"- existing Final chars: {len(existing_final)}\n"
+            commit_policy = textwrap.indent(commit_message_policy_prompt(task_id, target).rstrip(), "                ")
             task_context = textwrap.dedent(
                 f"""\
                 Current task context:
@@ -201,7 +203,9 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
                 - Commit, revert, and repository-change finalization requests are ownership-sensitive.
                 - When you are `task-main`, route commit work to the sub-agent that owns the changed scope when one exists.
                 - When you are a sub-agent, commit only files covered by your `assignment` / `created_reason`; if the requested commit is outside your scope, report back to `task-main`.
-                - Before any commit, inspect `git status`, avoid unrelated or user changes, and make the commit message identify the AHA task, agent, and scope, for example `AHA task={task_id} agent={target} scope=<short-scope>`.
+                - Before any commit, inspect `git status`, avoid unrelated or user changes, and follow the AHA commit message policy below.
+
+{commit_policy}
                 """
             )
         except KeyError:

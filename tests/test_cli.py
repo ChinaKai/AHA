@@ -10,6 +10,7 @@ from unittest import mock
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event
 from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
+from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
 from aha_cli.store.filesystem import (
@@ -342,6 +343,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("Commit ownership policy:", assignment_prompt)
         self.assertIn("route it to that sub-agent with `route_to_agent`", assignment_prompt)
         self.assertIn("Never ask a sub-agent to commit files outside its assignment", assignment_prompt)
+        self.assertIn("Commit message policy:", assignment_prompt)
+        self.assertIn("AHA-Task: task-001", assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -357,7 +360,10 @@ class CliTests(unittest.TestCase):
 
                 self.assertIn("Commit ownership policy:", main_prompt)
                 self.assertIn("route commit work to the sub-agent that owns the changed scope", main_prompt)
-                self.assertIn("AHA task=task-001 agent=main scope=<short-scope>", main_prompt)
+                self.assertIn("Commit message policy:", main_prompt)
+                self.assertIn("AHA-Task: task-001", main_prompt)
+                self.assertIn("AHA-Agent: main", main_prompt)
+                self.assertIn("aha commit --type <type>", main_prompt)
                 self.assertIn("UI routing changes", main_prompt)
 
                 sub_message = append_message(root, run_id, "sub-001", "提交你负责的部分", sender="main", task_id="task-001", role="sub")
@@ -365,7 +371,45 @@ class CliTests(unittest.TestCase):
 
                 self.assertIn("commit only files covered by your `assignment` / `created_reason`", sub_prompt)
                 self.assertIn("report back to `task-main`", sub_prompt)
-                self.assertIn("AHA task=task-001 agent=sub-001 scope=<short-scope>", sub_prompt)
+                self.assertIn("AHA-Task: task-001", sub_prompt)
+                self.assertIn("AHA-Agent: sub-001", sub_prompt)
+
+    def test_commit_policy_formats_validates_and_prints_dry_run_messages(self) -> None:
+        message = format_commit_message("feat", "add lazy loading", "task-001", "main", scope="web", aha_scope="lazy-log")
+
+        self.assertEqual(validate_commit_message(message), [])
+        self.assertIn("feat(web): add lazy loading", message)
+        self.assertIn("AHA-Task: task-001", message)
+        self.assertIn("AHA-Agent: main", message)
+        self.assertIn("AHA-Scope: lazy-log", message)
+        self.assertTrue(validate_commit_message("update stuff\n\nAHA-Task: task-001\n"))
+
+        code, output = self.run_cli(
+            "commit",
+            "--type",
+            "fix",
+            "--scope",
+            "web",
+            "--summary",
+            "keep logs scroll stable",
+            "--task-id",
+            "task-005",
+            "--agent",
+            "main",
+            "--aha-scope",
+            "log-scroll",
+            "--dry-run",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("fix(web): keep logs scroll stable", output)
+        self.assertIn("AHA-Task: task-005", output)
+        self.assertIn("AHA-Agent: main", output)
+        with tempfile.TemporaryDirectory() as tmp:
+            message_file = Path(tmp) / "COMMIT_EDITMSG"
+            message_file.write_text(message, encoding="utf-8")
+            code, output = self.run_cli("commit-check", str(message_file))
+        self.assertEqual(code, 0)
+        self.assertIn("Commit message OK", output)
 
     def test_raw_result_file_without_final_metadata_is_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

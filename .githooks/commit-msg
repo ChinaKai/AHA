@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+if command -v aha >/dev/null 2>&1; then
+  exec aha commit-check "$1"
+fi
+
+PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}src" exec python3 -m aha_cli commit-check "$1"

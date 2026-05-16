@@ -52,6 +52,8 @@ aha auto-reply <run-id> main
 aha codex-chat <run-id> main
 aha serve <run-id>
 aha ui <run-id>
+aha commit --type feat --scope web --summary "add lazy loading" --task-id task-001 --agent main --aha-scope web-lazy-loading
+aha commit-check .git/COMMIT_EDITMSG
 aha collect <run-id>
 aha merge <run-id>
 aha list
@@ -298,6 +300,43 @@ Recommended rule:
 ```text
 sub agents collect facts or edit isolated scopes;
 main agent makes final decisions and merges output.
+```
+
+## Commit Message Policy
+
+AHA commits use a Conventional Commit subject plus AHA trailers:
+
+```text
+feat(web): add lazy loading for logs
+
+AHA-Task: task-005
+AHA-Agent: main
+AHA-Scope: complete-lazy-log-loading
+```
+
+Prefer `aha commit` over raw `git commit` so the metadata is generated consistently:
+
+```bash
+aha commit \
+  --type feat \
+  --scope web \
+  --summary "add lazy loading for logs" \
+  --task-id task-005 \
+  --agent main \
+  --aha-scope complete-lazy-log-loading \
+  --add README.md src/aha_cli
+```
+
+Validate a commit message file with:
+
+```bash
+aha commit-check .git/COMMIT_EDITMSG
+```
+
+Enable the repository hook locally:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 ## Why This Exists

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import backend_status, start_backend
+from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
@@ -25,6 +26,7 @@ WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 
 
 def task_assignment_prompt(task: dict) -> str:
+    commit_policy = textwrap.indent(commit_message_policy_prompt(str(task.get("id") or "<task-id>"), "<agent-id>").rstrip(), "        ")
     return textwrap.dedent(
         f"""\
         You are now running in AHA mode.
@@ -64,6 +66,9 @@ def task_assignment_prompt(task: dict) -> str:
         - If a commit request belongs to one existing sub-agent's assignment, route it to that sub-agent with `route_to_agent`.
         - If a commit spans multiple owners, route work per owner or coordinate one aggregate commit only after verifying file ownership.
         - Never ask a sub-agent to commit files outside its assignment.
+        - Follow the AHA commit message policy below for every commit.
+
+{commit_policy}
 
         Return a concise response. If you need AHA to create sub-agents, include a JSON object
         in your response with this shape:
