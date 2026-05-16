@@ -940,6 +940,12 @@ button {
     box-shadow: 0 -16px 40px rgba(15, 23, 42, 0.18);
     overflow: auto;
   }
+  .agentbar {
+    left: 8px;
+    right: 8px;
+    max-width: calc(100vw - 16px);
+    overflow-x: hidden;
+  }
   body.mobile-tasks-open .sidebar,
   body.mobile-agents-open .agentbar {
     display: block;
@@ -951,6 +957,30 @@ button {
   body.mobile-tasks-open .sidebar .side-rail-toggle,
   body.mobile-agents-open .agentbar .side-rail-toggle {
     display: none;
+  }
+  .agent-panel,
+  #agents,
+  .agent-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .agent-card {
+    overflow: hidden;
+  }
+  .agent-card .truncate {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .agent-card-head {
+    grid-template-columns: minmax(0, 1fr) minmax(64px, auto);
+  }
+  .agent-process {
+    min-width: 0;
+  }
+  .agent-permissions select {
+    width: 100%;
   }
   .message-head {
     display: grid;
