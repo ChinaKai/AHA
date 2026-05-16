@@ -63,6 +63,7 @@ button, input, select { font: inherit; }
 .side-rail-toggle {
   display: none;
 }
+.mobile-task-summary,
 .mobile-context-actions,
 .mobile-actions-toggle,
 .mobile-action-panel,
@@ -764,15 +765,13 @@ button {
   header {
     min-height: 44px;
     padding: 6px 10px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    flex-wrap: nowrap;
     gap: 8px;
   }
   header > div {
     min-width: 0;
-  }
-  header > div:first-child {
-    flex: 0 1 auto;
   }
   header > div:first-child .meta {
     display: none;
@@ -787,16 +786,32 @@ button {
     font-size: 15px;
   }
   #run-state {
-    flex: 0 1 auto;
-    max-width: 44vw;
+    display: none;
+  }
+  .mobile-task-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: left;
+  }
+  #mobile-task-title {
+    min-width: 0;
     overflow: hidden;
-    text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0;
+    color: #344054;
+    font-size: 13px;
+    font-weight: 650;
   }
-  #run-state::before {
-    content: attr(data-mobile-label);
+  .mobile-task-summary .status {
+    min-height: 20px;
+    padding: 1px 7px;
     font-size: 11px;
   }
   h2 { font-size: 14px; }
@@ -852,9 +867,7 @@ button {
     padding: 8px 12px;
   }
   .task-header {
-    display: grid;
-    gap: 7px;
-    padding: 8px 12px;
+    display: none;
   }
   .task-header-top {
     display: grid;
@@ -899,7 +912,7 @@ button {
     font-size: 11px;
   }
   .tabs {
-    padding: 8px 12px;
+    display: none;
   }
   .conversation-filters {
     padding: 7px 12px;
@@ -994,6 +1007,11 @@ button {
     font-size: 12px;
     font-weight: 650;
   }
+  .mobile-action-panel button.active {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+    color: #1e3a8a;
+  }
   .command-item {
     grid-template-columns: 1fr;
     gap: 3px;
@@ -1024,7 +1042,7 @@ button {
   }
   input,
   select,
-  button {
+  button:not(.mobile-task-summary) {
     min-height: 42px;
   }
   pre {

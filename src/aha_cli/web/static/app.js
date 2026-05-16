@@ -42,6 +42,9 @@ const conversationFilterOptions = [
 
 const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
+const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
+const mobileTaskTitleEl = document.getElementById("mobile-task-title");
+const mobileTaskStatusEl = document.getElementById("mobile-task-status");
 const summaryEl = document.getElementById("summary");
 const taskCreateEl = document.getElementById("task-create");
 const collapseOverviewEl = document.getElementById("collapse-overview");
@@ -171,6 +174,7 @@ function setMobileSheet(sheet) {
   if (mobileSheetBackdropEl) mobileSheetBackdropEl.hidden = !taskOpen && !agentsOpen;
   openTasksSheetEl?.setAttribute("aria-expanded", String(taskOpen));
   openAgentsSheetEl?.setAttribute("aria-expanded", String(agentsOpen));
+  mobileTaskSummaryEl?.setAttribute("aria-expanded", String(taskOpen));
 }
 
 function closeMobileSheets() {
@@ -210,8 +214,16 @@ async function handleMobileAction(action) {
   }
 }
 
+function syncMobileActionPanel() {
+  mobileActionPanelEl?.querySelectorAll("[data-mobile-action]").forEach(button => {
+    const action = button.dataset.mobileAction || "";
+    button.classList.toggle("active", action === activeTab);
+  });
+}
+
 function initMobileSheets() {
   const mobileQuery = window.matchMedia("(max-width: 640px)");
+  mobileTaskSummaryEl?.addEventListener("click", () => setMobileSheet("tasks"));
   openTasksSheetEl?.addEventListener("click", () => setMobileSheet("tasks"));
   openAgentsSheetEl?.addEventListener("click", () => setMobileSheet("agents"));
   closeTasksSheetEl?.addEventListener("click", closeMobileSheets);
@@ -245,6 +257,7 @@ function initMobileActionPanel() {
     if (!button) return;
     handleMobileAction(button.dataset.mobileAction || "");
   });
+  syncMobileActionPanel();
 }
 
 function selectedTask() {
@@ -1098,6 +1111,7 @@ async function updateTaskVisibility(taskId, action) {
 function renderSelectedHeader() {
   const task = selectedTask();
   if (!task) {
+    renderMobileTaskSummary(null);
     selectedIdEl.textContent = "";
     selectedTitleEl.textContent = "No tasks";
     selectedTaskMetaEl.textContent = "";
@@ -1105,6 +1119,7 @@ function renderSelectedHeader() {
     selectedStatusEl.className = "status pending";
     return;
   }
+  renderMobileTaskSummary(task);
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
   const timing = taskMetaTiming(task.id, task);
@@ -1115,6 +1130,23 @@ function renderSelectedHeader() {
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
   selectedStatusEl.textContent = displayStatus;
   selectedStatusEl.className = `status ${displayStatus}`;
+}
+
+function renderMobileTaskSummary(task) {
+  if (!mobileTaskSummaryEl || !mobileTaskTitleEl || !mobileTaskStatusEl) return;
+  if (!task) {
+    mobileTaskTitleEl.textContent = "No task";
+    mobileTaskStatusEl.textContent = "empty";
+    mobileTaskStatusEl.className = "status pending";
+    mobileTaskSummaryEl.title = "No task selected";
+    return;
+  }
+  const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
+  const title = `${task.id} / ${task.title}`;
+  mobileTaskTitleEl.textContent = title;
+  mobileTaskStatusEl.textContent = displayStatus;
+  mobileTaskStatusEl.className = `status ${displayStatus}`;
+  mobileTaskSummaryEl.title = title;
 }
 
 function renderAgents() {
@@ -1511,6 +1543,7 @@ async function activateTab(tab) {
   if (activeTab === "conversation") conversationAutoFollow = true;
   if (activeTab === "logs" && selectedTaskId) logState(selectedTaskId).autoFollow = true;
   document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item.dataset.tab === activeTab));
+  syncMobileActionPanel();
   await ensureActiveTabData();
   renderPanel();
 }

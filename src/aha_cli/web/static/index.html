@@ -12,6 +12,10 @@
       <h1><span class="brand-short">AHA</span><span class="brand-full"> Dashboard</span></h1>
       <div class="meta">Run <code id="run-id"></code></div>
     </div>
+    <button id="mobile-task-summary" class="mobile-task-summary" type="button" aria-controls="overview-sidebar" aria-expanded="false">
+      <span id="mobile-task-title">No task</span>
+      <span id="mobile-task-status" class="status pending">pending</span>
+    </button>
     <div id="run-state" class="meta"></div>
   </header>
   <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop" hidden></div>
@@ -106,12 +110,13 @@
       <div id="backend-status" class="backend-status"></div>
       <div id="command-menu" class="command-menu hidden"></div>
       <div id="mobile-action-panel" class="mobile-action-panel" hidden>
-        <button type="button" data-mobile-action="tasks">Tasks</button>
-        <button type="button" data-mobile-action="agents">Agents</button>
-        <button type="button" data-mobile-action="add-task">Add Task</button>
+        <button type="button" data-mobile-action="conversation">Chat</button>
         <button type="button" data-mobile-action="final">Final</button>
         <button type="button" data-mobile-action="logs">Logs</button>
         <button type="button" data-mobile-action="context">Context</button>
+        <button type="button" data-mobile-action="tasks">Tasks</button>
+        <button type="button" data-mobile-action="agents">Agents</button>
+        <button type="button" data-mobile-action="add-task">Add Task</button>
       </div>
       <form id="send-form" class="composer">
         <select id="agent-target"></select>
