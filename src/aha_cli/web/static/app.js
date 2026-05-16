@@ -44,6 +44,10 @@ const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
 const summaryEl = document.getElementById("summary");
 const taskCreateEl = document.getElementById("task-create");
+const collapseOverviewEl = document.getElementById("collapse-overview");
+const collapseAgentsEl = document.getElementById("collapse-agents");
+const overviewRailToggleEl = document.getElementById("overview-rail-toggle");
+const agentsRailToggleEl = document.getElementById("agents-rail-toggle");
 const tasksEl = document.getElementById("tasks");
 const showHiddenEl = document.getElementById("show-hidden");
 const selectedIdEl = document.getElementById("selected-id");
@@ -107,6 +111,48 @@ function initTaskCreateDisclosure() {
     mobileQuery.addListener(applyDefault);
   }
   applyDefault();
+}
+
+function sidebarStorageKey(side) {
+  return `aha.${side}.sidebarCollapsed`;
+}
+
+function readSidebarCollapsed(side) {
+  try {
+    return localStorage.getItem(sidebarStorageKey(side)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarCollapsed(side, collapsed) {
+  try {
+    localStorage.setItem(sidebarStorageKey(side), collapsed ? "true" : "false");
+  } catch {
+    // localStorage can be unavailable in restricted browser modes.
+  }
+}
+
+function setSidebarCollapsed(side, collapsed) {
+  const className = `${side}-collapsed`;
+  document.body.classList.toggle(className, collapsed);
+  const expanded = String(!collapsed);
+  const controls = side === "overview"
+    ? [collapseOverviewEl, overviewRailToggleEl]
+    : [collapseAgentsEl, agentsRailToggleEl];
+  for (const control of controls) {
+    if (control) control.setAttribute("aria-expanded", expanded);
+  }
+  writeSidebarCollapsed(side, collapsed);
+}
+
+function initDesktopSidebars() {
+  setSidebarCollapsed("overview", readSidebarCollapsed("overview"));
+  setSidebarCollapsed("agents", readSidebarCollapsed("agents"));
+  collapseOverviewEl?.addEventListener("click", () => setSidebarCollapsed("overview", true));
+  overviewRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("overview", false));
+  collapseAgentsEl?.addEventListener("click", () => setSidebarCollapsed("agents", true));
+  agentsRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("agents", false));
 }
 
 function selectedTask() {
@@ -1563,6 +1609,7 @@ workspaceSelectEl.addEventListener("change", () => {
 });
 
 initTaskCreateDisclosure();
+initDesktopSidebars();
 
 async function tick() {
   try {

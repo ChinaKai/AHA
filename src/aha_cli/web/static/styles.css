@@ -22,8 +22,10 @@ header {
   gap: 16px;
 }
 main {
+  --overview-width: minmax(300px, 22vw);
+  --agents-width: minmax(270px, 20vw);
   display: grid;
-  grid-template-columns: minmax(300px, 22vw) minmax(420px, 1fr) minmax(270px, 20vw);
+  grid-template-columns: var(--overview-width) minmax(420px, 1fr) var(--agents-width);
   height: calc(100vh - 64px);
 }
 h1 { margin: 0; font-size: 20px; }
@@ -34,12 +36,32 @@ button, input, select { font: inherit; }
 .sidebar, .agentbar {
   background: #ffffff;
   overflow: auto;
+  position: relative;
 }
 .sidebar { border-right: 1px solid #d8dde4; }
 .agentbar { border-left: 1px solid #d8dde4; }
 .run-summary, .agent-panel {
   padding: 14px 16px;
   border-bottom: 1px solid #e4e7ec;
+}
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.panel-title-row h2 {
+  margin: 0;
+}
+.panel-collapse {
+  min-height: 28px;
+  padding: 0 8px;
+  color: #475467;
+  font-size: 12px;
+}
+.side-rail-toggle {
+  display: none;
 }
 .stack-form {
   display: grid;
@@ -624,6 +646,39 @@ button {
   color: #667085;
 }
 .empty.compact { padding: 16px 8px; }
+@media (min-width: 981px) {
+  body.overview-collapsed main { --overview-width: 46px; }
+  body.agents-collapsed main { --agents-width: 46px; }
+  body.overview-collapsed .sidebar,
+  body.agents-collapsed .agentbar {
+    overflow: hidden;
+  }
+  body.overview-collapsed .sidebar > :not(.side-rail-toggle),
+  body.agents-collapsed .agentbar > :not(.side-rail-toggle) {
+    display: none;
+  }
+  body.overview-collapsed .sidebar .side-rail-toggle,
+  body.agents-collapsed .agentbar .side-rail-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: #f8fafc;
+    color: #475467;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+  body.overview-collapsed .sidebar .side-rail-toggle {
+    transform: rotate(180deg);
+  }
+}
 @media (max-width: 980px) {
   header {
     min-height: auto;
@@ -636,6 +691,9 @@ button {
     grid-template-columns: 1fr;
     height: auto;
     min-height: calc(100dvh - 64px);
+  }
+  .panel-collapse {
+    display: none;
   }
   .workspace {
     order: 1;

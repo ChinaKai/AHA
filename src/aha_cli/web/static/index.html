@@ -15,9 +15,13 @@
     <div id="run-state" class="meta"></div>
   </header>
   <main>
-    <aside class="sidebar">
+    <aside id="overview-sidebar" class="sidebar">
+      <button id="overview-rail-toggle" class="side-rail-toggle" type="button" aria-controls="overview-sidebar" aria-expanded="false">Overview</button>
       <div class="run-summary">
-        <h2>Run Overview</h2>
+        <div class="panel-title-row">
+          <h2>Run Overview</h2>
+          <button id="collapse-overview" class="panel-collapse" type="button" aria-controls="overview-sidebar" aria-expanded="true">Hide</button>
+        </div>
         <div id="summary" class="meta">Loading...</div>
         <details id="task-create" class="task-create">
           <summary>Add Task</summary>
@@ -101,9 +105,13 @@
         <button class="send" type="submit">Send</button>
       </form>
     </section>
-    <aside class="agentbar">
+    <aside id="agents-sidebar" class="agentbar">
+      <button id="agents-rail-toggle" class="side-rail-toggle" type="button" aria-controls="agents-sidebar" aria-expanded="false">Agents</button>
       <div class="agent-panel">
-        <h2>Agents</h2>
+        <div class="panel-title-row">
+          <h2>Agents</h2>
+          <button id="collapse-agents" class="panel-collapse" type="button" aria-controls="agents-sidebar" aria-expanded="true">Hide</button>
+        </div>
         <div id="agents"></div>
       </div>
     </aside>
