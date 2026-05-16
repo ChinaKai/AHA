@@ -16,6 +16,7 @@ from aha_cli.services.orchestrator import (
     monitor_task_coordination,
     record_sub_agent_report,
     request_final_summary_if_ready,
+    task_has_active_followup,
     task_has_incomplete_sub_agents,
     waiting_for_subagents_message,
 )
@@ -297,9 +298,8 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             return 0
                         continue
                 coordination = task.get("coordination") or {}
-                if args.target.startswith("sub-") and (
-                    task.get("status") in {"completed", "failed", "blocked"} or coordination.get("final_summary_requested_at")
-                ):
+                terminal_without_followup = task.get("status") in TERMINAL_TASK_STATUSES and not task_has_active_followup(task)
+                if args.target.startswith("sub-") and (terminal_without_followup or coordination.get("final_summary_requested_at")):
                     append_event(
                         root,
                         run_id,

@@ -702,6 +702,43 @@ class CliTests(unittest.TestCase):
                 report = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sub follow-up done")
                 self.assertTrue(report["final_requested"])
 
+    def test_sub_agent_handles_active_followup_on_terminal_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Terminal follow-up", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_agent_status(root, run_id, "task-001", "sub-001", "pending")
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                mark_task_coordination(root, run_id, "task-001", followup_started_at="2026-05-15T00:00:00+00:00")
+                append_message(root, run_id, "sub-001", "继续处理你负责的范围", sender="main", task_id="task-001", role="sub")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "sub follow-up done", None)):
+                    code, output = self.run_cli(
+                        "codex-chat",
+                        run_id,
+                        "sub-001",
+                        "--task-id",
+                        "task-001",
+                        "--sender",
+                        "sub-001",
+                        "--from-start",
+                        "--once",
+                    )
+
+                self.assertEqual(code, 0)
+                self.assertIn("sub-001 -> main: sub follow-up done", output)
+                detail = task_snapshot(root, run_id, "task-001")
+                sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
+                self.assertEqual(detail["task"]["status"], "completed")
+                self.assertEqual(sub_agent["status"], "completed")
+                self.assertTrue(detail["task"]["coordination"]["final_summary_requested_at"])
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                self.assertFalse(any(event["type"] == "agent_message_skipped" for event in events))
+
     def test_sub_agent_reports_wait_then_request_main_final_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
