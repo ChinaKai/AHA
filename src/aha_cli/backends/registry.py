@@ -12,13 +12,10 @@ MODEL_OPTIONS = [
 
 DEFAULT_MODEL_OPTIONS = [MODEL_OPTIONS[0]]
 CODEX_AGENT_COMMANDS = [
-    {"scope": "agent", "name": "/agent help", "insert": "/agent help", "desc": "Route /help to the selected agent."},
-    {"scope": "agent", "name": "/agent status", "insert": "/agent status", "desc": "Route /status to the selected agent."},
-    {"scope": "agent", "name": "/agent <command>", "insert": "/agent ", "desc": "Route /<command> to the selected agent."},
+    {"scope": "agent", "name": "/agent <command>", "insert": "/agent ", "desc": "Route a command to the selected agent."},
 ]
 STUB_AGENT_COMMANDS = [
-    {"scope": "agent", "name": "/agent help", "insert": "/agent help", "desc": "Route /help to the selected agent."},
-    {"scope": "agent", "name": "/agent <command>", "insert": "/agent ", "desc": "Route /<command> to the selected agent."},
+    {"scope": "agent", "name": "/agent <command>", "insert": "/agent ", "desc": "Route a command to the selected agent."},
 ]
 
 BACKENDS = {
