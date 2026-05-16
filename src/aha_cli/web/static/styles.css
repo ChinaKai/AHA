@@ -29,6 +29,14 @@ main {
   height: calc(100vh - 64px);
 }
 h1 { margin: 0; font-size: 20px; }
+header > div:first-child {
+  min-width: 0;
+}
+header > div:first-child h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .header-workspace-dir {
   display: inline;
   min-width: 0;
@@ -46,10 +54,101 @@ h1 { margin: 0; font-size: 20px; }
   color: #98a2b3;
   font-weight: 500;
 }
+.session-control {
+  position: relative;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+}
+.session-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: #98a2b3;
+  text-align: center;
+}
+.session-toggle:hover {
+  background: #f2f4f7;
+  color: #475467;
+}
+.session-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.session-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid #d8dde4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
+}
+.session-menu.hidden {
+  display: none;
+}
+.session-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+.session-menu-head button {
+  min-height: 28px;
+  padding: 0 8px;
+  color: #475467;
+  font-size: 12px;
+}
+.session-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.session-create button {
+  border-color: #1f6feb;
+  background: #1f6feb;
+  color: #ffffff;
+}
+#session-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+#session-detail code {
+  color: #344054;
+  font-size: 11px;
+  word-break: break-all;
+}
 h2 { margin: 0 0 10px; font-size: 15px; }
 button, input, select { font: inherit; }
 .meta { color: #667085; font-size: 12px; }
 .hidden { display: none; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .sidebar, .agentbar {
   background: #ffffff;
   overflow: auto;
@@ -778,7 +877,7 @@ button {
     min-height: 44px;
     padding: 6px 10px;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
   }
@@ -798,13 +897,34 @@ button {
     font-size: 15px;
   }
   .header-workspace-dir {
-    max-width: none;
-    font-size: 12px;
+    display: none;
   }
   #run-state {
     display: none;
   }
+  .session-control {
+    min-width: 0;
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .session-toggle {
+    width: 28px;
+    min-width: 28px;
+    min-height: 28px;
+  }
+  .session-menu {
+    right: 0;
+    width: calc(100vw - 20px);
+    max-height: min(72dvh, 520px);
+    overflow: auto;
+  }
+  .session-create {
+    grid-template-columns: 1fr;
+  }
   .mobile-task-summary {
+    grid-column: 2;
+    grid-row: 1;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -1110,6 +1230,9 @@ button {
   select,
   button:not(.mobile-task-summary) {
     min-height: 42px;
+  }
+  .session-toggle {
+    min-height: 28px;
   }
   pre {
     border-radius: 4px;

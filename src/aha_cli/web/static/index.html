@@ -10,13 +10,30 @@
   <header>
     <div>
       <h1><span class="brand-short">AHA</span><span class="brand-full"> Dashboard</span><span id="header-workspace-dir" class="header-workspace-dir"></span></h1>
-      <div class="meta">Run <code id="run-id"></code></div>
+      <div id="run-state" class="meta"></div>
+    </div>
+    <div id="session-control" class="session-control">
+      <button id="session-toggle" class="session-toggle" type="button" aria-label="会话历史" title="会话历史" aria-controls="session-menu" aria-expanded="false">
+        <span class="session-icon" aria-hidden="true">⋯</span>
+        <strong id="session-title" class="sr-only">加载中...</strong>
+      </button>
+      <div id="session-menu" class="session-menu hidden">
+        <div class="session-menu-head">
+          <span>会话历史</span>
+          <button id="session-refresh" type="button">刷新</button>
+        </div>
+        <select id="run-select"></select>
+        <form id="run-create-form" class="session-create">
+          <input id="new-run-goal" placeholder="新会话目标">
+          <button type="submit">新建</button>
+        </form>
+        <div id="session-detail" class="meta"><span id="session-detail-text">会话详情</span><code id="run-id"></code></div>
+      </div>
     </div>
     <button id="mobile-task-summary" class="mobile-task-summary" type="button" aria-controls="overview-sidebar" aria-expanded="false">
       <span id="mobile-task-title">No task</span>
       <span id="mobile-task-status" class="status pending">pending</span>
     </button>
-    <div id="run-state" class="meta"></div>
   </header>
   <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop" hidden></div>
   <main>

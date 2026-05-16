@@ -3,6 +3,13 @@ const rawPollInterval = Number(queryParams.get("poll") || "1000");
 const rawRequestTimeoutMs = Number(queryParams.get("timeout") || "12000");
 const pollInterval = Number.isFinite(rawPollInterval) ? Math.max(250, rawPollInterval) : 1000;
 const requestTimeoutMs = Number.isFinite(rawRequestTimeoutMs) ? Math.max(1000, rawRequestTimeoutMs) : 12000;
+let currentRunId = String(queryParams.get("run_id") || queryParams.get("run") || "").trim();
+let defaultRunId = "";
+let runsData = [];
+let runsLoaded = false;
+let runsError = "";
+let sessionMenuOpen = false;
+let runActionInFlight = false;
 let offset = -1;
 let statusData = null;
 let selectedTaskId = null;
@@ -46,6 +53,15 @@ const conversationFilterOptions = [
 
 const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
+const sessionControlEl = document.getElementById("session-control");
+const sessionToggleEl = document.getElementById("session-toggle");
+const sessionTitleEl = document.getElementById("session-title");
+const sessionMenuEl = document.getElementById("session-menu");
+const sessionRefreshEl = document.getElementById("session-refresh");
+const runSelectEl = document.getElementById("run-select");
+const runCreateFormEl = document.getElementById("run-create-form");
+const newRunGoalEl = document.getElementById("new-run-goal");
+const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
 const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
 const mobileTaskTitleEl = document.getElementById("mobile-task-title");
@@ -131,6 +147,233 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = requestTimeoutMs)
 async function fetchJson(url, options = {}, fallbackMessage = "Request failed") {
   const res = await fetchWithTimeout(url, options);
   return readJsonResponse(res, fallbackMessage);
+}
+
+function apiUrl(path, params = {}, options = {}) {
+  const query = new URLSearchParams();
+  const source = params instanceof URLSearchParams ? params : new URLSearchParams(params);
+  for (const [key, value] of source.entries()) {
+    if (value !== null && value !== undefined && value !== "") query.set(key, value);
+  }
+  if (options.runScoped !== false && currentRunId) query.set("run_id", currentRunId);
+  const suffix = query.toString();
+  return suffix ? `${path}?${suffix}` : path;
+}
+
+function runScopedPayload(payload = {}) {
+  return currentRunId ? { ...payload, run_id: currentRunId } : payload;
+}
+
+function runIdOf(run) {
+  return String(run?.id || run?.run_id || "").trim();
+}
+
+function runTitleOf(run) {
+  const goal = String(run?.goal || "").trim();
+  return goal || runIdOf(run) || "未命名会话";
+}
+
+function runUpdatedAtOf(run) {
+  return run?.updated_at || run?.created_at || "";
+}
+
+function currentRunSummary() {
+  return runsData.find(run => runIdOf(run) === currentRunId) || null;
+}
+
+function fallbackCurrentRun() {
+  const id = currentRunId || statusData?.run_id || defaultRunId;
+  if (!id) return null;
+  return {
+    id,
+    goal: statusData?.goal || "当前会话",
+    mode: statusData?.mode || "",
+    status: statusData?.status || "",
+    updated_at: statusData?.updated_at || ""
+  };
+}
+
+function sessionOptionLabel(run) {
+  const title = runTitleOf(run);
+  const status = run?.status ? ` · ${run.status}` : "";
+  const taskCount = Number.isFinite(run?.task_count) ? ` · ${run.task_count} 个任务` : "";
+  return `${title}${status}${taskCount}`;
+}
+
+function syncRunUrl() {
+  if (!window.history?.replaceState) return;
+  const url = new URL(window.location.href);
+  if (currentRunId) {
+    url.searchParams.set("run_id", currentRunId);
+  } else {
+    url.searchParams.delete("run_id");
+  }
+  url.searchParams.delete("run");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function resetRunScopedState() {
+  selectedTaskId = null;
+  backendStatusData = null;
+  offset = -1;
+  eventTailInitialized = false;
+  conversationAutoFollow = true;
+  allEvents.length = 0;
+  conversationStates.clear();
+  expandedMessageKeys.clear();
+  finalDetails.clear();
+  contextDetails.clear();
+  logStates.clear();
+  panelEl.innerHTML = '<div class="empty">正在切换会话...</div>';
+}
+
+function renderSessionSummary() {
+  const run = currentRunSummary() || fallbackCurrentRun();
+  const runId = currentRunId || runIdOf(run);
+  if (!run && !statusData) {
+    if (sessionTitleEl) sessionTitleEl.textContent = currentRunId || "加载中...";
+    if (runIdEl) runIdEl.textContent = currentRunId || "-";
+    if (runStateEl) runStateEl.textContent = "";
+    if (sessionDetailTextEl) sessionDetailTextEl.textContent = "会话详情";
+    return;
+  }
+  const title = statusData?.goal || runTitleOf(run);
+  if (sessionTitleEl) {
+    sessionTitleEl.textContent = title || "未选择会话";
+    sessionTitleEl.title = title || "";
+  }
+  if (sessionToggleEl) {
+    const label = runId ? `会话历史: ${title || runId}` : "会话历史";
+    sessionToggleEl.title = label;
+    sessionToggleEl.setAttribute("aria-label", label);
+  }
+  if (runIdEl) {
+    runIdEl.textContent = runId || "-";
+    runIdEl.title = runId || "";
+  }
+  const mode = statusData?.mode || run?.mode || "-";
+  const updatedAt = statusData?.updated_at || runUpdatedAtOf(run);
+  const runStateText = `${mode} | updated ${formatLocalTimestamp(updatedAt, updatedAt || "-")}`;
+  if (runStateEl) {
+    runStateEl.textContent = runStateText;
+    runStateEl.dataset.mobileLabel = mode || "run";
+    runStateEl.title = runStateText;
+  }
+  if (sessionDetailTextEl) {
+    const taskCount = Number.isFinite(run?.task_count) ? `${run.completed_count || 0}/${run.task_count} 个任务` : "";
+    sessionDetailTextEl.textContent = [
+      run?.status ? `状态 ${run.status}` : "",
+      taskCount,
+      updatedAt ? `更新 ${formatLocalTimestamp(updatedAt, updatedAt)}` : "",
+      runsError ? `提示 ${runsError}` : ""
+    ].filter(Boolean).join(" · ") || "会话详情";
+  }
+}
+
+function renderSessionMenu() {
+  if (!runSelectEl) return;
+  const fallback = fallbackCurrentRun();
+  const runs = runsData.length ? runsData : (fallback ? [fallback] : []);
+  runSelectEl.innerHTML = "";
+  for (const run of runs) {
+    const id = runIdOf(run);
+    if (!id) continue;
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = sessionOptionLabel(run);
+    opt.selected = id === currentRunId;
+    runSelectEl.appendChild(opt);
+  }
+  runSelectEl.disabled = runActionInFlight || runSelectEl.options.length === 0;
+  if (sessionRefreshEl) sessionRefreshEl.disabled = runActionInFlight;
+  if (newRunGoalEl) newRunGoalEl.disabled = runActionInFlight;
+  renderSessionSummary();
+}
+
+async function loadRuns(force = false) {
+  if (runsLoaded && !force) {
+    renderSessionMenu();
+    return;
+  }
+  try {
+    const payload = await fetchJson("/api/runs", {}, "Failed to load sessions");
+    defaultRunId = String(payload.default_run_id || defaultRunId || "").trim();
+    runsData = Array.isArray(payload.runs) ? payload.runs : [];
+    runsError = "";
+    const preferred = currentRunId || defaultRunId || runIdOf(runsData[0]) || String(statusData?.run_id || "").trim();
+    if (preferred && preferred !== currentRunId) {
+      currentRunId = preferred;
+      syncRunUrl();
+    }
+  } catch (err) {
+    runsError = err?.message || String(err || "会话列表不可用");
+    runsData = fallbackCurrentRun() ? [fallbackCurrentRun()] : [];
+  } finally {
+    runsLoaded = true;
+    renderSessionMenu();
+  }
+}
+
+function setSessionMenu(open) {
+  sessionMenuOpen = Boolean(open);
+  sessionMenuEl?.classList.toggle("hidden", !sessionMenuOpen);
+  sessionToggleEl?.setAttribute("aria-expanded", String(sessionMenuOpen));
+}
+
+async function refreshRunScopedView() {
+  await loadStatus({ forceAgents: true });
+  await ensureConversationLoaded();
+  await loadBackendStatus();
+  await pollEvents();
+  renderPanel();
+}
+
+async function switchRun(runId) {
+  const nextRunId = String(runId || "").trim();
+  if (!nextRunId || nextRunId === currentRunId) {
+    renderSessionMenu();
+    setSessionMenu(false);
+    return;
+  }
+  runActionInFlight = true;
+  try {
+    currentRunId = nextRunId;
+    syncRunUrl();
+    resetRunScopedState();
+    renderSessionMenu();
+    setSessionMenu(false);
+    await refreshRunScopedView();
+  } catch (err) {
+    panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+  } finally {
+    runActionInFlight = false;
+    renderSessionMenu();
+  }
+}
+
+async function createRun(goal) {
+  const trimmedGoal = String(goal || "").trim();
+  if (!trimmedGoal) return;
+  runActionInFlight = true;
+  try {
+    const payload = await fetchJson("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal: trimmedGoal })
+    }, "Failed to create session");
+    const run = payload.run || payload;
+    const nextRunId = runIdOf(run);
+    if (!nextRunId) throw new Error("New session did not include an id");
+    if (newRunGoalEl) newRunGoalEl.value = "";
+    runsLoaded = false;
+    await loadRuns(true);
+    await switchRun(nextRunId);
+  } catch (err) {
+    alert(err?.message || String(err));
+  } finally {
+    runActionInFlight = false;
+    renderSessionMenu();
+  }
 }
 
 function initTaskCreateDisclosure() {
@@ -314,6 +557,29 @@ function initMobileActionPanel() {
   });
   syncMobileActionPanel();
   syncMobileComposerAction();
+}
+
+function initSessionControl() {
+  sessionToggleEl?.addEventListener("click", async event => {
+    event.stopPropagation();
+    setSessionMenu(!sessionMenuOpen);
+    if (sessionMenuOpen) await loadRuns();
+  });
+  sessionMenuEl?.addEventListener("click", event => event.stopPropagation());
+  sessionRefreshEl?.addEventListener("click", async () => loadRuns(true));
+  runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
+  runCreateFormEl?.addEventListener("submit", async event => {
+    event.preventDefault();
+    await createRun(newRunGoalEl?.value || "");
+  });
+  document.addEventListener("click", event => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (sessionMenuOpen && !sessionControlEl?.contains(target)) setSessionMenu(false);
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") setSessionMenu(false);
+  });
+  renderSessionMenu();
 }
 
 function selectedTask() {
@@ -935,12 +1201,12 @@ async function loadWorkspaces() {
 }
 
 async function loadStatus(options = {}) {
-  statusData = await fetchJson("/api/status", {}, "Failed to load status");
-  runIdEl.textContent = statusData.run_id;
-  const runStateText = `${statusData.mode} | updated ${formatLocalTimestamp(statusData.updated_at, statusData.updated_at || "-")}`;
-  runStateEl.textContent = runStateText;
-  runStateEl.dataset.mobileLabel = statusData.mode || "run";
-  runStateEl.title = runStateText;
+  statusData = await fetchJson(apiUrl("/api/status"), {}, "Failed to load status");
+  if (statusData.run_id && statusData.run_id !== currentRunId) {
+    currentRunId = String(statusData.run_id);
+    syncRunUrl();
+  }
+  renderSessionSummary();
   summaryEl.textContent = statusData.goal;
   const tasks = visibleTasks();
   if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
@@ -956,14 +1222,14 @@ async function loadStatus(options = {}) {
 async function loadBackendStatus() {
   const params = new URLSearchParams({ target: backendTarget() });
   if (selectedTaskId) params.set("task_id", selectedTaskId);
-  backendStatusData = await fetchJson(`/api/backend?${params.toString()}`, {}, "Failed to load backend status");
+  backendStatusData = await fetchJson(apiUrl("/api/backend", params), {}, "Failed to load backend status");
   renderBackendStatus();
 }
 
 async function loadFinalDetail(taskId, force = false) {
   if (!taskId) return null;
   if (!force && finalDetails.has(taskId)) return finalDetails.get(taskId);
-  const detail = await fetchJson(`/api/task/${encodeURIComponent(taskId)}/final`, {}, "Failed to load final");
+  const detail = await fetchJson(apiUrl(`/api/task/${encodeURIComponent(taskId)}/final`), {}, "Failed to load final");
   finalDetails.set(taskId, detail);
   return detail;
 }
@@ -971,7 +1237,7 @@ async function loadFinalDetail(taskId, force = false) {
 async function loadContextDetail(taskId, force = false) {
   if (!taskId) return null;
   if (!force && contextDetails.has(taskId)) return contextDetails.get(taskId);
-  const detail = await fetchJson(`/api/task/${encodeURIComponent(taskId)}/context`, {}, "Failed to load context");
+  const detail = await fetchJson(apiUrl(`/api/task/${encodeURIComponent(taskId)}/context`), {}, "Failed to load context");
   contextDetails.set(taskId, detail);
   return detail;
 }
@@ -992,7 +1258,7 @@ async function loadLogPage(taskId, older = false, force = false) {
     const params = new URLSearchParams({ limit: String(logPageLimit) });
     if (older && state.source) params.set("source", state.source);
     if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
-    const payload = await fetchJson(`/api/task/${encodeURIComponent(taskId)}/logs?${params.toString()}`, {}, "Failed to load logs");
+    const payload = await fetchJson(apiUrl(`/api/task/${encodeURIComponent(taskId)}/logs`, params), {}, "Failed to load logs");
     const text = payload.text || "";
     state.text = older ? [text, state.text].filter(Boolean).join("\n") : text;
     state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
@@ -1050,7 +1316,7 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
     if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
     let res;
     try {
-      res = await fetchWithTimeout(`/api/conversation-events?${params.toString()}`);
+      res = await fetchWithTimeout(apiUrl("/api/conversation-events", params));
     } catch (err) {
       await markConversationUnavailable(state, err);
       return state;
@@ -1085,7 +1351,7 @@ async function responseError(res, fallbackMessage = "Request failed") {
 
 async function initializeEventTailOffset() {
   if (eventTailInitialized) return;
-  const payload = await fetchJson("/api/events?offset=-1", {}, "Failed to initialize event stream");
+  const payload = await fetchJson(apiUrl("/api/events", { offset: "-1" }), {}, "Failed to initialize event stream");
   if (Number.isFinite(payload.offset)) offset = payload.offset;
   eventTailInitialized = true;
 }
@@ -1131,7 +1397,7 @@ function appendRealtimeConversationEvents(events) {
 async function pollEvents() {
   let res;
   try {
-    res = await fetchWithTimeout(`/api/events?offset=${offset}`);
+    res = await fetchWithTimeout(apiUrl("/api/events", { offset: String(offset) }));
   } catch (err) {
     if (offset < 0) {
       await initializeEventTailOffset();
@@ -1205,7 +1471,7 @@ async function updateTaskVisibility(taskId, action) {
   if (action === "delete" && !confirm(`Delete ${taskId} from the task list?`)) return;
   taskActionInFlight = true;
   try {
-    const res = await fetchWithTimeout(`/api/task/${encodeURIComponent(taskId)}/${action}`, { method: "POST" });
+    const res = await fetchWithTimeout(apiUrl(`/api/task/${encodeURIComponent(taskId)}/${action}`), { method: "POST" });
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));
       alert(payload.error || `Task action failed: ${action}`);
@@ -1398,10 +1664,10 @@ async function updateAgentConfig(agentId, field, value) {
   if (!task || !agentId || !field) return;
   const payload = { task_id: task.id, agent_id: agentId };
   payload[field] = value;
-  const res = await fetchWithTimeout("/api/agent-config", {
+  const res = await fetchWithTimeout(apiUrl("/api/agent-config"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(runScopedPayload(payload))
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -1684,10 +1950,10 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   const title = document.getElementById("new-task-title").value.trim();
   if (!title) return;
   try {
-    await fetchJson("/api/tasks", {
+    await fetchJson(apiUrl("/api/tasks"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(runScopedPayload({
         title,
         backend: taskBackendEl.value,
         model: taskModelEl.value || null,
@@ -1698,7 +1964,7 @@ document.getElementById("task-form").addEventListener("submit", async event => {
         max_sub_agents: Number(document.getElementById("max-sub-agents").value || "0"),
         preferred_sub_backend: taskBackendEl.value,
         dispatch: true
-      })
+      }))
     }, "Failed to create task");
     document.getElementById("new-task-title").value = "";
     await loadStatus();
@@ -1716,10 +1982,10 @@ sendFormEl.addEventListener("submit", async event => {
   const agentId = agentTargetEl.value || "main";
   const target = agentId === "main" ? "main" : agentId;
   try {
-    await fetchJson("/api/send", {
+    await fetchJson(apiUrl("/api/send"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(runScopedPayload({
         target,
         role: agentId === "main" ? "main" : "sub",
         task_id: task.id,
@@ -1727,7 +1993,7 @@ sendFormEl.addEventListener("submit", async event => {
         to_agent: agentId,
         message,
         sender: "browser"
-      })
+      }))
     }, "Failed to send message");
     messageEl.value = "";
     syncMobileComposerAction();
@@ -1850,6 +2116,7 @@ initTaskCreateDisclosure();
 initDesktopSidebars();
 initMobileSheets();
 initMobileActionPanel();
+initSessionControl();
 
 function recordTickFailure() {
   tickFailureCount += 1;
@@ -1858,7 +2125,7 @@ function recordTickFailure() {
 }
 
 async function tick() {
-  if (tickInFlight || taskActionInFlight || Date.now() < tickBackoffUntil) return;
+  if (tickInFlight || taskActionInFlight || runActionInFlight || Date.now() < tickBackoffUntil) return;
   tickInFlight = true;
   try {
     await loadStatus();
@@ -1876,7 +2143,10 @@ async function tick() {
   }
 }
 
-Promise.all([loadBackends(), loadWorkspaces()]).then(tick).catch(err => {
+Promise.all([loadBackends(), loadWorkspaces()]).then(async () => {
+  await loadRuns().catch(() => {});
+  await tick();
+}).catch(err => {
   panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
 });
 setInterval(tick, pollInterval);
