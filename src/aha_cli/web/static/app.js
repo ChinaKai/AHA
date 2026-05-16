@@ -48,6 +48,11 @@ const collapseOverviewEl = document.getElementById("collapse-overview");
 const collapseAgentsEl = document.getElementById("collapse-agents");
 const overviewRailToggleEl = document.getElementById("overview-rail-toggle");
 const agentsRailToggleEl = document.getElementById("agents-rail-toggle");
+const mobileSheetBackdropEl = document.getElementById("mobile-sheet-backdrop");
+const openTasksSheetEl = document.getElementById("open-tasks-sheet");
+const openAgentsSheetEl = document.getElementById("open-agents-sheet");
+const closeTasksSheetEl = document.getElementById("close-tasks-sheet");
+const closeAgentsSheetEl = document.getElementById("close-agents-sheet");
 const tasksEl = document.getElementById("tasks");
 const showHiddenEl = document.getElementById("show-hidden");
 const selectedIdEl = document.getElementById("selected-id");
@@ -153,6 +158,40 @@ function initDesktopSidebars() {
   overviewRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("overview", false));
   collapseAgentsEl?.addEventListener("click", () => setSidebarCollapsed("agents", true));
   agentsRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("agents", false));
+}
+
+function setMobileSheet(sheet) {
+  const taskOpen = sheet === "tasks";
+  const agentsOpen = sheet === "agents";
+  document.body.classList.toggle("mobile-tasks-open", taskOpen);
+  document.body.classList.toggle("mobile-agents-open", agentsOpen);
+  if (mobileSheetBackdropEl) mobileSheetBackdropEl.hidden = !taskOpen && !agentsOpen;
+  openTasksSheetEl?.setAttribute("aria-expanded", String(taskOpen));
+  openAgentsSheetEl?.setAttribute("aria-expanded", String(agentsOpen));
+}
+
+function closeMobileSheets() {
+  setMobileSheet(null);
+}
+
+function initMobileSheets() {
+  const mobileQuery = window.matchMedia("(max-width: 640px)");
+  openTasksSheetEl?.addEventListener("click", () => setMobileSheet("tasks"));
+  openAgentsSheetEl?.addEventListener("click", () => setMobileSheet("agents"));
+  closeTasksSheetEl?.addEventListener("click", closeMobileSheets);
+  closeAgentsSheetEl?.addEventListener("click", closeMobileSheets);
+  mobileSheetBackdropEl?.addEventListener("click", closeMobileSheets);
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeMobileSheets();
+  });
+  const closeWhenLeavingMobile = () => {
+    if (!mobileQuery.matches) closeMobileSheets();
+  };
+  if (mobileQuery.addEventListener) {
+    mobileQuery.addEventListener("change", closeWhenLeavingMobile);
+  } else {
+    mobileQuery.addListener(closeWhenLeavingMobile);
+  }
 }
 
 function selectedTask() {
@@ -971,6 +1010,7 @@ async function selectTask(taskId) {
   selectedTaskId = taskId;
   conversationAutoFollow = true;
   if (activeTab === "logs") logState(taskId).autoFollow = true;
+  closeMobileSheets();
   renderTaskList();
   renderSelectedHeader();
   renderAgents();
@@ -1074,8 +1114,8 @@ function renderAgents() {
       const clicked = event.target instanceof Element ? event.target : null;
       if (clicked?.closest("select")) return;
       agentTargetEl.value = agent.id;
-      syncAgentCards();
-      renderSelectedAgentInfo();
+      agentTargetEl.dispatchEvent(new Event("change"));
+      closeMobileSheets();
     });
     card.addEventListener("change", event => {
       const target = event.target instanceof HTMLSelectElement ? event.target : null;
@@ -1442,6 +1482,7 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   });
   document.getElementById("new-task-title").value = "";
   await loadStatus();
+  closeMobileSheets();
 });
 
 document.getElementById("send-form").addEventListener("submit", async event => {
@@ -1610,6 +1651,7 @@ workspaceSelectEl.addEventListener("change", () => {
 
 initTaskCreateDisclosure();
 initDesktopSidebars();
+initMobileSheets();
 
 async function tick() {
   try {

@@ -63,6 +63,11 @@ button, input, select { font: inherit; }
 .side-rail-toggle {
   display: none;
 }
+.mobile-context-actions,
+.mobile-sheet-close,
+.mobile-sheet-backdrop {
+  display: none;
+}
 .stack-form {
   display: grid;
   gap: 8px;
@@ -750,6 +755,10 @@ button {
 }
 
 @media (max-width: 640px) {
+  body.mobile-tasks-open,
+  body.mobile-agents-open {
+    overflow: hidden;
+  }
   header {
     padding: 10px 12px;
     gap: 6px;
@@ -759,6 +768,34 @@ button {
   .run-summary,
   .agent-panel {
     padding: 12px;
+  }
+  .mobile-context-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .mobile-context-actions button {
+    min-height: 38px;
+    color: #344054;
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .mobile-sheet-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0 10px;
+    color: #475467;
+    font-size: 12px;
+  }
+  .mobile-sheet-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(15, 23, 42, 0.42);
   }
   .stack-form {
     gap: 7px;
@@ -799,8 +836,36 @@ button {
     padding: 7px 12px;
   }
   .panel {
-    height: clamp(300px, 44dvh, 380px);
+    height: clamp(420px, 58dvh, 620px);
     padding: 12px;
+  }
+  .sidebar,
+  .agentbar {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    max-height: min(78dvh, 680px);
+    border: 1px solid #d8dde4;
+    border-bottom: 0;
+    border-radius: 12px 12px 0 0;
+    background: #ffffff;
+    box-shadow: 0 -16px 40px rgba(15, 23, 42, 0.18);
+    overflow: auto;
+  }
+  body.mobile-tasks-open .sidebar,
+  body.mobile-agents-open .agentbar {
+    display: block;
+  }
+  body.mobile-tasks-open .sidebar > :not(.side-rail-toggle),
+  body.mobile-agents-open .agentbar > :not(.side-rail-toggle) {
+    display: block;
+  }
+  body.mobile-tasks-open .sidebar .side-rail-toggle,
+  body.mobile-agents-open .agentbar .side-rail-toggle {
+    display: none;
   }
   .message-head {
     display: grid;

@@ -14,6 +14,7 @@
     </div>
     <div id="run-state" class="meta"></div>
   </header>
+  <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop" hidden></div>
   <main>
     <aside id="overview-sidebar" class="sidebar">
       <button id="overview-rail-toggle" class="side-rail-toggle" type="button" aria-controls="overview-sidebar" aria-expanded="false">Overview</button>
@@ -21,6 +22,7 @@
         <div class="panel-title-row">
           <h2>Run Overview</h2>
           <button id="collapse-overview" class="panel-collapse" type="button" aria-controls="overview-sidebar" aria-expanded="true">Hide</button>
+          <button id="close-tasks-sheet" class="mobile-sheet-close" type="button" aria-controls="overview-sidebar">Close</button>
         </div>
         <div id="summary" class="meta">Loading...</div>
         <details id="task-create" class="task-create">
@@ -87,6 +89,10 @@
           </div>
           <span id="selected-status" class="status pending">pending</span>
         </div>
+        <div class="mobile-context-actions">
+          <button id="open-tasks-sheet" type="button" aria-controls="overview-sidebar" aria-expanded="false">Tasks</button>
+          <button id="open-agents-sheet" type="button" aria-controls="agents-sidebar" aria-expanded="false">Agents</button>
+        </div>
       </div>
       <div class="tabs">
         <button class="tab active" data-tab="conversation">Conversation</button>
@@ -111,6 +117,7 @@
         <div class="panel-title-row">
           <h2>Agents</h2>
           <button id="collapse-agents" class="panel-collapse" type="button" aria-controls="agents-sidebar" aria-expanded="true">Hide</button>
+          <button id="close-agents-sheet" class="mobile-sheet-close" type="button" aria-controls="agents-sidebar">Close</button>
         </div>
         <div id="agents"></div>
       </div>
