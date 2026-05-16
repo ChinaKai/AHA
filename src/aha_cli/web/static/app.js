@@ -1476,10 +1476,9 @@ function renderTimelineEvent(event) {
     );
   }
   if (event.type === "agent_message") return renderTimelineCard(`agent update (${data.target || "main"})`, data.text || "", eventTimeLabel(event), "agent-update", event._uiKey);
-  if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey);
+  if (event.type === "agent_command_started") return renderTimelineStatus("command", `${data.target || "main"} running`, "running", eventTimeLabel(event));
   if (event.type === "agent_command_finished") {
-    const output = data.output_tail ? `\n\nOutput tail:\n${data.output_tail}` : "";
-    return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey);
+    return renderTimelineStatus("command", `${data.target || "main"} finished exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", eventTimeLabel(event));
   }
   if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey);
   if (event.type === "agent_usage") {
