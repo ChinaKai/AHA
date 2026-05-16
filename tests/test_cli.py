@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import multiprocessing
 from pathlib import Path
 import tempfile
 import unittest
@@ -37,6 +38,13 @@ from aha_cli.store.filesystem import (
     write_task_result,
 )
 from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, web_status_snapshot, workspace_options
+
+
+def write_plan_statuses(root_path: str, run_id: str, task_id: str, agent_id: str, iterations: int) -> None:
+    root = Path(root_path)
+    for _ in range(iterations):
+        set_task_status(root, run_id, task_id, "running")
+        set_agent_status(root, run_id, task_id, agent_id, "running")
 
 
 class CliTests(unittest.TestCase):
@@ -88,6 +96,36 @@ class CliTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")
                 self.assertEqual(detail["task"]["started_at"], "2026-05-15T00:00:00+00:00")
+
+    def test_parallel_plan_writers_do_not_collide_on_temp_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Parallel writers", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+
+            workers = [
+                multiprocessing.Process(
+                    target=write_plan_statuses,
+                    args=(str(root), run_id, "task-001", agent_id, 40),
+                )
+                for agent_id in ("main", "sub-001")
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=10)
+
+            for worker in workers:
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(worker.exitcode, 0)
+            snapshot = status_snapshot(root, run_id)
+            agents = {agent["id"]: agent["status"] for agent in snapshot["tasks"][0]["agents"]}
+            self.assertEqual(agents["main"], "running")
+            self.assertEqual(agents["sub-001"], "running")
 
     def test_chat_offset_persists_unprocessed_messages_across_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -541,6 +579,7 @@ class CliTests(unittest.TestCase):
                 detail = task_snapshot(root, run_id, "task-001")
                 sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
                 self.assertEqual(sub_agent["assignment"], "Inspect one slice")
+                self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
 
     def test_main_routes_followup_to_responsible_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -592,6 +631,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(detail["task"]["status"], "running")
                 self.assertEqual(detail["task"]["coordination"]["final_summary_requested_at"], "")
                 self.assertEqual(detail["task"]["coordination"]["final_summary_completed_at"], "")
+                self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
                 start_backend.assert_called_once()
 
     def test_sub_agent_reports_wait_then_request_main_final_summary(self) -> None:

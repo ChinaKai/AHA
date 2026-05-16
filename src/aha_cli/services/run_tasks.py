@@ -9,9 +9,9 @@ import textwrap
 
 from aha_cli.constants import EVENTS_FILE
 from aha_cli.store.filesystem import (
-    PLAN_LOCK,
     append_event,
     load_config,
+    locked_plan,
     require_plan,
     run_dir,
     save_plan,
@@ -40,7 +40,7 @@ def render_command(template: str, root: Path, run: Path, task: dict) -> str:
 
 def run_one_task(root: Path, plan: dict, task_id: str, command_template: str | None) -> tuple[str, int]:
     run = run_dir(root, plan["id"])
-    with PLAN_LOCK:
+    with locked_plan(root, plan["id"]):
         plan = require_plan(root, plan["id"])
         task = next(t for t in plan["tasks"] if t["id"] == task_id)
         task["status"] = "running"
@@ -130,7 +130,7 @@ def run_one_task(root: Path, plan: dict, task_id: str, command_template: str | N
         if not output_file.exists():
             output_file.write_text(log_file.read_text(encoding="utf-8"), encoding="utf-8")
 
-    with PLAN_LOCK:
+    with locked_plan(root, plan["id"]):
         plan = require_plan(root, plan["id"])
         task = next(t for t in plan["tasks"] if t["id"] == task_id)
         task["status"] = "completed" if exit_code == 0 else "failed"

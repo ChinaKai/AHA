@@ -20,6 +20,7 @@ const finalDetails = new Map();
 const contextDetails = new Map();
 const logStates = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
+const terminalAgentStatuses = new Set(["completed", "failed", "blocked"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
 const collapsedMessageCharLimit = 900;
@@ -463,6 +464,50 @@ function taskTiming(taskId, task) {
   return { startedAt, finishedAt: running ? null : endAt, elapsedMs: endAt - startedAt, running };
 }
 
+function subAgents(task) {
+  return (task?.agents || []).filter(agent => agent.role === "sub");
+}
+
+function pendingSubAgents(task) {
+  return subAgents(task).filter(agent => !terminalAgentStatuses.has(agent.status || ""));
+}
+
+function waitingSubagentTiming(task) {
+  const agents = subAgents(task);
+  if (!agents.length) return null;
+  const coordination = task?.coordination || {};
+  const startedAt = parseTimestamp(coordination.followup_started_at);
+  if (!startedAt) return null;
+  const pending = pendingSubAgents(task);
+  const finalRequestedAt = parseTimestamp(coordination.final_summary_requested_at);
+  const finalCompletedAt = parseTimestamp(coordination.final_summary_completed_at);
+  const running = task?.status === "running" && pending.length > 0 && !finalRequestedAt;
+  const endAt = running ? Date.now() : finalRequestedAt || finalCompletedAt || Date.now();
+  return {
+    startedAt,
+    finishedAt: running ? null : endAt,
+    elapsedMs: endAt - startedAt,
+    running,
+    pending,
+    completed: agents.filter(agent => terminalAgentStatuses.has(agent.status || ""))
+  };
+}
+
+function taskTimingLabel(taskId, task) {
+  const timing = taskTiming(taskId, task);
+  if (!timing) return "";
+  return `${timing.running ? "elapsed" : "duration"} ${formatDuration(timing.elapsedMs)}`;
+}
+
+function taskMetaTiming(taskId, task) {
+  const parts = [];
+  const taskLabel = taskTimingLabel(taskId, task);
+  if (taskLabel) parts.push(`task ${taskLabel}`);
+  const waiting = waitingSubagentTiming(task);
+  if (waiting) parts.push(`waiting subagents ${formatDuration(waiting.elapsedMs)} (${waiting.completed.length}/${subAgents(task).length})`);
+  return parts.join(" | ");
+}
+
 function latestTurnTiming(taskId) {
   const events = conversationSourceEvents(taskId).filter(eventMatchesSelectedAgent);
   let startIndex = -1;
@@ -789,7 +834,7 @@ function renderTaskList() {
         <span class="status ${escapeHtml(task.hidden ? "hidden" : task.status)}">${escapeHtml(task.hidden ? "hidden" : task.status)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}</div>
+      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
@@ -848,8 +893,9 @@ function renderSelectedHeader() {
   }
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
+  const timing = taskMetaTiming(task.id, task);
   selectedTaskMetaEl.textContent =
-    `${task.preferred_backend || "backend?"} | ${task.preferred_model || "default"} | sandbox=${task.preferred_sandbox || "process default"} | approval=${task.preferred_approval || "process default"} | ${task.workspace_path || "workspace not set"}`;
+    `${task.preferred_backend || "backend?"} | ${task.preferred_model || "default"} | sandbox=${task.preferred_sandbox || "process default"} | approval=${task.preferred_approval || "process default"}${timing ? ` | ${timing}` : ""} | ${task.workspace_path || "workspace not set"}`;
   selectedStatusEl.textContent = task.status;
   selectedStatusEl.className = `status ${task.status}`;
 }
@@ -895,7 +941,7 @@ function renderAgents() {
         <strong>${escapeHtml(agent.id)}</strong>
         <span class="agent-process ${escapeHtml(processStatus)}" title="${escapeHtml(processDetail)}">${escapeHtml(agentBackendProcessLabel(agent))}</span>
       </div>
-      <div class="meta truncate">${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
+      <div class="meta truncate">status=${escapeHtml(agent.status || "-")} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
@@ -1056,8 +1102,9 @@ function renderConversation(taskId) {
   const events = taskConversationEvents(taskId);
   if (!events.length && !state.hasMore) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
   const older = state.hasMore ? `<button class="load-older" type="button" data-load-older="true">${state.loading ? "Loading..." : "Load older"}</button>` : "";
+  const taskTimer = renderTaskTimer(taskId);
   const timer = renderTurnTimer(taskId);
-  return `<div class="conversation timeline">${older}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
+  return `<div class="conversation timeline">${older}${taskTimer}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
 }
 
 function renderTimelineEvent(event) {
@@ -1125,6 +1172,27 @@ function renderTurnTimer(taskId) {
   ].filter(Boolean).join(" | ");
   return `
     <div class="turn-timer ${escapeHtml(timing.status)}">
+      <span class="activity-dot"></span>
+      <strong>${escapeHtml(title)}</strong>
+      <code>${escapeHtml(details)}</code>
+    </div>
+  `;
+}
+
+function renderTaskTimer(taskId) {
+  const task = (statusData?.tasks || []).find(item => item.id === taskId);
+  const timing = taskTiming(taskId, task);
+  if (!timing) return "";
+  const waiting = waitingSubagentTiming(task);
+  const title = timing.running ? "Task is running" : `Task ${task?.status || "finished"}`;
+  const details = [
+    `wall ${formatDuration(timing.elapsedMs)}`,
+    `started ${formatClock(timing.startedAt)}`,
+    timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : "",
+    waiting ? `waiting subagents ${formatDuration(waiting.elapsedMs)} (${waiting.completed.length}/${subAgents(task).length})` : ""
+  ].filter(Boolean).join(" | ");
+  return `
+    <div class="turn-timer task-timer ${escapeHtml(timing.running ? "running" : task?.status || "completed")}">
       <span class="activity-dot"></span>
       <strong>${escapeHtml(title)}</strong>
       <code>${escapeHtml(details)}</code>
@@ -1432,5 +1500,9 @@ setInterval(tick, pollInterval);
 setInterval(() => {
   const task = selectedTask();
   const turn = task ? latestTurnTiming(task.id) : null;
-  if (task?.status === "running" || turn?.running) renderPanel();
+  if (task?.status === "running" || turn?.running) {
+    renderTaskList();
+    renderSelectedHeader();
+    renderPanel();
+  }
 }, 1000);

@@ -242,8 +242,17 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                     "reason": "delegation disabled or max_sub_agents reached",
                     "max_sub_agents": max_sub_agents,
                 },
-            )
+                )
             continue
+        mark_task_coordination(
+            root,
+            run_id,
+            task_id,
+            final_summary_requested_at="",
+            final_summary_completed_at="",
+            followup_started_at=utc_now(),
+        )
+        set_task_status(root, run_id, task_id, "running")
         agent = add_agent(
             root,
             run_id,

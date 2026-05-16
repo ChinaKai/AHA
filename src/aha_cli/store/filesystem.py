@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import json
+import os
 from pathlib import Path
 import threading
+import uuid
 
 from aha_cli.constants import CONFIG_DIR, CONFIG_FILE, EVENTS_FILE, PLAN_FILE, RUNS_DIR
 from aha_cli.domain.models import (
@@ -19,7 +23,7 @@ from aha_cli.domain.models import (
     new_run_id,
 )
 
-PLAN_LOCK = threading.Lock()
+PLAN_LOCK = threading.RLock()
 EVENT_LOCK = threading.Lock()
 
 
@@ -30,11 +34,15 @@ def read_json(path: Path) -> dict:
 
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    tmp.replace(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def append_jsonl(path: Path, data: dict) -> None:
@@ -71,6 +79,19 @@ def load_config(root: Path) -> dict:
 
 def run_dir(root: Path, run_id: str) -> Path:
     return root / CONFIG_DIR / RUNS_DIR / run_id
+
+
+@contextmanager
+def locked_plan(root: Path, run_id: str):
+    lock_path = run_dir(root, run_id) / "runtime" / "plan.lock"
+    with PLAN_LOCK:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def plan_path(root: Path, run_id: str) -> Path:
@@ -558,7 +579,7 @@ def add_task(
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
 ) -> dict:
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = make_task(
             next_task_id(plan["tasks"]),
@@ -658,7 +679,7 @@ def add_agent(
     created_by: str = "system",
     created_reason: str = "",
 ) -> dict:
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None:
@@ -704,7 +725,7 @@ def update_agent_config(
     sandbox: str | None = None,
     approval: str | None = None,
 ) -> dict:
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
@@ -742,7 +763,7 @@ def set_agent_status(
     exit_code: int | None = None,
 ) -> dict:
     now = utc_now()
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
@@ -773,7 +794,7 @@ def set_agent_status(
 
 def update_agent_runtime(root: Path, run_id: str, task_id: str, agent_id: str, **fields: object) -> dict:
     now = utc_now()
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
@@ -793,7 +814,7 @@ def update_agent_runtime(root: Path, run_id: str, task_id: str, agent_id: str, *
 
 def mark_task_coordination(root: Path, run_id: str, task_id: str, **fields: object) -> dict:
     now = utc_now()
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
@@ -811,7 +832,7 @@ def mark_task_coordination(root: Path, run_id: str, task_id: str, **fields: obje
 
 
 def set_task_hidden(root: Path, run_id: str, task_id: str, hidden: bool) -> dict:
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
@@ -826,7 +847,7 @@ def set_task_hidden(root: Path, run_id: str, task_id: str, hidden: bool) -> dict
 
 
 def delete_task(root: Path, run_id: str, task_id: str) -> dict:
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None:
@@ -843,7 +864,7 @@ def delete_task(root: Path, run_id: str, task_id: str) -> dict:
 
 def set_task_status(root: Path, run_id: str, task_id: str, status: str, exit_code: int | None = None) -> dict:
     now = utc_now()
-    with PLAN_LOCK:
+    with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
