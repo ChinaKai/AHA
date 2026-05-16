@@ -19,48 +19,51 @@
       <div class="run-summary">
         <h2>Run Overview</h2>
         <div id="summary" class="meta">Loading...</div>
-        <form id="task-form" class="stack-form">
-          <input id="new-task-title" placeholder="New task title">
-          <select id="workspace-select"></select>
-          <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
-          <div class="field-row">
-            <label class="field-label">
-              <span>Backend</span>
-              <select id="task-backend"></select>
-            </label>
-            <label class="field-label">
-              <span>Model</span>
-              <select id="task-model"></select>
-            </label>
-          </div>
-          <div class="field-row">
-            <label class="field-label">
-              <span>Sandbox</span>
-              <select id="task-sandbox">
-                <option value="workspace-write">workspace-write</option>
-                <option value="read-only">read-only</option>
-                <option value="danger-full-access">danger-full-access</option>
+        <details id="task-create" class="task-create">
+          <summary>Add Task</summary>
+          <form id="task-form" class="stack-form">
+            <input id="new-task-title" placeholder="New task title">
+            <select id="workspace-select"></select>
+            <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
+            <div class="field-row">
+              <label class="field-label">
+                <span>Backend</span>
+                <select id="task-backend"></select>
+              </label>
+              <label class="field-label">
+                <span>Model</span>
+                <select id="task-model"></select>
+              </label>
+            </div>
+            <div class="field-row">
+              <label class="field-label">
+                <span>Sandbox</span>
+                <select id="task-sandbox">
+                  <option value="workspace-write">workspace-write</option>
+                  <option value="read-only">read-only</option>
+                  <option value="danger-full-access">danger-full-access</option>
+                </select>
+              </label>
+              <label class="field-label">
+                <span>Approval</span>
+                <select id="task-approval">
+                  <option value="never">never</option>
+                  <option value="on-failure">on-failure</option>
+                  <option value="on-request">on-request</option>
+                  <option value="untrusted">untrusted</option>
+                </select>
+              </label>
+            </div>
+            <div class="field-row">
+              <select id="delegation-policy">
+                <option value="auto">auto delegation</option>
+                <option value="disabled">no delegation</option>
               </select>
-            </label>
-            <label class="field-label">
-              <span>Approval</span>
-              <select id="task-approval">
-                <option value="never">never</option>
-                <option value="on-failure">on-failure</option>
-                <option value="on-request">on-request</option>
-                <option value="untrusted">untrusted</option>
-              </select>
-            </label>
-          </div>
-          <div class="field-row">
-            <select id="delegation-policy">
-              <option value="auto">auto delegation</option>
-              <option value="disabled">no delegation</option>
-            </select>
-            <input id="max-sub-agents" type="number" min="0" max="16" value="3" placeholder="Max sub">
-          </div>
-          <button type="submit">Add Task</button>
-        </form>
+              <input id="max-sub-agents" type="number" min="0" max="16" value="3" placeholder="Max sub">
+            </div>
+            <button type="submit">Add Task</button>
+          </form>
+        </details>
       </div>
       <div class="task-list-tools">
         <label>

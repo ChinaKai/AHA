@@ -43,6 +43,7 @@ const conversationFilterOptions = [
 const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
 const summaryEl = document.getElementById("summary");
+const taskCreateEl = document.getElementById("task-create");
 const tasksEl = document.getElementById("tasks");
 const showHiddenEl = document.getElementById("show-hidden");
 const selectedIdEl = document.getElementById("selected-id");
@@ -83,6 +84,29 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function initTaskCreateDisclosure() {
+  if (!taskCreateEl) return;
+  const mobileQuery = window.matchMedia("(max-width: 640px)");
+  let applyingDefault = false;
+  const applyDefault = () => {
+    if (taskCreateEl.dataset.userToggled === "true") return;
+    applyingDefault = true;
+    taskCreateEl.open = !mobileQuery.matches;
+    setTimeout(() => {
+      applyingDefault = false;
+    }, 50);
+  };
+  taskCreateEl.addEventListener("toggle", () => {
+    if (!applyingDefault) taskCreateEl.dataset.userToggled = "true";
+  });
+  if (mobileQuery.addEventListener) {
+    mobileQuery.addEventListener("change", applyDefault);
+  } else {
+    mobileQuery.addListener(applyDefault);
+  }
+  applyDefault();
 }
 
 function selectedTask() {
@@ -1537,6 +1561,8 @@ workspaceSelectEl.addEventListener("change", () => {
   workspaceCustomEl.classList.toggle("hidden", !isCustom);
   if (isCustom) workspaceCustomEl.focus();
 });
+
+initTaskCreateDisclosure();
 
 async function tick() {
   try {

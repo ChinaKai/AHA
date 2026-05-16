@@ -46,6 +46,40 @@ button, input, select { font: inherit; }
   gap: 8px;
   margin-top: 12px;
 }
+.task-create {
+  margin-top: 12px;
+}
+.task-create > summary {
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 650;
+  list-style: none;
+}
+.task-create > summary::-webkit-details-marker {
+  display: none;
+}
+.task-create > summary::after {
+  content: "+";
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+.task-create[open] > summary::after {
+  content: "-";
+}
+.task-create > .stack-form {
+  margin-top: 10px;
+}
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
