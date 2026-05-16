@@ -30,14 +30,14 @@ main {
 }
 h1 { margin: 0; font-size: 20px; }
 .header-workspace-dir {
-  display: inline-flex;
+  display: inline;
   min-width: 0;
-  max-width: min(28vw, 320px);
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
   color: #667085;
   font-size: 14px;
   font-weight: 600;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   vertical-align: baseline;
   white-space: nowrap;
 }
@@ -797,13 +797,13 @@ button {
     display: none;
   }
   h1 {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
     white-space: nowrap;
     font-size: 15px;
   }
   .header-workspace-dir {
-    max-width: 72px;
+    max-width: none;
     font-size: 12px;
   }
   #run-state {
