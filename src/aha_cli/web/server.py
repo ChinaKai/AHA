@@ -7,6 +7,7 @@ import textwrap
 from urllib.parse import parse_qs, unquote, urlparse
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, agent_backends, model_options
+from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import (
     backend_status,
     start_backend,
@@ -17,6 +18,7 @@ from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     append_message,
+    complete_task,
     conversation_events_page,
     create_plan,
     delete_task,
@@ -26,9 +28,12 @@ from aha_cli.store.filesystem import (
     iter_jsonl_reverse,
     list_run_summaries,
     load_config,
+    mark_task_coordination,
+    reopen_task,
     run_exists,
     run_dir,
     run_summary,
+    set_task_status,
     set_task_hidden,
     status_snapshot,
     task_context_snapshot,
@@ -186,6 +191,7 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
         task_id = raw_task_id or None
         current_status = str(task.get("status") or "pending")
         outcome = current_status if current_status in TERMINAL_TASK_STATUSES else outcomes.get(raw_task_id, {}).get("status")
+        display_status = current_status if current_status in {"running", "awaiting_user"} else outcome or current_status
         for agent in task.get("agents", []):
             target = str(agent.get("id") or "main")
             key = (task_id, target)
@@ -198,7 +204,7 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
         task["current_status"] = current_status
         task["outcome_status"] = outcome
         task["activity_status"] = task_activity_status(task)
-        task["display_status"] = outcome or current_status
+        task["display_status"] = display_status
     return snapshot
 
 
@@ -214,6 +220,8 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha agents: list selected task agents",
                 "- /aha final: ask task-main to generate or update the Final",
                 "- /aha finalize: alias for /aha final",
+                "- /aha complete: mark selected task complete and lock normal messages",
+                "- /aha reopen: cancel completion and allow follow-up messages",
                 "",
                 "Agent command:",
                 "- /agent <command>: route /<command> to the selected agent",
@@ -247,6 +255,10 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
         return "\n".join(lines)
     if name in {"final", "finalize"}:
         return "Use `/aha final` from the selected task conversation to ask task-main to generate or update the Final."
+    if name in {"complete", "done"}:
+        return "Use `/aha complete` from the selected task conversation to lock the task as complete."
+    if name in {"reopen", "resume"}:
+        return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
     return f"Unknown AHA command: /aha {name}. Try /aha help."
 
 
@@ -280,6 +292,9 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
     except KeyError:
         return f"Task not found: {task_id}"
     task = detail["task"]
+    mark_task_coordination(root, run_id, task_id, final_summary_requested_at=utc_now(), final_summary_completed_at="")
+    if task.get("status") not in TERMINAL_TASK_STATUSES:
+        set_task_status(root, run_id, task_id, "running")
     append_message(
         root,
         run_id,
@@ -294,8 +309,28 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
         original_command=command,
         result_policy="finalize",
     )
-    append_event(root, run_id, "task_final_requested", {"task_id": task_id, "target": "main"})
+    append_event(root, run_id, "task_final_requested", {"task_id": task_id, "target": "main", "policy": "finalize"})
     return f"Finalization requested for {task_id}. Task-main will write the Final when it finishes."
+
+
+def complete_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
+    if not task_id:
+        return "No task is selected."
+    try:
+        complete_task(root, run_id, task_id, 0)
+    except SystemExit:
+        return f"Task not found: {task_id}"
+    return f"{task_id} marked completed. Normal main/sub-agent messages are now locked."
+
+
+def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
+    if not task_id:
+        return "No task is selected."
+    try:
+        reopen_task(root, run_id, task_id)
+    except SystemExit:
+        return f"Task not found: {task_id}"
+    return f"{task_id} reopened. Follow-up messages are allowed again."
 
 
 def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id: str | None, command: str) -> tuple[bool, str | None, str | None]:
@@ -324,6 +359,10 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         name = parts[1] if len(parts) > 1 else "help"
         if name in {"final", "finalize"}:
             reply = request_task_finalization(root, run_id, task_id, stripped)
+        elif name in {"complete", "done"}:
+            reply = complete_selected_task(root, run_id, task_id)
+        elif name in {"reopen", "resume"}:
+            reply = reopen_selected_task(root, run_id, task_id)
         else:
             reply = format_aha_command(root, run_id, task_id, stripped, target)
     else:
@@ -378,6 +417,17 @@ def ensure_chat_offset_before_message(root: Path, run_id: str, task_id: str, tar
     save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
 
 
+def task_locked_for_messages(root: Path, run_id: str, task_id: str | None) -> str | None:
+    if not task_id:
+        return None
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return None
+    status = str(task.get("status") or "")
+    return status if status in TERMINAL_TASK_STATUSES else None
+
+
 def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
     message = str(payload.get("message", "")).strip()
     task_id = str(payload.get("task_id", "")).strip() or None
@@ -391,6 +441,10 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
     handled, agent_message, command_payload = handle_slash_command(root, run_id, payload, message, task_id)
     if handled:
         return {"ok": True, "handled_by": "aha", **command_payload}
+
+    locked_status = task_locked_for_messages(root, run_id, task_id)
+    if locked_status:
+        raise ValueError(f"task {task_id} is {locked_status}; use /aha reopen before sending follow-up messages")
 
     autostart = message_backend_autostart_config(root, run_id, task_id, target_id)
     if autostart and task_id:
@@ -424,6 +478,25 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
             task_id=autostart["task_id"],
         )
     return response
+
+
+def start_dispatched_task_backend(root: Path, run_id: str, task: dict, dispatch: bool) -> dict | None:
+    if not dispatch:
+        return None
+    task_id = str(task.get("id") or "")
+    autostart = message_backend_autostart_config(root, run_id, task_id, "main")
+    if not autostart:
+        return None
+    return start_backend(
+        root,
+        run_id,
+        "main",
+        model=autostart["model"],
+        sandbox=autostart["sandbox"],
+        approval=autostart["approval"],
+        from_start=True,
+        task_id=task_id,
+    )
 
 
 async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -605,6 +678,10 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                         task = set_task_hidden(root, selected_run_id, task_id, True)
                     elif action == "restore":
                         task = set_task_hidden(root, selected_run_id, task_id, False)
+                    elif action == "complete":
+                        task = complete_task(root, selected_run_id, task_id, 0)
+                    elif action in {"reopen", "resume"}:
+                        task = reopen_task(root, selected_run_id, task_id)
                     elif action == "delete":
                         task = delete_task(root, selected_run_id, task_id)
                     else:
@@ -641,6 +718,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
                     await writer.drain()
                     return
+                dispatch = bool(payload.get("dispatch", True))
                 task = create_task_and_dispatch(
                     root,
                     selected_run_id,
@@ -654,9 +732,13 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     max_sub_agents=int(payload.get("max_sub_agents", 3) or 0),
                     preferred_sub_backend=preferred_sub_backend,
                     preferred_sub_model=str(payload.get("preferred_sub_model", "") or "") or None,
-                    dispatch=bool(payload.get("dispatch", True)),
+                    dispatch=dispatch,
                 )
-                writer.write(json_response({"ok": True, "task": task}))
+                backend_state = start_dispatched_task_backend(root, selected_run_id, task, dispatch)
+                response = {"ok": True, "task": task}
+                if backend_state:
+                    response["backend"] = backend_state
+                writer.write(json_response(response))
         elif method == "POST" and path == "/api/agents":
             payload = parse_json_body(body)
             selected_run_id = require_api_run_id(root, run_id, query, payload)

@@ -26,8 +26,14 @@ WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 
 
 def task_has_active_followup(task: dict) -> bool:
+    if task.get("status") in TERMINAL_AGENT_STATUSES:
+        return False
     coordination = task.get("coordination") or {}
-    return bool(coordination.get("followup_started_at") and not coordination.get("final_summary_completed_at"))
+    return bool(
+        coordination.get("followup_started_at")
+        and not coordination.get("final_summary_requested_at")
+        and not coordination.get("final_summary_completed_at")
+    )
 
 
 def task_assignment_prompt(task: dict) -> str:
@@ -194,6 +200,8 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 task_id,
                 final_summary_requested_at="",
                 final_summary_completed_at="",
+                round_summary_requested_at="",
+                round_summary_completed_at="",
                 followup_started_at=utc_now(),
             )
             set_task_status(root, run_id, task_id, "running")
@@ -255,6 +263,8 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             task_id,
             final_summary_requested_at="",
             final_summary_completed_at="",
+            round_summary_requested_at="",
+            round_summary_completed_at="",
             followup_started_at=utc_now(),
         )
         set_task_status(root, run_id, task_id, "running")
@@ -316,17 +326,22 @@ def task_has_incomplete_sub_agents(task: dict) -> bool:
 def waiting_for_subagents_message(task: dict) -> str:
     pending = pending_sub_agents(task)
     if not pending:
-        return "所有子 agent 已完成，等待 task-main 做最终汇总。"
+        return "所有子 agent 已完成，等待 task-main 做本轮汇总。"
     names = ", ".join(agent.get("id", "-") for agent in pending)
     done = len(sub_agents(task)) - len(pending)
     return f"等待子 agent 完成：{names}。当前进度 {done}/{len(sub_agents(task))}。"
 
 
-def request_final_summary_if_ready(root: Path, run_id: str, task_id: str) -> bool:
+def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> bool:
     task = task_snapshot(root, run_id, task_id)["task"]
     agents = sub_agents(task)
     coordination = task.get("coordination") or {}
-    if coordination.get("final_summary_requested_at") or coordination.get("final_summary_completed_at"):
+    if (
+        coordination.get("final_summary_requested_at")
+        or coordination.get("final_summary_completed_at")
+        or coordination.get("round_summary_requested_at")
+        or coordination.get("round_summary_completed_at")
+    ):
         return False
     if not agents or pending_sub_agents(task):
         append_event(
@@ -340,20 +355,20 @@ def request_final_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
             },
         )
         return False
-    if task.get("status") in TERMINAL_AGENT_STATUSES and not task_has_active_followup(task):
+    if task.get("status") in TERMINAL_AGENT_STATUSES:
         return False
-    task = mark_task_coordination(root, run_id, task_id, final_summary_requested_at=utc_now())
+    task = mark_task_coordination(root, run_id, task_id, round_summary_requested_at=utc_now())
     prompt = textwrap.dedent(
         f"""\
-        All sub-agents for {task_id} have completed.
+        All sub-agents for {task_id} have completed this round.
 
-        Produce the final user-facing task summary now. Include:
+        Produce a concise user-facing round summary now. Include:
         - what each sub-agent completed,
         - validation performed,
-        - remaining risks or follow-up work,
-        - whether the task is complete.
+        - remaining risks or follow-up work.
 
-        Do not send acknowledgements back to sub-agents. This is the final task-main summary.
+        Do not mark the task complete or final. The task remains open for follow-up.
+        Do not send acknowledgements back to sub-agents.
         """
     )
     append_message(
@@ -366,12 +381,17 @@ def request_final_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
         role="main",
         from_agent="aha",
         to_agent="main",
-        result_policy="finalize",
         reply_target="browser",
         coordination="subagents_complete",
     )
-    append_event(root, run_id, "task_final_requested", {"task_id": task_id, "target": "main", "reason": "subagents_complete"})
+    event_data = {"task_id": task_id, "target": "main", "reason": "subagents_complete", "policy": "round_summary"}
+    append_event(root, run_id, "task_round_summary_requested", event_data)
+    append_event(root, run_id, "task_final_requested", event_data)
     return True
+
+
+def request_final_summary_if_ready(root: Path, run_id: str, task_id: str) -> bool:
+    return request_round_summary_if_ready(root, run_id, task_id)
 
 
 def record_sub_agent_report(
@@ -389,7 +409,7 @@ def record_sub_agent_report(
         task = task_snapshot(root, run_id, task_id)["task"]
     except KeyError:
         return {"handled": False}
-    if task.get("status") in TERMINAL_AGENT_STATUSES and not task_has_active_followup(task):
+    if task.get("status") in TERMINAL_AGENT_STATUSES:
         append_event(root, run_id, "sub_agent_report_ignored", {"task_id": task_id, "agent_id": agent_id, "reason": "task already terminal"})
         return {"handled": True, "ignored": True}
     current = next((agent for agent in sub_agents(task) if agent.get("id") == agent_id), None)
@@ -397,19 +417,19 @@ def record_sub_agent_report(
         return {"handled": False}
     if current.get("status") in TERMINAL_AGENT_STATUSES:
         append_event(root, run_id, "sub_agent_report_ignored", {"task_id": task_id, "agent_id": agent_id, "reason": "agent already terminal"})
-        request_final_summary_if_ready(root, run_id, task_id)
+        request_round_summary_if_ready(root, run_id, task_id)
         return {"handled": True, "ignored": True}
     set_agent_status(root, run_id, task_id, agent_id, status, exit_code)
     append_event(root, run_id, "sub_agent_reported", {"task_id": task_id, "agent_id": agent_id, "status": status, "chars": len(message)})
-    final_requested = request_final_summary_if_ready(root, run_id, task_id)
-    return {"handled": True, "final_requested": final_requested}
+    round_summary_requested = request_round_summary_if_ready(root, run_id, task_id)
+    return {"handled": True, "round_summary_requested": round_summary_requested, "final_requested": False}
 
 
 def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
     actions: list[dict] = []
     snapshot = status_snapshot(root, run_id)
     for task in snapshot.get("tasks", []):
-        if task.get("status") in TERMINAL_AGENT_STATUSES and not task_has_active_followup(task):
+        if task.get("status") in TERMINAL_AGENT_STATUSES:
             continue
         agents = sub_agents(task)
         if not agents:
@@ -460,6 +480,6 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
             )
             actions.append({"type": "agent_recovered", "task_id": task["id"], "agent_id": agent["id"]})
         fresh_task = task_snapshot(root, run_id, task["id"])["task"]
-        if not pending_sub_agents(fresh_task) and request_final_summary_if_ready(root, run_id, task["id"]):
-            actions.append({"type": "final_requested", "task_id": task["id"]})
+        if not pending_sub_agents(fresh_task) and request_round_summary_if_ready(root, run_id, task["id"]):
+            actions.append({"type": "round_summary_requested", "task_id": task["id"]})
     return actions

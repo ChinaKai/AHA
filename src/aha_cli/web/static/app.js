@@ -106,7 +106,9 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
   { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
   { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate or update the Final." },
-  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." }
+  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
+  { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Mark the selected task complete and lock messages." },
+  { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." }
 ];
 
 function escapeHtml(value) {
@@ -776,6 +778,9 @@ const timelineEventTypes = new Set([
   "task_finished",
   "task_result_written",
   "task_final_requested",
+  "task_round_summary_requested",
+  "task_reopened",
+  "task_completed",
   "task_waiting_for_subagents",
   "task_status_changed",
   "agent_started",
@@ -1428,6 +1433,9 @@ function renderTaskList() {
     return;
   }
   for (const task of tasks) {
+    const locked = terminalTaskStatuses.has(taskCurrentStatus(task));
+    const completionAction = locked ? "reopen" : "complete";
+    const completionLabel = locked ? "Reopen" : "Complete";
     const item = document.createElement("div");
     item.className = `task ${task.id === selectedTaskId ? "active" : ""} ${task.hidden ? "hidden-task" : ""}`;
     item.dataset.taskId = task.id;
@@ -1439,6 +1447,7 @@ function renderTaskList() {
       <div class="task-title">${escapeHtml(task.title)}</div>
       <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
+        <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
@@ -1469,6 +1478,7 @@ async function selectTask(taskId) {
 
 async function updateTaskVisibility(taskId, action) {
   if (action === "delete" && !confirm(`Delete ${taskId} from the task list?`)) return;
+  if (action === "complete" && !confirm(`Mark ${taskId} complete and lock messages?`)) return;
   taskActionInFlight = true;
   try {
     const res = await fetchWithTimeout(apiUrl(`/api/task/${encodeURIComponent(taskId)}/${action}`), { method: "POST" });
@@ -1477,7 +1487,7 @@ async function updateTaskVisibility(taskId, action) {
       alert(payload.error || `Task action failed: ${action}`);
       return;
     }
-    if (action === "restore") selectedTaskId = taskId;
+    if (action === "restore" || action === "complete" || action === "reopen") selectedTaskId = taskId;
     if (action === "hide" || action === "delete") selectedTaskId = null;
     await loadStatus();
     renderPanel();
@@ -1742,9 +1752,8 @@ function renderConversation(taskId) {
   const events = taskConversationEvents(taskId);
   if (!events.length && !state.hasMore) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
   const older = state.hasMore ? `<button class="load-older" type="button" data-load-older="true">${state.loading ? "Loading..." : "Load older"}</button>` : "";
-  const taskTimer = renderTaskTimer(taskId);
   const timer = renderTurnTimer(taskId);
-  return `<div class="conversation timeline">${older}${taskTimer}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
+  return `<div class="conversation timeline">${older}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
 }
 
 function renderTimelineEvent(event) {
@@ -1780,7 +1789,13 @@ function renderTimelineEvent(event) {
   if (event.type === "task_started") return renderTimelineStatus("task started", data.title || "", "running", ts);
   if (event.type === "task_finished") return renderTimelineStatus(`task ${data.status || "finished"}`, `exit=${data.exit_code ?? "-"}`, data.status || "completed", ts);
   if (event.type === "task_result_written") return renderTimelineStatus("final written", `${data.chars || 0} chars`, "completed", ts);
-  if (event.type === "task_final_requested") return renderTimelineStatus("final requested", `target=${data.target || "main"}`, "running", ts);
+  if (event.type === "task_final_requested") {
+    const isRoundSummary = data.policy === "round_summary";
+    return renderTimelineStatus(isRoundSummary ? "round summary requested" : "final requested", `target=${data.target || "main"}`, "running", ts);
+  }
+  if (event.type === "task_round_summary_requested") return renderTimelineStatus("round summary requested", `target=${data.target || "main"}`, "running", ts);
+  if (event.type === "task_reopened") return renderTimelineStatus("task reopened", data.task_id || "-", "awaiting_user", ts);
+  if (event.type === "task_completed") return renderTimelineStatus("task completed", `exit=${data.exit_code ?? "-"}`, "completed", ts);
   if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", ts);
   if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "running", ts);
   if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
@@ -1815,32 +1830,6 @@ function renderTurnTimer(taskId) {
   ].filter(Boolean).join(" | ");
   return `
     <div class="turn-timer ${escapeHtml(timing.status)}">
-      <span class="activity-dot"></span>
-      <strong>${escapeHtml(title)}</strong>
-      <code>${escapeHtml(details)}</code>
-    </div>
-  `;
-}
-
-function renderTaskTimer(taskId) {
-  const task = (statusData?.tasks || []).find(item => item.id === taskId);
-  const timing = taskTiming(taskId, task);
-  if (!timing) return "";
-  const waiting = waitingSubagentTiming(task);
-  const displayStatus = taskDisplayStatus(task);
-  const outcome = taskOutcomeStatus(task);
-  const activity = taskActivityStatus(task);
-  const title = timing.running && outcome ? `Task activity ${activity}` : (timing.running ? "Task is running" : `Task ${displayStatus || "finished"}`);
-  const details = [
-    `wall ${formatDuration(timing.elapsedMs)}`,
-    outcome ? `outcome ${outcome}` : "",
-    `activity ${activity}`,
-    `started ${formatClock(timing.startedAt)}`,
-    timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : "",
-    waiting ? `waiting subagents ${formatDuration(waiting.elapsedMs)} (${waiting.completed.length}/${subAgents(task).length})` : ""
-  ].filter(Boolean).join(" | ");
-  return `
-    <div class="turn-timer task-timer ${escapeHtml(timing.running ? activity : displayStatus || "completed")}">
       <span class="activity-dot"></span>
       <strong>${escapeHtml(title)}</strong>
       <code>${escapeHtml(details)}</code>

@@ -26,7 +26,10 @@ main {
   --agents-width: minmax(270px, 20vw);
   display: grid;
   grid-template-columns: var(--overview-width) minmax(420px, 1fr) var(--agents-width);
+  grid-template-rows: minmax(0, 1fr);
   height: calc(100vh - 64px);
+  min-height: 0;
+  overflow: hidden;
 }
 h1 { margin: 0; font-size: 20px; }
 header > div:first-child {
@@ -319,6 +322,7 @@ button, input, select { font: inherit; }
 }
 .status.completed { background: #dcfce7; color: #14532d; }
 .status.running { background: #dbeafe; color: #1e3a8a; }
+.status.awaiting_user { background: #fef3c7; color: #92400e; }
 .status.busy { background: #fef3c7; color: #92400e; }
 .status.idle { background: #f2f4f7; color: #475467; }
 .status.activity {
@@ -329,10 +333,12 @@ button, input, select { font: inherit; }
 .status.pending { background: #f2f4f7; color: #344054; }
 .status.hidden { background: #f2f4f7; color: #475467; }
 .workspace {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 .task-header {
   padding: 16px 18px 12px;
@@ -370,6 +376,7 @@ button, input, select { font: inherit; }
   color: #ffffff;
 }
 .panel {
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   overflow: auto;
@@ -470,6 +477,7 @@ button, input, select { font: inherit; }
   color: #98a2b3;
 }
 .timeline-status.running { border-left-color: #2563eb; }
+.timeline-status.awaiting_user { border-left-color: #d97706; }
 .timeline-status.completed { border-left-color: #16a34a; }
 .timeline-status.failed { border-left-color: #dc2626; }
 .timeline-status.blocked { border-left-color: #d97706; }
@@ -593,6 +601,9 @@ pre {
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr) 86px;
   gap: 10px;
+  flex: 0 0 auto;
+  align-self: end;
+  width: 100%;
   padding: 12px 18px;
   background: #ffffff;
 }
@@ -808,20 +819,23 @@ button {
   header > div { min-width: 0; }
   main {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
     height: auto;
     min-height: calc(100dvh - 64px);
+    overflow: visible;
   }
   .panel-collapse {
     display: none;
   }
   .workspace {
     order: 1;
-    height: auto;
+    height: calc(100dvh - 64px);
     min-height: 0;
   }
   .panel {
-    height: min(44dvh, 420px);
-    min-height: 280px;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
     overscroll-behavior: contain;
   }
   .sidebar {
@@ -869,11 +883,22 @@ button {
 }
 
 @media (max-width: 640px) {
+  html,
+  body {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+  }
   body.mobile-tasks-open,
   body.mobile-agents-open {
     overflow: hidden;
   }
   header {
+    flex: 0 0 auto;
     min-height: 44px;
     padding: 6px 10px;
     display: grid;
@@ -952,13 +977,18 @@ button {
   }
   h2 { font-size: 14px; }
   main {
-    height: calc(100dvh - 44px);
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    height: auto;
     min-height: 0;
+    overflow: hidden;
   }
   .workspace {
     --mobile-composer-offset: calc(59px + env(safe-area-inset-bottom));
+    flex: 1 1 auto;
     position: relative;
-    height: 100%;
+    height: auto;
     min-height: 0;
   }
   .run-summary,
@@ -1168,7 +1198,7 @@ button {
     left: 0;
     right: 0;
     bottom: var(--mobile-composer-offset);
-    z-index: 20;
+    z-index: 30;
     max-height: min(42dvh, 260px);
     overflow: auto;
     padding: 10px 12px;
@@ -1197,6 +1227,7 @@ button {
   .composer {
     position: relative;
     z-index: 21;
+    flex: 0 0 auto;
     grid-template-columns: minmax(0, 1fr) 42px;
     align-items: end;
     gap: 6px;

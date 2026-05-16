@@ -15,8 +15,7 @@ from aha_cli.services.orchestrator import (
     execute_actions,
     monitor_task_coordination,
     record_sub_agent_report,
-    request_final_summary_if_ready,
-    task_has_active_followup,
+    request_round_summary_if_ready,
     task_has_incomplete_sub_agents,
     waiting_for_subagents_message,
 )
@@ -309,8 +308,8 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             return 0
                         continue
                 coordination = task.get("coordination") or {}
-                terminal_without_followup = task.get("status") in TERMINAL_TASK_STATUSES and not task_has_active_followup(task)
-                if args.target.startswith("sub-") and (terminal_without_followup or coordination.get("final_summary_requested_at")):
+                task_locked = task.get("status") in TERMINAL_TASK_STATUSES
+                if manages_task_status and task_locked and not is_finalization:
                     append_event(
                         root,
                         run_id,
@@ -320,7 +319,25 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             "target": args.target,
                             "task_id": item_task_id,
                             "sender": original_sender,
-                            "reason": "task final summary already requested or task is terminal",
+                            "reason": "task is completed; reopen required",
+                        },
+                    )
+                    if worker_task_id:
+                        save_chat_offset(offset_file, item_offset)
+                        mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                        return 0
+                    continue
+                if args.target.startswith("sub-") and coordination.get("final_summary_requested_at"):
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_message_skipped",
+                        {
+                            "source": "codex-chat",
+                            "target": args.target,
+                            "task_id": item_task_id,
+                            "sender": original_sender,
+                            "reason": "task final summary already requested",
                         },
                     )
                     if worker_task_id:
@@ -436,18 +453,23 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                                 exit_after_message = bool(worker_task_id)
                         elif agent_id != "main":
                             set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
-                            request_final_summary_if_ready(root, run_id, item_task_id)
+                            request_round_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")
                             exit_after_message = bool(worker_task_id)
                         else:
                             detail = task_snapshot(root, run_id, item_task_id)
-                            if executed or task_has_incomplete_sub_agents(detail["task"]):
+                            if item.get("coordination") == "subagents_complete":
+                                mark_task_coordination(root, run_id, item_task_id, round_summary_completed_at=utc_now())
+                                set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
+                                set_task_status(root, run_id, item_task_id, "awaiting_user")
+                            elif executed or task_has_incomplete_sub_agents(detail["task"]):
                                 set_agent_status(root, run_id, item_task_id, agent_id, "waiting")
                                 set_task_status(root, run_id, item_task_id, "running")
                             else:
                                 set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
-                                set_task_status(root, run_id, item_task_id, final_status, exit_code)
-                                if final_status in TERMINAL_TASK_STATUSES:
+                                next_task_status = "awaiting_user" if final_status == "completed" else final_status
+                                set_task_status(root, run_id, item_task_id, next_task_status, exit_code)
+                                if next_task_status in TERMINAL_TASK_STATUSES:
                                     stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
                                     exit_after_message = bool(worker_task_id)
                     print(f"{args.sender} -> {reply_target}: {display_reply}", flush=True)
@@ -455,7 +477,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     if manages_task_status:
                         if agent_id != "main":
                             set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
-                            request_final_summary_if_ready(root, run_id, item_task_id)
+                            request_round_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")
                             exit_after_message = bool(worker_task_id)
                         else:

@@ -190,7 +190,7 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
     completed = sum(1 for task in tasks if task.get("status") == "completed")
     failed = any(task.get("status") == "failed" for task in tasks)
     blocked = any(task.get("status") == "blocked" for task in tasks)
-    running = any(task.get("status") == "running" for task in tasks)
+    running = any(task.get("status") in {"running", "awaiting_user"} for task in tasks)
     if failed:
         status = "failed"
     elif blocked:
@@ -471,6 +471,9 @@ TIMELINE_EVENT_TYPES = {
     "task_finished",
     "task_result_written",
     "task_final_requested",
+    "task_round_summary_requested",
+    "task_reopened",
+    "task_completed",
     "task_waiting_for_subagents",
     "task_status_changed",
     "agent_started",
@@ -929,6 +932,32 @@ def mark_task_coordination(root: Path, run_id: str, task_id: str, **fields: obje
     return task
 
 
+def reopen_task(root: Path, run_id: str, task_id: str) -> dict:
+    now = utc_now()
+    task = set_task_status(root, run_id, task_id, "awaiting_user")
+    task = mark_task_coordination(
+        root,
+        run_id,
+        task_id,
+        final_summary_requested_at="",
+        final_summary_completed_at="",
+        round_summary_requested_at="",
+        round_summary_completed_at="",
+        followup_started_at=now,
+        reopened_at=now,
+    )
+    append_event(root, run_id, "task_reopened", {"task_id": task_id})
+    return task
+
+
+def complete_task(root: Path, run_id: str, task_id: str, exit_code: int | None = 0) -> dict:
+    now = utc_now()
+    task = set_task_status(root, run_id, task_id, "completed", exit_code)
+    task = mark_task_coordination(root, run_id, task_id, completion_marked_at=now)
+    append_event(root, run_id, "task_completed", {"task_id": task_id, "exit_code": exit_code})
+    return task
+
+
 def set_task_hidden(root: Path, run_id: str, task_id: str, hidden: bool) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -973,6 +1002,11 @@ def set_task_status(root: Path, run_id: str, task_id: str, status: str, exit_cod
         else:
             task["status"] = status
         if status == "running":
+            if should_append:
+                task["started_at"] = task.get("started_at") or now
+                task["finished_at"] = None
+                task["exit_code"] = None
+        elif status == "awaiting_user":
             if should_append:
                 task["started_at"] = task.get("started_at") or now
                 task["finished_at"] = None

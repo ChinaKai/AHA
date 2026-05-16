@@ -21,6 +21,7 @@ from aha_cli.store.filesystem import (
     add_agent,
     append_jsonl,
     append_event,
+    complete_task,
     conversation_events_page,
     delete_task,
     event_path,
@@ -29,6 +30,7 @@ from aha_cli.store.filesystem import (
     iter_jsonl_reverse,
     run_dir,
     mark_task_coordination,
+    reopen_task,
     set_agent_status,
     set_task_hidden,
     set_task_status,
@@ -504,7 +506,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertIn("aha_cli codex-runner", output)
 
-    def test_codex_chat_does_not_auto_write_final(self) -> None:
+    def test_codex_chat_does_not_auto_write_final_or_complete_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -518,7 +520,7 @@ class CliTests(unittest.TestCase):
                     code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 self.assertEqual(code, 0)
                 self.assertIn("main -> browser: 真实回复", output)
-                self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "completed")
+                self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "awaiting_user")
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["result"], "")
 
                 code, watch_output = self.run_cli("watch", run_id, "--once")
@@ -827,6 +829,7 @@ class CliTests(unittest.TestCase):
                     final_summary_completed_at="2026-05-15T00:01:00+00:00",
                 )
                 set_task_status(root, run_id, "task-001", "completed", 0)
+                reopen_task(root, run_id, "task-001")
                 append_message(root, run_id, "main", "这个范围继续调整", sender="browser", task_id="task-001", role="main")
                 reply = json.dumps(
                     {
@@ -856,17 +859,18 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(sub_messages[-1]["message"], "请继续调整你负责的范围")
                 self.assertEqual(sub_messages[-1]["coordination"], "routed_by_main")
                 detail = task_snapshot(root, run_id, "task-001")
-                self.assertEqual(detail["task"]["status"], "completed")
-                self.assertEqual(detail["task"]["exit_code"], 0)
+                self.assertEqual(detail["task"]["status"], "running")
+                self.assertIsNone(detail["task"]["exit_code"])
                 self.assertEqual(detail["task"]["coordination"]["final_summary_requested_at"], "")
                 self.assertEqual(detail["task"]["coordination"]["final_summary_completed_at"], "")
                 self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
                 start_backend.assert_called_once()
 
                 report = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sub follow-up done")
-                self.assertTrue(report["final_requested"])
+                self.assertTrue(report["round_summary_requested"])
+                self.assertFalse(report["final_requested"])
 
-    def test_sub_agent_handles_active_followup_on_terminal_task(self) -> None:
+    def test_sub_agent_skips_completed_task_even_with_old_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -880,7 +884,7 @@ class CliTests(unittest.TestCase):
                 mark_task_coordination(root, run_id, "task-001", followup_started_at="2026-05-15T00:00:00+00:00")
                 append_message(root, run_id, "sub-001", "继续处理你负责的范围", sender="main", task_id="task-001", role="sub")
 
-                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "sub follow-up done", None)):
+                with mock.patch("aha_cli.services.chat.run_codex_exec") as run_agent:
                     code, output = self.run_cli(
                         "codex-chat",
                         run_id,
@@ -891,19 +895,20 @@ class CliTests(unittest.TestCase):
                         "sub-001",
                         "--from-start",
                         "--once",
-                    )
+                )
 
                 self.assertEqual(code, 0)
-                self.assertIn("sub-001 -> main: sub follow-up done", output)
+                self.assertNotIn("sub-001 -> main", output)
+                run_agent.assert_not_called()
                 detail = task_snapshot(root, run_id, "task-001")
                 sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
                 self.assertEqual(detail["task"]["status"], "completed")
-                self.assertEqual(sub_agent["status"], "completed")
-                self.assertTrue(detail["task"]["coordination"]["final_summary_requested_at"])
+                self.assertEqual(sub_agent["status"], "pending")
+                self.assertNotIn("final_summary_requested_at", detail["task"].get("coordination") or {})
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
-                self.assertFalse(any(event["type"] == "agent_message_skipped" for event in events))
+                self.assertTrue(any(event["type"] == "agent_message_skipped" for event in events))
 
-    def test_sub_agent_reports_wait_then_request_main_final_summary(self) -> None:
+    def test_sub_agent_reports_wait_then_request_main_round_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -917,19 +922,21 @@ class CliTests(unittest.TestCase):
 
                 first = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sub-001 done")
                 self.assertTrue(first["handled"])
-                self.assertFalse(first.get("final_requested"))
+                self.assertFalse(first.get("round_summary_requested"))
                 detail = task_snapshot(root, run_id, "task-001")
                 statuses = {agent["id"]: agent["status"] for agent in detail["task"]["agents"]}
                 self.assertEqual(statuses["sub-001"], "completed")
                 self.assertEqual(statuses["sub-002"], "pending")
 
                 second = record_sub_agent_report(root, run_id, "task-001", "sub-002", "sub-002 done")
-                self.assertTrue(second["final_requested"])
+                self.assertTrue(second["round_summary_requested"])
+                self.assertFalse(second["final_requested"])
                 main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
                 self.assertEqual(main_messages[-1]["sender"], "aha")
                 self.assertEqual(main_messages[-1]["coordination"], "subagents_complete")
-                self.assertEqual(main_messages[-1]["result_policy"], "finalize")
+                self.assertNotIn("result_policy", main_messages[-1])
                 self.assertEqual(main_messages[-1]["reply_target"], "browser")
+                self.assertIn("round summary", main_messages[-1]["message"])
 
     def test_coordination_watchdog_recovers_stopped_pending_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1085,7 +1092,7 @@ class CliTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Web follow-up", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                set_task_status(root, run_id, "task-001", "completed", 0)
+                set_task_status(root, run_id, "task-001", "awaiting_user")
                 set_agent_status(root, run_id, "task-001", "main", "completed", 0)
                 append_message(root, run_id, "main", "old already-seen message", sender="browser", task_id="task-001", role="main")
 
@@ -1118,6 +1125,95 @@ class CliTests(unittest.TestCase):
                 offset = json.loads(offset_file.read_text(encoding="utf-8"))["offset"]
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
                 self.assertEqual([item["message"] for item in messages], ["new follow-up"])
+
+    def test_web_send_blocks_completed_task_until_reopened(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Locked task", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                complete_task(root, run_id, "task-001", 0)
+
+                payload = {
+                    "target": "main",
+                    "role": "main",
+                    "task_id": "task-001",
+                    "from_agent": "browser",
+                    "to_agent": "main",
+                    "sender": "browser",
+                    "message": "should be blocked",
+                }
+                with self.assertRaisesRegex(ValueError, "use /aha reopen"):
+                    handle_send_payload(root, run_id, payload)
+
+                reopened = handle_send_payload(root, run_id, {**payload, "message": "/aha reopen"})
+                self.assertTrue(reopened["ok"])
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                self.assertEqual(detail["status"], "awaiting_user")
+                self.assertEqual(detail["coordination"]["final_summary_requested_at"], "")
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    sent = handle_send_payload(root, run_id, {**payload, "message": "follow-up"})
+
+                self.assertTrue(sent["ok"])
+                start_backend.assert_called_once()
+
+    def test_task_action_resume_alias_reopens_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Resume alias", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                complete_task(root, run_id, "task-001", 0)
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/resume", method="POST"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["status"], "awaiting_user")
+
+    def test_web_task_creation_autostarts_dispatched_main_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task create autostart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend:
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/tasks",
+                            method="POST",
+                            payload={
+                                "title": "Autostart task",
+                                "backend": "codex",
+                                "sandbox": "danger-full-access",
+                                "approval": "never",
+                                "dispatch": True,
+                            },
+                        )
+                    )
+                    body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["backend"]["status"], "running")
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], body["task"]["id"])
+        self.assertTrue(start_backend.call_args.kwargs["from_start"])
 
     def test_conversation_events_page_filters_and_pages_by_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
