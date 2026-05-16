@@ -406,6 +406,10 @@ button, input, select { font: inherit; }
   border-left-color: #d97706;
   background: #fffbeb;
 }
+.turn-timer.waiting {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
 .turn-timer.completed { border-left-color: #16a34a; }
 .turn-timer.failed { border-left-color: #dc2626; }
 .turn-timer.blocked { border-left-color: #d97706; }
@@ -415,6 +419,10 @@ button, input, select { font: inherit; }
 }
 .turn-timer.completed .activity-dot { background: #16a34a; }
 .turn-timer.busy .activity-dot {
+  background: #d97706;
+  box-shadow: 0 0 0 4px #fef3c7;
+}
+.turn-timer.waiting .activity-dot {
   background: #d97706;
   box-shadow: 0 0 0 4px #fef3c7;
 }

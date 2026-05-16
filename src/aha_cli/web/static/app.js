@@ -783,34 +783,75 @@ function latestTurnTiming(taskId) {
   const startedEvent = events[startIndex];
   const startedAt = eventTimestamp(startedEvent);
   if (!startedAt) return null;
-  let finishedEvent = null;
-  for (let index = startIndex + 1; index < events.length; index += 1) {
-    if (events[index].type === "agent_finished") {
-      finishedEvent = events[index];
-      break;
+  const task = (statusData?.tasks || []).find(item => item.id === taskId);
+  const target = backendTarget();
+  const agent = (task?.agents || []).find(item => item.id === target);
+  const coordination = task?.coordination || {};
+  const followupStartedAt = parseTimestamp(coordination.followup_started_at);
+  const finalCompletedAt = parseTimestamp(coordination.final_summary_completed_at);
+  const followupCoversTurn =
+    target === "main" &&
+    followupStartedAt &&
+    ((!finalCompletedAt && followupStartedAt >= startedAt) || (finalCompletedAt && finalCompletedAt >= startedAt));
+  if (followupCoversTurn) {
+    let logicalStartedEvent = startedEvent;
+    for (let index = startIndex; index >= 0; index -= 1) {
+      if (events[index].type !== "agent_started") continue;
+      const candidateStartedAt = eventTimestamp(events[index]);
+      if (candidateStartedAt && candidateStartedAt <= followupStartedAt) {
+        logicalStartedEvent = events[index];
+        break;
+      }
     }
-    if (events[index].type === "agent_status_changed" && terminalAgentStatuses.has(eventData(events[index]).status || "")) {
-      finishedEvent = events[index];
-      break;
+    const logicalStartedAt = eventTimestamp(logicalStartedEvent) || followupStartedAt;
+    const waiting = waitingSubagentTiming(task);
+    const status = finalCompletedAt
+      ? "completed"
+      : waiting?.running || agentLifecycleStatus(agent) === "waiting"
+        ? "waiting"
+        : agentLifecycleStatus(agent) || "running";
+    const endAt = finalCompletedAt || Date.now();
+    return {
+      startedAt: logicalStartedAt,
+      finishedAt: finalCompletedAt || null,
+      elapsedMs: endAt - logicalStartedAt,
+      running: !finalCompletedAt,
+      status,
+      target,
+      sender: eventData(logicalStartedEvent).sender || "-"
+    };
+  }
+  let latestStatusEvent = null;
+  let terminalStatusEvent = null;
+  let agentFinishedEvent = null;
+  for (let index = startIndex + 1; index < events.length; index += 1) {
+    const data = eventData(events[index]);
+    if (events[index].type === "agent_status_changed") {
+      latestStatusEvent = events[index];
+      if (terminalAgentStatuses.has(data.status || "")) terminalStatusEvent = events[index];
+    } else if (events[index].type === "agent_finished") {
+      agentFinishedEvent = events[index];
     }
   }
-  const task = (statusData?.tasks || []).find(item => item.id === taskId);
-  const agent = (task?.agents || []).find(item => item.id === backendTarget());
-  let finishedAt = finishedEvent ? eventTimestamp(finishedEvent) : null;
+  const latestStatus = eventData(latestStatusEvent || {}).status || agentLifecycleStatus(agent);
+  let finishedAt = terminalStatusEvent ? eventTimestamp(terminalStatusEvent) : null;
+  if (!finishedAt && !["running", "waiting"].includes(latestStatus) && agentFinishedEvent) {
+    finishedAt = eventTimestamp(agentFinishedEvent);
+  }
   if (!finishedAt && terminalAgentStatuses.has(agent?.status || "")) {
     finishedAt = parseTimestamp(agent.finished_at) || parseTimestamp(agent.last_active_at) || parseTimestamp(task?.finished_at) || startedAt;
   }
-  const running = !finishedAt;
+  const running = !finishedAt || latestStatus === "waiting";
   const endAt = running ? Date.now() : finishedAt;
-  const finishedData = eventData(finishedEvent || {});
+  const finishedData = eventData(terminalStatusEvent || agentFinishedEvent || {});
   const exitCode = finishedData.exit_code;
-  const status = finishedData.status || agent?.status || (exitCode === 0 ? "completed" : "failed");
+  const status = running ? latestStatus || "running" : finishedData.status || agent?.status || (exitCode === 0 ? "completed" : "failed");
   return {
     startedAt,
-    finishedAt,
+    finishedAt: running ? null : finishedAt,
     elapsedMs: endAt - startedAt,
     running,
-    status: running ? "running" : status,
+    status,
     target: eventData(startedEvent).target || "main",
     sender: eventData(startedEvent).sender || "-"
   };
@@ -1477,10 +1518,13 @@ function renderTimelineEvent(event) {
 function renderTurnTimer(taskId) {
   const timing = latestTurnTiming(taskId);
   if (!timing) return "";
-  const title = timing.running ? "Agent is working" : `Agent turn ${timing.status}`;
+  const title = timing.running
+    ? (timing.status === "waiting" ? "Agent is waiting" : "Agent is working")
+    : `Agent turn ${timing.status}`;
   const label = timing.running ? "elapsed" : "duration";
   const details = [
     `${label} ${formatDuration(timing.elapsedMs)}`,
+    `status ${timing.status}`,
     `target ${timing.target}`,
     `started ${formatClock(timing.startedAt)}`,
     timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : ""
