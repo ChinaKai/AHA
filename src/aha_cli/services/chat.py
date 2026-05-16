@@ -57,8 +57,11 @@ def safe_target_name(target: str) -> str:
     return (target or "main").replace("/", "_")
 
 
-def chat_offset_path(run: Path, target: str) -> Path:
-    return run / "runtime" / f"chat-offset-{safe_target_name(target)}.json"
+def chat_offset_path(run: Path, target: str, task_id: str | None = None) -> Path:
+    target_name = safe_target_name(target)
+    if task_id:
+        return run / "runtime" / f"chat-offset-{safe_target_name(task_id)}-{target_name}.json"
+    return run / "runtime" / f"chat-offset-{target_name}.json"
 
 
 def load_chat_offset(inbox: Path, offset_file: Path, from_start: bool) -> int:
@@ -251,24 +254,28 @@ def codex_chat(root: Path, run_id: str, args) -> int:
     inbox = inbox_path(root, run_id, args.target)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
-    offset_file = chat_offset_path(run, args.target)
+    worker_task_id = str(getattr(args, "task_id", "") or "") or None
+    offset_file = chat_offset_path(run, args.target, worker_task_id)
     offset = load_chat_offset(inbox, offset_file, args.from_start)
     last_coordination_check = 0.0
-    print(f"Codex chat backend listening to {args.target} in run {run_id}. Ctrl-C to exit.")
+    task_label = f" task={worker_task_id}" if worker_task_id else ""
+    print(f"Codex chat backend listening to {args.target}{task_label} in run {run_id}. Ctrl-C to exit.")
     try:
         while True:
-            if args.target == "main" and not args.once and time.monotonic() - last_coordination_check >= max(10.0, args.interval):
+            if args.target == "main" and not worker_task_id and not args.once and time.monotonic() - last_coordination_check >= max(10.0, args.interval):
                 monitor_task_coordination(root, run_id)
                 last_coordination_check = time.monotonic()
             messages, next_offset = iter_jsonl_from(inbox, offset)
             for item in messages:
+                item_task_id = str(item.get("task_id", "") or "") or None
+                if worker_task_id and item_task_id != worker_task_id:
+                    continue
                 original_sender = str(item.get("sender", "") or "")
                 if original_sender == args.sender:
                     continue
                 original_message = str(item.get("message", "") or "")
                 if not original_message:
                     continue
-                item_task_id = str(item.get("task_id", "") or "") or None
                 agent_id = args.target if args.target != "main" else "main"
                 detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
                 task = detail["task"] if detail else {}
@@ -281,6 +288,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     result = record_sub_agent_report(root, run_id, item_task_id, original_sender, original_message)
                     if result.get("handled"):
                         if args.once:
+                            save_chat_offset(offset_file, next_offset)
                             return 0
                         continue
                 coordination = task.get("coordination") or {}
@@ -428,6 +436,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     append_event(root, run_id, "agent_error", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 append_event(root, run_id, "agent_finished", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if args.once:
+                    save_chat_offset(offset_file, next_offset)
                     return exit_code
             if messages:
                 offset = next_offset

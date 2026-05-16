@@ -12,6 +12,7 @@ from aha_cli.backends.registry import agent_backend_names, agent_backends, backe
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
+from aha_cli.services.backend_runtime import backend_status
 from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
 from aha_cli.store.filesystem import (
     add_agent,
@@ -104,6 +105,44 @@ class CliTests(unittest.TestCase):
 
                 self.assertEqual(load_chat_offset(inbox, offset_file, from_start=False), initial_offset)
                 self.assertGreater(inbox.stat().st_size, initial_offset)
+
+    def test_task_scoped_chat_offsets_are_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+
+            global_offset = chat_offset_path(run, "main")
+            task_one_offset = chat_offset_path(run, "main", "task-001")
+            task_two_offset = chat_offset_path(run, "main", "task-002")
+
+        self.assertNotEqual(global_offset, task_one_offset)
+        self.assertNotEqual(task_one_offset, task_two_offset)
+        self.assertEqual(task_one_offset.name, "chat-offset-task-001-main.json")
+
+    def test_task_scoped_codex_chat_skips_other_task_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task scoped workers", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                self.run_cli("task", "add", run_id, "Second task", "--no-dispatch")
+                append_message(root, run_id, "main", "task two", sender="browser", task_id="task-002", role="main")
+                append_message(root, run_id, "main", "task one", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "task one reply", None)) as run_agent:
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                self.assertEqual(run_agent.call_count, 1)
+                self.assertIn("task-001", run_agent.call_args.args[0])
+                self.assertNotIn("User message from browser", output)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                self.assertEqual(browser_messages[-1]["message"], "task one reply")
+                self.assertEqual(browser_messages[-1]["task_id"], "task-001")
+                scoped_offset = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                self.assertTrue(scoped_offset.exists())
+                self.assertFalse(chat_offset_path(run_dir(root, run_id), "main", "task-002").exists())
 
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
@@ -685,9 +724,10 @@ class CliTests(unittest.TestCase):
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 add_agent(root, run_id, "task-001", backend="codex", role="sub")
 
-                def fake_backend_status(_root: Path, _run_id: str, target: str = "main") -> dict:
+                def fake_backend_status(_root: Path, _run_id: str, target: str = "main", task_id: str | None = None) -> dict:
                     return {
                         "target": target,
+                        "task_id": task_id,
                         "status": "running" if target == "main" else "stopped",
                         "pid": 1234 if target == "main" else None,
                         "last_reply_at": "2026-05-15T00:00:00+00:00" if target == "main" else None,
@@ -892,6 +932,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Backend: stopped", output)
         self.assertIn("Target: main", output)
+
+    def test_backend_activity_can_be_filtered_by_task_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Scoped backend activity", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                self.run_cli("task", "add", run_id, "Second task", "--no-dispatch")
+                append_event(root, run_id, "agent_started", {"target": "main", "task_id": "task-002"})
+
+                task_one = backend_status(root, run_id, "main", task_id="task-001")
+                task_two = backend_status(root, run_id, "main", task_id="task-002")
+
+        self.assertFalse(task_one["busy"])
+        self.assertTrue(task_two["busy"])
 
     def test_agent_permission_update_is_in_status_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -141,8 +141,12 @@ def action_response_text(text: str) -> str:
     return text.strip()
 
 
-def chat_offset_exists(root: Path, run_id: str, target: str) -> bool:
-    return (run_dir(root, run_id) / "runtime" / f"chat-offset-{target.replace('/', '_')}.json").exists()
+def chat_offset_exists(root: Path, run_id: str, target: str, task_id: str | None = None) -> bool:
+    safe_target = target.replace("/", "_")
+    if task_id:
+        safe_task = task_id.replace("/", "_")
+        return (run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_task}-{safe_target}.json").exists()
+    return (run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_target}.json").exists()
 
 
 def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> list[dict]:
@@ -220,7 +224,8 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                     model=target_agent.get("model"),
                     sandbox=target_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
                     approval=target_agent.get("approval") or task.get("preferred_approval") or "never",
-                    from_start=not chat_offset_exists(root, run_id, target_id),
+                    from_start=not chat_offset_exists(root, run_id, target_id, task_id),
+                    task_id=task_id,
                 )
             executed.append({"type": "route_to_agent", "agent": target_agent})
             continue
@@ -274,6 +279,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
                 approval=agent.get("approval") or task.get("preferred_approval") or "never",
                 from_start=True,
+                task_id=task_id,
             )
         executed.append({"type": "spawn_sub", "agent": agent})
     if executed:
@@ -400,7 +406,7 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
         for agent in pending_sub_agents(task):
             if agent.get("backend") != "codex":
                 continue
-            state = backend_status(root, run_id, agent["id"])
+            state = backend_status(root, run_id, agent["id"], task_id=task["id"])
             if state.get("status") != "stopped":
                 continue
             attempts = int(agent.get("recovery_attempts") or 0)
@@ -422,6 +428,7 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
                 sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
                 approval=agent.get("approval") or task.get("preferred_approval") or "never",
                 from_start=False,
+                task_id=task["id"],
             )
             update_agent_runtime(
                 root,

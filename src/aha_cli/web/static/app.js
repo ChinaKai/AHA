@@ -112,6 +112,26 @@ function visibleTasks() {
   return showHiddenEl.checked ? tasks : tasks.filter(task => !task.hidden);
 }
 
+function taskActivityMillis(task) {
+  const candidates = [
+    task?.started_at,
+    task?.finished_at,
+    task?.hidden_at,
+    ...(task?.agents || []).flatMap(agent => [
+      agent.last_active_at,
+      agent.started_at,
+      agent.finished_at,
+      agent.session_updated_at
+    ])
+  ];
+  return Math.max(0, ...candidates.map(parseTimestamp).filter(value => value !== null));
+}
+
+function defaultTaskId(tasks) {
+  if (!tasks.length) return null;
+  return tasks.reduce((latest, task) => (taskActivityMillis(task) >= taskActivityMillis(latest) ? task : latest), tasks[0]).id;
+}
+
 function pathName(path) {
   if (!path) return "-";
   const trimmed = String(path).replace(/\/+$/, "");
@@ -547,7 +567,7 @@ async function loadStatus(options = {}) {
   runStateEl.textContent = `${statusData.mode} | updated ${formatLocalTimestamp(statusData.updated_at, statusData.updated_at || "-")}`;
   summaryEl.textContent = statusData.goal;
   const tasks = visibleTasks();
-  if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = tasks[0]?.id || null;
+  if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
   renderTaskList();
   renderSelectedHeader();
   if (options.forceAgents || !isAgentsPanelEditing()) {
@@ -558,7 +578,9 @@ async function loadStatus(options = {}) {
 }
 
 async function loadBackendStatus() {
-  const res = await fetch(`/api/backend?target=${encodeURIComponent(backendTarget())}`);
+  const params = new URLSearchParams({ target: backendTarget() });
+  if (selectedTaskId) params.set("task_id", selectedTaskId);
+  const res = await fetch(`/api/backend?${params.toString()}`);
   backendStatusData = await res.json();
   renderBackendStatus();
 }
@@ -1357,6 +1379,7 @@ backendStatusEl.addEventListener("click", async event => {
       body: JSON.stringify({
         action: button.dataset.backendAction,
         target: backendTarget(),
+        task_id: selectedTaskId,
         sandbox: agent?.sandbox || task?.preferred_sandbox || "workspace-write",
         approval: agent?.approval || task?.preferred_approval || "never",
         from_start: false
@@ -1378,7 +1401,7 @@ backendStatusEl.addEventListener("click", async event => {
 taskBackendEl.addEventListener("change", renderModelOptions);
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
-  if (!tasks.some(task => task.id === selectedTaskId)) selectedTaskId = tasks[0]?.id || null;
+  if (!tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
   renderTaskList();
   renderSelectedHeader();
   renderAgents();

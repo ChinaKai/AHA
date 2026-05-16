@@ -173,6 +173,15 @@ aha codex-chat <run-id> main
 
 When the dashboard sends a message to `main`, `codex-chat` reads `.aha/runs/<run-id>/inbox/main.jsonl`, calls `codex exec`, and writes the model response back as a `main -> browser` message event.
 
+For task-level parallelism, start task-scoped workers. They share the same logical inbox but keep independent offsets and only process messages for their task:
+
+```bash
+aha backend start <run-id> --target main --task-id task-001
+aha backend start <run-id> --target main --task-id task-002
+```
+
+This keeps each `task_id + agent_id` serial while allowing different tasks to run at the same time.
+
 ## Realtime Status And Conversation
 
 `aha` writes JSONL events while tasks run:
@@ -261,9 +270,11 @@ GET  /api/task/<task-id>
 GET  /api/task/<task-id>/logs?limit=200&before_offset=<byte-offset>&source=auto|file|events
 GET  /api/task/<task-id>/final
 GET  /api/task/<task-id>/context
+GET  /api/backend?target=<agent-id>&task_id=<task-id>
 POST /api/tasks
 POST /api/agents
 POST /api/send
+POST /api/backend
 ```
 
 It shows a task list on the left, a task workspace in the center, and task agents on the right. Selecting a task opens that task's conversation, result, logs, and prompt context.

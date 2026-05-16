@@ -238,8 +238,9 @@ def cmd_backend(args: argparse.Namespace) -> int:
     root = find_project_root()
     run_id = resolve_run_id(root, args.run_id)
     target = args.target or "main"
+    task_id = getattr(args, "task_id", None) or None
     if args.backend_cmd == "status":
-        state = backend_status(root, run_id, target)
+        state = backend_status(root, run_id, target, task_id=task_id)
     elif args.backend_cmd == "start":
         state = start_backend(
             root,
@@ -254,9 +255,10 @@ def cmd_backend(args: argparse.Namespace) -> int:
             no_json=args.no_json,
             extra_args=args.extra_arg,
             prompt_prefix=args.prompt_prefix,
+            task_id=task_id,
         )
     elif args.backend_cmd == "stop":
-        state = stop_backend(root, run_id, target, timeout=args.timeout)
+        state = stop_backend(root, run_id, target, task_id=task_id, timeout=args.timeout)
     elif args.backend_cmd == "restart":
         state = restart_backend(
             root,
@@ -272,6 +274,7 @@ def cmd_backend(args: argparse.Namespace) -> int:
             extra_args=args.extra_arg,
             prompt_prefix=args.prompt_prefix,
             timeout=args.timeout,
+            task_id=task_id,
         )
     else:
         raise SystemExit(f"Unknown backend command: {args.backend_cmd}")
@@ -525,6 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
     codex_chat_p = sub.add_parser("codex-chat")
     codex_chat_p.add_argument("run_id", nargs="?")
     codex_chat_p.add_argument("target", nargs="?", default="main")
+    codex_chat_p.add_argument("--task-id", default=None)
     codex_chat_p.add_argument("--sender", default="main")
     codex_chat_p.add_argument("--reply-target", default=None)
     codex_chat_p.add_argument("--interval", type=float, default=1.0)
@@ -544,10 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
     backend_status_p = backend_sub.add_parser("status")
     backend_status_p.add_argument("run_id", nargs="?")
     backend_status_p.add_argument("--target", default="main")
+    backend_status_p.add_argument("--task-id", default=None)
     backend_status_p.set_defaults(func=cmd_backend)
     backend_start_p = backend_sub.add_parser("start")
     backend_start_p.add_argument("run_id", nargs="?")
     backend_start_p.add_argument("--target", default="main")
+    backend_start_p.add_argument("--task-id", default=None)
     backend_start_p.add_argument("--codex-bin", default="codex")
     backend_start_p.add_argument("--model", default=None)
     backend_start_p.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default="workspace-write")
@@ -561,11 +567,13 @@ def build_parser() -> argparse.ArgumentParser:
     backend_stop_p = backend_sub.add_parser("stop")
     backend_stop_p.add_argument("run_id", nargs="?")
     backend_stop_p.add_argument("--target", default="main")
+    backend_stop_p.add_argument("--task-id", default=None)
     backend_stop_p.add_argument("--timeout", type=float, default=5.0)
     backend_stop_p.set_defaults(func=cmd_backend)
     backend_restart_p = backend_sub.add_parser("restart")
     backend_restart_p.add_argument("run_id", nargs="?")
     backend_restart_p.add_argument("--target", default="main")
+    backend_restart_p.add_argument("--task-id", default=None)
     backend_restart_p.add_argument("--codex-bin", default="codex")
     backend_restart_p.add_argument("--model", default=None)
     backend_restart_p.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default="workspace-write")

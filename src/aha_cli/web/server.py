@@ -110,31 +110,33 @@ def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
 
 def web_status_snapshot(root: Path, run_id: str) -> dict:
     snapshot = status_snapshot(root, run_id)
-    backend_cache: dict[str, dict] = {}
+    backend_cache: dict[tuple[str | None, str], dict] = {}
     for task in snapshot.get("tasks", []):
+        task_id = str(task.get("id") or "") or None
         for agent in task.get("agents", []):
             target = str(agent.get("id") or "main")
-            if target not in backend_cache:
-                backend_cache[target] = backend_status(root, run_id, target)
-            state = backend_cache[target]
+            key = (task_id, target)
+            if key not in backend_cache:
+                backend_cache[key] = backend_status(root, run_id, target, task_id=task_id)
+            state = backend_cache[key]
             agent["backend_process_status"] = state.get("status") or "stopped"
             agent["backend_process_pid"] = state.get("pid")
             agent["backend_process_last_reply_at"] = state.get("last_reply_at")
     return snapshot
 
 
-def format_backend_command(root: Path, run_id: str, command: str, target: str = "main") -> str:
+def format_backend_command(root: Path, run_id: str, command: str, target: str = "main", task_id: str | None = None) -> str:
     parts = command.split()
     action = parts[2] if len(parts) > 2 else "status"
     command_target = parts[3] if len(parts) > 3 else target or "main"
     if action == "status":
-        return format_backend_status(backend_status(root, run_id, command_target))
+        return format_backend_status(backend_status(root, run_id, command_target, task_id=task_id))
     if action == "start":
-        return format_backend_status(start_backend(root, run_id, command_target))
+        return format_backend_status(start_backend(root, run_id, command_target, task_id=task_id))
     if action == "stop":
-        return format_backend_status(stop_backend(root, run_id, command_target))
+        return format_backend_status(stop_backend(root, run_id, command_target, task_id=task_id))
     if action == "restart":
-        return format_backend_status(restart_backend(root, run_id, command_target))
+        return format_backend_status(restart_backend(root, run_id, command_target, task_id=task_id))
     return "Usage: /aha backend status|start|stop|restart [target]"
 
 
@@ -158,7 +160,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
             ]
         )
     if name == "backend":
-        return format_backend_command(root, run_id, command, target)
+        return format_backend_command(root, run_id, command, target, task_id=task_id)
     if not task_id:
         return "No task is selected."
     try:
@@ -323,7 +325,8 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         elif method in {"GET", "HEAD"} and path == "/api/backend":
             query = parse_qs(parsed.query)
             target = query.get("target", ["main"])[0] or "main"
-            response = json_response(backend_status(root, run_id, target))
+            task_id = query.get("task_id", [""])[0] or None
+            response = json_response(backend_status(root, run_id, target, task_id=task_id))
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/events":
             query = parse_qs(parsed.query)
@@ -483,6 +486,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             payload = parse_json_body(body)
             action = str(payload.get("action", "status") or "status")
             target = str(payload.get("target", "main") or "main")
+            task_id = str(payload.get("task_id", "") or "") or None
             sandbox = str(payload.get("sandbox", "workspace-write") or "workspace-write")
             approval = str(payload.get("approval", "never") or "never")
             from_start = bool(payload.get("from_start", False))
@@ -491,13 +495,13 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             elif approval not in APPROVAL_OPTIONS:
                 writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
             elif action == "status":
-                writer.write(json_response({"ok": True, "backend": backend_status(root, run_id, target)}))
+                writer.write(json_response({"ok": True, "backend": backend_status(root, run_id, target, task_id=task_id)}))
             elif action == "start":
-                writer.write(json_response({"ok": True, "backend": start_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start)}))
+                writer.write(json_response({"ok": True, "backend": start_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start, task_id=task_id)}))
             elif action == "stop":
-                writer.write(json_response({"ok": True, "backend": stop_backend(root, run_id, target)}))
+                writer.write(json_response({"ok": True, "backend": stop_backend(root, run_id, target, task_id=task_id)}))
             elif action == "restart":
-                writer.write(json_response({"ok": True, "backend": restart_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start)}))
+                writer.write(json_response({"ok": True, "backend": restart_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start, task_id=task_id)}))
             else:
                 writer.write(json_response({"error": f"unknown backend action: {action}"}, "400 Bad Request"))
         elif method == "POST" and path == "/api/send":

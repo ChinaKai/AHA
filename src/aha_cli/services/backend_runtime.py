@@ -23,12 +23,19 @@ def safe_target(target: str) -> str:
     return (target or "main").replace("/", "_")
 
 
-def backend_state_path(root: Path, run_id: str, target: str = "main") -> Path:
-    return run_dir(root, run_id) / "runtime" / f"backend-{safe_target(target)}.json"
+def backend_key(target: str = "main", task_id: str | None = None) -> str:
+    target_name = safe_target(target)
+    if task_id:
+        return f"{safe_target(task_id)}-{target_name}"
+    return target_name
 
 
-def backend_log_path(root: Path, run_id: str, target: str = "main") -> Path:
-    return run_dir(root, run_id) / "logs" / f"backend-{safe_target(target)}.log"
+def backend_state_path(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> Path:
+    return run_dir(root, run_id) / "runtime" / f"backend-{backend_key(target, task_id)}.json"
+
+
+def backend_log_path(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> Path:
+    return run_dir(root, run_id) / "logs" / f"backend-{backend_key(target, task_id)}.log"
 
 
 def pid_is_running(pid: int | None) -> bool:
@@ -51,8 +58,8 @@ def pid_is_running(pid: int | None) -> bool:
     return True
 
 
-def _read_state(root: Path, run_id: str, target: str) -> dict:
-    path = backend_state_path(root, run_id, target)
+def _read_state(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
+    path = backend_state_path(root, run_id, target, task_id)
     if not path.exists():
         return {}
     try:
@@ -61,8 +68,8 @@ def _read_state(root: Path, run_id: str, target: str) -> dict:
         return {}
 
 
-def _write_state(root: Path, run_id: str, target: str, state: dict) -> dict:
-    write_json(backend_state_path(root, run_id, target), state)
+def _write_state(root: Path, run_id: str, target: str, state: dict, task_id: str | None = None) -> dict:
+    write_json(backend_state_path(root, run_id, target, task_id), state)
     return state
 
 
@@ -70,7 +77,7 @@ def _event_time(event: dict) -> str:
     return str(event.get("ts", "") or "")
 
 
-def _backend_activity(root: Path, run_id: str, target: str) -> dict:
+def _backend_activity(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
     events, _ = iter_jsonl_from(event_path(root, run_id), 0)
     latest_started: dict | None = None
     latest_finished: dict | None = None
@@ -78,6 +85,8 @@ def _backend_activity(root: Path, run_id: str, target: str) -> dict:
     latest_error: dict | None = None
     for event in events:
         data = event.get("data") or {}
+        if task_id and data.get("task_id") != task_id:
+            continue
         if event.get("type") == "agent_started" and data.get("target") == target:
             latest_started = event
         elif event.get("type") == "agent_finished" and data.get("target") == target:
@@ -98,7 +107,16 @@ def _backend_activity(root: Path, run_id: str, target: str) -> dict:
     }
 
 
-def _discover_backend_process(run_id: str, target: str) -> int | None:
+def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
+    if "--task-id" not in parts:
+        return task_id is None
+    if task_id is None:
+        return False
+    index = parts.index("--task-id")
+    return len(parts) > index + 1 and parts[index + 1] == task_id
+
+
+def _discover_backend_process(run_id: str, target: str, task_id: str | None = None) -> int | None:
     proc = Path("/proc")
     if not proc.is_dir():
         return None
@@ -121,28 +139,31 @@ def _discover_backend_process(run_id: str, target: str) -> int | None:
             len(parts) > index + 2
             and parts[index + 1] == run_id
             and parts[index + 2] == target
+            and _process_matches_task(parts, task_id)
             and pid_is_running(pid)
         ):
             return pid
     return None
 
 
-def backend_status(root: Path, run_id: str, target: str = "main") -> dict:
+def backend_status(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> dict:
     require_plan(root, run_id)
     target = target or "main"
-    state = _read_state(root, run_id, target)
+    task_id = task_id or None
+    state = _read_state(root, run_id, target, task_id)
     pid = int(state.get("pid") or 0) or None
     managed = bool(state.get("managed")) if state else False
     running = pid_is_running(pid)
-    discovered_pid = None if running else _discover_backend_process(run_id, target)
+    discovered_pid = None if running else _discover_backend_process(run_id, target, task_id)
     if discovered_pid:
         pid = discovered_pid
         running = True
         managed = bool(state.get("managed")) if state and state.get("pid") == pid else False
-    activity = _backend_activity(root, run_id, target)
+    activity = _backend_activity(root, run_id, target, task_id)
     status = "busy" if running and activity["busy"] else "running" if running else "stopped"
     return {
         "target": target,
+        "task_id": task_id,
         "backend": state.get("backend", "codex-chat"),
         "status": status,
         "pid": pid if running else None,
@@ -150,7 +171,7 @@ def backend_status(root: Path, run_id: str, target: str = "main") -> dict:
         "managed": managed,
         "started_at": state.get("started_at"),
         "stopped_at": state.get("stopped_at"),
-        "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target)),
+        "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
         "command": state.get("command", []),
         **activity,
     }
@@ -169,6 +190,7 @@ def _codex_chat_command(
     no_json: bool = False,
     extra_args: list[str] | None = None,
     prompt_prefix: str = "You are connected to AHA as the real backend agent.",
+    task_id: str | None = None,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -190,6 +212,8 @@ def _codex_chat_command(
         "--prompt-prefix",
         prompt_prefix,
     ]
+    if task_id:
+        command.extend(["--task-id", task_id])
     if model:
         command.extend(["--model", model])
     if from_start:
@@ -215,8 +239,10 @@ def start_backend(
     no_json: bool = False,
     extra_args: list[str] | None = None,
     prompt_prefix: str = "You are connected to AHA as the real backend agent.",
+    task_id: str | None = None,
 ) -> dict:
-    current = backend_status(root, run_id, target)
+    task_id = task_id or None
+    current = backend_status(root, run_id, target, task_id)
     if current["status"] in {"running", "busy"}:
         current["already_running"] = True
         return current
@@ -233,8 +259,9 @@ def start_backend(
         no_json=no_json,
         extra_args=extra_args,
         prompt_prefix=prompt_prefix,
+        task_id=task_id,
     )
-    log_path = backend_log_path(root, run_id, target)
+    log_path = backend_log_path(root, run_id, target, task_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("ab")
     try:
@@ -250,6 +277,7 @@ def start_backend(
         log_file.close()
     state = {
         "target": target,
+        "task_id": task_id,
         "backend": "codex-chat",
         "status": "running",
         "pid": process.pid,
@@ -263,13 +291,14 @@ def start_backend(
         "model": model,
         "from_start": from_start,
     }
-    _write_state(root, run_id, target, state)
-    append_event(root, run_id, "backend_started", {"target": target, "pid": process.pid, "log_path": str(log_path)})
-    return backend_status(root, run_id, target) | {"started": True}
+    _write_state(root, run_id, target, state, task_id)
+    append_event(root, run_id, "backend_started", {"target": target, "task_id": task_id, "pid": process.pid, "log_path": str(log_path)})
+    return backend_status(root, run_id, target, task_id) | {"started": True}
 
 
-def stop_backend(root: Path, run_id: str, target: str = "main", *, timeout: float = 5.0) -> dict:
-    current = backend_status(root, run_id, target)
+def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, timeout: float = 5.0) -> dict:
+    task_id = task_id or None
+    current = backend_status(root, run_id, target, task_id)
     pid = current.get("pid")
     target = target or "main"
     if not pid or current["status"] == "stopped":
@@ -297,26 +326,29 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, timeout: floa
                 os.kill(int(pid), signal.SIGKILL)
         except ProcessLookupError:
             pass
-    state = _read_state(root, run_id, target)
+    state = _read_state(root, run_id, target, task_id)
     state.update(
         {
             "target": target,
+            "task_id": task_id,
             "backend": state.get("backend", "codex-chat"),
             "status": "stopped",
             "pid": pid,
             "managed": bool(state),
             "stopped_at": utc_now(),
-            "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target)),
+            "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
             "command": state.get("command", []),
         }
     )
-    _write_state(root, run_id, target, state)
-    append_event(root, run_id, "backend_stopped", {"target": target, "pid": pid})
-    return backend_status(root, run_id, target) | {"stopped": True}
+    _write_state(root, run_id, target, state, task_id)
+    append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": pid})
+    return backend_status(root, run_id, target, task_id) | {"stopped": True}
 
 
 def restart_backend(root: Path, run_id: str, target: str = "main", **kwargs) -> dict:
-    stop_backend(root, run_id, target, timeout=float(kwargs.pop("timeout", 5.0)))
+    task_id = kwargs.pop("task_id", None) or None
+    stop_backend(root, run_id, target, task_id=task_id, timeout=float(kwargs.pop("timeout", 5.0)))
+    kwargs["task_id"] = task_id
     return start_backend(root, run_id, target, **kwargs) | {"restarted": True}
 
 
@@ -324,6 +356,7 @@ def format_backend_status(state: dict) -> str:
     parts = [
         f"Backend: {state.get('status', 'stopped')}",
         f"Target: {state.get('target', 'main')}",
+        f"Task: {state.get('task_id') or '-'}",
         f"Runner: {state.get('backend', 'codex-chat')}",
         f"PID: {state.get('pid') or '-'}",
         f"Managed: {'yes' if state.get('managed') else 'no'}",
