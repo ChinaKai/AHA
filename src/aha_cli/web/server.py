@@ -6,7 +6,7 @@ from pathlib import Path
 import textwrap
 from urllib.parse import parse_qs, unquote, urlparse
 
-from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
+from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, agent_backends, model_options
 from aha_cli.services.backend_runtime import (
     backend_status,
     start_backend,
@@ -18,12 +18,17 @@ from aha_cli.store.filesystem import (
     append_event,
     append_message,
     conversation_events_page,
+    create_plan,
     delete_task,
     event_path,
     inbox_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
+    list_run_summaries,
+    load_config,
+    run_exists,
     run_dir,
+    run_summary,
     set_task_hidden,
     status_snapshot,
     task_context_snapshot,
@@ -44,6 +49,12 @@ ACTIVE_BACKEND_STATUSES = {"running", "busy"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
 TASK_OUTCOME_SCAN_LIMIT = 10000
+
+
+class ApiRunNotFound(Exception):
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(run_id)
 
 
 def http_response(status: str, body: bytes, content_type: str = "text/plain; charset=utf-8") -> bytes:
@@ -94,6 +105,19 @@ async def read_http_request(reader: asyncio.StreamReader) -> tuple[str, str, dic
 
 def parse_json_body(body: bytes) -> dict:
     return json.loads(body.decode("utf-8") or "{}")
+
+
+def request_run_id(default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
+    payload_run_id = str((payload or {}).get("run_id", "") or "").strip()
+    query_run_id = str(query.get("run_id", [""])[0] or "").strip()
+    return payload_run_id or query_run_id or default_run_id
+
+
+def require_api_run_id(root: Path, default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
+    selected_run_id = request_run_id(default_run_id, query, payload)
+    if not run_exists(root, selected_run_id):
+        raise ApiRunNotFound(selected_run_id)
+    return selected_run_id
 
 
 def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
@@ -407,6 +431,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         method, target, _headers, body = await read_http_request(reader)
         parsed = urlparse(target)
         path = parsed.path
+        query = parse_qs(parsed.query)
         if method in {"GET", "HEAD"} and path == "/":
             writer.write(static_response(STATIC_DIR / "index.html", method))
         elif method in {"GET", "HEAD"} and path.startswith("/static/"):
@@ -415,14 +440,70 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(http_response("404 Not Found", b"not found\n"))
             else:
                 writer.write(static_response(STATIC_DIR / static_name, method))
+        elif method in {"GET", "HEAD"} and path == "/api/runs":
+            response = json_response({"default_run_id": run_id, "runs": list_run_summaries(root)})
+            writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method == "POST" and path == "/api/runs":
+            payload = parse_json_body(body)
+            goal = str(payload.get("goal", "") or "").strip()
+            if not goal:
+                writer.write(json_response({"error": "goal cannot be empty"}, "400 Bad Request"))
+            else:
+                cfg = load_config(root)
+                mode = str(payload.get("mode", cfg.get("default_mode", "research")) or "research")
+                if mode not in {"research", "implementation"}:
+                    writer.write(json_response({"error": f"unknown mode: {mode}"}, "400 Bad Request"))
+                    await writer.drain()
+                    return
+                backend = str(payload.get("backend", "") or "") or agent_backend_or_default(cfg.get("backend"), "stub")
+                if backend not in agent_backend_names():
+                    writer.write(json_response({"error": f"unknown agent backend: {backend}"}, "400 Bad Request"))
+                    await writer.drain()
+                    return
+                sandbox = str(payload.get("sandbox", "") or "") or None
+                approval = str(payload.get("approval", "") or "") or None
+                if sandbox is not None and sandbox not in SANDBOX_OPTIONS:
+                    writer.write(json_response({"error": f"unknown sandbox: {sandbox}"}, "400 Bad Request"))
+                    await writer.drain()
+                    return
+                if approval is not None and approval not in APPROVAL_OPTIONS:
+                    writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
+                    await writer.drain()
+                    return
+                task_titles = payload.get("task_titles", payload.get("tasks", []))
+                if isinstance(task_titles, str):
+                    task_titles = [task_titles]
+                write_scopes = payload.get("write_scopes", [])
+                if isinstance(write_scopes, str):
+                    write_scopes = [write_scopes]
+                try:
+                    agents = max(1, int(payload.get("agents", 1) or 1))
+                except (TypeError, ValueError):
+                    writer.write(json_response({"error": "agents must be an integer"}, "400 Bad Request"))
+                    await writer.drain()
+                    return
+                plan = create_plan(
+                    root=root,
+                    goal=goal,
+                    agents=agents,
+                    mode=mode,
+                    task_titles=[str(item) for item in (task_titles or []) if str(item).strip()],
+                    write_scopes=[str(item) for item in (write_scopes or []) if str(item).strip()],
+                    backend=backend,
+                    model=str(payload.get("model", "") or "") or None,
+                    workspace_path=str(payload.get("workspace_path", "") or "") or str(root),
+                    sandbox=sandbox,
+                    approval=approval,
+                )
+                writer.write(json_response({"ok": True, "run": run_summary(root, plan["id"])}, "201 Created"))
         elif method in {"GET", "HEAD"} and path == "/api/status":
-            response = json_response(web_status_snapshot(root, run_id))
+            selected_run_id = require_api_run_id(root, run_id, query)
+            response = json_response(web_status_snapshot(root, selected_run_id))
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/backends":
             response = json_response({"backends": agent_backends()})
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/models":
-            query = parse_qs(parsed.query)
             backend = query.get("backend", ["codex"])[0] or "codex"
             if backend not in agent_backend_names():
                 writer.write(json_response({"error": f"unknown agent backend: {backend}"}, "400 Bad Request"))
@@ -439,13 +520,13 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/backend":
-            query = parse_qs(parsed.query)
+            selected_run_id = require_api_run_id(root, run_id, query)
             target = query.get("target", ["main"])[0] or "main"
             task_id = query.get("task_id", [""])[0] or None
-            response = json_response(backend_status(root, run_id, target, task_id=task_id))
+            response = json_response(backend_status(root, selected_run_id, target, task_id=task_id))
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/events":
-            query = parse_qs(parsed.query)
+            selected_run_id = require_api_run_id(root, run_id, query)
             try:
                 offset = int(query.get("offset", ["0"])[0] or "0")
                 limit = int(query.get("limit", [str(DEFAULT_EVENTS_LIMIT)])[0] or str(DEFAULT_EVENTS_LIMIT))
@@ -454,7 +535,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 await writer.drain()
                 return
             safe_limit = max(1, min(limit, MAX_EVENTS_LIMIT))
-            events_path = event_path(root, run_id)
+            events_path = event_path(root, selected_run_id)
             snapshot_offset = events_path.stat().st_size if events_path.exists() else 0
             if offset < 0:
                 events, new_offset = [], snapshot_offset
@@ -462,6 +543,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 events, new_offset = iter_jsonl_from(events_path, offset, before=snapshot_offset, limit=safe_limit)
             response = json_response(
                 {
+                    "run_id": selected_run_id,
                     "offset": new_offset,
                     "snapshot_offset": snapshot_offset,
                     "has_more": new_offset < snapshot_offset,
@@ -471,7 +553,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/conversation-events":
-            query = parse_qs(parsed.query)
+            selected_run_id = require_api_run_id(root, run_id, query)
             task_id = query.get("task_id", [""])[0]
             target = query.get("target", ["main"])[0] or "main"
             limit = int(query.get("limit", ["50"])[0] or "50")
@@ -483,15 +565,15 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             if not task_id:
                 writer.write(json_response({"error": "task_id required"}, "400 Bad Request"))
             else:
-                response = json_response(conversation_events_page(root, run_id, task_id, target, limit=limit, before=before))
+                response = json_response(conversation_events_page(root, selected_run_id, task_id, target, limit=limit, before=before))
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path.startswith("/api/task/"):
+            selected_run_id = require_api_run_id(root, run_id, query)
             parts = unquote(path.removeprefix("/api/task/")).split("/", 1)
             task_id = parts[0]
             detail_name = parts[1] if len(parts) > 1 else ""
             try:
                 if detail_name == "logs":
-                    query = parse_qs(parsed.query)
                     limit = int(query.get("limit", ["200"])[0] or "200")
                     source = query.get("source", ["auto"])[0] or "auto"
                     before_values = query.get("before_offset", []) or query.get("before", [])
@@ -499,19 +581,20 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                         before = int(before_values[0]) if before_values and before_values[0] else None
                     except ValueError:
                         before = None
-                    response = json_response(task_log_page(root, run_id, task_id, limit=limit, before=before, source=source))
+                    response = json_response(task_log_page(root, selected_run_id, task_id, limit=limit, before=before, source=source))
                 elif detail_name == "final":
-                    response = json_response(task_final_snapshot(root, run_id, task_id))
+                    response = json_response(task_final_snapshot(root, selected_run_id, task_id))
                 elif detail_name == "context":
-                    response = json_response(task_context_snapshot(root, run_id, task_id))
+                    response = json_response(task_context_snapshot(root, selected_run_id, task_id))
                 elif not detail_name:
-                    response = json_response(task_snapshot(root, run_id, task_id))
+                    response = json_response(task_snapshot(root, selected_run_id, task_id))
                 else:
                     response = json_response({"error": "task detail not found"}, "404 Not Found")
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
             except KeyError:
                 writer.write(json_response({"error": "task not found"}, "404 Not Found"))
         elif method == "POST" and path.startswith("/api/task/"):
+            selected_run_id = require_api_run_id(root, run_id, query)
             parts = path.removeprefix("/api/task/").split("/", 1)
             if len(parts) != 2:
                 writer.write(json_response({"error": "task action required"}, "400 Bad Request"))
@@ -519,11 +602,11 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 task_id, action = unquote(parts[0]), parts[1]
                 try:
                     if action == "hide":
-                        task = set_task_hidden(root, run_id, task_id, True)
+                        task = set_task_hidden(root, selected_run_id, task_id, True)
                     elif action == "restore":
-                        task = set_task_hidden(root, run_id, task_id, False)
+                        task = set_task_hidden(root, selected_run_id, task_id, False)
                     elif action == "delete":
-                        task = delete_task(root, run_id, task_id)
+                        task = delete_task(root, selected_run_id, task_id)
                     else:
                         writer.write(json_response({"error": f"unknown task action: {action}"}, "400 Bad Request"))
                         await writer.drain()
@@ -533,6 +616,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
         elif method == "POST" and path == "/api/tasks":
             payload = parse_json_body(body)
+            selected_run_id = require_api_run_id(root, run_id, query, payload)
             title = str(payload.get("title", "")).strip()
             if not title:
                 writer.write(json_response({"error": "title cannot be empty"}, "400 Bad Request"))
@@ -559,7 +643,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     return
                 task = create_task_and_dispatch(
                     root,
-                    run_id,
+                    selected_run_id,
                     title,
                     backend=backend,
                     model=str(payload.get("model", "") or "") or None,
@@ -575,6 +659,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(json_response({"ok": True, "task": task}))
         elif method == "POST" and path == "/api/agents":
             payload = parse_json_body(body)
+            selected_run_id = require_api_run_id(root, run_id, query, payload)
             task_id = str(payload.get("task_id", "")).strip()
             if not task_id:
                 writer.write(json_response({"error": "task_id cannot be empty"}, "400 Bad Request"))
@@ -594,10 +679,11 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
                     await writer.drain()
                     return
-                agent = add_agent(root, run_id, task_id, backend=backend, role=str(payload.get("role", "sub") or "sub"), sandbox=sandbox, approval=approval)
+                agent = add_agent(root, selected_run_id, task_id, backend=backend, role=str(payload.get("role", "sub") or "sub"), sandbox=sandbox, approval=approval)
                 writer.write(json_response({"ok": True, "agent": agent}))
         elif method == "POST" and path == "/api/agent-config":
             payload = parse_json_body(body)
+            selected_run_id = require_api_run_id(root, run_id, query, payload)
             task_id = str(payload.get("task_id", "")).strip()
             agent_id = str(payload.get("agent_id", "")).strip()
             sandbox = str(payload.get("sandbox", "") or "") or None
@@ -610,18 +696,22 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
             else:
                 try:
-                    agent = update_agent_config(root, run_id, task_id, agent_id, sandbox=sandbox, approval=approval)
+                    agent = update_agent_config(root, selected_run_id, task_id, agent_id, sandbox=sandbox, approval=approval)
                     writer.write(json_response({"ok": True, "agent": agent}))
                 except SystemExit as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
         elif method == "POST" and path == "/api/send":
             payload = parse_json_body(body)
+            selected_run_id = require_api_run_id(root, run_id, query, payload)
             try:
-                writer.write(json_response(handle_send_payload(root, run_id, payload)))
+                writer.write(json_response(handle_send_payload(root, selected_run_id, payload)))
             except ValueError as exc:
                 writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
         else:
             writer.write(http_response("404 Not Found", b"not found\n"))
+        await writer.drain()
+    except ApiRunNotFound as exc:
+        writer.write(json_response({"error": f"run not found: {exc.run_id}"}, "404 Not Found"))
         await writer.drain()
     except json.JSONDecodeError:
         writer.write(json_response({"error": "invalid json"}, "400 Bad Request"))

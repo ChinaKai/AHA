@@ -181,6 +181,59 @@ def latest_run_id(root: Path) -> str | None:
     return candidates[-1] if candidates else None
 
 
+def run_exists(root: Path, run_id: str) -> bool:
+    return bool(run_id) and plan_path(root, run_id).exists()
+
+
+def run_summary_from_plan(root: Path, plan: dict) -> dict:
+    tasks = [task for task in plan.get("tasks", []) if not task.get("deleted_at")]
+    completed = sum(1 for task in tasks if task.get("status") == "completed")
+    failed = any(task.get("status") == "failed" for task in tasks)
+    blocked = any(task.get("status") == "blocked" for task in tasks)
+    running = any(task.get("status") == "running" for task in tasks)
+    if failed:
+        status = "failed"
+    elif blocked:
+        status = "blocked"
+    elif tasks and completed == len(tasks):
+        status = "completed"
+    elif running:
+        status = "running"
+    else:
+        status = "pending"
+    return {
+        "id": plan["id"],
+        "goal": plan.get("goal", ""),
+        "mode": plan.get("mode", ""),
+        "status": status,
+        "created_at": plan.get("created_at"),
+        "updated_at": plan.get("updated_at"),
+        "task_count": len(tasks),
+        "completed_count": completed,
+        "hidden_count": sum(1 for task in tasks if task.get("hidden")),
+        "path": str(plan_path(root, plan["id"])),
+    }
+
+
+def run_summary(root: Path, run_id: str) -> dict:
+    plan = enrich_plan(read_json(plan_path(root, run_id)), load_config(root).get("backend", "codex"))
+    return run_summary_from_plan(root, plan)
+
+
+def list_run_summaries(root: Path) -> list[dict]:
+    runs = root / CONFIG_DIR / RUNS_DIR
+    if not runs.is_dir():
+        return []
+    summaries: list[dict] = []
+    for path in sorted(runs.glob(f"*/{PLAN_FILE}"), reverse=True):
+        try:
+            plan = enrich_plan(read_json(path), load_config(root).get("backend", "codex"))
+            summaries.append(run_summary_from_plan(root, plan))
+        except (OSError, ValueError, KeyError):
+            continue
+    return summaries
+
+
 def resolve_run_id(root: Path, run_id: str | None) -> str:
     if run_id:
         return run_id

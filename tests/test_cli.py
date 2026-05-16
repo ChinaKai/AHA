@@ -64,12 +64,30 @@ def append_jsonl_records(path: str, worker_id: int, iterations: int) -> None:
         append_jsonl(Path(path), {"worker": worker_id, "index": index})
 
 
-async def fetch_ui_response(root: Path, run_id: str, target: str, timeout: float = 1.0) -> bytes:
+async def fetch_ui_response(
+    root: Path,
+    run_id: str,
+    target: str,
+    timeout: float = 1.0,
+    method: str = "GET",
+    payload: dict | None = None,
+) -> bytes:
     server = await asyncio.start_server(lambda reader, writer: handle_ui_client(root, run_id, reader, writer), "127.0.0.1", 0)
     host, port = server.sockets[0].getsockname()
     try:
         reader, writer = await asyncio.open_connection(host, port)
-        writer.write(f"GET {target} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n".encode("ascii"))
+        body = json.dumps(payload).encode("utf-8") if payload is not None else b""
+        writer.write(
+            (
+                f"{method} {target} HTTP/1.1\r\n"
+                "Host: test\r\n"
+                "Connection: close\r\n"
+                "Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            ).encode("ascii")
+            + body
+        )
         await writer.drain()
         response = await asyncio.wait_for(reader.read(), timeout=timeout)
         writer.close()
@@ -1299,6 +1317,96 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("invalid choice: 'backend'", err.getvalue())
+
+    def test_api_runs_lists_and_creates_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Default session", "--agents", "1")
+                self.assertEqual(code, 0)
+                default_run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                runs_response = asyncio.run(fetch_ui_response(root, default_run_id, "/api/runs"))
+                runs_body = json_response_body(runs_response)
+                create_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        default_run_id,
+                        "/api/runs",
+                        method="POST",
+                        payload={"goal": "Second session", "agents": 1, "mode": "research"},
+                    )
+                )
+                create_body = json_response_body(create_response)
+                updated_response = asyncio.run(fetch_ui_response(root, default_run_id, "/api/runs"))
+                updated_body = json_response_body(updated_response)
+
+        self.assertTrue(runs_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(runs_body["default_run_id"], default_run_id)
+        self.assertIn(default_run_id, {item["id"] for item in runs_body["runs"]})
+        self.assertTrue(create_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(create_body["ok"])
+        self.assertEqual(create_body["run"]["goal"], "Second session")
+        self.assertIn(create_body["run"]["id"], {item["id"] for item in updated_body["runs"]})
+
+    def test_api_routes_can_target_non_default_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, first_output = self.run_cli("plan", "First session", "--agents", "1")
+                self.assertEqual(code, 0)
+                first_run_id = first_output.splitlines()[0].split(": ", 1)[1]
+                code, second_output = self.run_cli("plan", "Second session", "--agents", "1")
+                self.assertEqual(code, 0)
+                second_run_id = second_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, second_run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "second-only-event"})
+                append_message(root, second_run_id, "main", "second conversation", sender="browser", task_id="task-001", role="main")
+
+                default_status = json_response_body(asyncio.run(fetch_ui_response(root, first_run_id, "/api/status")))
+                selected_status = json_response_body(asyncio.run(fetch_ui_response(root, first_run_id, f"/api/status?run_id={second_run_id}")))
+                events = json_response_body(asyncio.run(fetch_ui_response(root, first_run_id, f"/api/events?run_id={second_run_id}&offset=0&limit=50")))
+                conversation = json_response_body(
+                    asyncio.run(fetch_ui_response(root, first_run_id, f"/api/conversation-events?run_id={second_run_id}&task_id=task-001&target=main"))
+                )
+                send_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        first_run_id,
+                        "/api/send",
+                        method="POST",
+                        payload={"run_id": second_run_id, "target": "manual-target", "message": "sent to second"},
+                    )
+                )
+                task_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        first_run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={"run_id": second_run_id, "title": "Second extra task", "dispatch": False},
+                    )
+                )
+                first_after = json_response_body(asyncio.run(fetch_ui_response(root, first_run_id, "/api/status")))
+                second_after = json_response_body(asyncio.run(fetch_ui_response(root, first_run_id, f"/api/status?run_id={second_run_id}")))
+                first_manual, _ = iter_jsonl_from(inbox_path(root, first_run_id, "manual-target"), 0)
+                second_manual, _ = iter_jsonl_from(inbox_path(root, second_run_id, "manual-target"), 0)
+
+        self.assertEqual(default_status["run_id"], first_run_id)
+        self.assertEqual(default_status["goal"], "First session")
+        self.assertEqual(selected_status["run_id"], second_run_id)
+        self.assertEqual(selected_status["goal"], "Second session")
+        self.assertEqual(events["run_id"], second_run_id)
+        self.assertTrue(any(event.get("data", {}).get("text") == "second-only-event" for event in events["events"]))
+        self.assertTrue(any(event.get("data", {}).get("message") == "second conversation" for event in conversation["events"]))
+        self.assertTrue(send_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(task_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(first_after["tasks"][0]["title"], "Map the relevant files, concepts, and terminology for the goal.")
+        self.assertEqual(len(first_after["tasks"]), 1)
+        self.assertEqual(len(second_after["tasks"]), 2)
+        self.assertEqual(first_manual, [])
+        self.assertEqual(second_manual[-1]["message"], "sent to second")
 
     def test_ui_core_endpoints_return_without_full_event_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
