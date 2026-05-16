@@ -101,6 +101,13 @@ button, input, select { font: inherit; }
   justify-content: space-between;
   gap: 8px;
 }
+.task-statuses {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
+}
 .task-title { font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
 .task-actions {
   display: flex;
@@ -132,6 +139,11 @@ button, input, select { font: inherit; }
 }
 .status.completed { background: #dcfce7; color: #14532d; }
 .status.running { background: #dbeafe; color: #1e3a8a; }
+.status.busy { background: #fef3c7; color: #92400e; }
+.status.idle { background: #f2f4f7; color: #475467; }
+.status.activity {
+  border: 1px solid #d0d5dd;
+}
 .status.failed { background: #fee2e2; color: #7f1d1d; }
 .status.blocked { background: #fef3c7; color: #92400e; }
 .status.pending { background: #f2f4f7; color: #344054; }
@@ -309,6 +321,10 @@ button, input, select { font: inherit; }
   border-left-color: #2563eb;
   background: #f8fbff;
 }
+.turn-timer.busy {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
 .turn-timer.completed { border-left-color: #16a34a; }
 .turn-timer.failed { border-left-color: #dc2626; }
 .turn-timer.blocked { border-left-color: #d97706; }
@@ -317,6 +333,10 @@ button, input, select { font: inherit; }
   box-shadow: 0 0 0 4px #dbeafe;
 }
 .turn-timer.completed .activity-dot { background: #16a34a; }
+.turn-timer.busy .activity-dot {
+  background: #d97706;
+  box-shadow: 0 0 0 4px #fef3c7;
+}
 .turn-timer.failed .activity-dot { background: #dc2626; }
 .turn-timer.blocked .activity-dot { background: #d97706; }
 .conversation-filters {

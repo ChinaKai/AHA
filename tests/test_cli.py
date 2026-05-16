@@ -37,7 +37,14 @@ from aha_cli.store.filesystem import (
     update_agent_runtime,
     write_task_result,
 )
-from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, web_status_snapshot, workspace_options
+from aha_cli.web.server import (
+    format_agent_command,
+    format_aha_command,
+    handle_send_payload,
+    handle_slash_command,
+    web_status_snapshot,
+    workspace_options,
+)
 
 
 def write_plan_statuses(root_path: str, run_id: str, task_id: str, agent_id: str, iterations: int) -> None:
@@ -816,10 +823,76 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(snapshot["tasks"][0]["coordination"]["followup_started_at"], "2026-05-15T00:00:00+00:00")
         agents = {agent["id"]: agent for agent in snapshot["tasks"][0]["agents"]}
+        self.assertEqual(snapshot["tasks"][0]["activity_status"], "running")
         self.assertEqual(agents["main"]["backend_process_status"], "running")
         self.assertEqual(agents["main"]["backend_process_pid"], 1234)
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
+
+    def test_web_status_snapshot_keeps_outcome_during_active_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Follow-up state", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with mock.patch("aha_cli.web.server.backend_status", return_value={"status": "busy", "pid": 1234}):
+                    snapshot = web_status_snapshot(root, run_id)
+
+        task = snapshot["tasks"][0]
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["current_status"], "running")
+        self.assertEqual(task["outcome_status"], "completed")
+        self.assertEqual(task["display_status"], "completed")
+        self.assertEqual(task["activity_status"], "busy")
+
+    def test_web_send_autostarts_stopped_task_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Web follow-up", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+                append_message(root, run_id, "main", "old already-seen message", sender="browser", task_id="task-001", role="main")
+
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                self.assertFalse(offset_file.exists())
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "role": "main",
+                            "task_id": "task-001",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "sender": "browser",
+                            "message": "new follow-up",
+                        },
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["backend"]["status"], "running")
+                start_backend.assert_called_once()
+                self.assertFalse(start_backend.call_args.kwargs["from_start"])
+                self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
+                offset = json.loads(offset_file.read_text(encoding="utf-8"))["offset"]
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+                self.assertEqual([item["message"] for item in messages], ["new follow-up"])
 
     def test_conversation_events_page_filters_and_pages_by_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

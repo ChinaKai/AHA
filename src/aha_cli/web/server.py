@@ -14,6 +14,7 @@ from aha_cli.services.backend_runtime import (
     start_backend,
     stop_backend,
 )
+from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
@@ -22,7 +23,9 @@ from aha_cli.store.filesystem import (
     conversation_events_page,
     delete_task,
     event_path,
+    inbox_path,
     iter_jsonl_from,
+    run_dir,
     set_task_hidden,
     status_snapshot,
     task_context_snapshot,
@@ -38,6 +41,8 @@ MY_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/my_project")
 WORKSPACE_ROOTS = [HL_PROJECT_ROOT, MY_PROJECT_ROOT]
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
+TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+ACTIVE_BACKEND_STATUSES = {"running", "busy"}
 
 
 def http_response(status: str, body: bytes, content_type: str = "text/plain; charset=utf-8") -> bytes:
@@ -108,11 +113,45 @@ def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
     return options
 
 
+def task_outcome_snapshots(root: Path, run_id: str) -> dict[str, dict]:
+    outcomes: dict[str, dict] = {}
+    events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+    for event in events:
+        if event.get("type") != "task_status_changed":
+            continue
+        data = event.get("data") or {}
+        task_id = str(data.get("task_id") or "")
+        status = str(data.get("status") or "")
+        if task_id and status in TERMINAL_TASK_STATUSES:
+            outcomes[task_id] = {
+                "status": status,
+                "exit_code": data.get("exit_code"),
+                "updated_at": event.get("ts"),
+            }
+    return outcomes
+
+
+def task_activity_status(task: dict) -> str:
+    process_statuses = {
+        str(agent.get("backend_process_status") or "stopped").lower()
+        for agent in task.get("agents", [])
+    }
+    if "busy" in process_statuses:
+        return "busy"
+    if str(task.get("status") or "").lower() == "running" or process_statuses.intersection(ACTIVE_BACKEND_STATUSES):
+        return "running"
+    return "idle"
+
+
 def web_status_snapshot(root: Path, run_id: str) -> dict:
     snapshot = status_snapshot(root, run_id)
+    outcomes = task_outcome_snapshots(root, run_id)
     backend_cache: dict[tuple[str | None, str], dict] = {}
     for task in snapshot.get("tasks", []):
-        task_id = str(task.get("id") or "") or None
+        raw_task_id = str(task.get("id") or "")
+        task_id = raw_task_id or None
+        current_status = str(task.get("status") or "pending")
+        outcome = current_status if current_status in TERMINAL_TASK_STATUSES else outcomes.get(raw_task_id, {}).get("status")
         for agent in task.get("agents", []):
             target = str(agent.get("id") or "main")
             key = (task_id, target)
@@ -122,6 +161,10 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
             agent["backend_process_status"] = state.get("status") or "stopped"
             agent["backend_process_pid"] = state.get("pid")
             agent["backend_process_last_reply_at"] = state.get("last_reply_at")
+        task["current_status"] = current_status
+        task["outcome_status"] = outcome
+        task["activity_status"] = task_activity_status(task)
+        task["display_status"] = outcome or current_status
     return snapshot
 
 
@@ -284,6 +327,87 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         to_agent="browser",
     )
     return True, None, {"message": response}
+
+
+def message_backend_autostart_config(root: Path, run_id: str, task_id: str | None, target_id: str) -> dict | None:
+    if not task_id or not target_id:
+        return None
+    try:
+        detail = task_snapshot(root, run_id, task_id)
+    except KeyError:
+        return None
+    task = detail["task"]
+    agent = next((item for item in task.get("agents", []) if item.get("id") == target_id), None)
+    if not agent:
+        return None
+    if (agent.get("backend") or task.get("preferred_backend")) != "codex":
+        return None
+    state = backend_status(root, run_id, target_id, task_id=task_id)
+    if state.get("status") != "stopped":
+        return None
+    return {
+        "target": target_id,
+        "task_id": task_id,
+        "model": agent.get("model") or task.get("preferred_model"),
+        "sandbox": agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+        "approval": agent.get("approval") or task.get("preferred_approval") or "never",
+    }
+
+
+def ensure_chat_offset_before_message(root: Path, run_id: str, task_id: str, target_id: str) -> None:
+    offset_file = chat_offset_path(run_dir(root, run_id), target_id, task_id)
+    if offset_file.exists():
+        return
+    inbox = inbox_path(root, run_id, target_id)
+    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+
+
+def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
+    message = str(payload.get("message", "")).strip()
+    task_id = str(payload.get("task_id", "")).strip() or None
+    role = str(payload.get("role", "")).strip() or None
+    target_id = str(payload.get("target", "")).strip()
+    if not target_id:
+        target_id = task_id if role == "sub" and task_id else "main"
+    if not message:
+        raise ValueError("message cannot be empty")
+
+    handled, agent_message, command_payload = handle_slash_command(root, run_id, payload, message, task_id)
+    if handled:
+        return {"ok": True, "handled_by": "aha", **command_payload}
+
+    autostart = message_backend_autostart_config(root, run_id, task_id, target_id)
+    if autostart and task_id:
+        ensure_chat_offset_before_message(root, run_id, task_id, target_id)
+
+    message = agent_message or message
+    sent = append_message(
+        root,
+        run_id,
+        target_id,
+        message,
+        str(payload.get("sender", "browser") or "browser"),
+        task_id=task_id,
+        role=role,
+        from_agent=str(payload.get("from_agent", "") or "") or None,
+        to_agent=str(payload.get("to_agent", "") or "") or None,
+        command_namespace=str(command_payload.get("command_namespace", "") or "") or None,
+        original_command=str(command_payload.get("original_command", "") or "") or None,
+        result_policy=str(command_payload.get("result_policy", "") or "") or None,
+    )
+    response = {"ok": True, "message": sent}
+    if autostart:
+        response["backend"] = start_backend(
+            root,
+            run_id,
+            autostart["target"],
+            model=autostart["model"],
+            sandbox=autostart["sandbox"],
+            approval=autostart["approval"],
+            from_start=False,
+            task_id=autostart["task_id"],
+        )
+    return response
 
 
 async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -506,35 +630,10 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(json_response({"error": f"unknown backend action: {action}"}, "400 Bad Request"))
         elif method == "POST" and path == "/api/send":
             payload = parse_json_body(body)
-            message = str(payload.get("message", "")).strip()
-            task_id = str(payload.get("task_id", "")).strip() or None
-            role = str(payload.get("role", "")).strip() or None
-            target_id = str(payload.get("target", "")).strip()
-            if not target_id:
-                target_id = task_id if role == "sub" and task_id else "main"
-            if not message:
-                writer.write(json_response({"error": "message cannot be empty"}, "400 Bad Request"))
-            else:
-                handled, agent_message, command_payload = handle_slash_command(root, run_id, payload, message, task_id)
-                if handled:
-                    writer.write(json_response({"ok": True, "handled_by": "aha", **command_payload}))
-                    await writer.drain()
-                    return
-                message = agent_message or message
-                writer.write(json_response({"ok": True, "message": append_message(
-                    root,
-                    run_id,
-                    target_id,
-                    message,
-                    str(payload.get("sender", "browser") or "browser"),
-                    task_id=task_id,
-                    role=role,
-                    from_agent=str(payload.get("from_agent", "") or "") or None,
-                    to_agent=str(payload.get("to_agent", "") or "") or None,
-                    command_namespace=str(command_payload.get("command_namespace", "") or "") or None,
-                    original_command=str(command_payload.get("original_command", "") or "") or None,
-                    result_policy=str(command_payload.get("result_policy", "") or "") or None,
-                )}))
+            try:
+                writer.write(json_response(handle_send_payload(root, run_id, payload)))
+            except ValueError as exc:
+                writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
         else:
             writer.write(http_response("404 Not Found", b"not found\n"))
         await writer.drain()

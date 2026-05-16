@@ -116,6 +116,34 @@ function agentLifecycleLabel(agent) {
   return agentLifecycleStatus(agent).toUpperCase();
 }
 
+function taskCurrentStatus(task) {
+  return String(task?.current_status || task?.status || "pending").toLowerCase();
+}
+
+function taskOutcomeStatus(task) {
+  const raw = task?.outcome_status || (terminalTaskStatuses.has(taskCurrentStatus(task)) ? taskCurrentStatus(task) : "");
+  return raw ? String(raw).toLowerCase() : "";
+}
+
+function taskActivityStatus(task) {
+  return String(task?.activity_status || (taskCurrentStatus(task) === "running" ? "running" : "idle")).toLowerCase();
+}
+
+function taskDisplayStatus(task) {
+  return String(task?.display_status || taskOutcomeStatus(task) || taskCurrentStatus(task)).toLowerCase();
+}
+
+function taskStatusBadges(task) {
+  if (task?.hidden) return '<span class="status hidden">hidden</span>';
+  const primary = taskDisplayStatus(task);
+  const activity = taskActivityStatus(task);
+  const badges = [`<span class="status ${escapeHtml(primary)}">${escapeHtml(primary)}</span>`];
+  if (activity !== "idle" && activity !== primary) {
+    badges.push(`<span class="status activity ${escapeHtml(activity)}">${escapeHtml(activity)}</span>`);
+  }
+  return badges.join("");
+}
+
 function visibleTasks() {
   const tasks = statusData?.tasks || [];
   return showHiddenEl.checked ? tasks : tasks.filter(task => !task.hidden);
@@ -456,7 +484,7 @@ function taskTiming(taskId, task) {
       (event.type === "task_status_changed" && data.status === "running")
     );
   });
-  const terminalStatus = terminalTaskStatuses.has(task?.status || "");
+  const terminalStatus = terminalTaskStatuses.has(taskDisplayStatus(task));
   const finishedAt = parseTimestamp(task?.finished_at) || lastMatchingTime(event => {
     const data = eventData(event);
     return (
@@ -466,7 +494,7 @@ function taskTiming(taskId, task) {
     );
   });
   if (!startedAt) return null;
-  const running = task?.status === "running";
+  const running = taskCurrentStatus(task) === "running" && taskActivityStatus(task) !== "idle";
   const endAt = running ? Date.now() : finishedAt || (terminalStatus ? lastMatchingTime(() => true) : null);
   if (!endAt) return { startedAt, finishedAt: null, elapsedMs: Date.now() - startedAt, running };
   return { startedAt, finishedAt: running ? null : endAt, elapsedMs: endAt - startedAt, running };
@@ -489,7 +517,7 @@ function waitingSubagentTiming(task) {
   const pending = pendingSubAgents(task);
   const finalRequestedAt = parseTimestamp(coordination.final_summary_requested_at);
   const finalCompletedAt = parseTimestamp(coordination.final_summary_completed_at);
-  const running = task?.status === "running" && pending.length > 0 && !finalRequestedAt;
+  const running = taskCurrentStatus(task) === "running" && pending.length > 0 && !finalRequestedAt;
   const endAt = running ? Date.now() : finalRequestedAt || finalCompletedAt || Date.now();
   return {
     startedAt,
@@ -839,7 +867,7 @@ function renderTaskList() {
     item.innerHTML = `
       <div class="task-row">
         <strong>${escapeHtml(task.id)}</strong>
-        <span class="status ${escapeHtml(task.hidden ? "hidden" : task.status)}">${escapeHtml(task.hidden ? "hidden" : task.status)}</span>
+        <span class="task-statuses">${taskStatusBadges(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
       <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
@@ -902,10 +930,13 @@ function renderSelectedHeader() {
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
   const timing = taskMetaTiming(task.id, task);
+  const outcome = taskOutcomeStatus(task) || "-";
+  const activity = taskActivityStatus(task);
   selectedTaskMetaEl.textContent =
-    `${task.preferred_backend || "backend?"} | ${task.preferred_model || "default"} | sandbox=${task.preferred_sandbox || "process default"} | approval=${task.preferred_approval || "process default"}${timing ? ` | ${timing}` : ""} | ${task.workspace_path || "workspace not set"}`;
-  selectedStatusEl.textContent = task.status;
-  selectedStatusEl.className = `status ${task.status}`;
+    `outcome=${outcome} | activity=${activity} | ${task.preferred_backend || "backend?"} | ${task.preferred_model || "default"} | sandbox=${task.preferred_sandbox || "process default"} | approval=${task.preferred_approval || "process default"}${timing ? ` | ${timing}` : ""} | ${task.workspace_path || "workspace not set"}`;
+  const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
+  selectedStatusEl.textContent = displayStatus;
+  selectedStatusEl.className = `status ${displayStatus}`;
 }
 
 function renderAgents() {
@@ -1193,15 +1224,20 @@ function renderTaskTimer(taskId) {
   const timing = taskTiming(taskId, task);
   if (!timing) return "";
   const waiting = waitingSubagentTiming(task);
-  const title = timing.running ? "Task is running" : `Task ${task?.status || "finished"}`;
+  const displayStatus = taskDisplayStatus(task);
+  const outcome = taskOutcomeStatus(task);
+  const activity = taskActivityStatus(task);
+  const title = timing.running && outcome ? `Task activity ${activity}` : (timing.running ? "Task is running" : `Task ${displayStatus || "finished"}`);
   const details = [
     `wall ${formatDuration(timing.elapsedMs)}`,
+    outcome ? `outcome ${outcome}` : "",
+    `activity ${activity}`,
     `started ${formatClock(timing.startedAt)}`,
     timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : "",
     waiting ? `waiting subagents ${formatDuration(waiting.elapsedMs)} (${waiting.completed.length}/${subAgents(task).length})` : ""
   ].filter(Boolean).join(" | ");
   return `
-    <div class="turn-timer task-timer ${escapeHtml(timing.running ? "running" : task?.status || "completed")}">
+    <div class="turn-timer task-timer ${escapeHtml(timing.running ? activity : displayStatus || "completed")}">
       <span class="activity-dot"></span>
       <strong>${escapeHtml(title)}</strong>
       <code>${escapeHtml(details)}</code>
@@ -1509,7 +1545,7 @@ setInterval(tick, pollInterval);
 setInterval(() => {
   const task = selectedTask();
   const turn = task ? latestTurnTiming(task.id) : null;
-  if (task?.status === "running" || turn?.running) {
+  if ((task && taskActivityStatus(task) !== "idle") || turn?.running) {
     renderTaskList();
     renderSelectedHeader();
     renderPanel();
