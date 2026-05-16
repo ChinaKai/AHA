@@ -122,6 +122,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(detail["task"]["exit_code"], 0)
         self.assertEqual(detail["task"]["finished_at"], completed["finished_at"])
 
+    def test_agent_status_started_at_tracks_status_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Agent timing", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                with mock.patch(
+                    "aha_cli.store.filesystem.utc_now",
+                    side_effect=[
+                        "2026-05-15T00:00:00+00:00",
+                        "2026-05-15T00:00:01+00:00",
+                        "2026-05-15T00:00:10+00:00",
+                        "2026-05-15T00:00:11+00:00",
+                        "2026-05-15T00:01:00+00:00",
+                        "2026-05-15T00:01:01+00:00",
+                    ],
+                ):
+                    set_agent_status(root, run_id, "task-001", "main", "running")
+                    set_agent_status(root, run_id, "task-001", "main", "running")
+                    set_agent_status(root, run_id, "task-001", "main", "waiting")
+
+                agent = task_snapshot(root, run_id, "task-001")["task"]["agents"][0]
+
+        self.assertEqual(agent["status"], "waiting")
+        self.assertEqual(agent["status_started_at"], "2026-05-15T00:01:00+00:00")
+        self.assertEqual(agent["last_active_at"], "2026-05-15T00:01:00+00:00")
+        self.assertEqual(agent["started_at"], "2026-05-15T00:00:10+00:00")
+
     def test_parallel_plan_writers_do_not_collide_on_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

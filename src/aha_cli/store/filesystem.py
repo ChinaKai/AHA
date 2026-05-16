@@ -772,8 +772,11 @@ def set_agent_status(
         agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), None)
         if agent is None:
             raise SystemExit(f"Agent not found: {agent_id}")
+        previous_status = agent.get("status")
         agent["status"] = status
         agent["last_active_at"] = now
+        if previous_status != status or not agent.get("status_started_at"):
+            agent["status_started_at"] = now
         if status == "running":
             agent["started_at"] = now
             agent["finished_at"] = None
@@ -788,7 +791,7 @@ def set_agent_status(
         root,
         run_id,
         "agent_status_changed",
-        {"task_id": task_id, "agent_id": agent_id, "status": status, "exit_code": exit_code},
+        {"task_id": task_id, "agent_id": agent_id, "status": status, "exit_code": exit_code, "status_started_at": agent.get("status_started_at")},
     )
     return agent
 

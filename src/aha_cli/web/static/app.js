@@ -316,6 +316,31 @@ function agentLifecycleLabel(agent) {
   return agentLifecycleStatus(agent).toUpperCase();
 }
 
+function agentStatusTiming(agent) {
+  const status = agentLifecycleStatus(agent);
+  const startedAt =
+    parseTimestamp(agent?.status_started_at) ||
+    (status === "running" ? parseTimestamp(agent?.started_at) : null) ||
+    parseTimestamp(agent?.last_active_at);
+  if (!startedAt) return null;
+  const terminal = terminalAgentStatuses.has(status);
+  const finishedAt = terminal ? parseTimestamp(agent?.finished_at) || parseTimestamp(agent?.last_active_at) : null;
+  const endAt = terminal ? (finishedAt || startedAt) : Date.now();
+  return {
+    status,
+    startedAt,
+    finishedAt,
+    elapsedMs: endAt - startedAt,
+    running: !terminal
+  };
+}
+
+function agentStatusTimingText(agent) {
+  const timing = agentStatusTiming(agent);
+  if (!timing) return "";
+  return `${timing.status} · ${formatDuration(timing.elapsedMs)}`;
+}
+
 function taskCurrentStatus(task) {
   return String(task?.current_status || task?.status || "pending").toLowerCase();
 }
@@ -1198,6 +1223,8 @@ function renderAgents() {
     const processStatus = agentBackendProcessStatus(agent);
     const rawProcessStatus = agent.backend_process_status || processStatus;
     const lifecycleStatus = agentLifecycleStatus(agent);
+    const lifecycleTiming = agentStatusTiming(agent);
+    const lifecycleTimingText = agentStatusTimingText(agent);
     const lastReply = formatLocalTimestamp(agent.backend_process_last_reply_at, agent.backend_process_last_reply_at || "");
     const processDetail = [
       `process=${rawProcessStatus}`,
@@ -1216,6 +1243,9 @@ function renderAgents() {
       `model=${agent.model || "default"}`,
       `sandbox=${sandbox}`,
       `approval=${approval}`,
+      lifecycleTimingText ? `status=${lifecycleTimingText}` : `status=${lifecycleStatus}`,
+      lifecycleTiming?.startedAt ? `status_started=${formatClock(lifecycleTiming.startedAt)}` : "",
+      lifecycleTiming?.finishedAt ? `status_finished=${formatClock(lifecycleTiming.finishedAt)}` : "",
       processDetail,
       `session=${agent.backend_session_id || "-"}`,
       `workspace=${agent.workspace_path || task.workspace_path || "-"}`
@@ -1225,7 +1255,7 @@ function renderAgents() {
         <strong>${escapeHtml(agent.id)}</strong>
         <span class="agent-process ${escapeHtml(processStatus)}" title="backend process status">${escapeHtml(agentBackendProcessLabel(agent))}</span>
       </div>
-      <div class="meta truncate">result=${escapeHtml(lifecycleStatus)} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
+      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
@@ -1270,8 +1300,9 @@ function renderSelectedAgentInfo() {
     selectedAgentInfoEl.textContent = "";
     return;
   }
+  const lifecycleTiming = agentStatusTimingText(agent) || agentLifecycleStatus(agent);
   selectedAgentInfoEl.textContent =
-    `To ${agent.id} | process=${agent.backend_process_status || "stopped"} | pid=${agent.backend_process_pid || "-"} | role=${agent.role} | backend=${agent.backend} | model=${agent.model || "default"} | sandbox=${agent.sandbox || task.preferred_sandbox || "process default"} | approval=${agent.approval || task.preferred_approval || "process default"} | session=${agent.backend_session_id || "-"} | scope=${agent.session_scope || "-"} | workspace=${agent.workspace_path || task.workspace_path || "-"}`;
+    `To ${agent.id} | status=${lifecycleTiming} | process=${agent.backend_process_status || "stopped"} | pid=${agent.backend_process_pid || "-"} | role=${agent.role} | backend=${agent.backend} | model=${agent.model || "default"} | sandbox=${agent.sandbox || task.preferred_sandbox || "process default"} | approval=${agent.approval || task.preferred_approval || "process default"} | session=${agent.backend_session_id || "-"} | scope=${agent.session_scope || "-"} | workspace=${agent.workspace_path || task.workspace_path || "-"}`;
 }
 
 function renderBackendStatus() {

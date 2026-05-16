@@ -77,6 +77,7 @@ def make_agent(
         "workspace_path": workspace_path,
         "created_by": created_by,
         "created_reason": created_reason,
+        "status_started_at": None,
         "last_active_at": None,
         "last_usage": None,
     }
@@ -161,6 +162,7 @@ def ensure_task_agents(task: dict, backend: str = "codex") -> list[dict]:
         agent.setdefault("workspace_path", task.get("workspace_path"))
         agent.setdefault("created_by", "system")
         agent.setdefault("created_reason", "")
+        agent.setdefault("status_started_at", None)
         agent.setdefault("last_active_at", None)
         agent.setdefault("last_usage", None)
     return agents
