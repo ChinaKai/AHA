@@ -1127,8 +1127,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn("Status: pending", output)
 
                 backend_output = format_aha_command(root, run_id, "task-001", "/aha backend status")
-                self.assertIn("Backend: stopped", backend_output)
-                self.assertIn("Target: main", backend_output)
+                self.assertIn("Unknown AHA command", backend_output)
 
                 handled, agent_message, payload = handle_slash_command(
                     root,
@@ -1177,20 +1176,13 @@ class CliTests(unittest.TestCase):
                 self.assertIsNone(agent_message)
                 self.assertIn("Usage: /agent <command>", reply or "")
 
-    def test_backend_status_cli_reports_stopped_backend(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Backend lifecycle", "--agents", "1")
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+    def test_backend_cli_command_is_not_exposed(self) -> None:
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as raised:
+            main(["backend"])
 
-                code, output = self.run_cli("backend", "status", run_id)
-
-        self.assertEqual(code, 0)
-        self.assertIn("Backend: stopped", output)
-        self.assertIn("Target: main", output)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice: 'backend'", err.getvalue())
 
     def test_backend_activity_can_be_filtered_by_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

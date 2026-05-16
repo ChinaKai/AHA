@@ -9,10 +9,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.backend_runtime import (
     backend_status,
-    format_backend_status,
-    restart_backend,
     start_backend,
-    stop_backend,
 )
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.tasks import create_task_and_dispatch
@@ -168,21 +165,6 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
     return snapshot
 
 
-def format_backend_command(root: Path, run_id: str, command: str, target: str = "main", task_id: str | None = None) -> str:
-    parts = command.split()
-    action = parts[2] if len(parts) > 2 else "status"
-    command_target = parts[3] if len(parts) > 3 else target or "main"
-    if action == "status":
-        return format_backend_status(backend_status(root, run_id, command_target, task_id=task_id))
-    if action == "start":
-        return format_backend_status(start_backend(root, run_id, command_target, task_id=task_id))
-    if action == "stop":
-        return format_backend_status(stop_backend(root, run_id, command_target, task_id=task_id))
-    if action == "restart":
-        return format_backend_status(restart_backend(root, run_id, command_target, task_id=task_id))
-    return "Usage: /aha backend status|start|stop|restart [target]"
-
-
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
     parts = command.split()
     name = parts[1] if len(parts) > 1 else "help"
@@ -195,15 +177,11 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha agents: list selected task agents",
                 "- /aha final: ask task-main to generate or update the Final",
                 "- /aha finalize: alias for /aha final",
-                "- /aha backend status: show selected backend process status",
-                "- /aha backend start|stop|restart: manage selected backend process",
                 "",
                 "Agent command:",
                 "- /agent <command>: route /<command> to the selected agent",
             ]
         )
-    if name == "backend":
-        return format_backend_command(root, run_id, command, target, task_id=task_id)
     if not task_id:
         return "No task is selected."
     try:
@@ -607,28 +585,6 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"ok": True, "agent": agent}))
                 except SystemExit as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
-        elif method == "POST" and path == "/api/backend":
-            payload = parse_json_body(body)
-            action = str(payload.get("action", "status") or "status")
-            target = str(payload.get("target", "main") or "main")
-            task_id = str(payload.get("task_id", "") or "") or None
-            sandbox = str(payload.get("sandbox", "workspace-write") or "workspace-write")
-            approval = str(payload.get("approval", "never") or "never")
-            from_start = bool(payload.get("from_start", False))
-            if sandbox not in SANDBOX_OPTIONS:
-                writer.write(json_response({"error": f"unknown sandbox: {sandbox}"}, "400 Bad Request"))
-            elif approval not in APPROVAL_OPTIONS:
-                writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
-            elif action == "status":
-                writer.write(json_response({"ok": True, "backend": backend_status(root, run_id, target, task_id=task_id)}))
-            elif action == "start":
-                writer.write(json_response({"ok": True, "backend": start_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start, task_id=task_id)}))
-            elif action == "stop":
-                writer.write(json_response({"ok": True, "backend": stop_backend(root, run_id, target, task_id=task_id)}))
-            elif action == "restart":
-                writer.write(json_response({"ok": True, "backend": restart_backend(root, run_id, target, sandbox=sandbox, approval=approval, from_start=from_start, task_id=task_id)}))
-            else:
-                writer.write(json_response({"error": f"unknown backend action: {action}"}, "400 Bad Request"))
         elif method == "POST" and path == "/api/send":
             payload = parse_json_body(body)
             try:

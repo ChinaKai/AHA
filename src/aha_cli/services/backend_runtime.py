@@ -200,7 +200,6 @@ def mark_backend_stopped(root: Path, run_id: str, target: str = "main", *, task_
     append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": previous_pid})
     return backend_status(root, run_id, target, task_id) | {"stopped": True}
 
-
 def stop_task_backends(root: Path, run_id: str, task_id: str, *, exclude_pid: int | None = None, timeout: float = 5.0) -> list[dict]:
     plan = require_plan(root, run_id)
     task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
@@ -396,26 +395,3 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str 
     _write_state(root, run_id, target, state, task_id)
     append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": pid})
     return backend_status(root, run_id, target, task_id) | {"stopped": True}
-
-
-def restart_backend(root: Path, run_id: str, target: str = "main", **kwargs) -> dict:
-    task_id = kwargs.pop("task_id", None) or None
-    stop_backend(root, run_id, target, task_id=task_id, timeout=float(kwargs.pop("timeout", 5.0)))
-    kwargs["task_id"] = task_id
-    return start_backend(root, run_id, target, **kwargs) | {"restarted": True}
-
-
-def format_backend_status(state: dict) -> str:
-    parts = [
-        f"Backend: {state.get('status', 'stopped')}",
-        f"Target: {state.get('target', 'main')}",
-        f"Task: {state.get('task_id') or '-'}",
-        f"Runner: {state.get('backend', 'codex-chat')}",
-        f"PID: {state.get('pid') or '-'}",
-        f"Managed: {'yes' if state.get('managed') else 'no'}",
-    ]
-    if state.get("last_reply_at"):
-        parts.append(f"Last reply: {state['last_reply_at']}")
-    if state.get("log_path"):
-        parts.append(f"Log: {state['log_path']}")
-    return "\n".join(parts)

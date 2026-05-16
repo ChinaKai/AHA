@@ -6,7 +6,6 @@ let activeTab = "conversation";
 let backendModels = new Map();
 let backendCommands = new Map();
 let taskActionInFlight = false;
-let backendActionInFlight = false;
 let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
@@ -84,11 +83,7 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
   { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
   { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate or update the Final." },
-  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
-  { scope: "aha", name: "/aha backend status", insert: "/aha backend status", desc: "Show selected backend process status." },
-  { scope: "aha", name: "/aha backend start", insert: "/aha backend start", desc: "Start selected backend process." },
-  { scope: "aha", name: "/aha backend stop", insert: "/aha backend stop", desc: "Stop selected backend process." },
-  { scope: "aha", name: "/aha backend restart", insert: "/aha backend restart", desc: "Restart selected backend process." }
+  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." }
 ];
 
 function escapeHtml(value) {
@@ -1369,11 +1364,6 @@ function renderBackendStatus() {
     <span class="activity-dot"></span>
     <strong>${escapeHtml(status)}</strong>
     <code title="${escapeHtml(detail)}">${escapeHtml(detail)}</code>
-    <div class="backend-actions">
-      <button type="button" data-backend-action="start" ${status === "running" || status === "busy" || backendActionInFlight ? "disabled" : ""}>Start</button>
-      <button type="button" data-backend-action="stop" ${status === "stopped" || backendActionInFlight ? "disabled" : ""}>Stop</button>
-      <button type="button" data-backend-action="restart" ${backendActionInFlight ? "disabled" : ""}>Restart</button>
-    </div>
   `;
 }
 
@@ -1801,39 +1791,6 @@ agentTargetEl.addEventListener("change", async () => {
   renderConversationFilters();
   await ensureConversationLoaded();
   renderPanel();
-});
-backendStatusEl.addEventListener("click", async event => {
-  const button = event.target instanceof Element ? event.target.closest("[data-backend-action]") : null;
-  if (!button || backendActionInFlight) return;
-  backendActionInFlight = true;
-  renderBackendStatus();
-  try {
-    const task = selectedTask();
-    const agent = selectedAgent();
-    const res = await fetch("/api/backend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: button.dataset.backendAction,
-        target: backendTarget(),
-        task_id: selectedTaskId,
-        sandbox: agent?.sandbox || task?.preferred_sandbox || "workspace-write",
-        approval: agent?.approval || task?.preferred_approval || "never",
-        from_start: false
-      })
-    });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      alert(payload.error || "Backend action failed");
-      return;
-    }
-    backendStatusData = payload.backend;
-    await pollEvents();
-  } finally {
-    backendActionInFlight = false;
-    await loadBackendStatus();
-    renderPanel();
-  }
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
 showHiddenEl.addEventListener("change", () => {
