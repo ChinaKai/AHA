@@ -105,7 +105,15 @@ function agentBackendProcessStatus(agent) {
 }
 
 function agentBackendProcessLabel(agent) {
-  return agentBackendProcessStatus(agent).toUpperCase();
+  return agentBackendProcessStatus(agent) === "running" ? "session alive" : "session stopped";
+}
+
+function agentLifecycleStatus(agent) {
+  return String(agent?.status || "pending").toLowerCase();
+}
+
+function agentLifecycleLabel(agent) {
+  return agentLifecycleStatus(agent).toUpperCase();
 }
 
 function visibleTasks() {
@@ -914,6 +922,7 @@ function renderAgents() {
     const approval = agent.approval || task.preferred_approval || "never";
     const processStatus = agentBackendProcessStatus(agent);
     const rawProcessStatus = agent.backend_process_status || processStatus;
+    const lifecycleStatus = agentLifecycleStatus(agent);
     const lastReply = formatLocalTimestamp(agent.backend_process_last_reply_at, agent.backend_process_last_reply_at || "");
     const processDetail = [
       `process=${rawProcessStatus}`,
@@ -939,11 +948,11 @@ function renderAgents() {
     card.innerHTML = `
       <div class="agent-card-head">
         <strong>${escapeHtml(agent.id)}</strong>
-        <span class="agent-process ${escapeHtml(processStatus)}" title="${escapeHtml(processDetail)}">${escapeHtml(agentBackendProcessLabel(agent))}</span>
+        <span class="status ${escapeHtml(lifecycleStatus)}" title="agent status">${escapeHtml(agentLifecycleLabel(agent))}</span>
       </div>
       <div class="meta truncate">status=${escapeHtml(agent.status || "-")} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
-      <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
+      <div class="meta truncate">process=${escapeHtml(agentBackendProcessLabel(agent))} (${escapeHtml(rawProcessStatus)}) | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
         <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
         <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>

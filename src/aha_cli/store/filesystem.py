@@ -950,6 +950,7 @@ def status_snapshot(root: Path, run_id: str) -> dict:
                 "exit_code": task["exit_code"],
                 "started_at": task["started_at"],
                 "finished_at": task["finished_at"],
+                "coordination": task.get("coordination"),
                 "hidden": bool(task.get("hidden")),
                 "hidden_at": task.get("hidden_at"),
                 "deleted_at": task.get("deleted_at"),

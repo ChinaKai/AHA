@@ -763,6 +763,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                mark_task_coordination(root, run_id, "task-001", followup_started_at="2026-05-15T00:00:00+00:00")
 
                 def fake_backend_status(_root: Path, _run_id: str, target: str = "main", task_id: str | None = None) -> dict:
                     return {
@@ -776,6 +777,7 @@ class CliTests(unittest.TestCase):
                 with mock.patch("aha_cli.web.server.backend_status", side_effect=fake_backend_status):
                     snapshot = web_status_snapshot(root, run_id)
 
+        self.assertEqual(snapshot["tasks"][0]["coordination"]["followup_started_at"], "2026-05-15T00:00:00+00:00")
         agents = {agent["id"]: agent for agent in snapshot["tasks"][0]["agents"]}
         self.assertEqual(agents["main"]["backend_process_status"], "running")
         self.assertEqual(agents["main"]["backend_process_pid"], 1234)
