@@ -27,14 +27,12 @@ const collapsedMessageCharLimit = 900;
 const collapsedMessageLineLimit = 2;
 const conversationFilters = {
   chat: true,
-  system: false,
   runtime: false,
   commands: false,
   usage: false
 };
 const conversationFilterOptions = [
   { key: "chat", label: "Chat" },
-  { key: "system", label: "System" },
   { key: "runtime", label: "Runtime" },
   { key: "commands", label: "Commands" },
   { key: "usage", label: "Usage" }
@@ -612,11 +610,7 @@ function conversationEventCategory(event) {
   if (event.type === "agent_message") return "chat";
   if (event.type === "agent_usage") return "usage";
   if (event.type === "agent_command_started" || event.type === "agent_command_finished") return "commands";
-  if (event.type === "message") {
-    if (data.role === "aha" || data.from_agent === "aha" || data.to_agent === "aha") return "chat";
-    if (data.sender === "system" || data.sender === "aha") return "system";
-    return "chat";
-  }
+  if (event.type === "message") return "chat";
   return "runtime";
 }
 
