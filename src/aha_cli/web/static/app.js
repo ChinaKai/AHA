@@ -53,6 +53,8 @@ const openTasksSheetEl = document.getElementById("open-tasks-sheet");
 const openAgentsSheetEl = document.getElementById("open-agents-sheet");
 const closeTasksSheetEl = document.getElementById("close-tasks-sheet");
 const closeAgentsSheetEl = document.getElementById("close-agents-sheet");
+const mobileActionPanelEl = document.getElementById("mobile-action-panel");
+const mobileActionsToggleEl = document.getElementById("mobile-actions-toggle");
 const tasksEl = document.getElementById("tasks");
 const showHiddenEl = document.getElementById("show-hidden");
 const selectedIdEl = document.getElementById("selected-id");
@@ -163,6 +165,7 @@ function initDesktopSidebars() {
 function setMobileSheet(sheet) {
   const taskOpen = sheet === "tasks";
   const agentsOpen = sheet === "agents";
+  if (taskOpen || agentsOpen) closeMobileActionPanel();
   document.body.classList.toggle("mobile-tasks-open", taskOpen);
   document.body.classList.toggle("mobile-agents-open", agentsOpen);
   if (mobileSheetBackdropEl) mobileSheetBackdropEl.hidden = !taskOpen && !agentsOpen;
@@ -174,6 +177,39 @@ function closeMobileSheets() {
   setMobileSheet(null);
 }
 
+function setMobileActionPanel(open) {
+  if (!mobileActionPanelEl) return;
+  mobileActionPanelEl.hidden = !open;
+  document.body.classList.toggle("mobile-actions-open", open);
+  mobileActionsToggleEl?.setAttribute("aria-expanded", String(open));
+  if (open) commandMenuEl.classList.add("hidden");
+}
+
+function closeMobileActionPanel() {
+  setMobileActionPanel(false);
+}
+
+async function handleMobileAction(action) {
+  closeMobileActionPanel();
+  if (action === "tasks") {
+    setMobileSheet("tasks");
+    return;
+  }
+  if (action === "agents") {
+    setMobileSheet("agents");
+    return;
+  }
+  if (action === "add-task") {
+    taskCreateEl.open = true;
+    setMobileSheet("tasks");
+    setTimeout(() => document.getElementById("new-task-title")?.focus(), 0);
+    return;
+  }
+  if (["conversation", "final", "logs", "context"].includes(action)) {
+    await activateTab(action);
+  }
+}
+
 function initMobileSheets() {
   const mobileQuery = window.matchMedia("(max-width: 640px)");
   openTasksSheetEl?.addEventListener("click", () => setMobileSheet("tasks"));
@@ -182,16 +218,33 @@ function initMobileSheets() {
   closeAgentsSheetEl?.addEventListener("click", closeMobileSheets);
   mobileSheetBackdropEl?.addEventListener("click", closeMobileSheets);
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape") closeMobileSheets();
+    if (event.key === "Escape") {
+      closeMobileSheets();
+      closeMobileActionPanel();
+    }
   });
   const closeWhenLeavingMobile = () => {
-    if (!mobileQuery.matches) closeMobileSheets();
+    if (!mobileQuery.matches) {
+      closeMobileSheets();
+      closeMobileActionPanel();
+    }
   };
   if (mobileQuery.addEventListener) {
     mobileQuery.addEventListener("change", closeWhenLeavingMobile);
   } else {
     mobileQuery.addListener(closeWhenLeavingMobile);
   }
+}
+
+function initMobileActionPanel() {
+  mobileActionsToggleEl?.addEventListener("click", () => {
+    setMobileActionPanel(Boolean(mobileActionPanelEl?.hidden));
+  });
+  mobileActionPanelEl?.addEventListener("click", event => {
+    const button = event.target instanceof Element ? event.target.closest("[data-mobile-action]") : null;
+    if (!button) return;
+    handleMobileAction(button.dataset.mobileAction || "");
+  });
 }
 
 function selectedTask() {
@@ -1014,6 +1067,7 @@ async function selectTask(taskId) {
   conversationAutoFollow = true;
   if (activeTab === "logs") logState(taskId).autoFollow = true;
   closeMobileSheets();
+  closeMobileActionPanel();
   renderTaskList();
   renderSelectedHeader();
   renderAgents();
@@ -1452,15 +1506,17 @@ function isPanelNearBottom() {
   return panelEl.scrollHeight - panelEl.scrollTop - panelEl.clientHeight < 80;
 }
 
+async function activateTab(tab) {
+  activeTab = tab || "conversation";
+  if (activeTab === "conversation") conversationAutoFollow = true;
+  if (activeTab === "logs" && selectedTaskId) logState(selectedTaskId).autoFollow = true;
+  document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item.dataset.tab === activeTab));
+  await ensureActiveTabData();
+  renderPanel();
+}
+
 document.querySelectorAll(".tab").forEach(button => {
-  button.addEventListener("click", async () => {
-    activeTab = button.dataset.tab;
-    if (activeTab === "conversation") conversationAutoFollow = true;
-    if (activeTab === "logs" && selectedTaskId) logState(selectedTaskId).autoFollow = true;
-    document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === button));
-    await ensureActiveTabData();
-    renderPanel();
-  });
+  button.addEventListener("click", () => activateTab(button.dataset.tab));
 });
 
 document.getElementById("task-form").addEventListener("submit", async event => {
@@ -1510,6 +1566,7 @@ document.getElementById("send-form").addEventListener("submit", async event => {
   });
   messageEl.value = "";
   commandMenuEl.classList.add("hidden");
+  closeMobileActionPanel();
   await pollEvents();
   conversationAutoFollow = true;
   renderPanel();
@@ -1655,6 +1712,7 @@ workspaceSelectEl.addEventListener("change", () => {
 initTaskCreateDisclosure();
 initDesktopSidebars();
 initMobileSheets();
+initMobileActionPanel();
 
 async function tick() {
   try {

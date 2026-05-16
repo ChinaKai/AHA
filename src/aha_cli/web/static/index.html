@@ -105,9 +105,18 @@
       <div id="selected-agent-info" class="selected-agent-info"></div>
       <div id="backend-status" class="backend-status"></div>
       <div id="command-menu" class="command-menu hidden"></div>
+      <div id="mobile-action-panel" class="mobile-action-panel" hidden>
+        <button type="button" data-mobile-action="tasks">Tasks</button>
+        <button type="button" data-mobile-action="agents">Agents</button>
+        <button type="button" data-mobile-action="add-task">Add Task</button>
+        <button type="button" data-mobile-action="final">Final</button>
+        <button type="button" data-mobile-action="logs">Logs</button>
+        <button type="button" data-mobile-action="context">Context</button>
+      </div>
       <form id="send-form" class="composer">
         <select id="agent-target"></select>
-        <input id="message" placeholder="Message in the selected task context" autocomplete="off">
+        <input id="message" placeholder="Message in the selected task context" autocomplete="off" enterkeyhint="send">
+        <button id="mobile-actions-toggle" class="mobile-actions-toggle" type="button" aria-controls="mobile-action-panel" aria-expanded="false">+</button>
         <button class="send" type="submit">Send</button>
       </form>
     </section>

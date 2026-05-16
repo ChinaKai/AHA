@@ -64,6 +64,8 @@ button, input, select { font: inherit; }
   display: none;
 }
 .mobile-context-actions,
+.mobile-actions-toggle,
+.mobile-action-panel,
 .mobile-sheet-close,
 .mobile-sheet-backdrop {
   display: none;
@@ -811,16 +813,7 @@ button {
     padding: 12px;
   }
   .mobile-context-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-top: 0;
-  }
-  .mobile-context-actions button {
-    min-height: 34px;
-    color: #344054;
-    font-size: 13px;
-    font-weight: 650;
+    display: none;
   }
   .mobile-sheet-close {
     display: inline-flex;
@@ -986,25 +979,48 @@ button {
   .command-menu {
     padding: 8px 12px;
   }
+  .mobile-action-panel:not([hidden]) {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid #e4e7ec;
+    background: #fbfcfd;
+  }
+  .mobile-action-panel button {
+    min-height: 38px;
+    padding: 0 8px;
+    color: #344054;
+    font-size: 12px;
+    font-weight: 650;
+  }
   .command-item {
     grid-template-columns: 1fr;
     gap: 3px;
     min-height: auto;
   }
   .composer {
-    grid-template-columns: minmax(76px, 92px) minmax(0, 1fr) 58px;
+    grid-template-columns: minmax(0, 1fr) 42px;
     align-items: end;
     gap: 6px;
     padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid #e4e7ec;
   }
   #agent-target {
-    min-width: 0;
-    padding: 0 6px;
-    font-size: 12px;
+    display: none;
   }
   .send {
-    padding: 0 10px;
+    display: none;
+  }
+  .mobile-actions-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 999px;
+    color: #344054;
+    font-size: 22px;
+    line-height: 1;
   }
   input,
   select,
