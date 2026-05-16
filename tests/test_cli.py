@@ -1134,6 +1134,22 @@ class CliTests(unittest.TestCase):
                     root,
                     run_id,
                     {"sender": "browser", "target": "main", "to_agent": "main"},
+                    "/aha status",
+                    "task-001",
+                )
+                self.assertTrue(handled)
+                self.assertIsNone(agent_message)
+                self.assertEqual(payload["message"]["sender"], "AHA")
+                self.assertEqual(payload["message"]["agent_id"], "main")
+                page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
+                messages = [event["data"] for event in page["events"] if event["type"] == "message"]
+                self.assertTrue(any(message.get("message") == "/aha status" and message.get("agent_id") == "main" for message in messages))
+                self.assertTrue(any(message.get("sender") == "AHA" and "Task: task-001" in message.get("message", "") for message in messages))
+
+                handled, agent_message, payload = handle_slash_command(
+                    root,
+                    run_id,
+                    {"sender": "browser", "target": "main", "to_agent": "main"},
                     "/aha final",
                     "task-001",
                 )

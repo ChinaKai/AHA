@@ -303,13 +303,13 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
                 return False, agent_message, {"command_namespace": "agent", "original_command": stripped}
             reply = reply or "Usage: /agent send <message>"
     elif stripped == "/aha" or stripped.startswith("/aha "):
-        append_message(root, run_id, "aha", stripped, sender=sender, task_id=task_id, role="aha", from_agent=sender, to_agent="aha")
+        target = str(payload.get("to_agent", "") or payload.get("target", "") or "main")
+        append_message(root, run_id, "aha", stripped, sender=sender, task_id=task_id, role="aha", from_agent=sender, to_agent="aha", agent_id=target)
         parts = stripped.split()
         name = parts[1] if len(parts) > 1 else "help"
         if name in {"final", "finalize"}:
             reply = request_task_finalization(root, run_id, task_id, stripped)
         else:
-            target = str(payload.get("to_agent", "") or payload.get("target", "") or "main")
             reply = format_aha_command(root, run_id, task_id, stripped, target)
     else:
         reply = f"Unknown command: {stripped.split()[0]}. Use /aha help or /agent <command>."
@@ -325,6 +325,7 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         role="aha",
         from_agent="aha",
         to_agent="browser",
+        agent_id=target if stripped.startswith("/aha") else None,
     )
     return True, None, {"message": response}
 

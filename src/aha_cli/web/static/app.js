@@ -515,7 +515,8 @@ function taskTimelineEvents(taskId) {
 
 function addAgentRef(refs, value) {
   const text = String(value || "").trim();
-  if (!text || text === "browser" || text === "system" || text === "aha") return;
+  const lower = text.toLowerCase();
+  if (!text || lower === "browser" || lower === "system" || lower === "aha") return;
   refs.add(text);
 }
 
@@ -526,7 +527,10 @@ function eventAgentRefs(event) {
   addAgentRef(refs, data.to_agent);
   addAgentRef(refs, data.from_agent);
   addAgentRef(refs, data.agent_id);
-  if (event.type === "message") addAgentRef(refs, data.sender);
+  if (event.type === "message") {
+    addAgentRef(refs, data.sender);
+    if (["role", "from_agent", "to_agent", "sender", "target"].some(key => String(data[key] || "").toLowerCase() === "aha")) refs.add("main");
+  }
   if (!refs.size && (event.type.startsWith("agent_") || event.type.startsWith("task_") || event.type === "workspace_missing")) {
     refs.add("main");
   }

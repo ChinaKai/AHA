@@ -181,6 +181,7 @@ def append_message(
     result_policy: str | None = None,
     reply_target: str | None = None,
     coordination: str | None = None,
+    agent_id: str | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -207,6 +208,8 @@ def append_message(
         payload["reply_target"] = reply_target
     if coordination:
         payload["coordination"] = coordination
+    if agent_id:
+        payload["agent_id"] = agent_id
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)
@@ -418,7 +421,7 @@ def event_agent_refs(event: dict) -> set[str]:
 
     def add(value: object) -> None:
         text = str(value or "").strip()
-        if text and text not in {"browser", "system", "aha"}:
+        if text and text.lower() not in {"browser", "system", "aha"}:
             refs.add(text)
 
     add(data.get("target"))
@@ -427,6 +430,8 @@ def event_agent_refs(event: dict) -> set[str]:
     add(data.get("agent_id"))
     if event.get("type") == "message":
         add(data.get("sender"))
+        if any(str(data.get(key) or "").lower() == "aha" for key in ("role", "from_agent", "to_agent", "sender", "target")):
+            refs.add("main")
     event_type = str(event.get("type") or "")
     if not refs and (event_type.startswith("agent_") or event_type.startswith("task_") or event_type == "workspace_missing"):
         refs.add("main")
