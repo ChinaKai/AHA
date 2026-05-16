@@ -1,4 +1,8 @@
-const pollInterval = Number(new URLSearchParams(location.search).get("poll") || "1000");
+const queryParams = new URLSearchParams(location.search);
+const rawPollInterval = Number(queryParams.get("poll") || "1000");
+const rawRequestTimeoutMs = Number(queryParams.get("timeout") || "12000");
+const pollInterval = Number.isFinite(rawPollInterval) ? Math.max(250, rawPollInterval) : 1000;
+const requestTimeoutMs = Number.isFinite(rawRequestTimeoutMs) ? Math.max(1000, rawRequestTimeoutMs) : 12000;
 let offset = -1;
 let statusData = null;
 let selectedTaskId = null;
@@ -6,10 +10,13 @@ let activeTab = "conversation";
 let backendModels = new Map();
 let backendCommands = new Map();
 let taskActionInFlight = false;
+let tickInFlight = false;
+let tickFailureCount = 0;
+let tickBackoffUntil = 0;
 let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
-let legacyEventsLoaded = false;
+let eventTailInitialized = false;
 const allEvents = [];
 const conversationPageLimit = 50;
 const logPageLimit = 200;
@@ -93,6 +100,37 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+async function readJsonResponse(res, fallbackMessage = "Request failed") {
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    const status = [res.status, res.statusText].filter(Boolean).join(" ");
+    const detail = payload?.error || status || fallbackMessage;
+    throw new Error(`${fallbackMessage}: ${detail}`);
+  }
+  return payload || {};
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = requestTimeoutMs) {
+  const controller = new AbortController();
+  const init = { ...options, signal: options.signal || controller.signal };
+  const timer = options.signal ? null : setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function fetchJson(url, options = {}, fallbackMessage = "Request failed") {
+  const res = await fetchWithTimeout(url, options);
+  return readJsonResponse(res, fallbackMessage);
 }
 
 function initTaskCreateDisclosure() {
@@ -461,10 +499,6 @@ function isTaskEvent(event, taskId) {
   return eventTaskId(event) === taskId;
 }
 
-function taskConversation(taskId) {
-  return allEvents.filter(event => event.type === "message" && isTaskEvent(event, taskId));
-}
-
 function taskEvents(taskId) {
   return allEvents.filter(event => isTaskEvent(event, taskId));
 }
@@ -569,7 +603,7 @@ function mergeConversationEvents(current, incoming, prepend = false) {
 function conversationState(taskId = selectedTaskId, target = backendTarget()) {
   const key = conversationKey(taskId, target);
   if (!conversationStates.has(key)) {
-    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false });
+    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false, error: "" });
   }
   return conversationStates.get(key);
 }
@@ -851,20 +885,8 @@ function latestTurnTiming(taskId) {
   };
 }
 
-function formatEvent(event) {
-  const data = eventData(event);
-  const ts = eventTimeLabel(event);
-  if (event.type === "log") return `[${ts}] ${data.task_id || "-"}: ${data.line || ""}`;
-  if (event.type === "message") {
-    const task = data.task_id ? ` task=${data.task_id}` : "";
-    return `[${ts}] message${task} ${data.sender || "main"} -> ${data.target || "-"}: ${data.message || ""}`;
-  }
-  return `[${ts}] ${event.type}: ${JSON.stringify(data)}`;
-}
-
 async function loadBackends() {
-  const res = await fetch("/api/backends");
-  const payload = await res.json();
+  const payload = await fetchJson("/api/backends", {}, "Failed to load backends");
   backendModels = new Map();
   backendCommands = new Map();
   taskBackendEl.innerHTML = "";
@@ -894,8 +916,7 @@ function renderModelOptions() {
 }
 
 async function loadWorkspaces() {
-  const res = await fetch("/api/workspaces");
-  const payload = await res.json();
+  const payload = await fetchJson("/api/workspaces", {}, "Failed to load workspaces");
   workspaceSelectEl.innerHTML = "";
   for (const workspace of payload.workspaces || []) {
     const opt = document.createElement("option");
@@ -914,8 +935,7 @@ async function loadWorkspaces() {
 }
 
 async function loadStatus(options = {}) {
-  const res = await fetch("/api/status");
-  statusData = await res.json();
+  statusData = await fetchJson("/api/status", {}, "Failed to load status");
   runIdEl.textContent = statusData.run_id;
   const runStateText = `${statusData.mode} | updated ${formatLocalTimestamp(statusData.updated_at, statusData.updated_at || "-")}`;
   runStateEl.textContent = runStateText;
@@ -936,16 +956,14 @@ async function loadStatus(options = {}) {
 async function loadBackendStatus() {
   const params = new URLSearchParams({ target: backendTarget() });
   if (selectedTaskId) params.set("task_id", selectedTaskId);
-  const res = await fetch(`/api/backend?${params.toString()}`);
-  backendStatusData = await res.json();
+  backendStatusData = await fetchJson(`/api/backend?${params.toString()}`, {}, "Failed to load backend status");
   renderBackendStatus();
 }
 
 async function loadFinalDetail(taskId, force = false) {
   if (!taskId) return null;
   if (!force && finalDetails.has(taskId)) return finalDetails.get(taskId);
-  const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/final`);
-  const detail = await res.json();
+  const detail = await fetchJson(`/api/task/${encodeURIComponent(taskId)}/final`, {}, "Failed to load final");
   finalDetails.set(taskId, detail);
   return detail;
 }
@@ -953,8 +971,7 @@ async function loadFinalDetail(taskId, force = false) {
 async function loadContextDetail(taskId, force = false) {
   if (!taskId) return null;
   if (!force && contextDetails.has(taskId)) return contextDetails.get(taskId);
-  const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/context`);
-  const detail = await res.json();
+  const detail = await fetchJson(`/api/task/${encodeURIComponent(taskId)}/context`, {}, "Failed to load context");
   contextDetails.set(taskId, detail);
   return detail;
 }
@@ -975,8 +992,7 @@ async function loadLogPage(taskId, older = false, force = false) {
     const params = new URLSearchParams({ limit: String(logPageLimit) });
     if (older && state.source) params.set("source", state.source);
     if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
-    const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/logs?${params.toString()}`);
-    const payload = await res.json();
+    const payload = await fetchJson(`/api/task/${encodeURIComponent(taskId)}/logs?${params.toString()}`, {}, "Failed to load logs");
     const text = payload.text || "";
     state.text = older ? [text, state.text].filter(Boolean).join("\n") : text;
     state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
@@ -1034,29 +1050,23 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
     if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
     let res;
     try {
-      res = await fetch(`/api/conversation-events?${params.toString()}`);
+      res = await fetchWithTimeout(`/api/conversation-events?${params.toString()}`);
     } catch (err) {
-      await loadLegacyEvents();
-      state.events = agentTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
-      state.beforeOffset = null;
-      state.hasMore = false;
-      state.initialized = true;
+      await markConversationUnavailable(state, err);
       return state;
     }
     if (!res.ok) {
-      await loadLegacyEvents();
-      state.events = agentTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
-      state.beforeOffset = null;
-      state.hasMore = false;
-      state.initialized = true;
+      const error = await responseError(res, "Failed to load conversation");
+      await markConversationUnavailable(state, error);
       return state;
     }
-    const payload = await res.json();
+    const payload = await readJsonResponse(res, "Failed to load conversation");
     const events = assignConversationKeys(payload.events || [], payload.before_offset || 0);
     state.events = older ? mergeConversationEvents(state.events, events, true) : mergeConversationEvents(events, state.events, false);
     state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
     state.hasMore = Boolean(payload.has_more);
     state.initialized = true;
+    state.error = "";
     if (!older && offset < 0 && Number.isFinite(payload.after_offset)) offset = payload.after_offset;
     return state;
   } finally {
@@ -1064,17 +1074,33 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
   }
 }
 
-async function loadLegacyEvents() {
-  if (legacyEventsLoaded) return;
-  const res = await fetch("/api/events?offset=0");
-  const payload = await res.json();
-  offset = payload.offset;
-  const events = payload.events || [];
-  events.forEach((event, index) => {
-    if (!event._uiKey) event._uiKey = `event-0-${index}`;
-  });
-  allEvents.push(...events);
-  legacyEventsLoaded = true;
+async function responseError(res, fallbackMessage = "Request failed") {
+  try {
+    await readJsonResponse(res, fallbackMessage);
+  } catch (err) {
+    return err;
+  }
+  return new Error(fallbackMessage);
+}
+
+async function initializeEventTailOffset() {
+  if (eventTailInitialized) return;
+  const payload = await fetchJson("/api/events?offset=-1", {}, "Failed to initialize event stream");
+  if (Number.isFinite(payload.offset)) offset = payload.offset;
+  eventTailInitialized = true;
+}
+
+async function markConversationUnavailable(state, err) {
+  state.events = [];
+  state.beforeOffset = null;
+  state.hasMore = false;
+  state.initialized = true;
+  state.error = err?.message || String(err || "Conversation unavailable");
+  try {
+    await initializeEventTailOffset();
+  } catch (tailErr) {
+    state.error = `${state.error}; ${tailErr?.message || tailErr}`;
+  }
 }
 
 async function ensureConversationLoaded() {
@@ -1105,19 +1131,19 @@ function appendRealtimeConversationEvents(events) {
 async function pollEvents() {
   let res;
   try {
-    res = await fetch(`/api/events?offset=${offset}`);
+    res = await fetchWithTimeout(`/api/events?offset=${offset}`);
   } catch (err) {
     if (offset < 0) {
-      await loadLegacyEvents();
+      await initializeEventTailOffset();
       return;
     }
     throw err;
   }
   if (!res.ok) {
-    if (offset < 0) await loadLegacyEvents();
+    if (offset < 0) await initializeEventTailOffset();
     return;
   }
-  const payload = await res.json();
+  const payload = await readJsonResponse(res, "Failed to poll events");
   const startOffset = offset;
   offset = payload.offset;
   const events = payload.events || [];
@@ -1179,7 +1205,7 @@ async function updateTaskVisibility(taskId, action) {
   if (action === "delete" && !confirm(`Delete ${taskId} from the task list?`)) return;
   taskActionInFlight = true;
   try {
-    const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/${action}`, { method: "POST" });
+    const res = await fetchWithTimeout(`/api/task/${encodeURIComponent(taskId)}/${action}`, { method: "POST" });
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));
       alert(payload.error || `Task action failed: ${action}`);
@@ -1372,7 +1398,7 @@ async function updateAgentConfig(agentId, field, value) {
   if (!task || !agentId || !field) return;
   const payload = { task_id: task.id, agent_id: agentId };
   payload[field] = value;
-  const res = await fetch("/api/agent-config", {
+  const res = await fetchWithTimeout("/api/agent-config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -1443,6 +1469,9 @@ function renderConversation(taskId) {
   const state = conversationState(taskId);
   if (!state.initialized || state.loading && !state.events.length) {
     return `<div class="empty">Loading conversation...</div>`;
+  }
+  if (state.error && !state.events.length) {
+    return `<div class="empty">Conversation unavailable. Realtime updates will start from the latest event offset.<br><code>${escapeHtml(state.error)}</code></div>`;
   }
   const events = taskConversationEvents(taskId);
   if (!events.length && !state.hasMore) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
@@ -1654,25 +1683,29 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   event.preventDefault();
   const title = document.getElementById("new-task-title").value.trim();
   if (!title) return;
-  await fetch("/api/tasks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title,
-      backend: taskBackendEl.value,
-      model: taskModelEl.value || null,
-      sandbox: taskSandboxEl.value,
-      approval: taskApprovalEl.value,
-      workspace_path: selectedWorkspacePath(),
-      delegation_policy: document.getElementById("delegation-policy").value,
-      max_sub_agents: Number(document.getElementById("max-sub-agents").value || "0"),
-      preferred_sub_backend: taskBackendEl.value,
-      dispatch: true
-    })
-  });
-  document.getElementById("new-task-title").value = "";
-  await loadStatus();
-  closeMobileSheets();
+  try {
+    await fetchJson("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        backend: taskBackendEl.value,
+        model: taskModelEl.value || null,
+        sandbox: taskSandboxEl.value,
+        approval: taskApprovalEl.value,
+        workspace_path: selectedWorkspacePath(),
+        delegation_policy: document.getElementById("delegation-policy").value,
+        max_sub_agents: Number(document.getElementById("max-sub-agents").value || "0"),
+        preferred_sub_backend: taskBackendEl.value,
+        dispatch: true
+      })
+    }, "Failed to create task");
+    document.getElementById("new-task-title").value = "";
+    await loadStatus();
+    closeMobileSheets();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
 });
 
 sendFormEl.addEventListener("submit", async event => {
@@ -1682,26 +1715,30 @@ sendFormEl.addEventListener("submit", async event => {
   if (!task || !message) return;
   const agentId = agentTargetEl.value || "main";
   const target = agentId === "main" ? "main" : agentId;
-  await fetch("/api/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      target,
-      role: agentId === "main" ? "main" : "sub",
-      task_id: task.id,
-      from_agent: "browser",
-      to_agent: agentId,
-      message,
-      sender: "browser"
-    })
-  });
-  messageEl.value = "";
-  syncMobileComposerAction();
-  commandMenuEl.classList.add("hidden");
-  closeMobileActionPanel();
-  await pollEvents();
-  conversationAutoFollow = true;
-  renderPanel();
+  try {
+    await fetchJson("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target,
+        role: agentId === "main" ? "main" : "sub",
+        task_id: task.id,
+        from_agent: "browser",
+        to_agent: agentId,
+        message,
+        sender: "browser"
+      })
+    }, "Failed to send message");
+    messageEl.value = "";
+    syncMobileComposerAction();
+    commandMenuEl.classList.add("hidden");
+    closeMobileActionPanel();
+    await pollEvents();
+    conversationAutoFollow = true;
+    renderPanel();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
 });
 
 messageEl.addEventListener("input", () => {
@@ -1814,20 +1851,34 @@ initDesktopSidebars();
 initMobileSheets();
 initMobileActionPanel();
 
+function recordTickFailure() {
+  tickFailureCount += 1;
+  const multiplier = 2 ** Math.min(tickFailureCount - 1, 5);
+  tickBackoffUntil = Date.now() + Math.min(30000, pollInterval * multiplier);
+}
+
 async function tick() {
+  if (tickInFlight || taskActionInFlight || Date.now() < tickBackoffUntil) return;
+  tickInFlight = true;
   try {
-    if (taskActionInFlight) return;
     await loadStatus();
     await ensureConversationLoaded();
     await loadBackendStatus();
     await pollEvents();
+    tickFailureCount = 0;
+    tickBackoffUntil = 0;
     renderPanel();
   } catch (err) {
+    recordTickFailure();
     panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+  } finally {
+    tickInFlight = false;
   }
 }
 
-Promise.all([loadBackends(), loadWorkspaces()]).then(tick);
+Promise.all([loadBackends(), loadWorkspaces()]).then(tick).catch(err => {
+  panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+});
 setInterval(tick, pollInterval);
 setInterval(() => {
   const task = selectedTask();
