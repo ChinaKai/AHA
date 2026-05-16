@@ -320,7 +320,7 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         run_id,
         "browser",
         reply,
-        sender="system",
+        sender="AHA",
         task_id=task_id,
         role="aha",
         from_agent="aha",
