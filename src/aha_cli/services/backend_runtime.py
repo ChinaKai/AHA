@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import os
 from pathlib import Path
 import signal
@@ -11,12 +13,14 @@ from aha_cli.domain.models import utc_now
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
-    iter_jsonl_from,
+    iter_jsonl_reverse,
     read_json,
     require_plan,
     run_dir,
     write_json,
 )
+
+BACKEND_ACTIVITY_SCAN_LIMIT = 5000
 
 
 def safe_target(target: str) -> str:
@@ -36,6 +40,22 @@ def backend_state_path(root: Path, run_id: str, target: str = "main", task_id: s
 
 def backend_log_path(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> Path:
     return run_dir(root, run_id) / "logs" / f"backend-{backend_key(target, task_id)}.log"
+
+
+def backend_lock_path(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> Path:
+    return run_dir(root, run_id) / "runtime" / f"backend-{backend_key(target, task_id)}.lock"
+
+
+@contextmanager
+def locked_backend(root: Path, run_id: str, target: str = "main", task_id: str | None = None):
+    lock_path = backend_lock_path(root, run_id, target, task_id)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def pid_is_running(pid: int | None) -> bool:
@@ -78,23 +98,28 @@ def _event_time(event: dict) -> str:
 
 
 def _backend_activity(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
-    events, _ = iter_jsonl_from(event_path(root, run_id), 0)
     latest_started: dict | None = None
     latest_finished: dict | None = None
     latest_reply: dict | None = None
     latest_error: dict | None = None
-    for event in events:
+    scanned = 0
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        scanned += 1
+        if scanned > BACKEND_ACTIVITY_SCAN_LIMIT:
+            break
         data = event.get("data") or {}
         if task_id and data.get("task_id") != task_id:
             continue
-        if event.get("type") == "agent_started" and data.get("target") == target:
+        if latest_started is None and event.get("type") == "agent_started" and data.get("target") == target:
             latest_started = event
-        elif event.get("type") == "agent_finished" and data.get("target") == target:
+        elif latest_finished is None and event.get("type") == "agent_finished" and data.get("target") == target:
             latest_finished = event
-        elif event.get("type") == "agent_error" and data.get("target") == target:
+        elif latest_error is None and event.get("type") == "agent_error" and data.get("target") == target:
             latest_error = event
-        elif event.get("type") == "message" and data.get("sender") == target:
+        elif latest_reply is None and event.get("type") == "message" and data.get("sender") == target:
             latest_reply = event
+        if latest_started and latest_finished and latest_reply and latest_error:
+            break
     started_at = _event_time(latest_started or {})
     finished_at = _event_time(latest_finished or {})
     busy = bool(started_at and (not finished_at or started_at > finished_at))
@@ -181,24 +206,34 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
 def mark_backend_stopped(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, pid: int | None = None) -> dict:
     task_id = task_id or None
     target = target or "main"
-    state = _read_state(root, run_id, target, task_id)
-    previous_pid = int(pid or state.get("pid") or 0) or None
-    state.update(
-        {
-            "target": target,
-            "task_id": task_id,
-            "backend": state.get("backend", "codex-chat"),
-            "status": "stopped",
-            "pid": previous_pid,
-            "managed": bool(state),
-            "stopped_at": utc_now(),
-            "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
-            "command": state.get("command", []),
-        }
-    )
-    _write_state(root, run_id, target, state, task_id)
-    append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": previous_pid})
-    return backend_status(root, run_id, target, task_id) | {"stopped": True}
+    with locked_backend(root, run_id, target, task_id):
+        state = _read_state(root, run_id, target, task_id)
+        state_pid = int(state.get("pid") or 0) or None
+        previous_pid = int(pid or state_pid or 0) or None
+        if pid and state_pid and state_pid != int(pid) and state.get("status") != "stopped":
+            append_event(
+                root,
+                run_id,
+                "backend_stop_ignored",
+                {"target": target, "task_id": task_id, "pid": pid, "current_pid": state_pid},
+            )
+            return backend_status(root, run_id, target, task_id) | {"stale_stop_ignored": True}
+        state.update(
+            {
+                "target": target,
+                "task_id": task_id,
+                "backend": state.get("backend", "codex-chat"),
+                "status": "stopped",
+                "pid": previous_pid,
+                "managed": bool(state),
+                "stopped_at": utc_now(),
+                "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
+                "command": state.get("command", []),
+            }
+        )
+        _write_state(root, run_id, target, state, task_id)
+        append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": previous_pid})
+        return backend_status(root, run_id, target, task_id) | {"stopped": True}
 
 def stop_task_backends(root: Path, run_id: str, task_id: str, *, exclude_pid: int | None = None, timeout: float = 5.0) -> list[dict]:
     plan = require_plan(root, run_id)
@@ -294,104 +329,106 @@ def start_backend(
     task_id: str | None = None,
 ) -> dict:
     task_id = task_id or None
-    current = backend_status(root, run_id, target, task_id)
-    if current["status"] in {"running", "busy"}:
-        current["already_running"] = True
-        return current
     target = target or "main"
-    command = _codex_chat_command(
-        run_id,
-        target,
-        codex_bin=codex_bin,
-        model=model,
-        sandbox=sandbox,
-        approval=approval,
-        interval=interval,
-        from_start=from_start,
-        no_json=no_json,
-        extra_args=extra_args,
-        prompt_prefix=prompt_prefix,
-        task_id=task_id,
-    )
-    log_path = backend_log_path(root, run_id, target, task_id)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("ab")
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=root,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
+    with locked_backend(root, run_id, target, task_id):
+        current = backend_status(root, run_id, target, task_id)
+        if current["status"] in {"running", "busy"}:
+            current["already_running"] = True
+            return current
+        command = _codex_chat_command(
+            run_id,
+            target,
+            codex_bin=codex_bin,
+            model=model,
+            sandbox=sandbox,
+            approval=approval,
+            interval=interval,
+            from_start=from_start,
+            no_json=no_json,
+            extra_args=extra_args,
+            prompt_prefix=prompt_prefix,
+            task_id=task_id,
         )
-    finally:
-        log_file.close()
-    state = {
-        "target": target,
-        "task_id": task_id,
-        "backend": "codex-chat",
-        "status": "running",
-        "pid": process.pid,
-        "managed": True,
-        "started_at": utc_now(),
-        "stopped_at": None,
-        "log_path": str(log_path),
-        "command": command,
-        "sandbox": sandbox,
-        "approval": approval,
-        "model": model,
-        "from_start": from_start,
-    }
-    _write_state(root, run_id, target, state, task_id)
-    append_event(root, run_id, "backend_started", {"target": target, "task_id": task_id, "pid": process.pid, "log_path": str(log_path)})
-    return backend_status(root, run_id, target, task_id) | {"started": True}
+        log_path = backend_log_path(root, run_id, target, task_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = log_path.open("ab")
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=root,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        finally:
+            log_file.close()
+        state = {
+            "target": target,
+            "task_id": task_id,
+            "backend": "codex-chat",
+            "status": "running",
+            "pid": process.pid,
+            "managed": True,
+            "started_at": utc_now(),
+            "stopped_at": None,
+            "log_path": str(log_path),
+            "command": command,
+            "sandbox": sandbox,
+            "approval": approval,
+            "model": model,
+            "from_start": from_start,
+        }
+        _write_state(root, run_id, target, state, task_id)
+        append_event(root, run_id, "backend_started", {"target": target, "task_id": task_id, "pid": process.pid, "log_path": str(log_path)})
+        return backend_status(root, run_id, target, task_id) | {"started": True}
 
 
 def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, timeout: float = 5.0) -> dict:
     task_id = task_id or None
-    current = backend_status(root, run_id, target, task_id)
-    pid = current.get("pid")
     target = target or "main"
-    if not pid or current["status"] == "stopped":
-        current["already_stopped"] = True
-        return current
-    try:
-        pgid = os.getpgid(int(pid))
-        if pgid == int(pid):
-            os.killpg(pgid, signal.SIGTERM)
-        else:
-            os.kill(int(pid), signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not pid_is_running(int(pid)):
-            break
-        time.sleep(0.1)
-    if pid_is_running(int(pid)):
+    with locked_backend(root, run_id, target, task_id):
+        current = backend_status(root, run_id, target, task_id)
+        pid = current.get("pid")
+        if not pid or current["status"] == "stopped":
+            current["already_stopped"] = True
+            return current
         try:
             pgid = os.getpgid(int(pid))
             if pgid == int(pid):
-                os.killpg(pgid, signal.SIGKILL)
+                os.killpg(pgid, signal.SIGTERM)
             else:
-                os.kill(int(pid), signal.SIGKILL)
+                os.kill(int(pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-    state = _read_state(root, run_id, target, task_id)
-    state.update(
-        {
-            "target": target,
-            "task_id": task_id,
-            "backend": state.get("backend", "codex-chat"),
-            "status": "stopped",
-            "pid": pid,
-            "managed": bool(state),
-            "stopped_at": utc_now(),
-            "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
-            "command": state.get("command", []),
-        }
-    )
-    _write_state(root, run_id, target, state, task_id)
-    append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": pid})
-    return backend_status(root, run_id, target, task_id) | {"stopped": True}
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not pid_is_running(int(pid)):
+                break
+            time.sleep(0.1)
+        if pid_is_running(int(pid)):
+            try:
+                pgid = os.getpgid(int(pid))
+                if pgid == int(pid):
+                    os.killpg(pgid, signal.SIGKILL)
+                else:
+                    os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        state = _read_state(root, run_id, target, task_id)
+        state.update(
+            {
+                "target": target,
+                "task_id": task_id,
+                "backend": state.get("backend", "codex-chat"),
+                "status": "stopped",
+                "pid": pid,
+                "managed": bool(state),
+                "stopped_at": utc_now(),
+                "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
+                "command": state.get("command", []),
+            }
+        )
+        _write_state(root, run_id, target, state, task_id)
+        append_event(root, run_id, "backend_stopped", {"target": target, "task_id": task_id, "pid": pid})
+        return backend_status(root, run_id, target, task_id) | {"stopped": True}

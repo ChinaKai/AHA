@@ -10,6 +10,8 @@ import struct
 from aha_cli.constants import WS_GUID
 from aha_cli.store.filesystem import append_message, event_path, iter_jsonl_from, status_snapshot
 
+WS_EVENTS_LIMIT = 500
+
 
 async def ws_send_text(writer: asyncio.StreamWriter, message: str) -> None:
     payload = message.encode("utf-8")
@@ -77,10 +79,12 @@ async def handle_ws_client(root: Path, run_id: str, reader: asyncio.StreamReader
         await writer.wait_closed()
         return
     await ws_send_text(writer, json.dumps({"type": "status", "data": status_snapshot(root, run_id)}, ensure_ascii=False))
-    offset = 0
+    events_file = event_path(root, run_id)
+    offset = events_file.stat().st_size if events_file.exists() else 0
     try:
         while True:
-            events, offset = iter_jsonl_from(event_path(root, run_id), offset)
+            snapshot_offset = events_file.stat().st_size if events_file.exists() else 0
+            events, offset = iter_jsonl_from(events_file, offset, before=snapshot_offset, limit=WS_EVENTS_LIMIT)
             for event in events:
                 await ws_send_text(writer, json.dumps({"type": "event", "data": event}, ensure_ascii=False))
             try:

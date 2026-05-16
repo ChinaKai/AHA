@@ -42,6 +42,9 @@ from aha_cli.store.filesystem import (
 from aha_cli.web.server import run_ui_server
 from aha_cli.websocket.server import run_ws_server
 
+WATCH_EVENTS_LIMIT = 500
+MAX_WATCH_EVENTS_LIMIT = 2000
+
 
 def visible_plan_tasks(plan: dict) -> list[dict]:
     return [task for task in plan["tasks"] if not task.get("deleted_at")]
@@ -166,12 +169,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
     run_id = resolve_run_id(root, args.run_id)
     print(json.dumps(status_snapshot(root, run_id), indent=2, ensure_ascii=False))
     events = event_path(root, run_id)
-    offset = 0
-    if args.tail:
-        _, offset = iter_jsonl_from(events, 0)
+    offset = events.stat().st_size if args.tail and events.exists() else 0
+    event_limit = max(1, min(args.event_limit, MAX_WATCH_EVENTS_LIMIT))
     try:
         while True:
-            new_events, offset = iter_jsonl_from(events, offset)
+            snapshot_offset = events.stat().st_size if events.exists() else 0
+            new_events, offset = iter_jsonl_from(events, offset, before=snapshot_offset, limit=event_limit)
             for event in new_events:
                 print(format_event(event), flush=True)
             if args.once:
@@ -420,6 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_p.add_argument("--interval", type=float, default=1.0)
     watch_p.add_argument("--once", action="store_true")
     watch_p.add_argument("--tail", action="store_true")
+    watch_p.add_argument("--event-limit", type=int, default=WATCH_EVENTS_LIMIT)
     watch_p.set_defaults(func=cmd_watch)
 
     send_p = sub.add_parser("send")

@@ -27,6 +27,8 @@ from aha_cli.store.filesystem import (
     event_path,
     inbox_path,
     iter_jsonl_from,
+    iter_jsonl_records_from,
+    iter_jsonl_reverse,
     mark_task_coordination,
     read_json,
     require_plan,
@@ -56,6 +58,15 @@ BLOCKED_REPLY_MARKERS = (
 )
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+
+
+def recent_run_events(root: Path, run_id: str, limit: int) -> list[dict]:
+    events: list[dict] = []
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        events.append(event)
+        if len(events) >= limit:
+            break
+    return list(reversed(events))
 
 
 def safe_target_name(target: str) -> str:
@@ -218,9 +229,9 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
             )
         except KeyError:
             task_context = f"Current task context: task_id={task_id} was referenced but not found.\n"
-    events, _ = iter_jsonl_from(event_path(root, run_id), 0)
     event_limit = 80 if is_finalization else 20
-    recent = "\n".join(format_event(event) for event in events[-event_limit:]) or "(no events)"
+    events = recent_run_events(root, run_id, event_limit)
+    recent = "\n".join(format_event(event) for event in events) or "(no events)"
     status = status_snapshot(root, run_id)
     mode_instruction = (
         "You are generating the task Final. Return concise Markdown only. "
@@ -270,8 +281,8 @@ def codex_chat(root: Path, run_id: str, args) -> int:
             if args.target == "main" and not worker_task_id and not args.once and time.monotonic() - last_coordination_check >= max(10.0, args.interval):
                 monitor_task_coordination(root, run_id)
                 last_coordination_check = time.monotonic()
-            messages, next_offset = iter_jsonl_from(inbox, offset)
-            for item in messages:
+            message_records, next_offset = iter_jsonl_records_from(inbox, offset)
+            for item, item_offset in message_records:
                 exit_after_message = False
                 item_task_id = str(item.get("task_id", "") or "") or None
                 if worker_task_id and item_task_id != worker_task_id:
@@ -294,7 +305,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     result = record_sub_agent_report(root, run_id, item_task_id, original_sender, original_message)
                     if result.get("handled"):
                         if args.once:
-                            save_chat_offset(offset_file, next_offset)
+                            save_chat_offset(offset_file, item_offset)
                             return 0
                         continue
                 coordination = task.get("coordination") or {}
@@ -313,7 +324,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         },
                     )
                     if worker_task_id:
-                        save_chat_offset(offset_file, next_offset)
+                        save_chat_offset(offset_file, item_offset)
                         mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                         return 0
                     continue
@@ -455,13 +466,13 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     append_event(root, run_id, "agent_error", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 append_event(root, run_id, "agent_finished", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if exit_after_message and worker_task_id:
-                    save_chat_offset(offset_file, next_offset)
+                    save_chat_offset(offset_file, item_offset)
                     mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                     return exit_code
                 if args.once:
-                    save_chat_offset(offset_file, next_offset)
+                    save_chat_offset(offset_file, item_offset)
                     return exit_code
-            if messages:
+            if message_records:
                 offset = next_offset
                 save_chat_offset(offset_file, offset)
             if args.once:

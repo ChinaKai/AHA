@@ -48,9 +48,57 @@ def write_json(path: Path, data: dict) -> None:
 
 def append_jsonl(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.write("\n")
+    line = json.dumps(data, ensure_ascii=False) + "\n"
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
+    try:
+        with os.fdopen(fd, "ab", closefd=False) as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                payload = line.encode("utf-8")
+                written = 0
+                while written < len(payload):
+                    count = os.write(f.fileno(), payload[written:])
+                    if count == 0:
+                        raise OSError(f"Unable to append JSONL record to {path}")
+                    written += count
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def iter_jsonl_records_from(
+    path: Path,
+    start: int = 0,
+    before: int | None = None,
+    limit: int | None = None,
+) -> tuple[list[tuple[dict, int]], int]:
+    if not path.exists():
+        return [], start
+    file_size = path.stat().st_size
+    end = file_size if before is None else max(0, min(before, file_size))
+    records: list[tuple[dict, int]] = []
+    offset = max(0, min(start, end))
+    with path.open("rb") as f:
+        f.seek(offset)
+        while f.tell() < end and (limit is None or len(records) < limit):
+            line_start = f.tell()
+            line = f.readline(end - line_start if before is not None else -1)
+            if not line:
+                break
+            line_end = f.tell()
+            if before is not None and line_end >= end and not line.endswith(b"\n"):
+                return records, line_start
+            line = line.strip()
+            if not line:
+                offset = line_end
+                continue
+            try:
+                records.append((json.loads(line.decode("utf-8")), line_end))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                records.append(({"ts": utc_now(), "type": "malformed_event", "data": {"line": line.decode("utf-8", errors="replace")}}, line_end))
+            offset = line_end
+        return records, offset
 
 
 def find_project_root(start: Path | None = None) -> Path:
@@ -217,21 +265,9 @@ def append_message(
     return payload
 
 
-def iter_jsonl_from(path: Path, start: int = 0) -> tuple[list[dict], int]:
-    if not path.exists():
-        return [], start
-    events: list[dict] = []
-    with path.open("r", encoding="utf-8") as f:
-        f.seek(start)
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                events.append({"ts": utc_now(), "type": "malformed_event", "data": {"line": line}})
-        return events, f.tell()
+def iter_jsonl_from(path: Path, start: int = 0, before: int | None = None, limit: int | None = None) -> tuple[list[dict], int]:
+    records, offset = iter_jsonl_records_from(path, start, before=before, limit=limit)
+    return [item for item, _line_end in records], offset
 
 
 def iter_jsonl_reverse(path: Path, before: int | None = None, chunk_size: int = 65536):

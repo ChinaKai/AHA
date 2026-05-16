@@ -22,6 +22,7 @@ from aha_cli.store.filesystem import (
     event_path,
     inbox_path,
     iter_jsonl_from,
+    iter_jsonl_reverse,
     run_dir,
     set_task_hidden,
     status_snapshot,
@@ -40,6 +41,9 @@ SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 ACTIVE_BACKEND_STATUSES = {"running", "busy"}
+DEFAULT_EVENTS_LIMIT = 500
+MAX_EVENTS_LIMIT = 2000
+TASK_OUTCOME_SCAN_LIMIT = 10000
 
 
 def http_response(status: str, body: bytes, content_type: str = "text/plain; charset=utf-8") -> bytes:
@@ -110,21 +114,29 @@ def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
     return options
 
 
-def task_outcome_snapshots(root: Path, run_id: str) -> dict[str, dict]:
+def task_outcome_snapshots(root: Path, run_id: str, task_ids: set[str] | None = None) -> dict[str, dict]:
     outcomes: dict[str, dict] = {}
-    events, _ = iter_jsonl_from(event_path(root, run_id), 0)
-    for event in events:
+    wanted = {task_id for task_id in (task_ids or set()) if task_id}
+    scanned = 0
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        scanned += 1
         if event.get("type") != "task_status_changed":
+            if scanned >= TASK_OUTCOME_SCAN_LIMIT:
+                break
             continue
         data = event.get("data") or {}
         task_id = str(data.get("task_id") or "")
         status = str(data.get("status") or "")
-        if task_id and status in TERMINAL_TASK_STATUSES:
+        if task_id and task_id not in outcomes and status in TERMINAL_TASK_STATUSES:
             outcomes[task_id] = {
                 "status": status,
                 "exit_code": data.get("exit_code"),
                 "updated_at": event.get("ts"),
             }
+            if wanted and wanted.issubset(outcomes):
+                break
+        if scanned >= TASK_OUTCOME_SCAN_LIMIT:
+            break
     return outcomes
 
 
@@ -142,7 +154,8 @@ def task_activity_status(task: dict) -> str:
 
 def web_status_snapshot(root: Path, run_id: str) -> dict:
     snapshot = status_snapshot(root, run_id)
-    outcomes = task_outcome_snapshots(root, run_id)
+    task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
+    outcomes = task_outcome_snapshots(root, run_id, task_ids)
     backend_cache: dict[tuple[str | None, str], dict] = {}
     for task in snapshot.get("tasks", []):
         raw_task_id = str(task.get("id") or "")
@@ -433,13 +446,29 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/events":
             query = parse_qs(parsed.query)
-            offset = int(query.get("offset", ["0"])[0] or "0")
+            try:
+                offset = int(query.get("offset", ["0"])[0] or "0")
+                limit = int(query.get("limit", [str(DEFAULT_EVENTS_LIMIT)])[0] or str(DEFAULT_EVENTS_LIMIT))
+            except ValueError:
+                writer.write(json_response({"error": "offset and limit must be integers"}, "400 Bad Request"))
+                await writer.drain()
+                return
+            safe_limit = max(1, min(limit, MAX_EVENTS_LIMIT))
+            events_path = event_path(root, run_id)
+            snapshot_offset = events_path.stat().st_size if events_path.exists() else 0
             if offset < 0:
-                events_path = event_path(root, run_id)
-                events, new_offset = [], events_path.stat().st_size if events_path.exists() else 0
+                events, new_offset = [], snapshot_offset
             else:
-                events, new_offset = iter_jsonl_from(event_path(root, run_id), offset)
-            response = json_response({"offset": new_offset, "events": events})
+                events, new_offset = iter_jsonl_from(events_path, offset, before=snapshot_offset, limit=safe_limit)
+            response = json_response(
+                {
+                    "offset": new_offset,
+                    "snapshot_offset": snapshot_offset,
+                    "has_more": new_offset < snapshot_offset,
+                    "limit": safe_limit,
+                    "events": events,
+                }
+            )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/conversation-events":
             query = parse_qs(parsed.query)

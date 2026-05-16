@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import io
 import json
 import multiprocessing
@@ -13,10 +15,11 @@ from aha_cli.backends.registry import agent_backend_names, agent_backends, backe
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
-from aha_cli.services.backend_runtime import backend_status, stop_task_backends
+from aha_cli.services.backend_runtime import backend_status, start_backend, stop_task_backends
 from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
 from aha_cli.store.filesystem import (
     add_agent,
+    append_jsonl,
     append_event,
     conversation_events_page,
     delete_task,
@@ -40,11 +43,13 @@ from aha_cli.store.filesystem import (
 from aha_cli.web.server import (
     format_agent_command,
     format_aha_command,
+    handle_ui_client,
     handle_send_payload,
     handle_slash_command,
     web_status_snapshot,
     workspace_options,
 )
+from aha_cli.websocket.server import handle_ws_client, ws_read_text
 
 
 def write_plan_statuses(root_path: str, run_id: str, task_id: str, agent_id: str, iterations: int) -> None:
@@ -52,6 +57,66 @@ def write_plan_statuses(root_path: str, run_id: str, task_id: str, agent_id: str
     for _ in range(iterations):
         set_task_status(root, run_id, task_id, "running")
         set_agent_status(root, run_id, task_id, agent_id, "running")
+
+
+def append_jsonl_records(path: str, worker_id: int, iterations: int) -> None:
+    for index in range(iterations):
+        append_jsonl(Path(path), {"worker": worker_id, "index": index})
+
+
+async def fetch_ui_response(root: Path, run_id: str, target: str, timeout: float = 1.0) -> bytes:
+    server = await asyncio.start_server(lambda reader, writer: handle_ui_client(root, run_id, reader, writer), "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()
+    try:
+        reader, writer = await asyncio.open_connection(host, port)
+        writer.write(f"GET {target} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n".encode("ascii"))
+        await writer.drain()
+        response = await asyncio.wait_for(reader.read(), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        return response
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def fetch_initial_ws_messages(root: Path, run_id: str, timeout: float = 0.2) -> list[dict]:
+    server = await asyncio.start_server(lambda reader, writer: handle_ws_client(root, run_id, reader, writer, 0.05), "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()
+    writer = None
+    try:
+        reader, writer = await asyncio.open_connection(host, port)
+        writer.write(
+            b"GET / HTTP/1.1\r\n"
+            b"Host: test\r\n"
+            b"Upgrade: websocket\r\n"
+            b"Connection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Version: 13\r\n"
+            b"\r\n"
+        )
+        await writer.drain()
+        await reader.readuntil(b"\r\n\r\n")
+        messages = [json.loads(await asyncio.wait_for(ws_read_text(reader), timeout=timeout))]
+        try:
+            next_message = await asyncio.wait_for(ws_read_text(reader), timeout=timeout)
+        except asyncio.TimeoutError:
+            next_message = None
+        if next_message:
+            messages.append(json.loads(next_message))
+        writer.close()
+        await writer.wait_closed()
+        return messages
+    finally:
+        if writer and not writer.is_closing():
+            writer.close()
+            await writer.wait_closed()
+        server.close()
+        await server.wait_closed()
+
+
+def json_response_body(response: bytes) -> dict:
+    return json.loads(response.split(b"\r\n\r\n", 1)[1].decode("utf-8"))
 
 
 class CliTests(unittest.TestCase):
@@ -182,6 +247,27 @@ class CliTests(unittest.TestCase):
             self.assertEqual(agents["main"], "running")
             self.assertEqual(agents["sub-001"], "running")
 
+    def test_jsonl_appends_are_valid_under_concurrent_writers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "events.jsonl")
+            workers = [
+                multiprocessing.Process(target=append_jsonl_records, args=(path, worker_id, 50))
+                for worker_id in range(4)
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=10)
+
+            for worker in workers:
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(worker.exitcode, 0)
+            events, _ = iter_jsonl_from(Path(path), 0)
+
+        self.assertEqual(len(events), 200)
+        self.assertFalse(any(event.get("type") == "malformed_event" for event in events))
+        self.assertEqual(len({(event["worker"], event["index"]) for event in events}), 200)
+
     def test_chat_offset_persists_unprocessed_messages_across_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -236,6 +322,36 @@ class CliTests(unittest.TestCase):
                 scoped_offset = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 self.assertTrue(scoped_offset.exists())
                 self.assertFalse(chat_offset_path(run_dir(root, run_id), "main", "task-002").exists())
+
+    def test_codex_chat_once_saves_offset_after_processed_message_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task scoped offsets", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "first", sender="browser", task_id="task-001", role="main")
+                append_message(root, run_id, "main", "second", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch(
+                    "aha_cli.services.chat.run_codex_exec",
+                    side_effect=[(0, "reply one", None), (0, "reply two", None)],
+                ) as run_agent:
+                    code, first_output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+                    self.assertEqual(code, 0)
+                    code, second_output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+                    self.assertEqual(code, 0)
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+
+        self.assertEqual(run_agent.call_count, 2)
+        self.assertIn("main -> browser: reply one", first_output)
+        self.assertIn("main -> browser: reply two", second_output)
+        self.assertIn("User message from browser", run_agent.call_args_list[0].args[0])
+        self.assertIn("first", run_agent.call_args_list[0].args[0])
+        self.assertIn("second", run_agent.call_args_list[1].args[0])
+        self.assertEqual([item["message"] for item in browser_messages[-2:]], ["reply one", "reply two"])
 
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
@@ -1183,6 +1299,125 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("invalid choice: 'backend'", err.getvalue())
+
+    def test_ui_core_endpoints_return_without_full_event_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Fast UI endpoints", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for index in range(3000):
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": f"event-{index}"})
+                set_task_status(root, run_id, "task-001", "completed", exit_code=0)
+
+                responses = {
+                    target: asyncio.run(fetch_ui_response(root, run_id, target))
+                    for target in ("/", "/static/app.js", "/api/status", "/api/events?offset=-1")
+                }
+
+        for response in responses.values():
+            self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        events_body = json_response_body(responses["/api/events?offset=-1"])
+        self.assertEqual(events_body["events"], [])
+        self.assertGreater(events_body["offset"], 0)
+        status_body = json_response_body(responses["/api/status"])
+        self.assertEqual(status_body["tasks"][0]["display_status"], "completed")
+
+    def test_api_events_uses_snapshot_and_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Paged events", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for index in range(10):
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": f"event-{index}"})
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/events?offset=0&limit=3"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(len(body["events"]), 3)
+        self.assertEqual(body["limit"], 3)
+        self.assertTrue(body["has_more"])
+        self.assertLess(body["offset"], body["snapshot_offset"])
+
+    def test_chat_prompt_uses_recent_events_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recent prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for index in range(30):
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": f"prompt-event-{index}"})
+
+                prompt = chat_prompt(root, run_id, "main", {"sender": "browser", "message": "status"}, "")
+
+        self.assertIn("prompt-event-29", prompt)
+        self.assertNotIn("prompt-event-0", prompt)
+
+    def test_watch_tail_starts_at_current_event_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Tail watch", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "old-event"})
+
+                code, watch_output = self.run_cli("watch", run_id, "--once", "--tail")
+
+        self.assertEqual(code, 0)
+        self.assertIn("Tail watch", watch_output)
+        self.assertNotIn("old-event", watch_output)
+
+    def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Websocket tail", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for index in range(1000):
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": f"old-ws-event-{index}"})
+
+                messages = asyncio.run(fetch_initial_ws_messages(root, run_id))
+
+        self.assertEqual([message["type"] for message in messages], ["status"])
+
+    def test_start_backend_serializes_concurrent_autostart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Backend start lock", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                    concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
+                ):
+                    futures = [
+                        pool.submit(start_backend, root, run_id, "main", task_id="task-001")
+                        for _ in range(2)
+                    ]
+                    results = [future.result(timeout=10) for future in futures]
+
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(sum(1 for result in results if result.get("started")), 1)
+        self.assertEqual(sum(1 for result in results if result.get("already_running")), 1)
 
     def test_backend_activity_can_be_filtered_by_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
