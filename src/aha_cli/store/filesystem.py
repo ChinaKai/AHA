@@ -209,6 +209,147 @@ def iter_jsonl_from(path: Path, start: int = 0) -> tuple[list[dict], int]:
         return events, f.tell()
 
 
+def iter_jsonl_reverse(path: Path, before: int | None = None, chunk_size: int = 65536):
+    if not path.exists():
+        return
+    file_size = path.stat().st_size
+    end = file_size if before is None else max(0, min(before, file_size))
+    if end <= 0:
+        return
+    with path.open("rb") as f:
+        carry = b""
+        position = end
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            f.seek(position)
+            data = f.read(read_size) + carry
+            parts = data.split(b"\n")
+            if position > 0:
+                carry = parts[0]
+                line_parts = parts[1:]
+                line_start = position + len(parts[0]) + 1
+            else:
+                carry = b""
+                line_parts = parts
+                line_start = 0
+
+            records: list[tuple[int, bytes]] = []
+            cursor = line_start
+            for part in line_parts:
+                start = cursor
+                cursor += len(part) + 1
+                if part.strip():
+                    records.append((start, part))
+
+            for start, line in reversed(records):
+                try:
+                    yield start, json.loads(line.decode("utf-8"))
+                except json.JSONDecodeError:
+                    yield start, {"ts": utc_now(), "type": "malformed_event", "data": {"line": line.decode("utf-8", errors="replace")}}
+
+
+def iter_text_lines_reverse(path: Path, before: int | None = None, chunk_size: int = 65536):
+    if not path.exists():
+        return
+    file_size = path.stat().st_size
+    end = file_size if before is None else max(0, min(before, file_size))
+    if end <= 0:
+        return
+    with path.open("rb") as f:
+        carry = b""
+        position = end
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            f.seek(position)
+            data = f.read(read_size) + carry
+            parts = data.split(b"\n")
+            if position > 0:
+                carry = parts[0]
+                line_parts = parts[1:]
+                line_start = position + len(parts[0]) + 1
+            else:
+                carry = b""
+                line_parts = parts
+                line_start = 0
+
+            records: list[tuple[int, bytes]] = []
+            cursor = line_start
+            for part in line_parts:
+                start = cursor
+                cursor += len(part) + 1
+                if part:
+                    records.append((start, part))
+
+            for start, line in reversed(records):
+                yield start, line.decode("utf-8", errors="replace")
+
+
+def text_tail_page(path: Path, limit: int = 200, before: int | None = None) -> dict:
+    file_size = path.stat().st_size if path.exists() else 0
+    end_offset = file_size if before is None else max(0, min(before, file_size))
+    safe_limit = max(1, min(limit, 1000))
+    matches: list[dict] = []
+    for offset, line in iter_text_lines_reverse(path, before=end_offset) or ():
+        matches.append({"_cursor": offset, "text": line})
+        if len(matches) > safe_limit:
+            break
+
+    has_more = len(matches) > safe_limit
+    page = list(reversed(matches[:safe_limit]))
+    next_before_offset = page[0].get("_cursor") if has_more and page else None
+    return {
+        "text": "\n".join(item["text"] for item in page),
+        "lines": page,
+        "before_offset": end_offset,
+        "after_offset": file_size,
+        "next_before_offset": next_before_offset,
+        "has_more": has_more,
+        "count": len(page),
+    }
+
+
+def format_event_log_line(event: dict) -> str:
+    data = event.get("data") or {}
+    ts = event.get("ts") or ""
+    event_type = str(event.get("type") or "event")
+    if event_type == "log":
+        return f"[{ts}] {data.get('task_id') or '-'}: {data.get('line') or ''}"
+    if event_type == "message":
+        task = f" task={data['task_id']}" if data.get("task_id") else ""
+        return f"[{ts}] message{task} {data.get('sender') or 'main'} -> {data.get('target') or '-'}: {data.get('message') or ''}"
+    return f"[{ts}] {event_type}: {json.dumps(data, ensure_ascii=False)}"
+
+
+def task_event_log_page(root: Path, run_id: str, task_id: str, limit: int = 200, before: int | None = None) -> dict:
+    path = event_path(root, run_id)
+    after_offset = path.stat().st_size if path.exists() else 0
+    end_offset = after_offset if before is None else max(0, min(before, after_offset))
+    safe_limit = max(1, min(limit, 1000))
+    matches: list[dict] = []
+    for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
+        if event_task_id(event) == task_id:
+            matches.append({"_cursor": offset, "text": format_event_log_line(event)})
+            if len(matches) > safe_limit:
+                break
+
+    has_more = len(matches) > safe_limit
+    page = list(reversed(matches[:safe_limit]))
+    next_before_offset = page[0].get("_cursor") if has_more and page else None
+    return {
+        "source": "events",
+        "path": "events.jsonl",
+        "text": "\n".join(item["text"] for item in page),
+        "lines": page,
+        "before_offset": end_offset,
+        "after_offset": after_offset,
+        "next_before_offset": next_before_offset,
+        "has_more": has_more,
+        "count": len(page),
+    }
+
+
 TIMELINE_EVENT_TYPES = {
     "message",
     "task_dispatched",
@@ -270,26 +411,42 @@ def event_agent_refs(event: dict) -> set[str]:
     return refs
 
 
-def conversation_events_page(root: Path, run_id: str, task_id: str, target: str, limit: int = 50, before: int | None = None) -> dict:
-    events, _ = iter_jsonl_from(event_path(root, run_id), 0)
-    filtered = [
-        event
-        for event in events
-        if event.get("type") in TIMELINE_EVENT_TYPES
-        and event_task_id(event) == task_id
-        and (target or "main") in event_agent_refs(event)
-    ]
-    total = len(filtered)
+def conversation_events_page(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    target: str,
+    limit: int = 50,
+    before: int | None = None,
+) -> dict:
+    path = event_path(root, run_id)
+    after_offset = path.stat().st_size if path.exists() else 0
+    end_offset = after_offset if before is None else max(0, min(before, after_offset))
     safe_limit = max(1, min(limit, 200))
-    end = total if before is None else max(0, min(before, total))
-    start = max(0, end - safe_limit)
+    matches: list[dict] = []
+    for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
+        if (
+            event.get("type") in TIMELINE_EVENT_TYPES
+            and event_task_id(event) == task_id
+            and (target or "main") in event_agent_refs(event)
+        ):
+            item = dict(event)
+            item["_cursor"] = offset
+            matches.append(item)
+            if len(matches) > safe_limit:
+                break
+
+    has_more = len(matches) > safe_limit
+    page = list(reversed(matches[:safe_limit]))
+    next_before_offset = page[0].get("_cursor") if has_more and page else None
     return {
-        "events": filtered[start:end],
-        "start": start,
-        "end": end,
-        "before": start if start > 0 else None,
-        "has_more": start > 0,
-        "total": total,
+        "events": page,
+        "before_offset": end_offset,
+        "after_offset": after_offset,
+        "next_before_offset": next_before_offset,
+        "before": next_before_offset,
+        "has_more": has_more,
+        "count": len(page),
     }
 
 
@@ -783,12 +940,49 @@ def status_snapshot(root: Path, run_id: str) -> dict:
     }
 
 
-def task_snapshot(root: Path, run_id: str, task_id: str) -> dict:
+def task_lookup(root: Path, run_id: str, task_id: str) -> tuple[dict, dict, Path]:
     plan = require_plan(root, run_id)
     task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
     if task is None:
         raise KeyError(task_id)
     run = run_dir(root, run_id)
+    return plan, task, run
+
+
+def task_final_snapshot(root: Path, run_id: str, task_id: str) -> dict:
+    _plan, task, run = task_lookup(root, run_id, task_id)
+    output_file = run / task["output_file"]
+    output_meta_file = output_file.with_suffix(".meta.json")
+    result_meta = read_json(output_meta_file) if output_meta_file.exists() else {}
+    result = ""
+    if output_file.exists() and result_meta.get("policy") == "finalize":
+        result = output_file.read_text(encoding="utf-8")
+    return {"task_id": task_id, "result": result, "result_meta": result_meta}
+
+
+def task_context_snapshot(root: Path, run_id: str, task_id: str) -> dict:
+    plan, task, run = task_lookup(root, run_id, task_id)
+    prompt_file = run / task["prompt_file"]
+    return {
+        "task": task,
+        "prompt": prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else "",
+        "sessions": list_sessions(root, run_id, task_id),
+        "write_scopes": plan.get("write_scopes", []),
+    }
+
+
+def task_log_page(root: Path, run_id: str, task_id: str, limit: int = 200, before: int | None = None, source: str = "auto") -> dict:
+    _plan, task, run = task_lookup(root, run_id, task_id)
+    log_file = run / task["log_file"]
+    selected_source = source if source in {"auto", "file", "events"} else "auto"
+    if selected_source == "events" or (selected_source == "auto" and (not log_file.exists() or log_file.stat().st_size == 0)):
+        return {"task_id": task_id, **task_event_log_page(root, run_id, task_id, limit=limit, before=before)}
+    page = text_tail_page(log_file, limit=limit, before=before)
+    return {"task_id": task_id, "source": "file", "path": task.get("log_file"), **page}
+
+
+def task_snapshot(root: Path, run_id: str, task_id: str) -> dict:
+    plan, task, run = task_lookup(root, run_id, task_id)
     prompt_file = run / task["prompt_file"]
     output_file = run / task["output_file"]
     output_meta_file = output_file.with_suffix(".meta.json")

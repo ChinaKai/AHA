@@ -13,9 +13,12 @@ let agentsPanelEditingUntil = 0;
 let legacyEventsLoaded = false;
 const allEvents = [];
 const conversationPageLimit = 50;
+const logPageLimit = 200;
 const conversationStates = new Map();
 const expandedMessageKeys = new Set();
-const taskDetails = new Map();
+const finalDetails = new Map();
+const contextDetails = new Map();
+const logStates = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
@@ -190,36 +193,41 @@ function taskEvents(taskId) {
   return allEvents.filter(event => isTaskEvent(event, taskId));
 }
 
+const timelineEventTypes = new Set([
+  "message",
+  "task_dispatched",
+  "task_started",
+  "task_finished",
+  "task_result_written",
+  "task_final_requested",
+  "task_waiting_for_subagents",
+  "task_status_changed",
+  "agent_started",
+  "agent_status_changed",
+  "agent_thread",
+  "agent_command_started",
+  "agent_command_finished",
+  "agent_message",
+  "agent_usage",
+  "agent_error",
+  "agent_delegated",
+  "agent_message_routed",
+  "sub_agent_reported",
+  "sub_agent_report_ignored",
+  "sub_agent_backend_recovered",
+  "sub_agent_backend_failed",
+  "agent_created",
+  "agent_config_updated",
+  "agent_finished",
+  "workspace_missing"
+]);
+
+function isTimelineEvent(event) {
+  return timelineEventTypes.has(event.type);
+}
+
 function taskTimelineEvents(taskId) {
-  const visibleTypes = new Set([
-    "message",
-    "task_dispatched",
-    "task_started",
-    "task_finished",
-    "task_result_written",
-    "task_final_requested",
-    "task_waiting_for_subagents",
-    "task_status_changed",
-    "agent_started",
-    "agent_status_changed",
-    "agent_thread",
-    "agent_command_started",
-    "agent_command_finished",
-    "agent_message",
-    "agent_usage",
-    "agent_error",
-    "agent_delegated",
-    "agent_message_routed",
-    "sub_agent_reported",
-    "sub_agent_report_ignored",
-    "sub_agent_backend_recovered",
-    "sub_agent_backend_failed",
-    "agent_created",
-    "agent_config_updated",
-    "agent_finished",
-    "workspace_missing"
-  ]);
-  return taskEvents(taskId).filter(event => visibleTypes.has(event.type));
+  return taskEvents(taskId).filter(isTimelineEvent);
 }
 
 function addAgentRef(refs, value) {
@@ -281,7 +289,7 @@ function mergeConversationEvents(current, incoming, prepend = false) {
 function conversationState(taskId = selectedTaskId, target = backendTarget()) {
   const key = conversationKey(taskId, target);
   if (!conversationStates.has(key)) {
-    conversationStates.set(key, { events: [], before: null, hasMore: true, initialized: false, loading: false });
+    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false });
   }
   return conversationStates.get(key);
 }
@@ -436,7 +444,7 @@ function taskTiming(taskId, task) {
 }
 
 function latestTurnTiming(taskId) {
-  const events = taskEvents(taskId).filter(eventMatchesSelectedAgent);
+  const events = conversationSourceEvents(taskId).filter(eventMatchesSelectedAgent);
   let startIndex = -1;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     if (events[index].type === "agent_started") {
@@ -555,17 +563,81 @@ async function loadBackendStatus() {
   renderBackendStatus();
 }
 
-async function refreshTaskDetail(taskId) {
+async function loadFinalDetail(taskId, force = false) {
   if (!taskId) return null;
-  const res = await fetch(`/api/task/${encodeURIComponent(taskId)}`);
+  if (!force && finalDetails.has(taskId)) return finalDetails.get(taskId);
+  const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/final`);
   const detail = await res.json();
-  taskDetails.set(taskId, detail);
+  finalDetails.set(taskId, detail);
   return detail;
+}
+
+async function loadContextDetail(taskId, force = false) {
+  if (!taskId) return null;
+  if (!force && contextDetails.has(taskId)) return contextDetails.get(taskId);
+  const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/context`);
+  const detail = await res.json();
+  contextDetails.set(taskId, detail);
+  return detail;
+}
+
+function logState(taskId) {
+  if (!logStates.has(taskId)) {
+    logStates.set(taskId, { text: "", beforeOffset: null, hasMore: true, initialized: false, loading: false, source: "auto", autoFollow: true });
+  }
+  return logStates.get(taskId);
+}
+
+async function loadLogPage(taskId, older = false, force = false) {
+  if (!taskId) return null;
+  const state = logState(taskId);
+  if (state.loading || (!force && !older && state.initialized) || (older && !state.hasMore)) return state;
+  state.loading = true;
+  try {
+    const params = new URLSearchParams({ limit: String(logPageLimit) });
+    if (older && state.source) params.set("source", state.source);
+    if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
+    const res = await fetch(`/api/task/${encodeURIComponent(taskId)}/logs?${params.toString()}`);
+    const payload = await res.json();
+    const text = payload.text || "";
+    state.text = older ? [text, state.text].filter(Boolean).join("\n") : text;
+    state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
+    state.hasMore = Boolean(payload.has_more);
+    state.source = payload.source || state.source || "auto";
+    state.initialized = true;
+    return state;
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function ensureActiveTabData() {
+  if (!selectedTaskId) return;
+  if (activeTab === "conversation") {
+    await ensureConversationLoaded();
+  } else if (activeTab === "logs") {
+    await loadLogPage(selectedTaskId);
+  } else if (activeTab === "final") {
+    await loadFinalDetail(selectedTaskId);
+  } else {
+    await loadContextDetail(selectedTaskId);
+  }
+}
+
+async function loadOlderLogs() {
+  if (activeTab !== "logs" || !selectedTaskId) return;
+  const state = logState(selectedTaskId);
+  if (!state.initialized || !state.hasMore || state.loading) return;
+  const previousHeight = panelEl.scrollHeight;
+  const previousTop = panelEl.scrollTop;
+  await loadLogPage(selectedTaskId, true);
+  renderPanel({ preserveScroll: true, previousHeight, previousTop });
 }
 
 function assignConversationKeys(events, start = 0) {
   events.forEach((event, index) => {
-    if (!event._uiKey) event._uiKey = `conversation-${start + index}-${event.type || "event"}`;
+    const cursor = event._cursor ?? event.cursor ?? start + index;
+    if (!event._uiKey) event._uiKey = `conversation-${cursor}-${event.type || "event"}`;
   });
   return events;
 }
@@ -581,14 +653,14 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
       target,
       limit: String(conversationPageLimit)
     });
-    if (older && state.before !== null && state.before !== undefined) params.set("before", String(state.before));
+    if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
     let res;
     try {
       res = await fetch(`/api/conversation-events?${params.toString()}`);
     } catch (err) {
       await loadLegacyEvents();
       state.events = agentTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
-      state.before = null;
+      state.beforeOffset = null;
       state.hasMore = false;
       state.initialized = true;
       return state;
@@ -596,17 +668,18 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
     if (!res.ok) {
       await loadLegacyEvents();
       state.events = agentTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
-      state.before = null;
+      state.beforeOffset = null;
       state.hasMore = false;
       state.initialized = true;
       return state;
     }
     const payload = await res.json();
-    const events = assignConversationKeys(payload.events || [], payload.start || 0);
+    const events = assignConversationKeys(payload.events || [], payload.before_offset || 0);
     state.events = older ? mergeConversationEvents(state.events, events, true) : mergeConversationEvents(events, state.events, false);
-    state.before = payload.before ?? null;
+    state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
     state.hasMore = Boolean(payload.has_more);
     state.initialized = true;
+    if (!older && offset < 0 && Number.isFinite(payload.after_offset)) offset = payload.after_offset;
     return state;
   } finally {
     state.loading = false;
@@ -646,7 +719,7 @@ function appendRealtimeConversationEvents(events) {
   for (const [key, state] of conversationStates.entries()) {
     if (!state.initialized) continue;
     const { taskId, target } = parseConversationKey(key);
-    const matching = events.filter(event => isTaskEvent(event, taskId) && taskTimelineEvents(taskId).includes(event) && eventMatchesAgent(event, target));
+    const matching = events.filter(event => isTaskEvent(event, taskId) && isTimelineEvent(event) && eventMatchesAgent(event, target));
     if (matching.length) state.events = mergeConversationEvents(state.events, matching, false);
   }
 }
@@ -713,12 +786,12 @@ function renderTaskList() {
 async function selectTask(taskId) {
   selectedTaskId = taskId;
   conversationAutoFollow = true;
+  if (activeTab === "logs") logState(taskId).autoFollow = true;
   renderTaskList();
   renderSelectedHeader();
   renderAgents();
   await loadBackendStatus();
-  await refreshTaskDetail(selectedTaskId);
-  await ensureConversationLoaded();
+  await ensureActiveTabData();
   renderPanel();
 }
 
@@ -897,7 +970,8 @@ async function updateAgentConfig(agentId, field, value) {
     return;
   }
   await loadStatus({ forceAgents: true });
-  await refreshTaskDetail(task.id);
+  contextDetails.delete(task.id);
+  await ensureActiveTabData();
   renderPanel();
 }
 
@@ -1065,7 +1139,6 @@ function renderPanel(options = {}) {
     panelEl.innerHTML = '<div class="empty">No task selected.</div>';
     return;
   }
-  const detail = taskDetails.get(task.id);
   if (activeTab === "conversation") {
     const previousTop = options.previousTop ?? panelEl.scrollTop;
     const previousHeight = options.previousHeight ?? panelEl.scrollHeight;
@@ -1078,16 +1151,30 @@ function renderPanel(options = {}) {
     }
     return;
   }
-  if (!detail) {
-    panelEl.innerHTML = '<div class="empty">Loading...</div>';
-    return;
-  }
   if (activeTab === "final") {
-    panelEl.innerHTML = `<pre>${escapeHtml(detail.result || "No Final yet. Use /aha final to generate it.")}</pre>`;
+    const detail = finalDetails.get(task.id);
+    panelEl.innerHTML = detail
+      ? `<pre>${escapeHtml(detail.result || "No Final yet. Use /aha final to generate it.")}</pre>`
+      : '<div class="empty">Loading final...</div>';
   } else if (activeTab === "logs") {
-    const logs = detail.log ? localizeTimestampText(detail.log) : taskEvents(task.id).map(formatEvent).join("\n") || "No logs yet.";
-    panelEl.innerHTML = `<pre>${escapeHtml(logs)}</pre>`;
+    const state = logState(task.id);
+    const previousTop = options.previousTop ?? panelEl.scrollTop;
+    const previousHeight = options.previousHeight ?? panelEl.scrollHeight;
+    const shouldFollow = state.autoFollow;
+    const older = state.hasMore ? `<button class="load-older" type="button" data-load-older-log="true">${state.loading ? "Loading..." : "Load older logs"}</button>` : "";
+    const body = state.initialized ? localizeTimestampText(state.text || "No logs yet.") : "Loading logs...";
+    panelEl.innerHTML = `<div class="log-view">${older}<pre>${escapeHtml(body)}</pre></div>`;
+    if (options.preserveScroll) {
+      panelEl.scrollTop = panelEl.scrollHeight - previousHeight + previousTop;
+    } else if (state.initialized) {
+      panelEl.scrollTop = shouldFollow ? panelEl.scrollHeight : previousTop;
+    }
   } else {
+    const detail = contextDetails.get(task.id);
+    if (!detail) {
+      panelEl.innerHTML = '<div class="empty">Loading context...</div>';
+      return;
+    }
     const context = [
       "Task:",
       JSON.stringify(localizeTimestampFields(detail.task), null, 2),
@@ -1110,12 +1197,9 @@ document.querySelectorAll(".tab").forEach(button => {
   button.addEventListener("click", async () => {
     activeTab = button.dataset.tab;
     if (activeTab === "conversation") conversationAutoFollow = true;
+    if (activeTab === "logs" && selectedTaskId) logState(selectedTaskId).autoFollow = true;
     document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === button));
-    if (activeTab === "conversation") {
-      await ensureConversationLoaded();
-    } else {
-      await refreshTaskDetail(selectedTaskId);
-    }
+    await ensureActiveTabData();
     renderPanel();
   });
 });
@@ -1225,11 +1309,16 @@ panelEl.addEventListener("scroll", () => {
   if (activeTab === "conversation") {
     conversationAutoFollow = isPanelNearBottom();
     if (panelEl.scrollTop < 48) loadOlderConversation();
+  } else if (activeTab === "logs") {
+    if (selectedTaskId) logState(selectedTaskId).autoFollow = isPanelNearBottom();
+    if (panelEl.scrollTop < 48) loadOlderLogs();
   }
 });
 panelEl.addEventListener("click", event => {
   const button = event.target instanceof Element ? event.target.closest("[data-load-older]") : null;
   if (button) loadOlderConversation();
+  const logButton = event.target instanceof Element ? event.target.closest("[data-load-older-log]") : null;
+  if (logButton) loadOlderLogs();
 });
 panelEl.addEventListener("toggle", event => {
   const details = event.target instanceof HTMLDetailsElement ? event.target : null;
@@ -1309,7 +1398,6 @@ async function tick() {
     await ensureConversationLoaded();
     await loadBackendStatus();
     await pollEvents();
-    if (selectedTaskId && activeTab !== "conversation") await refreshTaskDetail(selectedTaskId);
     renderPanel();
   } catch (err) {
     panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;

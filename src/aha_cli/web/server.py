@@ -25,6 +25,9 @@ from aha_cli.store.filesystem import (
     iter_jsonl_from,
     set_task_hidden,
     status_snapshot,
+    task_context_snapshot,
+    task_final_snapshot,
+    task_log_page,
     task_snapshot,
     update_agent_config,
 )
@@ -337,7 +340,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             task_id = query.get("task_id", [""])[0]
             target = query.get("target", ["main"])[0] or "main"
             limit = int(query.get("limit", ["50"])[0] or "50")
-            before_values = query.get("before", [])
+            before_values = query.get("before_offset", []) or query.get("before", [])
             try:
                 before = int(before_values[0]) if before_values and before_values[0] else None
             except ValueError:
@@ -348,9 +351,28 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 response = json_response(conversation_events_page(root, run_id, task_id, target, limit=limit, before=before))
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path.startswith("/api/task/"):
-            task_id = unquote(path.removeprefix("/api/task/"))
+            parts = unquote(path.removeprefix("/api/task/")).split("/", 1)
+            task_id = parts[0]
+            detail_name = parts[1] if len(parts) > 1 else ""
             try:
-                response = json_response(task_snapshot(root, run_id, task_id))
+                if detail_name == "logs":
+                    query = parse_qs(parsed.query)
+                    limit = int(query.get("limit", ["200"])[0] or "200")
+                    source = query.get("source", ["auto"])[0] or "auto"
+                    before_values = query.get("before_offset", []) or query.get("before", [])
+                    try:
+                        before = int(before_values[0]) if before_values and before_values[0] else None
+                    except ValueError:
+                        before = None
+                    response = json_response(task_log_page(root, run_id, task_id, limit=limit, before=before, source=source))
+                elif detail_name == "final":
+                    response = json_response(task_final_snapshot(root, run_id, task_id))
+                elif detail_name == "context":
+                    response = json_response(task_context_snapshot(root, run_id, task_id))
+                elif not detail_name:
+                    response = json_response(task_snapshot(root, run_id, task_id))
+                else:
+                    response = json_response({"error": "task detail not found"}, "404 Not Found")
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
             except KeyError:
                 writer.write(json_response({"error": "task not found"}, "404 Not Found"))

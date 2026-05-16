@@ -17,14 +17,19 @@ from aha_cli.store.filesystem import (
     append_event,
     conversation_events_page,
     delete_task,
+    event_path,
     inbox_path,
     iter_jsonl_from,
+    iter_jsonl_reverse,
     run_dir,
     mark_task_coordination,
     set_agent_status,
     set_task_hidden,
     set_task_status,
     status_snapshot,
+    task_context_snapshot,
+    task_final_snapshot,
+    task_log_page,
     update_agent_config,
     update_agent_runtime,
     write_task_result,
@@ -663,13 +668,95 @@ class CliTests(unittest.TestCase):
             append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "other task"})
 
             latest = conversation_events_page(root, run_id, "task-001", "main", limit=1)
-            older = conversation_events_page(root, run_id, "task-001", "main", limit=1, before=latest["before"])
+            append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "new realtime"})
+            realtime, _ = iter_jsonl_from(event_path(root, run_id), latest["after_offset"])
+            older = conversation_events_page(root, run_id, "task-001", "main", limit=1, before=latest["next_before_offset"])
 
-        self.assertEqual(latest["total"], 2)
+        self.assertEqual(latest["count"], 1)
         self.assertTrue(latest["has_more"])
         self.assertEqual(latest["events"][0]["data"]["text"], "two")
+        self.assertEqual(realtime[0]["data"]["text"], "new realtime")
         self.assertFalse(older["has_more"])
         self.assertEqual(older["events"][0]["data"]["message"], "one")
+
+    def test_reverse_jsonl_reader_pages_by_byte_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            for index in range(5):
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "to_agent": "main", "message": f"line-{index}-" + ("x" * 40)})
+
+            path = event_path(root, run_id)
+            newest = list(iter_jsonl_reverse(path, chunk_size=32))
+            older = list(iter_jsonl_reverse(path, before=newest[0][0], chunk_size=32))
+
+        self.assertEqual(newest[0][1]["data"]["message"].split("-", 2)[:2], ["line", "4"])
+        self.assertEqual(older[0][1]["data"]["message"].split("-", 2)[:2], ["line", "3"])
+        self.assertGreater(newest[0][0], older[0][0])
+
+    def test_task_log_page_tails_and_pages_by_byte_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Logs", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                task = task_snapshot(root, run_id, "task-001")["task"]
+                log_path = run_dir(root, run_id) / task["log_file"]
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text("\n".join(f"line-{index}" for index in range(5)) + "\n", encoding="utf-8")
+
+                latest = task_log_page(root, run_id, "task-001", limit=2)
+                older = task_log_page(root, run_id, "task-001", limit=2, before=latest["next_before_offset"])
+
+        self.assertEqual(latest["text"], "line-3\nline-4")
+        self.assertTrue(latest["has_more"])
+        self.assertEqual(older["text"], "line-1\nline-2")
+        self.assertTrue(older["has_more"])
+
+    def test_task_log_page_falls_back_to_event_log_when_task_log_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Event logs", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "first"})
+                append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "other task"})
+                append_event(root, run_id, "agent_command_finished", {"task_id": "task-001", "target": "main", "command": "pwd", "output_tail": "second"})
+
+                latest = task_log_page(root, run_id, "task-001", limit=1)
+                older = task_log_page(root, run_id, "task-001", limit=1, before=latest["next_before_offset"], source=latest["source"])
+
+        self.assertEqual(latest["source"], "events")
+        self.assertIn("agent_command_finished", latest["text"])
+        self.assertIn("second", latest["text"])
+        self.assertNotIn("other task", latest["text"])
+        self.assertEqual(older["source"], "events")
+        self.assertIn("first", older["text"])
+
+    def test_task_lightweight_snapshots_exclude_heavy_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Lightweight", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "large message", sender="browser", task_id="task-001")
+                write_task_result(root, run_id, "task-001", "final text")
+
+                final = task_final_snapshot(root, run_id, "task-001")
+                context = task_context_snapshot(root, run_id, "task-001")
+
+        self.assertEqual(final["result"].strip(), "final text")
+        self.assertNotIn("messages", final)
+        self.assertNotIn("log", final)
+        self.assertIn("prompt", context)
+        self.assertNotIn("messages", context)
+        self.assertNotIn("log", context)
 
     def test_workspace_options_include_multiple_project_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
