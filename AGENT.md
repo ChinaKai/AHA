@@ -16,7 +16,7 @@ This repository implements AHA: a local multi-agent orchestration prototype wher
 
 ## Agent And Session Model
 
-- `run-main` is the global controller for a run.
+- `run-main` is a reserved run-level identity. It is not an active controller yet; current run-level orchestration is handled by AHA services.
 - Every task has an independent `task-main` session.
 - Every sub-agent has its own session scoped to one task.
 - Backend sessions must never be shared across task boundaries, except for `run-main`, which only works from summaries and decisions.
@@ -45,16 +45,17 @@ src/aha_cli/
 
 ## Commit Convention
 
-Use concise Conventional Commit style:
+Use a concise Conventional Commit subject plus AHA trailers:
 
 ```text
-feat: add task agent management
-fix: preserve task_id in message replies
-refactor: split web server from cli parser
-docs: document session boundaries
-test: cover backend registry
-chore: update packaging metadata
+feat(tasks): add task agent management
+
+AHA-Task: task-001
+AHA-Agent: main
+AHA-Scope: task-agent-management
 ```
+
+Prefer `aha commit --type <type> --scope <scope> --summary <summary> --task-id <task-id> --agent <agent-id> --aha-scope <short-scope>` over raw `git commit`, and validate hand-written messages with `aha commit-check`.
 
 ## Testing Expectations
 

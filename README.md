@@ -9,7 +9,7 @@ main agent = planner + dispatcher + collector + merger
 sub agents = independent researchers or bounded workers
 ```
 
-The first version intentionally stays backend-neutral. It does not assume a specific agent runtime. Instead, it creates task prompts and can run any external command you provide with `--runner-command`.
+AHA keeps the orchestration model backend-aware but loosely coupled. It can write deterministic stub results, run any external command through `--runner-command`, or use the local Codex CLI for task and chat backends.
 
 ## What It Does
 
@@ -173,11 +173,11 @@ aha codex-chat <run-id> main
 
 When the dashboard sends a message to `main`, `codex-chat` reads `.aha/runs/<run-id>/inbox/main.jsonl`, calls `codex exec`, and writes the model response back as a `main -> browser` message event.
 
-For task-level parallelism, start task-scoped workers. They share the same logical inbox but keep independent offsets and only process messages for their task:
+For task-level parallelism, use task-scoped Codex chat workers. They share the same logical inbox but keep independent offsets and only process messages for their task:
 
 ```bash
-aha backend start <run-id> --target main --task-id task-001
-aha backend start <run-id> --target main --task-id task-002
+aha codex-chat <run-id> main --task-id task-001
+aha codex-chat <run-id> main --task-id task-002
 ```
 
 This keeps each `task_id + agent_id` serial while allowing different tasks to run at the same time.
@@ -197,7 +197,7 @@ aha watch <run-id>
 aha watch <run-id> --once
 ```
 
-Send a message to a task inbox:
+Send a message to a named inbox target:
 
 ```bash
 aha send <run-id> task-001 "Can you narrow this to the package layer?"
@@ -214,6 +214,8 @@ Messages are appended to:
 ```text
 .aha/runs/<run-id>/inbox/task-001.jsonl
 ```
+
+The CLI `send` and `chat` commands are simple inbox tools. The browser dashboard uses the newer task-scoped route by sending messages to an agent target such as `main` or `sub-001` while carrying `task_id`, `from_agent`, and `to_agent`.
 
 Important: realtime conversation requires the runner/agent backend to cooperate. `aha` can write the inbox and expose the path through `$AHA_INBOX_FILE`, but the actual agent must read that file or implement its own watch loop.
 
@@ -241,7 +243,7 @@ The WebSocket server sends JSON messages:
 Clients can send:
 
 ```json
-{"type":"send","target":"task-001","message":"please check logs","sender":"web"}
+{"type":"send","target":"main","task_id":"task-001","message":"please check logs","sender":"web"}
 {"type":"status"}
 ```
 
@@ -274,8 +276,9 @@ GET  /api/backend?target=<agent-id>&task_id=<task-id>
 POST /api/tasks
 POST /api/agents
 POST /api/send
-POST /api/backend
 ```
+
+There is no explicit HTTP start/stop backend endpoint yet. `POST /api/send` autostarts a stopped Codex backend for the addressed task agent when possible.
 
 It shows a task list on the left, a task workspace in the center, and task agents on the right. Selecting a task opens that task's conversation, result, logs, and prompt context.
 

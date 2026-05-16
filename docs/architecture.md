@@ -17,7 +17,7 @@ Run
     task-main
 ```
 
-`run-main` decides whether work is simple enough to handle directly, should become one task, or should be split into multiple tasks. `task-main` owns local task context. Sub-agents execute bounded work inside one task.
+Intended future role: `run-main` decides whether work is simple enough to handle directly, should become one task, or should be split into multiple tasks. Today, `run-main` is only a reserved identity. `task-main` owns local task context. Sub-agents execute bounded work inside one task.
 
 Current implementation note: `run-main` is reserved, not active. The plan stores a `main_agent` and a run-scoped session for future compatibility, but AHA does not currently dispatch prompts to a run-level agent. The active team unit today is one task: `task-main` owns the task outcome and may request sub-agents for bounded workstreams. AHA itself currently performs the run-level orchestration: task creation, routing, status, backend lifecycle, and result collection.
 
