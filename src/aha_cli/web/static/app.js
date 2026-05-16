@@ -563,17 +563,23 @@ function latestTurnTiming(taskId) {
       finishedEvent = events[index];
       break;
     }
+    if (events[index].type === "agent_status_changed" && terminalAgentStatuses.has(eventData(events[index]).status || "")) {
+      finishedEvent = events[index];
+      break;
+    }
   }
   const finishedAt = finishedEvent ? eventTimestamp(finishedEvent) : null;
   const running = !finishedAt;
   const endAt = running ? Date.now() : finishedAt;
-  const exitCode = eventData(finishedEvent || {}).exit_code;
+  const finishedData = eventData(finishedEvent || {});
+  const exitCode = finishedData.exit_code;
+  const status = finishedData.status || (exitCode === 0 ? "completed" : "failed");
   return {
     startedAt,
     finishedAt,
     elapsedMs: endAt - startedAt,
     running,
-    status: running ? "running" : exitCode === 0 ? "completed" : "failed",
+    status: running ? "running" : status,
     target: eventData(startedEvent).target || "main",
     sender: eventData(startedEvent).sender || "-"
   };
