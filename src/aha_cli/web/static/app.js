@@ -100,12 +100,12 @@ function backendTarget() {
 
 function agentBackendProcessStatus(agent) {
   const raw = String(agent?.backend_process_status || "stopped").toLowerCase();
-  if (raw === "running" || raw === "busy") return "running";
+  if (raw === "running" || raw === "busy") return raw;
   return "stopped";
 }
 
 function agentBackendProcessLabel(agent) {
-  return agentBackendProcessStatus(agent) === "running" ? "session alive" : "session stopped";
+  return agentBackendProcessStatus(agent).toUpperCase();
 }
 
 function agentLifecycleStatus(agent) {
@@ -990,11 +990,11 @@ function renderAgents() {
     card.innerHTML = `
       <div class="agent-card-head">
         <strong>${escapeHtml(agent.id)}</strong>
-        <span class="status ${escapeHtml(lifecycleStatus)}" title="agent status">${escapeHtml(agentLifecycleLabel(agent))}</span>
+        <span class="agent-process ${escapeHtml(processStatus)}" title="backend process status">${escapeHtml(agentBackendProcessLabel(agent))}</span>
       </div>
-      <div class="meta truncate">status=${escapeHtml(agent.status || "-")} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
+      <div class="meta truncate">result=${escapeHtml(lifecycleStatus)} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
-      <div class="meta truncate">process=${escapeHtml(agentBackendProcessLabel(agent))} (${escapeHtml(rawProcessStatus)}) | session=${escapeHtml(agent.backend_session_id || "-")}</div>
+      <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
         <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
         <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>

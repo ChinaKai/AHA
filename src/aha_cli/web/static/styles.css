@@ -562,8 +562,12 @@ button {
   line-height: 1;
 }
 .agent-process.running {
-  background: #dcfce7;
-  color: #14532d;
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+.agent-process.busy {
+  background: #fef3c7;
+  color: #92400e;
 }
 .agent-process.stopped {
   background: #f2f4f7;
