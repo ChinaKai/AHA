@@ -311,6 +311,22 @@ function resetRunScopedState() {
   panelEl.innerHTML = '<div class="empty">正在切换会话...</div>';
 }
 
+function realtimeTransportText() {
+  if (!currentRunId) return "realtime Disconnected";
+  if (wsDisabled || typeof WebSocket === "undefined") return "realtime Polling";
+  if (eventSocketState === "open") return "realtime WebSocket";
+  if (eventSocketState === "connecting") return "realtime Connecting";
+  if (Date.now() < eventSocketReconnectAt) return "realtime Reconnecting (polling)";
+  if (eventSocketState === "polling") return "realtime Polling fallback";
+  if (eventSocketState === "error") return "realtime Polling fallback";
+  if (eventSocketState === "closed") return "realtime Disconnected";
+  return "realtime WebSocket pending";
+}
+
+function refreshRealtimeIndicator() {
+  if (runStateEl && (statusData || currentRunId)) renderSessionSummary();
+}
+
 function renderSessionSummary() {
   const run = currentRunSummary() || fallbackCurrentRun();
   const runId = currentRunId || runIdOf(run);
@@ -335,12 +351,10 @@ function renderSessionSummary() {
     runIdEl.textContent = runId || "-";
     runIdEl.title = runId || "";
   }
-  const mode = statusData?.mode || run?.mode || "-";
   const updatedAt = statusData?.updated_at || runUpdatedAtOf(run);
-  const runStateText = `${mode} | updated ${formatLocalTimestamp(updatedAt, updatedAt || "-")}`;
+  const runStateText = `updated ${formatLocalTimestamp(updatedAt, updatedAt || "-")}`;
   if (runStateEl) {
     runStateEl.textContent = runStateText;
-    runStateEl.dataset.mobileLabel = mode || "run";
     runStateEl.title = runStateText;
   }
   if (sessionDetailTextEl) {
@@ -349,6 +363,7 @@ function renderSessionSummary() {
       run?.status ? `状态 ${run.status}` : "",
       taskCount,
       updatedAt ? `更新 ${formatLocalTimestamp(updatedAt, updatedAt)}` : "",
+      realtimeTransportText(),
       runsError ? `提示 ${runsError}` : ""
     ].filter(Boolean).join(" · ") || "会话详情";
   }
@@ -1098,6 +1113,13 @@ function eventIdentity(event) {
   return `${event.ts || ""}|${event.type || ""}|${JSON.stringify(eventData(event))}`;
 }
 
+function conversationEventOrder(event) {
+  const cursor = event?._cursor ?? event?.event_id ?? event?.cursor;
+  const numeric = Number(cursor);
+  if (Number.isFinite(numeric)) return numeric;
+  return eventTimestamp(event) ?? Number.MAX_SAFE_INTEGER;
+}
+
 function mergeConversationEvents(current, incoming, prepend = false) {
   const merged = prepend ? [...incoming, ...current] : [...current, ...incoming];
   const seen = new Set();
@@ -1106,6 +1128,9 @@ function mergeConversationEvents(current, incoming, prepend = false) {
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
+  }).sort((left, right) => {
+    const order = conversationEventOrder(left) - conversationEventOrder(right);
+    return order === 0 ? 0 : order;
   });
 }
 
@@ -1779,28 +1804,35 @@ function openEventWebSocket() {
     const socket = new WebSocket(eventWebSocketUrl());
     eventSocket = socket;
     eventSocketState = "connecting";
+    refreshRealtimeIndicator();
     socket.onopen = () => {
       if (eventSocket !== socket) return;
       eventSocketState = "open";
       eventSocketFailureCount = 0;
       eventSocketReconnectAt = 0;
+      refreshRealtimeIndicator();
     };
     socket.onmessage = message => {
       if (eventSocket === socket) handleEventWebSocketMessage(message);
     };
     socket.onerror = () => {
-      if (eventSocket === socket) eventSocketState = "error";
+      if (eventSocket === socket) {
+        eventSocketState = "error";
+        refreshRealtimeIndicator();
+      }
     };
     socket.onclose = () => {
       if (eventSocket !== socket) return;
       eventSocket = null;
       eventSocketState = "closed";
       scheduleEventWebSocketReconnect();
+      refreshRealtimeIndicator();
     };
     return true;
   } catch (_err) {
     eventSocketState = "error";
     scheduleEventWebSocketReconnect();
+    refreshRealtimeIndicator();
     return false;
   }
 }
@@ -1823,6 +1855,8 @@ async function ensureEventWebSocket() {
 async function syncRealtimeEvents() {
   if (await ensureEventWebSocket()) return;
   await pollEvents();
+  if (!wsDisabled && typeof WebSocket !== "undefined" && eventSocketState === "idle") eventSocketState = "polling";
+  refreshRealtimeIndicator();
 }
 
 function renderTaskList() {
