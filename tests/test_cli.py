@@ -2009,6 +2009,18 @@ class CliTests(unittest.TestCase):
         self.assertIn("Tail watch", watch_output)
         self.assertNotIn("old-event", watch_output)
 
+    def test_frontend_prefers_websocket_with_cursor_and_polling_fallback(self) -> None:
+        script_path = Path(__file__).resolve().parents[1] / "src" / "aha_cli" / "web" / "static" / "app.js"
+        script = script_path.read_text(encoding="utf-8")
+        websocket_index = script.find("new WebSocket")
+
+        self.assertGreaterEqual(websocket_index, 0, "frontend should open a WebSocket transport")
+        websocket_block = script[max(0, websocket_index - 2000) : websocket_index + 3000]
+        self.assertRegex(websocket_block, r"last_event_id|after_event_id")
+        self.assertRegex(websocket_block, r"onclose|onerror|catch")
+        self.assertIn("pollEvents", script)
+        self.assertRegex(script, r"typeof\s+WebSocket|WebSocket\s+in\s+window|window\.WebSocket")
+
     def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

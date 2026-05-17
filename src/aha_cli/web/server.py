@@ -47,6 +47,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_config,
 )
+from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
 
 STATIC_DIR = Path(__file__).parent / "static"
 HL_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/hl_project")
@@ -636,10 +637,16 @@ def start_dispatched_task_backend(root: Path, run_id: str, task: dict, dispatch:
 
 async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
-        method, target, _headers, body = await read_http_request(reader)
+        method, target, headers, body = await read_http_request(reader)
         parsed = urlparse(target)
         path = parsed.path
         query = parse_qs(parsed.query)
+        if method == "GET" and path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
+            selected_run_id = require_api_run_id(root, run_id, query)
+            ok, cursor = await ws_handshake_from_headers(root, selected_run_id, target, headers, writer)
+            if ok:
+                await handle_ws_connection(root, selected_run_id, reader, writer, 1.0, cursor)
+            return
         if method in {"GET", "HEAD"} and path == "/":
             writer.write(static_response(STATIC_DIR / "index.html", method))
         elif method in {"GET", "HEAD"} and path.startswith("/static/"):

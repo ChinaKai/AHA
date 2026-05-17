@@ -272,6 +272,14 @@ Open:
 http://<host-lan-ip>:8766
 ```
 
+The dashboard prefers the same-origin WebSocket endpoint:
+
+```text
+GET /ws?run_id=<run-id>&last_event_id=<event-id>
+```
+
+It stores the latest `event_id` in browser local storage, reconnects with that cursor after refresh or disconnect, and falls back to `/api/events` polling when WebSocket is unavailable. Use `?transport=polling` or `?ws=0` to force HTTP polling during debugging.
+
 The dashboard uses local HTTP endpoints:
 
 ```text

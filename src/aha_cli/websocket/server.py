@@ -83,18 +83,15 @@ def _parse_ws_cursor(query: dict[str, list[str]], max_event_id: int) -> tuple[in
     return cursor, None
 
 
-async def ws_handshake(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[bool, int | None]:
-    raw = await reader.readuntil(b"\r\n\r\n")
-    headers = raw.decode("utf-8", errors="replace").split("\r\n")
-    request = headers[0].split()
-    target = request[1] if len(request) >= 2 else "/"
+async def ws_handshake_from_headers(
+    root: Path,
+    run_id: str,
+    target: str,
+    headers: dict[str, str],
+    writer: asyncio.StreamWriter,
+) -> tuple[bool, int | None]:
     query = parse_qs(urlparse(target).query, keep_blank_values=True)
-    values: dict[str, str] = {}
-    for line in headers[1:]:
-        if ":" in line:
-            key, value = line.split(":", 1)
-            values[key.strip().lower()] = value.strip()
-    key = values.get("sec-websocket-key")
+    key = headers.get("sec-websocket-key")
     if not key:
         writer.write(_http_error("400 Bad Request", "missing Sec-WebSocket-Key"))
         await writer.drain()
@@ -117,6 +114,19 @@ async def ws_handshake(root: Path, run_id: str, reader: asyncio.StreamReader, wr
     return True, cursor
 
 
+async def ws_handshake(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[bool, int | None]:
+    raw = await reader.readuntil(b"\r\n\r\n")
+    lines = raw.decode("utf-8", errors="replace").split("\r\n")
+    request = lines[0].split()
+    target = request[1] if len(request) >= 2 else "/"
+    headers: dict[str, str] = {}
+    for line in lines[1:]:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    return await ws_handshake_from_headers(root, run_id, target, headers, writer)
+
+
 async def _send_status(root: Path, run_id: str, writer: asyncio.StreamWriter) -> None:
     await ws_send_text(writer, json.dumps({"type": "status", "data": status_snapshot_projection(root, run_id)}, ensure_ascii=False))
 
@@ -135,12 +145,14 @@ async def _send_events(root: Path, run_id: str, writer: asyncio.StreamWriter, la
     return last_event_id
 
 
-async def handle_ws_client(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, interval: float) -> None:
-    ok, cursor = await ws_handshake(root, run_id, reader, writer)
-    if not ok:
-        writer.close()
-        await writer.wait_closed()
-        return
+async def handle_ws_connection(
+    root: Path,
+    run_id: str,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    interval: float,
+    cursor: int | None,
+) -> None:
     await _send_status(root, run_id, writer)
     offset = cursor
     if cursor is not None:
@@ -188,6 +200,15 @@ async def handle_ws_client(root: Path, run_id: str, reader: asyncio.StreamReader
     finally:
         writer.close()
         await writer.wait_closed()
+
+
+async def handle_ws_client(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, interval: float) -> None:
+    ok, cursor = await ws_handshake(root, run_id, reader, writer)
+    if not ok:
+        writer.close()
+        await writer.wait_closed()
+        return
+    await handle_ws_connection(root, run_id, reader, writer, interval, cursor)
 
 
 async def run_ws_server(root: Path, run_id: str, host: str, port: int, interval: float) -> None:

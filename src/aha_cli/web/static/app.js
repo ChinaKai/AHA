@@ -3,6 +3,9 @@ const rawPollInterval = Number(queryParams.get("poll") || "1000");
 const rawRequestTimeoutMs = Number(queryParams.get("timeout") || "12000");
 const pollInterval = Number.isFinite(rawPollInterval) ? Math.max(250, rawPollInterval) : 1000;
 const requestTimeoutMs = Number.isFinite(rawRequestTimeoutMs) ? Math.max(1000, rawRequestTimeoutMs) : 12000;
+const eventTransport = String(queryParams.get("transport") || queryParams.get("events") || "").toLowerCase();
+const wsConfig = String(queryParams.get("ws") || "").trim();
+const wsDisabled = eventTransport === "poll" || eventTransport === "polling" || ["0", "false", "off"].includes(wsConfig.toLowerCase());
 let currentRunId = String(queryParams.get("run_id") || queryParams.get("run") || "").trim();
 let defaultRunId = "";
 let runsData = [];
@@ -27,7 +30,12 @@ let agentsPanelEditingUntil = 0;
 let eventTailInitialized = false;
 let pendingMessageId = 0;
 let pendingSendInFlight = false;
+let eventSocket = null;
+let eventSocketState = "idle";
+let eventSocketFailureCount = 0;
+let eventSocketReconnectAt = 0;
 const allEvents = [];
+const seenRealtimeEvents = new Set();
 const pendingMessages = [];
 const interruptedContexts = new Set();
 const conversationPageLimit = 50;
@@ -220,6 +228,16 @@ function rememberEventCursor(payload) {
   }
 }
 
+function rememberEventCursorFromEvent(event) {
+  const nextEventId = String(event?.event_id || "").trim();
+  if (!nextEventId) return;
+  lastEventId = nextEventId;
+  const numericOffset = Number(nextEventId);
+  if (Number.isFinite(numericOffset)) offset = numericOffset;
+  eventTailInitialized = true;
+  writeStoredLastEventId(nextEventId);
+}
+
 function runScopedPayload(payload = {}) {
   return currentRunId ? { ...payload, run_id: currentRunId } : payload;
 }
@@ -273,11 +291,16 @@ function syncRunUrl() {
 }
 
 function resetRunScopedState() {
+  closeEventWebSocket();
+  eventSocketState = "idle";
+  eventSocketFailureCount = 0;
+  eventSocketReconnectAt = 0;
   selectedTaskId = null;
   backendStatusData = null;
   restoreEventCursorFromStorage();
   conversationAutoFollow = true;
   allEvents.length = 0;
+  seenRealtimeEvents.clear();
   conversationStates.clear();
   expandedMessageKeys.clear();
   finalDetails.clear();
@@ -386,7 +409,7 @@ async function refreshRunScopedView() {
   await loadStatus({ forceAgents: true });
   await ensureConversationLoaded();
   await loadBackendStatus();
-  await pollEvents();
+  await syncRealtimeEvents();
   renderPanel();
 }
 
@@ -806,7 +829,7 @@ async function maybeAutoFlushPending() {
   if (!pendingForContext(task.id, agentId).length) return null;
   const response = await flushPendingMessages(task, agentId, "", { auto: true });
   if (!response) return null;
-  await pollEvents();
+  await syncRealtimeEvents();
   conversationAutoFollow = true;
   return response;
 }
@@ -1428,11 +1451,12 @@ async function loadWorkspaces() {
   workspaceCustomEl.classList.toggle("hidden", workspaceSelectEl.value !== "__custom__");
 }
 
-async function loadStatus(options = {}) {
-  statusData = await fetchJson(apiUrl("/api/status"), {}, "Failed to load status");
+function applyStatusData(options = {}) {
   if (statusData.run_id && statusData.run_id !== currentRunId) {
+    closeEventWebSocket();
     currentRunId = String(statusData.run_id);
     syncRunUrl();
+    restoreEventCursorFromStorage();
   }
   renderSessionSummary();
   summaryEl.textContent = statusData.goal;
@@ -1446,6 +1470,11 @@ async function loadStatus(options = {}) {
     renderSelectedAgentInfo();
   }
   renderPendingMessages();
+}
+
+async function loadStatus(options = {}) {
+  statusData = await fetchJson(apiUrl("/api/status"), {}, "Failed to load status");
+  applyStatusData(options);
 }
 
 async function loadBackendStatus() {
@@ -1623,6 +1652,27 @@ function appendRealtimeConversationEvents(events) {
   }
 }
 
+function realtimeEventCursor(event, index = 0, startOffset = "") {
+  return String(event?.event_id || event?._cursor || (startOffset !== "" ? `${startOffset}-${index}` : eventIdentity(event))).trim();
+}
+
+function appendRealtimeEvents(events, startOffset = "") {
+  const accepted = [];
+  events.forEach((event, index) => {
+    const cursor = realtimeEventCursor(event, index, startOffset);
+    const dedupeKey = event?.event_id ? `event_id:${event.event_id}` : `event:${eventIdentity(event)}`;
+    if (seenRealtimeEvents.has(dedupeKey)) return;
+    seenRealtimeEvents.add(dedupeKey);
+    if (!event._uiKey) event._uiKey = `event-${cursor || index}-${event.type || "event"}`;
+    rememberEventCursorFromEvent(event);
+    accepted.push(event);
+  });
+  if (!accepted.length) return accepted;
+  allEvents.push(...accepted);
+  appendRealtimeConversationEvents(accepted);
+  return accepted;
+}
+
 async function pollEvents() {
   let res;
   try {
@@ -1650,13 +1700,129 @@ async function pollEvents() {
   const payload = await readJsonResponse(res, "Failed to poll events");
   const startOffset = offset;
   rememberEventCursor(payload);
-  const events = payload.events || [];
-  events.forEach((event, index) => {
-    const cursor = event.event_id || event._cursor || `${startOffset}-${index}`;
-    if (!event._uiKey) event._uiKey = `event-${cursor}-${event.type || "event"}`;
-  });
-  allEvents.push(...events);
-  appendRealtimeConversationEvents(events);
+  appendRealtimeEvents(payload.events || [], startOffset);
+}
+
+function webSocketSupported() {
+  return !wsDisabled && currentRunId && typeof WebSocket !== "undefined";
+}
+
+function closeEventWebSocket() {
+  const socket = eventSocket;
+  eventSocket = null;
+  eventSocketState = "closed";
+  if (socket && socket.readyState !== WebSocket.CLOSED) {
+    socket.onclose = null;
+    socket.close();
+  }
+}
+
+function eventWebSocketBaseUrl() {
+  const explicit = String(queryParams.get("ws_url") || wsConfig || "").trim();
+  let explicitAbsolute = false;
+  let url;
+  if (explicit && !["1", "true", "on"].includes(explicit.toLowerCase())) {
+    if (/^\d+$/.test(explicit)) {
+      url = new URL("/ws", window.location.href);
+      url.port = explicit;
+    } else {
+      explicitAbsolute = /^[a-z][a-z0-9+.-]*:\/\//i.test(explicit);
+      url = new URL(explicit, window.location.href);
+    }
+  } else {
+    url = new URL("/ws", window.location.href);
+  }
+  if (!explicitAbsolute || url.protocol === "http:" || url.protocol === "https:") {
+    url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  }
+  const wsPort = String(queryParams.get("ws_port") || "").trim();
+  if (wsPort) url.port = wsPort;
+  return url;
+}
+
+function eventWebSocketUrl() {
+  const url = eventWebSocketBaseUrl();
+  if (currentRunId) url.searchParams.set("run_id", currentRunId);
+  if (lastEventId) url.searchParams.set("last_event_id", lastEventId);
+  return url.toString();
+}
+
+function scheduleEventWebSocketReconnect() {
+  eventSocketFailureCount += 1;
+  const multiplier = 2 ** Math.min(eventSocketFailureCount - 1, 5);
+  eventSocketReconnectAt = Date.now() + Math.min(30000, pollInterval * multiplier);
+}
+
+function handleEventWebSocketMessage(message) {
+  let payload;
+  try {
+    payload = JSON.parse(message.data);
+  } catch (_err) {
+    return;
+  }
+  if (payload.type === "status") {
+    statusData = payload.data || {};
+    applyStatusData();
+    renderPanel();
+    return;
+  }
+  if (payload.type === "event" && payload.data) {
+    const accepted = appendRealtimeEvents([payload.data]);
+    if (accepted.length) renderPanel();
+  }
+}
+
+function openEventWebSocket() {
+  if (!webSocketSupported()) return false;
+  if (eventSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(eventSocket.readyState)) return true;
+  try {
+    const socket = new WebSocket(eventWebSocketUrl());
+    eventSocket = socket;
+    eventSocketState = "connecting";
+    socket.onopen = () => {
+      if (eventSocket !== socket) return;
+      eventSocketState = "open";
+      eventSocketFailureCount = 0;
+      eventSocketReconnectAt = 0;
+    };
+    socket.onmessage = message => {
+      if (eventSocket === socket) handleEventWebSocketMessage(message);
+    };
+    socket.onerror = () => {
+      if (eventSocket === socket) eventSocketState = "error";
+    };
+    socket.onclose = () => {
+      if (eventSocket !== socket) return;
+      eventSocket = null;
+      eventSocketState = "closed";
+      scheduleEventWebSocketReconnect();
+    };
+    return true;
+  } catch (_err) {
+    eventSocketState = "error";
+    scheduleEventWebSocketReconnect();
+    return false;
+  }
+}
+
+async function ensureEventWebSocket() {
+  if (!webSocketSupported()) return false;
+  if (eventSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(eventSocket.readyState)) return true;
+  if (Date.now() < eventSocketReconnectAt) return false;
+  if (!lastEventId && !eventTailInitialized) {
+    try {
+      await initializeEventTailOffset();
+    } catch (_err) {
+      scheduleEventWebSocketReconnect();
+      return false;
+    }
+  }
+  return openEventWebSocket();
+}
+
+async function syncRealtimeEvents() {
+  if (await ensureEventWebSocket()) return;
+  await pollEvents();
 }
 
 function renderTaskList() {
@@ -2224,7 +2390,7 @@ sendFormEl.addEventListener("submit", async event => {
     syncMobileComposerAction();
     commandMenuEl.classList.add("hidden");
     closeMobileActionPanel();
-    await pollEvents();
+    await syncRealtimeEvents();
     await loadStatus({ forceAgents: Boolean(response?.interrupt) });
     await loadBackendStatus();
     conversationAutoFollow = true;
@@ -2282,7 +2448,7 @@ backendStatusEl.addEventListener("click", async event => {
   try {
     const response = await sendBackendMessage(task, agentId, "/aha interrupt");
     if (response?.interrupt?.interrupted) interruptedContexts.add(messageContextKey(task.id, agentId));
-    await pollEvents();
+    await syncRealtimeEvents();
     await loadStatus({ forceAgents: true });
     await loadBackendStatus();
     renderPendingMessages();
@@ -2393,7 +2559,7 @@ async function tick() {
       await loadStatus({ forceAgents: true });
       await loadBackendStatus();
     }
-    await pollEvents();
+    await syncRealtimeEvents();
     tickFailureCount = 0;
     tickBackoffUntil = 0;
     renderPendingMessages();
