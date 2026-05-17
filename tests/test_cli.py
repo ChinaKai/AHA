@@ -112,29 +112,36 @@ async def fetch_ui_response(
 
 
 async def fetch_initial_ws_messages(root: Path, run_id: str, timeout: float = 0.2) -> list[dict]:
+    return await fetch_ws_messages(root, run_id, timeout=timeout)
+
+
+async def fetch_ws_messages(root: Path, run_id: str, path: str = "/", timeout: float = 0.2, max_messages: int = 2) -> list[dict]:
     server = await asyncio.start_server(lambda reader, writer: handle_ws_client(root, run_id, reader, writer, 0.05), "127.0.0.1", 0)
     host, port = server.sockets[0].getsockname()
     writer = None
     try:
         reader, writer = await asyncio.open_connection(host, port)
         writer.write(
-            b"GET / HTTP/1.1\r\n"
-            b"Host: test\r\n"
-            b"Upgrade: websocket\r\n"
-            b"Connection: Upgrade\r\n"
-            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-            b"Sec-WebSocket-Version: 13\r\n"
-            b"\r\n"
+            (
+                f"GET {path} HTTP/1.1\r\n"
+                "Host: test\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "\r\n"
+            ).encode("ascii")
         )
         await writer.drain()
         await reader.readuntil(b"\r\n\r\n")
-        messages = [json.loads(await asyncio.wait_for(ws_read_text(reader), timeout=timeout))]
-        try:
-            next_message = await asyncio.wait_for(ws_read_text(reader), timeout=timeout)
-        except asyncio.TimeoutError:
-            next_message = None
-        if next_message:
-            messages.append(json.loads(next_message))
+        messages = []
+        while len(messages) < max_messages:
+            try:
+                next_message = await asyncio.wait_for(ws_read_text(reader), timeout=timeout)
+            except asyncio.TimeoutError:
+                break
+            if next_message:
+                messages.append(json.loads(next_message))
         writer.close()
         await writer.wait_closed()
         return messages
@@ -2016,6 +2023,60 @@ class CliTests(unittest.TestCase):
                 messages = asyncio.run(fetch_initial_ws_messages(root, run_id))
 
         self.assertEqual([message["type"] for message in messages], ["status"])
+
+    def test_websocket_replays_from_last_event_id_after_reconnect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Websocket replay", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                baseline = append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "before-disconnect"})
+                missed_one = append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "missed-ws-1"})
+                missed_two = append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+
+                messages = asyncio.run(
+                    fetch_ws_messages(root, run_id, f"/?last_event_id={baseline['event_id']}", max_messages=3)
+                )
+
+        self.assertEqual([message["type"] for message in messages], ["status", "event", "event"])
+        replayed = [message["data"] for message in messages if message["type"] == "event"]
+        self.assertEqual([event["event_id"] for event in replayed], [missed_one["event_id"], missed_two["event_id"]])
+        self.assertEqual(replayed[0]["data"]["text"], "missed-ws-1")
+        self.assertEqual(replayed[1]["type"], "agent_finished")
+
+    def test_websocket_same_cursor_replays_same_events_to_multiple_clients(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Websocket multi replay", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                baseline = append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "before-clients"})
+                expected = [
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "client-replay-1"})[
+                        "event_id"
+                    ],
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "client-replay-2"})[
+                        "event_id"
+                    ],
+                ]
+
+                async def fetch_both() -> tuple[list[dict], list[dict]]:
+                    first_messages, second_messages = await asyncio.gather(
+                        fetch_ws_messages(root, run_id, f"/?after_event_id={baseline['event_id']}", max_messages=3),
+                        fetch_ws_messages(root, run_id, f"/?after_event_id={baseline['event_id']}", max_messages=3),
+                    )
+                    return first_messages, second_messages
+
+                first, second = asyncio.run(fetch_both())
+
+        first_events = [message["data"]["event_id"] for message in first if message["type"] == "event"]
+        second_events = [message["data"]["event_id"] for message in second if message["type"] == "event"]
+        self.assertEqual(first_events, expected)
+        self.assertEqual(second_events, expected)
 
     def test_start_backend_serializes_concurrent_autostart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -235,11 +235,20 @@ Start the minimal WebSocket server:
 aha serve <run-id> --host 127.0.0.1 --port 8765
 ```
 
+Reconnect with a saved event cursor to replay missed events before tailing live updates:
+
+```text
+ws://127.0.0.1:8765?last_event_id=<event-id>
+ws://127.0.0.1:8765?after_event_id=<event-id>
+```
+
+Without a cursor, the WebSocket starts from the current tail. Invalid cursors return HTTP 400 and close before upgrade.
+
 The WebSocket server sends JSON messages:
 
 ```json
 {"type":"status","data":{}}
-{"type":"event","data":{}}
+{"type":"event","data":{"event_id":123}}
 ```
 
 Clients can send:
