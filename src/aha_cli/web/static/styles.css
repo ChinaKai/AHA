@@ -977,13 +977,18 @@ button {
     display: none;
   }
   h1 {
-    overflow: visible;
-    text-overflow: clip;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 15px;
   }
   .header-workspace-dir {
-    display: none;
+    display: inline-block;
+    max-width: min(48vw, 180px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
   }
   #run-state {
     display: none;
