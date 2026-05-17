@@ -24,6 +24,8 @@ from aha_cli.store.filesystem import (
     create_plan,
     delete_task,
     event_path,
+    event_stream_page,
+    event_stream_position,
     inbox_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
@@ -734,27 +736,31 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         elif method in {"GET", "HEAD"} and path == "/api/events":
             selected_run_id = require_api_run_id(root, run_id, query)
             try:
-                offset = int(query.get("offset", ["0"])[0] or "0")
                 limit = int(query.get("limit", [str(DEFAULT_EVENTS_LIMIT)])[0] or str(DEFAULT_EVENTS_LIMIT))
+                last_event_id = str(query.get("last_event_id", [""])[0] or query.get("after_event_id", [""])[0] or "").strip()
+                offset = int(last_event_id) if last_event_id else int(query.get("offset", ["0"])[0] or "0")
             except ValueError:
-                writer.write(json_response({"error": "offset and limit must be integers"}, "400 Bad Request"))
+                writer.write(json_response({"error": "offset, limit, and last_event_id must be valid event cursors"}, "400 Bad Request"))
                 await writer.drain()
                 return
             safe_limit = max(1, min(limit, MAX_EVENTS_LIMIT))
-            events_path = event_path(root, selected_run_id)
-            snapshot_offset = events_path.stat().st_size if events_path.exists() else 0
             if offset < 0:
-                events, new_offset = [], snapshot_offset
+                snapshot_offset = event_stream_position(root, selected_run_id)
+                page = event_stream_page(root, selected_run_id, snapshot_offset, limit=safe_limit, snapshot_event_id=snapshot_offset)
             else:
-                events, new_offset = iter_jsonl_from(events_path, offset, before=snapshot_offset, limit=safe_limit)
+                page = event_stream_page(root, selected_run_id, offset, limit=safe_limit)
+            new_offset = int(page["last_event_id"])
+            snapshot_offset = int(page["snapshot_event_id"])
             response = json_response(
                 {
                     "run_id": selected_run_id,
                     "offset": new_offset,
+                    "last_event_id": page["last_event_id"],
                     "snapshot_offset": snapshot_offset,
+                    "snapshot_event_id": page["snapshot_event_id"],
                     "has_more": new_offset < snapshot_offset,
                     "limit": safe_limit,
-                    "events": events,
+                    "events": page["events"],
                 }
             )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)

@@ -11,6 +11,7 @@ let runsError = "";
 let sessionMenuOpen = false;
 let runActionInFlight = false;
 let offset = -1;
+let lastEventId = "";
 let statusData = null;
 let selectedTaskId = null;
 let activeTab = "conversation";
@@ -169,6 +170,56 @@ function apiUrl(path, params = {}, options = {}) {
   return suffix ? `${path}?${suffix}` : path;
 }
 
+function eventCursorStorageKey() {
+  return currentRunId ? `aha:last-event-id:${currentRunId}` : "";
+}
+
+function readStoredLastEventId() {
+  const key = eventCursorStorageKey();
+  if (!key) return "";
+  try {
+    return String(window.localStorage?.getItem(key) || "").trim();
+  } catch (_err) {
+    return "";
+  }
+}
+
+function writeStoredLastEventId(value) {
+  const key = eventCursorStorageKey();
+  if (!key || !value) return;
+  try {
+    window.localStorage?.setItem(key, String(value));
+  } catch (_err) {
+    // localStorage can be disabled; realtime still works for this page session.
+  }
+}
+
+function clearStoredLastEventId() {
+  const key = eventCursorStorageKey();
+  if (!key) return;
+  try {
+    window.localStorage?.removeItem(key);
+  } catch (_err) {
+    // Ignore storage errors and fall back to tail initialization.
+  }
+}
+
+function restoreEventCursorFromStorage() {
+  lastEventId = readStoredLastEventId();
+  const numericOffset = Number(lastEventId);
+  offset = lastEventId && Number.isFinite(numericOffset) ? numericOffset : -1;
+  eventTailInitialized = Boolean(lastEventId);
+}
+
+function rememberEventCursor(payload) {
+  if (Number.isFinite(payload.offset)) offset = payload.offset;
+  const nextEventId = String(payload.last_event_id || payload.offset || "").trim();
+  if (nextEventId) {
+    lastEventId = nextEventId;
+    writeStoredLastEventId(nextEventId);
+  }
+}
+
 function runScopedPayload(payload = {}) {
   return currentRunId ? { ...payload, run_id: currentRunId } : payload;
 }
@@ -224,8 +275,7 @@ function syncRunUrl() {
 function resetRunScopedState() {
   selectedTaskId = null;
   backendStatusData = null;
-  offset = -1;
-  eventTailInitialized = false;
+  restoreEventCursorFromStorage();
   conversationAutoFollow = true;
   allEvents.length = 0;
   conversationStates.clear();
@@ -316,6 +366,7 @@ async function loadRuns(force = false) {
       currentRunId = preferred;
       syncRunUrl();
     }
+    restoreEventCursorFromStorage();
   } catch (err) {
     runsError = err?.message || String(err || "会话列表不可用");
     runsData = fallbackCurrentRun() ? [fallbackCurrentRun()] : [];
@@ -1530,7 +1581,7 @@ async function responseError(res, fallbackMessage = "Request failed") {
 async function initializeEventTailOffset() {
   if (eventTailInitialized) return;
   const payload = await fetchJson(apiUrl("/api/events", { offset: "-1" }), {}, "Failed to initialize event stream");
-  if (Number.isFinite(payload.offset)) offset = payload.offset;
+  rememberEventCursor(payload);
   eventTailInitialized = true;
 }
 
@@ -1575,24 +1626,34 @@ function appendRealtimeConversationEvents(events) {
 async function pollEvents() {
   let res;
   try {
-    res = await fetchWithTimeout(apiUrl("/api/events", { offset: String(offset) }));
+    const params = lastEventId ? { last_event_id: lastEventId } : { offset: String(offset) };
+    res = await fetchWithTimeout(apiUrl("/api/events", params));
   } catch (err) {
-    if (offset < 0) {
+    if (!lastEventId && offset < 0) {
       await initializeEventTailOffset();
       return;
     }
     throw err;
   }
   if (!res.ok) {
+    if (lastEventId) {
+      lastEventId = "";
+      offset = -1;
+      eventTailInitialized = false;
+      clearStoredLastEventId();
+      await initializeEventTailOffset();
+      return;
+    }
     if (offset < 0) await initializeEventTailOffset();
     return;
   }
   const payload = await readJsonResponse(res, "Failed to poll events");
   const startOffset = offset;
-  offset = payload.offset;
+  rememberEventCursor(payload);
   const events = payload.events || [];
   events.forEach((event, index) => {
-    if (!event._uiKey) event._uiKey = `event-${startOffset}-${index}`;
+    const cursor = event.event_id || event._cursor || `${startOffset}-${index}`;
+    if (!event._uiKey) event._uiKey = `event-${cursor}-${event.type || "event"}`;
   });
   allEvents.push(...events);
   appendRealtimeConversationEvents(events);

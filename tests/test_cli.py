@@ -1631,6 +1631,32 @@ class CliTests(unittest.TestCase):
         self.assertFalse(older["has_more"])
         self.assertEqual(older["events"][0]["data"]["message"], "one")
 
+    def test_events_api_replays_from_saved_offset_after_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Replay events", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                initial = json_response_body(asyncio.run(fetch_ui_response(root, run_id, "/api/events?offset=-1")))
+                last_event_id = initial["offset"]
+
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "missed-1"})
+                append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+
+                first_page = json_response_body(
+                    asyncio.run(fetch_ui_response(root, run_id, f"/api/events?offset={last_event_id}&limit=1"))
+                )
+                replay = json_response_body(asyncio.run(fetch_ui_response(root, run_id, f"/api/events?offset={last_event_id}&limit=10")))
+
+            self.assertEqual(first_page["events"][0]["data"]["text"], "missed-1")
+            self.assertTrue(first_page["has_more"])
+            self.assertGreater(first_page["offset"], last_event_id)
+            self.assertEqual([event["type"] for event in replay["events"]], ["agent_message", "agent_finished"])
+            self.assertEqual(replay["events"][1]["data"]["exit_code"], 0)
+            self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "pending")
+
     def test_reverse_jsonl_reader_pages_by_byte_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

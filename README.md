@@ -269,6 +269,7 @@ The dashboard uses local HTTP endpoints:
 GET  /api/status
 GET  /api/backends
 GET  /api/events?offset=<byte-offset>
+GET  /api/events?last_event_id=<event-id>
 GET  /api/conversation-events?task_id=<task-id>&target=<agent-id>&limit=50&before_offset=<byte-offset>
 GET  /api/task/<task-id>
 GET  /api/task/<task-id>/logs?limit=200&before_offset=<byte-offset>&source=auto|file|events

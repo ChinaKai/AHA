@@ -47,7 +47,7 @@ def write_json(path: Path, data: dict) -> None:
             tmp.unlink()
 
 
-def append_jsonl(path: Path, data: dict) -> None:
+def append_jsonl(path: Path, data: dict) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(data, ensure_ascii=False) + "\n"
     fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
@@ -62,6 +62,7 @@ def append_jsonl(path: Path, data: dict) -> None:
                     if count == 0:
                         raise OSError(f"Unable to append JSONL record to {path}")
                     written += count
+                return os.lseek(f.fileno(), 0, os.SEEK_CUR)
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     finally:
@@ -257,6 +258,26 @@ def event_path(root: Path, run_id: str) -> Path:
     return run_dir(root, run_id) / EVENTS_FILE
 
 
+def event_stream_position(root: Path, run_id: str) -> int:
+    path = event_path(root, run_id)
+    return path.stat().st_size if path.exists() else 0
+
+
+def normalize_event_id(event_id: object, default: int = 0) -> int:
+    if event_id is None or event_id == "":
+        return default
+    try:
+        return max(0, int(event_id))
+    except (TypeError, ValueError):
+        return default
+
+
+def with_event_id(event: dict, event_id: int) -> dict:
+    item = dict(event)
+    item.setdefault("event_id", event_id)
+    return item
+
+
 def inbox_path(root: Path, run_id: str, target: str) -> Path:
     safe_target = target.replace("/", "_")
     return run_dir(root, run_id) / "inbox" / f"{safe_target}.jsonl"
@@ -357,8 +378,8 @@ def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
         "data": data,
     }
     with EVENT_LOCK:
-        append_jsonl(event_path(root, run_id), event)
-    return event
+        event_id = append_jsonl(event_path(root, run_id), event)
+    return with_event_id(event, event_id)
 
 
 def append_event_to_file(events_file: Path | None, run_id: str, event_type: str, data: dict) -> dict:
@@ -369,8 +390,37 @@ def append_event_to_file(events_file: Path | None, run_id: str, event_type: str,
         "data": data,
     }
     if events_file is not None:
-        append_jsonl(events_file, event)
+        event_id = append_jsonl(events_file, event)
+        return with_event_id(event, event_id)
     return event
+
+
+def event_stream_page(
+    root: Path,
+    run_id: str,
+    last_event_id: object = 0,
+    limit: int | None = None,
+    snapshot_event_id: object | None = None,
+) -> dict:
+    path = event_path(root, run_id)
+    snapshot_id = normalize_event_id(snapshot_event_id, event_stream_position(root, run_id))
+    start_id = normalize_event_id(last_event_id)
+    if not path.exists():
+        return {
+            "events": [],
+            "last_event_id": snapshot_id,
+            "snapshot_event_id": snapshot_id,
+            "has_more": False,
+            "limit": limit,
+        }
+    records, next_id = iter_jsonl_records_from(path, start_id, before=snapshot_id, limit=limit)
+    return {
+        "events": [with_event_id(event, line_end) for event, line_end in records],
+        "last_event_id": next_id,
+        "snapshot_event_id": snapshot_id,
+        "has_more": next_id < snapshot_id,
+        "limit": limit,
+    }
 
 
 def append_message(
@@ -1394,6 +1444,13 @@ def status_snapshot(root: Path, run_id: str) -> dict:
             if not task.get("deleted_at")
         ],
     }
+
+
+def status_snapshot_projection(root: Path, run_id: str) -> dict:
+    snapshot_event_id = event_stream_position(root, run_id)
+    snapshot = status_snapshot(root, run_id)
+    snapshot["snapshot_event_id"] = snapshot_event_id
+    return snapshot
 
 
 def task_lookup(root: Path, run_id: str, task_id: str) -> tuple[dict, dict, Path]:
