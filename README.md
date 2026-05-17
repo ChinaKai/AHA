@@ -138,6 +138,8 @@ aha task add <run-id> "Analyze package rules" \
   --max-sub-agents 3
 aha task list <run-id>
 aha task show <run-id> task-001
+aha task final <run-id> task-001
+aha task reopen <run-id> task-001
 
 aha agent add <run-id> task-001 --role sub --backend codex
 aha agent list <run-id> task-001
@@ -273,6 +275,8 @@ GET  /api/task/<task-id>/logs?limit=200&before_offset=<byte-offset>&source=auto|
 GET  /api/task/<task-id>/final
 GET  /api/task/<task-id>/context
 GET  /api/backend?target=<agent-id>&task_id=<task-id>
+POST /api/task/<task-id>/final
+POST /api/task/<task-id>/reopen
 POST /api/tasks
 POST /api/agents
 POST /api/send

@@ -31,6 +31,7 @@ from aha_cli.store.filesystem import (
     plan_path,
     read_json,
     require_plan,
+    reopen_task,
     resolve_run_id,
     run_dir,
     save_session,
@@ -39,7 +40,7 @@ from aha_cli.store.filesystem import (
     update_agent_config,
     write_json,
 )
-from aha_cli.web.server import run_ui_server
+from aha_cli.web.server import request_task_finalization_with_backend, run_ui_server
 from aha_cli.websocket.server import run_ws_server
 
 WATCH_EVENTS_LIMIT = 500
@@ -255,6 +256,21 @@ def cmd_task(args: argparse.Namespace) -> int:
             print(f"{task['id']} [{task['status']}] agents={len(task.get('agents', []))} {task['title']}")
     elif args.task_cmd == "show":
         print(json.dumps(task_snapshot(root, run_id, args.task_id), indent=2, ensure_ascii=False))
+    elif args.task_cmd == "final":
+        payload = request_task_finalization_with_backend(
+            root,
+            run_id,
+            args.task_id,
+            f"aha task final {run_id} {args.task_id}",
+            autostart_backend=not args.no_autostart,
+        )
+        print(payload["message"])
+        backend = payload.get("backend")
+        if backend:
+            print(f"Backend: {backend.get('status')} pid={backend.get('pid') or '-'}")
+    elif args.task_cmd == "reopen":
+        reopen_task(root, run_id, args.task_id)
+        print(f"{args.task_id} reopened. Follow-up messages are allowed again.")
     return 0
 
 
@@ -515,6 +531,15 @@ def build_parser() -> argparse.ArgumentParser:
     task_show.add_argument("run_id")
     task_show.add_argument("task_id")
     task_show.set_defaults(func=cmd_task)
+    task_final = task_sub.add_parser("final", help="Ask task-main to generate the Final and complete the task")
+    task_final.add_argument("run_id")
+    task_final.add_argument("task_id")
+    task_final.add_argument("--no-autostart", action="store_true", help="Do not start a stopped task-main backend")
+    task_final.set_defaults(func=cmd_task)
+    task_reopen = task_sub.add_parser("reopen", help="Reopen a completed task for follow-up")
+    task_reopen.add_argument("run_id")
+    task_reopen.add_argument("task_id")
+    task_reopen.set_defaults(func=cmd_task)
 
     agent_p = sub.add_parser("agent")
     agent_sub = agent_p.add_subparsers(dest="agent_cmd", required=True)

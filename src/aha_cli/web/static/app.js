@@ -111,9 +111,9 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
   { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
   { scope: "aha", name: "/aha checkpoint", insert: "/aha checkpoint ", desc: "Record a task journal checkpoint. Handled locally." },
-  { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate or update the Final." },
+  { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate the Final and complete the task." },
   { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
-  { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Mark the selected task complete and lock messages." },
+  { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
   { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." }
 ];
@@ -1607,8 +1607,8 @@ function renderTaskList() {
   }
   for (const task of tasks) {
     const locked = terminalTaskStatuses.has(taskCurrentStatus(task));
-    const completionAction = locked ? "reopen" : "complete";
-    const completionLabel = locked ? "Reopen" : "Complete";
+    const completionAction = locked ? "reopen" : "final";
+    const completionLabel = locked ? "Reopen" : "Final";
     const item = document.createElement("div");
     item.className = `task ${task.id === selectedTaskId ? "active" : ""} ${task.hidden ? "hidden-task" : ""}`;
     item.dataset.taskId = task.id;
@@ -1652,7 +1652,7 @@ async function selectTask(taskId) {
 
 async function updateTaskVisibility(taskId, action) {
   if (action === "delete" && !confirm(`Delete ${taskId} from the task list?`)) return;
-  if (action === "complete" && !confirm(`Mark ${taskId} complete and lock messages?`)) return;
+  if ((action === "final" || action === "complete") && !confirm(`Ask task-main to generate the Final for ${taskId}?`)) return;
   taskActionInFlight = true;
   try {
     const res = await fetchWithTimeout(apiUrl(`/api/task/${encodeURIComponent(taskId)}/${action}`), { method: "POST" });
@@ -1661,7 +1661,7 @@ async function updateTaskVisibility(taskId, action) {
       alert(payload.error || `Task action failed: ${action}`);
       return;
     }
-    if (action === "restore" || action === "complete" || action === "reopen") selectedTaskId = taskId;
+    if (action === "restore" || action === "final" || action === "complete" || action === "reopen") selectedTaskId = taskId;
     if (action === "hide" || action === "delete") selectedTaskId = null;
     await loadStatus();
     renderPanel();

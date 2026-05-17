@@ -20,7 +20,6 @@ from aha_cli.store.filesystem import (
     append_event,
     append_message,
     append_task_round,
-    complete_task,
     conversation_events_page,
     create_plan,
     delete_task,
@@ -222,9 +221,9 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha status: show selected task status",
                 "- /aha agents: list selected task agents",
                 "- /aha checkpoint <summary>: record a task journal checkpoint",
-                "- /aha final: ask task-main to generate or update the Final",
+                "- /aha final: ask task-main to generate the Final and complete the task",
                 "- /aha finalize: alias for /aha final",
-                "- /aha complete: mark selected task complete and lock normal messages",
+                "- /aha complete: alias for /aha final",
                 "- /aha reopen: cancel completion and allow follow-up messages",
                 "- /aha interrupt: interrupt the selected agent's current turn",
                 "",
@@ -261,9 +260,9 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
     if name == "checkpoint":
         return "Use `/aha checkpoint <summary>` from the selected task conversation to record a journal checkpoint."
     if name in {"final", "finalize"}:
-        return "Use `/aha final` from the selected task conversation to ask task-main to generate or update the Final."
+        return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
     if name in {"complete", "done"}:
-        return "Use `/aha complete` from the selected task conversation to lock the task as complete."
+        return "Use `/aha complete` as an alias for `/aha final`."
     if name in {"reopen", "resume"}:
         return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
     return f"Unknown AHA command: /aha {name}. Try /aha help."
@@ -347,6 +346,47 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
     return f"Finalization requested for {task_id}. Task-main will write the Final when it finishes."
 
 
+def prepare_task_main_autostart(root: Path, run_id: str, task_id: str | None) -> dict | None:
+    if not task_id:
+        return None
+    autostart = message_backend_autostart_config(root, run_id, task_id, "main")
+    if autostart:
+        ensure_chat_offset_before_message(root, run_id, task_id, "main")
+    return autostart
+
+
+def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> dict | None:
+    if not autostart:
+        return None
+    return start_backend(
+        root,
+        run_id,
+        autostart["target"],
+        model=autostart["model"],
+        sandbox=autostart["sandbox"],
+        approval=autostart["approval"],
+        from_start=False,
+        task_id=autostart["task_id"],
+    )
+
+
+def request_task_finalization_with_backend(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    command: str,
+    *,
+    autostart_backend: bool = True,
+) -> dict:
+    autostart = prepare_task_main_autostart(root, run_id, task_id) if autostart_backend else None
+    message = request_task_finalization(root, run_id, task_id, command)
+    payload: dict = {"message": message}
+    backend = start_prepared_backend(root, run_id, autostart)
+    if backend:
+        payload["backend"] = backend
+    return payload
+
+
 def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command: str) -> str:
     if not task_id:
         return "No task is selected."
@@ -362,13 +402,7 @@ def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command
 
 
 def complete_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
-    if not task_id:
-        return "No task is selected."
-    try:
-        complete_task(root, run_id, task_id, 0)
-    except SystemExit:
-        return f"Task not found: {task_id}"
-    return f"{task_id} marked completed. Normal main/sub-agent messages are now locked."
+    return request_task_finalization(root, run_id, task_id, "/aha complete")
 
 
 def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
@@ -427,6 +461,7 @@ def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id:
 def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, task_id: str | None) -> tuple[bool, str | None, dict]:
     sender = str(payload.get("sender", "browser") or "browser")
     stripped = message.strip()
+    backend_autostart = None
     if not stripped.startswith("/"):
         return False, message, {}
     if stripped == "/agent" or stripped.startswith("/agent "):
@@ -441,10 +476,12 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         parts = stripped.split()
         name = parts[1] if len(parts) > 1 else "help"
         if name in {"final", "finalize"}:
+            backend_autostart = prepare_task_main_autostart(root, run_id, task_id)
             reply = request_task_finalization(root, run_id, task_id, stripped)
         elif name == "checkpoint":
             reply = record_task_checkpoint(root, run_id, task_id, stripped)
         elif name in {"complete", "done"}:
+            backend_autostart = prepare_task_main_autostart(root, run_id, task_id)
             reply = complete_selected_task(root, run_id, task_id)
         elif name in {"reopen", "resume"}:
             reply = reopen_selected_task(root, run_id, task_id)
@@ -469,6 +506,8 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         agent_id=target if stripped.startswith("/aha") else None,
     )
     command_response = {"message": response}
+    if backend_autostart:
+        command_response["backend_autostart"] = backend_autostart
     if "interrupt_payload" in locals():
         command_response["interrupt"] = interrupt_payload
     return True, None, command_response
@@ -530,6 +569,10 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
 
     handled, agent_message, command_payload = handle_slash_command(root, run_id, payload, message, task_id)
     if handled:
+        backend_autostart = command_payload.pop("backend_autostart", None)
+        backend = start_prepared_backend(root, run_id, backend_autostart)
+        if backend:
+            command_payload["backend"] = backend
         return {"ok": True, "handled_by": "aha", **command_payload}
 
     locked_status = task_locked_for_messages(root, run_id, task_id)
@@ -768,8 +811,17 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                         task = set_task_hidden(root, selected_run_id, task_id, True)
                     elif action == "restore":
                         task = set_task_hidden(root, selected_run_id, task_id, False)
-                    elif action == "complete":
-                        task = complete_task(root, selected_run_id, task_id, 0)
+                    elif action in {"final", "finalize", "complete"}:
+                        final_payload = request_task_finalization_with_backend(
+                            root,
+                            selected_run_id,
+                            task_id,
+                            f"/api/task/{task_id}/{action}",
+                        )
+                        task = task_snapshot(root, selected_run_id, task_id)["task"]
+                        writer.write(json_response({"ok": True, "task": task, **final_payload}))
+                        await writer.drain()
+                        return
                     elif action in {"reopen", "resume"}:
                         task = reopen_task(root, selected_run_id, task_id)
                     elif action == "delete":
@@ -779,7 +831,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                         await writer.drain()
                         return
                     writer.write(json_response({"ok": True, "task": task}))
-                except SystemExit as exc:
+                except (KeyError, SystemExit) as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
         elif method == "POST" and path == "/api/tasks":
             payload = parse_json_body(body)

@@ -36,6 +36,7 @@ from aha_cli.store.filesystem import (
     inbox_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
+    list_task_lifecycle_rounds,
     list_task_rounds,
     run_dir,
     mark_task_coordination,
@@ -739,6 +740,150 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["result"].strip(), "new final")
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "completed")
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["exit_code"], 0)
+
+    def test_final_driven_completion_reopen_preserves_round_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Final loop", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                append_message(root, run_id, "main", "先做第一轮", sender="browser", task_id="task-001", role="main")
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "第一轮已处理", None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "awaiting_user")
+                self.assertEqual(task_snapshot(root, run_id, "task-001")["result"], "")
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                self.assertTrue(any(event["type"] == "agent_finished" for event in events))
+                self.assertFalse(any(event["type"] == "task_completed" for event in events))
+
+                handled, agent_message, payload = handle_slash_command(
+                    root,
+                    run_id,
+                    {"sender": "browser", "target": "main", "to_agent": "main"},
+                    "/aha final",
+                    "task-001",
+                )
+                self.assertTrue(handled)
+                self.assertIsNone(agent_message)
+                self.assertIn("Finalization requested", payload["message"]["message"])
+
+                first_final = "第一轮 Final"
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, first_final, None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--once")
+
+                self.assertEqual(code, 0)
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["status"], "completed")
+                self.assertEqual(detail["result"].strip(), first_final)
+                first_rounds = list_task_lifecycle_rounds(root, run_id, "task-001")
+                self.assertEqual(len(first_rounds), 1)
+                self.assertEqual(first_rounds[0]["round_id"], "round-001")
+                self.assertEqual(first_rounds[0]["status"], "finalized")
+                self.assertEqual((run_dir(root, run_id) / first_rounds[0]["final_path"]).read_text(encoding="utf-8").strip(), first_final)
+
+                handled, agent_message, payload = handle_slash_command(
+                    root,
+                    run_id,
+                    {"sender": "browser", "target": "main", "to_agent": "main"},
+                    "/aha reopen",
+                    "task-001",
+                )
+                self.assertTrue(handled)
+                self.assertIsNone(agent_message)
+                self.assertIn("reopened", payload["message"]["message"])
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["status"], "awaiting_user")
+                self.assertEqual(detail["result"].strip(), first_final)
+                reopened_rounds = list_task_lifecycle_rounds(root, run_id, "task-001")
+                self.assertEqual(len(reopened_rounds), 2)
+                self.assertEqual(reopened_rounds[0]["status"], "finalized")
+                self.assertEqual(reopened_rounds[1]["round_id"], "round-002")
+                self.assertEqual(reopened_rounds[1]["status"], "active")
+                self.assertEqual(reopened_rounds[1]["reopened_from_round_id"], "round-001")
+                self.assertEqual((run_dir(root, run_id) / reopened_rounds[0]["final_path"]).read_text(encoding="utf-8").strip(), first_final)
+
+                append_message(root, run_id, "main", "继续第二轮", sender="browser", task_id="task-001", role="main")
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "第二轮已处理", None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--once")
+                self.assertEqual(code, 0)
+                self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "awaiting_user")
+
+                handled, agent_message, payload = handle_slash_command(
+                    root,
+                    run_id,
+                    {"sender": "browser", "target": "main", "to_agent": "main"},
+                    "/aha final",
+                    "task-001",
+                )
+                self.assertTrue(handled)
+                self.assertIsNone(agent_message)
+                self.assertIn("Finalization requested", payload["message"]["message"])
+
+                second_final = "第二轮 Final"
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, second_final, None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--once")
+
+                self.assertEqual(code, 0)
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["status"], "completed")
+                self.assertEqual(detail["result"].strip(), second_final)
+                final_rounds = list_task_lifecycle_rounds(root, run_id, "task-001")
+                self.assertEqual(len(final_rounds), 2)
+                self.assertEqual(final_rounds[0]["status"], "finalized")
+                self.assertEqual(final_rounds[1]["status"], "finalized")
+                self.assertEqual((run_dir(root, run_id) / final_rounds[0]["final_path"]).read_text(encoding="utf-8").strip(), first_final)
+                self.assertEqual((run_dir(root, run_id) / final_rounds[1]["final_path"]).read_text(encoding="utf-8").strip(), second_final)
+
+    def test_record_task_update_uses_current_lifecycle_round_after_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Journal lifecycle", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                write_task_result(root, run_id, "task-001", "第一轮 Final")
+                complete_task(root, run_id, "task-001", 0)
+                reopen_task(root, run_id, "task-001")
+
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "第二轮修复 Round/Journal 关联",
+                                "changed_files": ["src/aha_cli/store/filesystem.py"],
+                            }
+                        ],
+                        "response": "已记录",
+                    },
+                    ensure_ascii=False,
+                )
+
+                executed = execute_actions(root, run_id, "task-001", reply)
+
+                self.assertEqual(executed, [{"type": "record_task_update", "round_id": "round-002"}])
+                journal = list_task_rounds(root, run_id, "task-001")
+                self.assertEqual(journal[0]["round_id"], "round-002")
+                self.assertEqual(journal[0]["round_sequence"], 2)
+                self.assertEqual(journal[0]["sequence"], 2)
+                self.assertEqual(journal[0]["journal_id"], "journal-001")
+                self.assertEqual(journal[0]["journal_sequence"], 1)
+                journal_text = (run_dir(root, run_id) / "results/task-001.md").read_text(encoding="utf-8")
+                self.assertIn("轮次：`round-002`", journal_text)
+                self.assertNotIn("轮次：`round-001`", journal_text)
+                prompt = finalization_prompt("task-001", "Journal lifecycle", journal)
+                self.assertIn("round-002", prompt)
+                self.assertNotIn("round-001", prompt)
+                final = task_final_snapshot(root, run_id, "task-001")
+                self.assertEqual(final["result"].strip(), "第一轮 Final")
+                self.assertEqual(final["finals"][0]["round_id"], "round-001")
+                self.assertEqual((run_dir(root, run_id) / final["finals"][0]["final_path"]).read_text(encoding="utf-8").strip(), "第一轮 Final")
 
     def test_final_summary_stops_task_scoped_backends(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

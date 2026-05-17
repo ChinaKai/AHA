@@ -118,6 +118,10 @@ def make_task(
         "started_at": None,
         "finished_at": None,
         "exit_code": None,
+        "current_round_id": "round-001",
+        "round_sequence": 1,
+        "last_final_round_id": None,
+        "last_final_at": None,
         "hidden": False,
         "hidden_at": None,
         "deleted_at": None,
@@ -135,6 +139,27 @@ def make_task(
                 created_reason="task creation",
             )
         ],
+    }
+
+
+def make_task_round(
+    task_id: str,
+    sequence: int,
+    started_at: str,
+    reopened_from_round_id: str | None = None,
+    status: str = "active",
+) -> dict:
+    round_id = f"round-{max(1, sequence):03d}"
+    return {
+        "task_id": task_id,
+        "round_id": round_id,
+        "sequence": max(1, sequence),
+        "status": status,
+        "started_at": started_at,
+        "finalized_at": None,
+        "final_path": None,
+        "final_meta_path": None,
+        "reopened_from_round_id": reopened_from_round_id,
     }
 
 
@@ -267,6 +292,10 @@ def task_prompt(goal: str, mode: str, task: dict, write_scopes: list[str]) -> st
 
 def enrich_plan(plan: dict, backend: str = "codex") -> dict:
     for task in plan.get("tasks", []):
+        task.setdefault("current_round_id", "round-001")
+        task.setdefault("round_sequence", 1)
+        task.setdefault("last_final_round_id", None)
+        task.setdefault("last_final_at", None)
         task.setdefault("hidden", False)
         task.setdefault("hidden_at", None)
         task.setdefault("deleted_at", None)
