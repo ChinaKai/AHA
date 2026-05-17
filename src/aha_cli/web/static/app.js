@@ -110,6 +110,7 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha help", insert: "/aha help", desc: "Show AHA commands. Handled locally." },
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
   { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
+  { scope: "aha", name: "/aha checkpoint", insert: "/aha checkpoint ", desc: "Record a task journal checkpoint. Handled locally." },
   { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate or update the Final." },
   { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Mark the selected task complete and lock messages." },
@@ -1256,6 +1257,15 @@ function latestTurnTiming(taskId) {
     followupStartedAt &&
     ((!finalCompletedAt && followupStartedAt >= startedAt) || (finalCompletedAt && finalCompletedAt >= startedAt));
   if (followupCoversTurn) {
+    const waiting = waitingSubagentTiming(task);
+    const agentStatus = agentLifecycleStatus(agent);
+    const followupStillActive =
+      taskCurrentStatus(task) === "running" ||
+      waiting?.running ||
+      agentStatus === "waiting";
+    if (!finalCompletedAt && !followupStillActive) {
+      return null;
+    }
     let logicalStartedEvent = startedEvent;
     for (let index = startIndex; index >= 0; index -= 1) {
       if (events[index].type !== "agent_started") continue;
@@ -1266,12 +1276,11 @@ function latestTurnTiming(taskId) {
       }
     }
     const logicalStartedAt = eventTimestamp(logicalStartedEvent) || followupStartedAt;
-    const waiting = waitingSubagentTiming(task);
     const status = finalCompletedAt
       ? "completed"
-      : waiting?.running || agentLifecycleStatus(agent) === "waiting"
+      : waiting?.running || agentStatus === "waiting"
         ? "waiting"
-        : agentLifecycleStatus(agent) || "running";
+        : agentStatus || "running";
     const endAt = finalCompletedAt || Date.now();
     return {
       startedAt: logicalStartedAt,

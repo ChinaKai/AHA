@@ -19,6 +19,7 @@ from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     append_message,
+    append_task_round,
     complete_task,
     conversation_events_page,
     create_plan,
@@ -27,6 +28,7 @@ from aha_cli.store.filesystem import (
     inbox_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
+    list_task_rounds,
     list_run_summaries,
     load_config,
     mark_task_coordination,
@@ -52,7 +54,6 @@ WORKSPACE_ROOTS = [HL_PROJECT_ROOT, MY_PROJECT_ROOT]
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
-ACTIVE_BACKEND_STATUSES = {"running", "busy"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
 TASK_OUTCOME_SCAN_LIMIT = 10000
@@ -178,7 +179,7 @@ def task_activity_status(task: dict) -> str:
     }
     if "busy" in process_statuses:
         return "busy"
-    if str(task.get("status") or "").lower() == "running" or process_statuses.intersection(ACTIVE_BACKEND_STATUSES):
+    if str(task.get("status") or "").lower() == "running":
         return "running"
     return "idle"
 
@@ -220,6 +221,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha help: show AHA commands",
                 "- /aha status: show selected task status",
                 "- /aha agents: list selected task agents",
+                "- /aha checkpoint <summary>: record a task journal checkpoint",
                 "- /aha final: ask task-main to generate or update the Final",
                 "- /aha finalize: alias for /aha final",
                 "- /aha complete: mark selected task complete and lock normal messages",
@@ -256,6 +258,8 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 f"assignment={agent.get('assignment') or agent.get('created_reason') or '-'}"
             )
         return "\n".join(lines)
+    if name == "checkpoint":
+        return "Use `/aha checkpoint <summary>` from the selected task conversation to record a journal checkpoint."
     if name in {"final", "finalize"}:
         return "Use `/aha final` from the selected task conversation to ask task-main to generate or update the Final."
     if name in {"complete", "done"}:
@@ -265,7 +269,28 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
     return f"Unknown AHA command: /aha {name}. Try /aha help."
 
 
-def finalization_prompt(task_id: str, title: str) -> str:
+def format_task_journal_for_prompt(rounds: list[dict]) -> str:
+    if not rounds:
+        return "Task journal (chronological ordered list):\n1. (empty)"
+    lines = ["Task journal (chronological ordered list):"]
+    for index, item in enumerate(rounds[-50:], start=1):
+        lines.append(f"{index}. {item.get('summary')}")
+        lines.append(f"   - round_id: {item.get('round_id')}")
+        lines.append(f"   - trigger: {item.get('trigger')}")
+        changed_files = item.get("changed_files") or []
+        verification = item.get("verification") or []
+        risks = item.get("risks") or []
+        if changed_files:
+            lines.append(f"   - files: {', '.join(str(path) for path in changed_files)}")
+        if verification:
+            lines.append(f"   - verification: {'; '.join(str(check) for check in verification)}")
+        if risks:
+            lines.append(f"   - risks: {'; '.join(str(risk) for risk in risks)}")
+    return "\n".join(lines)
+
+
+def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None) -> str:
+    journal = textwrap.indent(format_task_journal_for_prompt(rounds or []), "        ")
     return textwrap.dedent(
         f"""\
         AHA finalize request.
@@ -274,10 +299,15 @@ def finalization_prompt(task_id: str, title: str) -> str:
         - id: {task_id}
         - title: {title}
 
+{journal}
+
         Generate or update the task Final now.
 
         Requirements:
         - Return concise Markdown only.
+        - Use the Task journal as the primary source when it has entries.
+        - Preserve meaningful task rounds under `## 任务轮次` as a chronological ordered list (`1.`, `2.`, ...).
+        - For each round, include result plus verification, files, notes, or risks when available.
         - Summarize the stable outcome of this task, not the whole noisy chat transcript.
         - Include changed files or concrete decisions when relevant.
         - Include verification performed when relevant.
@@ -295,6 +325,7 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
     except KeyError:
         return f"Task not found: {task_id}"
     task = detail["task"]
+    rounds = list_task_rounds(root, run_id, task_id)
     mark_task_coordination(root, run_id, task_id, final_summary_requested_at=utc_now(), final_summary_completed_at="")
     if task.get("status") not in TERMINAL_TASK_STATUSES:
         set_task_status(root, run_id, task_id, "running")
@@ -302,7 +333,7 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
         root,
         run_id,
         "main",
-        finalization_prompt(task_id, str(task.get("title", ""))),
+        finalization_prompt(task_id, str(task.get("title", "")), rounds),
         sender="aha",
         task_id=task_id,
         role="main",
@@ -314,6 +345,20 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
     )
     append_event(root, run_id, "task_final_requested", {"task_id": task_id, "target": "main", "policy": "finalize"})
     return f"Finalization requested for {task_id}. Task-main will write the Final when it finishes."
+
+
+def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command: str) -> str:
+    if not task_id:
+        return "No task is selected."
+    parts = command.split(maxsplit=2)
+    summary = parts[2].strip() if len(parts) > 2 else ""
+    if not summary:
+        return "Usage: /aha checkpoint <summary>"
+    try:
+        record = append_task_round(root, run_id, task_id, {"trigger": "manual", "summary": summary, "agents": ["browser"]})
+    except KeyError:
+        return f"Task not found: {task_id}"
+    return f"Checkpoint recorded for {task_id}: {record['round_id']}"
 
 
 def complete_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
@@ -397,6 +442,8 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         name = parts[1] if len(parts) > 1 else "help"
         if name in {"final", "finalize"}:
             reply = request_task_finalization(root, run_id, task_id, stripped)
+        elif name == "checkpoint":
+            reply = record_task_checkpoint(root, run_id, task_id, stripped)
         elif name in {"complete", "done"}:
             reply = complete_selected_task(root, run_id, task_id)
         elif name in {"reopen", "resume"}:

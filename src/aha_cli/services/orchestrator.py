@@ -12,6 +12,7 @@ from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     append_message,
+    append_task_round,
     mark_task_coordination,
     set_agent_status,
     set_task_status,
@@ -23,6 +24,7 @@ from aha_cli.store.filesystem import (
 
 TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted"}
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
+AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 
 
 def task_has_active_followup(task: dict) -> bool:
@@ -81,8 +83,9 @@ def task_assignment_prompt(task: dict) -> str:
 
 {commit_policy}
 
-        Return a concise response. If you need AHA to create sub-agents, include a JSON object
-        in your response with this shape:
+        Return plain text when no AHA action is needed. If you need AHA actions,
+        return ONLY one JSON object, with no Markdown fence and no explanatory text
+        outside it. Use this shape:
 
         {{
           "complexity": "simple|medium|complex",
@@ -101,12 +104,20 @@ def task_assignment_prompt(task: dict) -> str:
               "agent_id": "sub-001",
               "message": "follow-up for the agent that owns this scope",
               "reason": "why this existing sub-agent owns the follow-up"
+            }},
+            {{
+              "type": "record_task_update",
+              "summary": "one concise durable note for this completed work round",
+              "changed_files": ["optional/path"],
+              "verification": ["optional check"],
+              "risks": ["optional remaining risk"]
             }}
           ],
           "response": "short user-facing summary"
         }}
 
         Do not pretend a sub-agent exists before AHA creates it.
+        Use `record_task_update` only for concrete completed work, decisions, validation, commits, or meaningful follow-up state; do not record pure discussion or status chatter.
         """
     )
 
@@ -128,13 +139,13 @@ def dispatch_task_to_main(root: Path, run_id: str, task: dict) -> dict:
 
 
 def extract_action_payload(text: str) -> dict | None:
+    stripped = text.strip()
     candidates: list[str] = []
-    for match in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL):
-        candidates.append(match.group(1))
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        candidates.append(text[first : last + 1])
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    fenced_match = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", stripped, flags=re.DOTALL)
+    if fenced_match:
+        candidates.append(fenced_match.group(1))
     for candidate in candidates:
         try:
             payload = json.loads(candidate)
@@ -145,8 +156,40 @@ def extract_action_payload(text: str) -> dict | None:
     return None
 
 
+def invalid_action_schema_reason(payload: dict) -> str | None:
+    if "action" in payload:
+        return "top-level action is not supported; use actions array"
+    if payload.get("type") in AHA_ACTION_TYPES:
+        return "top-level type is not supported; use actions array"
+    if "actions" not in payload:
+        return None
+    actions = payload.get("actions")
+    if not isinstance(actions, list):
+        return "actions must be a list"
+    for action in actions:
+        if not isinstance(action, dict):
+            return "actions must contain objects"
+        action_type = action.get("type")
+        if not action_type:
+            return "each action must include type"
+        if action_type not in AHA_ACTION_TYPES:
+            return f"unknown action type: {action_type}"
+    return None
+
+
+def invalid_action_schema_message(reason: str) -> str:
+    return (
+        "Invalid AHA action schema: "
+        f"{reason}. Use {{\"actions\":[{{\"type\":\"route_to_agent\", ...}}], \"response\":\"...\"}}."
+    )
+
+
 def action_response_text(text: str) -> str:
     payload = extract_action_payload(text)
+    if payload:
+        reason = invalid_action_schema_reason(payload)
+        if reason:
+            return invalid_action_schema_message(reason)
     if payload and isinstance(payload.get("response"), str):
         return payload["response"].strip()
     return text.strip()
@@ -172,11 +215,40 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
     payload = extract_action_payload(text)
     if not payload:
         return []
+    invalid_reason = invalid_action_schema_reason(payload)
+    if invalid_reason:
+        append_event(root, run_id, "invalid_action_schema", {"task_id": task_id, "reason": invalid_reason})
+        return []
     executed: list[dict] = []
     for action in payload.get("actions", []):
         if not isinstance(action, dict):
             continue
         action_type = action.get("type")
+        if action_type == "record_task_update":
+            summary = str(action.get("summary") or "").strip()
+            if not summary:
+                append_event(
+                    root,
+                    run_id,
+                    "action_skipped",
+                    {"task_id": task_id, "type": "record_task_update", "reason": "missing summary"},
+                )
+                continue
+            record = append_task_round(
+                root,
+                run_id,
+                task_id,
+                {
+                    "trigger": str(action.get("trigger") or "main_turn"),
+                    "summary": summary,
+                    "changed_files": action.get("changed_files") or action.get("files"),
+                    "verification": action.get("verification") or action.get("checks"),
+                    "risks": action.get("risks"),
+                    "agents": action.get("agents") or ["main"],
+                },
+            )
+            executed.append({"type": "record_task_update", "round_id": record["round_id"]})
+            continue
         if action_type == "route_to_agent":
             target_id = str(action.get("agent_id") or action.get("target") or "").strip()
             message = str(action.get("message") or action.get("prompt") or "").strip()

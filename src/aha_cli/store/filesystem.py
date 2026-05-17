@@ -469,6 +469,8 @@ TIMELINE_EVENT_TYPES = {
     "task_dispatched",
     "task_started",
     "task_finished",
+    "task_round_recorded",
+    "task_journal_rendered",
     "task_result_written",
     "task_final_requested",
     "task_round_summary_requested",
@@ -1038,6 +1040,96 @@ def write_task_result(root: Path, run_id: str, task_id: str, content: str, polic
     return path
 
 
+def task_rounds_path(root: Path, run_id: str, task_id: str) -> Path:
+    return run_dir(root, run_id) / "tasks" / task_id / "rounds.jsonl"
+
+
+def list_task_rounds(root: Path, run_id: str, task_id: str) -> list[dict]:
+    rounds, _ = iter_jsonl_from(task_rounds_path(root, run_id, task_id), 0)
+    return rounds
+
+
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def render_task_rounds_markdown(task: dict, rounds: list[dict]) -> str:
+    title = str(task.get("title") or task.get("id") or "Task")
+    lines = ["# Final", "", f"Task: {title}", "", "## 任务轮次"]
+    if not rounds:
+        lines.append("")
+        lines.append("_暂无任务轮次记录。_")
+        return "\n".join(lines).rstrip() + "\n"
+    for index, item in enumerate(rounds, start=1):
+        heading = str(item.get("summary") or "").strip() or "(no summary)"
+        prefix = str(item.get("round_id") or f"round-{item.get('sequence') or '?'}")
+        trigger = str(item.get("trigger") or "manual")
+        lines.append("")
+        lines.append(f"{index}. **{heading}**")
+        lines.append(f"   - 轮次：`{prefix}`")
+        lines.append(f"   - 触发：`{trigger}`")
+        changed_files = _string_list(item.get("changed_files"))
+        verification = _string_list(item.get("verification"))
+        risks = _string_list(item.get("risks"))
+        agents = _string_list(item.get("agents"))
+        if changed_files:
+            lines.append(f"   - 文件：{', '.join(changed_files)}")
+        if verification:
+            lines.append(f"   - 验证：{'; '.join(verification)}")
+        if risks:
+            lines.append(f"   - 风险：{'; '.join(risks)}")
+        if agents:
+            lines.append(f"   - Agent：{', '.join(agents)}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_task_journal_result(root: Path, run_id: str, task_id: str) -> Path:
+    _plan, task, run = task_lookup(root, run_id, task_id)
+    rounds = list_task_rounds(root, run_id, task_id)
+    path = run / task["output_file"]
+    content = render_task_rounds_markdown(task, rounds)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    write_json(path.with_suffix(".meta.json"), {"task_id": task_id, "policy": "journal", "updated_at": utc_now(), "round_count": len(rounds)})
+    append_event(root, run_id, "task_journal_rendered", {"task_id": task_id, "path": str(path), "round_count": len(rounds)})
+    return path
+
+
+def append_task_round(root: Path, run_id: str, task_id: str, entry: dict) -> dict:
+    _plan, task, _run = task_lookup(root, run_id, task_id)
+    rounds = list_task_rounds(root, run_id, task_id)
+    sequence = len(rounds) + 1
+    payload = {
+        "task_id": task_id,
+        "round_id": str(entry.get("round_id") or f"round-{sequence:03d}"),
+        "sequence": sequence,
+        "at": str(entry.get("at") or utc_now()),
+        "trigger": str(entry.get("trigger") or "manual"),
+        "summary": str(entry.get("summary") or "").strip(),
+        "changed_files": _string_list(entry.get("changed_files")),
+        "verification": _string_list(entry.get("verification")),
+        "risks": _string_list(entry.get("risks")),
+        "agents": _string_list(entry.get("agents")),
+    }
+    if not payload["summary"]:
+        raise ValueError("Task round summary is required")
+    append_jsonl(task_rounds_path(root, run_id, task_id), payload)
+    render_task_journal_result(root, run_id, task_id)
+    append_event(
+        root,
+        run_id,
+        "task_round_recorded",
+        {"task_id": task_id, "round_id": payload["round_id"], "trigger": payload["trigger"], "chars": len(payload["summary"])},
+    )
+    return payload
+
+
 def list_sessions(root: Path, run_id: str, task_id: str | None = None) -> list[dict]:
     base = run_dir(root, run_id) / ("sessions" if task_id is None else f"tasks/{task_id}/sessions")
     if not base.is_dir():
@@ -1116,9 +1208,9 @@ def task_final_snapshot(root: Path, run_id: str, task_id: str) -> dict:
     output_meta_file = output_file.with_suffix(".meta.json")
     result_meta = read_json(output_meta_file) if output_meta_file.exists() else {}
     result = ""
-    if output_file.exists() and result_meta.get("policy") == "finalize":
+    if output_file.exists() and result_meta.get("policy") in {"finalize", "journal"}:
         result = output_file.read_text(encoding="utf-8")
-    return {"task_id": task_id, "result": result, "result_meta": result_meta}
+    return {"task_id": task_id, "result": result, "result_meta": result_meta, "rounds": list_task_rounds(root, run_id, task_id)}
 
 
 def task_context_snapshot(root: Path, run_id: str, task_id: str) -> dict:
@@ -1152,13 +1244,14 @@ def task_snapshot(root: Path, run_id: str, task_id: str) -> dict:
     task_messages = run / "tasks" / task_id / "messages.jsonl"
     result_meta = read_json(output_meta_file) if output_meta_file.exists() else {}
     result = ""
-    if output_file.exists() and result_meta.get("policy") == "finalize":
+    if output_file.exists() and result_meta.get("policy") in {"finalize", "journal"}:
         result = output_file.read_text(encoding="utf-8")
     return {
         "task": task,
         "prompt": prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else "",
         "result": result,
         "result_meta": result_meta,
+        "rounds": list_task_rounds(root, run_id, task_id),
         "log": log_file.read_text(encoding="utf-8") if log_file.exists() else "",
         "inbox": inbox_file.read_text(encoding="utf-8") if inbox_file.exists() else "",
         "messages": task_messages.read_text(encoding="utf-8") if task_messages.exists() else "",

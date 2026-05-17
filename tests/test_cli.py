@@ -7,6 +7,7 @@ import json
 import multiprocessing
 from pathlib import Path
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -16,7 +17,14 @@ from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.backend_runtime import backend_status, start_backend, stop_task_backends
-from aha_cli.services.orchestrator import monitor_task_coordination, record_sub_agent_report, task_assignment_prompt
+from aha_cli.services.orchestrator import (
+    action_response_text,
+    execute_actions,
+    extract_action_payload,
+    monitor_task_coordination,
+    record_sub_agent_report,
+    task_assignment_prompt,
+)
 from aha_cli.store.filesystem import (
     add_agent,
     append_jsonl,
@@ -28,6 +36,7 @@ from aha_cli.store.filesystem import (
     inbox_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
+    list_task_rounds,
     run_dir,
     mark_task_coordination,
     reopen_task,
@@ -43,6 +52,7 @@ from aha_cli.store.filesystem import (
     write_task_result,
 )
 from aha_cli.web.server import (
+    finalization_prompt,
     format_agent_command,
     format_aha_command,
     handle_ui_client,
@@ -165,6 +175,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status_from_agent_result(1, "done"), "failed")
         self.assertEqual(status_from_agent_result(0, "文件没有落盘，因为 read-only sandbox"), "blocked")
         self.assertEqual(status_from_agent_result(0, "当前沙箱是只读，写入被拦截"), "blocked")
+        self.assertEqual(status_from_agent_result(0, '`write_task_result()` 写入 `task["output_file"]`'), "completed")
 
     def test_running_status_keeps_original_task_start_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -613,6 +624,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("Never ask a sub-agent to commit files outside its assignment", assignment_prompt)
         self.assertIn("Commit message policy:", assignment_prompt)
         self.assertIn("AHA-Task: task-001", assignment_prompt)
+        self.assertIn("return ONLY one JSON object", assignment_prompt)
+        self.assertIn('"actions"', assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -627,6 +640,10 @@ class CliTests(unittest.TestCase):
                 main_prompt = chat_prompt(root, run_id, "main", main_message, "")
 
                 self.assertIn("Commit ownership policy:", main_prompt)
+                self.assertIn("Route format:", main_prompt)
+                self.assertIn('"type": "route_to_agent"', main_prompt)
+                self.assertIn('"type": "record_task_update"', main_prompt)
+                self.assertNotIn("Return a JSON action `route_to_agent`", main_prompt)
                 self.assertIn("route commit work to the sub-agent that owns the changed scope", main_prompt)
                 self.assertIn("Commit message policy:", main_prompt)
                 self.assertIn("AHA-Task: task-001", main_prompt)
@@ -782,6 +799,160 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "running")
                 browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
                 self.assertIn("等待子 agent 完成", browser_messages[-1]["message"])
+
+    def test_action_parser_ignores_embedded_json_examples(self) -> None:
+        reply = textwrap.dedent(
+            """\
+            我建议使用这个格式：
+
+            ```json
+            {"actions":[{"type":"route_to_agent","agent_id":"...","message":"..."}],"response":"..."}
+            ```
+            """
+        ).strip()
+
+        self.assertIsNone(extract_action_payload(reply))
+        self.assertEqual(action_response_text(reply), reply)
+
+    def test_invalid_top_level_action_schema_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Bad route schema", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                reply = json.dumps(
+                    {
+                        "action": "route_to_agent",
+                        "agent_id": "sub-001",
+                        "message": "This should not route",
+                        "response": "sent",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend") as start_backend_mock:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                self.assertEqual(executed, [])
+                self.assertIn("Invalid AHA action schema", action_response_text(reply))
+                start_backend_mock.assert_not_called()
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                self.assertEqual(sub_messages, [])
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                self.assertTrue(any(event["type"] == "invalid_action_schema" for event in events))
+
+    def test_execute_actions_records_task_update_round(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Journal task", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "修复 action schema 误解析",
+                                "changed_files": ["src/aha_cli/services/orchestrator.py"],
+                                "verification": ["tests OK"],
+                                "risks": [],
+                            }
+                        ],
+                        "response": "已记录",
+                    },
+                    ensure_ascii=False,
+                )
+
+                executed = execute_actions(root, run_id, "task-001", reply)
+
+                self.assertEqual(executed, [{"type": "record_task_update", "round_id": "round-001"}])
+                rounds = list_task_rounds(root, run_id, "task-001")
+                self.assertEqual(rounds[0]["summary"], "修复 action schema 误解析")
+                self.assertEqual(rounds[0]["changed_files"], ["src/aha_cli/services/orchestrator.py"])
+                snapshot = task_final_snapshot(root, run_id, "task-001")
+                self.assertEqual(snapshot["result_meta"]["policy"], "journal")
+                self.assertIn("修复 action schema 误解析", snapshot["result"])
+                self.assertIn("## 任务轮次", snapshot["result"])
+                self.assertIn("1. **修复 action schema 误解析**", snapshot["result"])
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                self.assertTrue(any(event["type"] == "task_round_recorded" for event in events))
+
+    def test_codex_chat_record_task_update_does_not_wait_for_subagents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Record round", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "完成了一个小修复", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps(
+                    {
+                        "actions": [{"type": "record_task_update", "summary": "完成小修复"}],
+                        "response": "完成",
+                    },
+                    ensure_ascii=False,
+                )
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                self.assertIn("完成", output)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                self.assertNotIn("等待子 agent 完成", "\n".join(item["message"] for item in browser_messages))
+                self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "awaiting_user")
+
+    def test_finalization_prompt_includes_task_journal(self) -> None:
+        prompt = finalization_prompt(
+            "task-001",
+            "Journal task",
+            [
+                {
+                    "round_id": "round-001",
+                    "trigger": "main_turn",
+                    "summary": "完成小修复",
+                    "changed_files": ["src/app.py"],
+                    "verification": ["unit tests"],
+                    "risks": [],
+                }
+            ],
+        )
+
+        self.assertIn("Task journal (chronological ordered list):", prompt)
+        self.assertIn("1. 完成小修复", prompt)
+        self.assertIn("round-001", prompt)
+        self.assertIn("完成小修复", prompt)
+        self.assertIn("Use the Task journal as the primary source", prompt)
+        self.assertIn("chronological ordered list", prompt)
+
+    def test_aha_checkpoint_records_task_round(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Checkpoint task", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                handled, forwarded, response = handle_slash_command(
+                    root,
+                    run_id,
+                    {"sender": "browser", "target": "main"},
+                    "/aha checkpoint 完成第一轮清理",
+                    "task-001",
+                )
+
+                self.assertTrue(handled)
+                self.assertIsNone(forwarded)
+                self.assertIn("Checkpoint recorded", response["message"]["message"])
+                rounds = list_task_rounds(root, run_id, "task-001")
+                self.assertEqual(rounds[0]["trigger"], "manual")
+                self.assertEqual(rounds[0]["summary"], "完成第一轮清理")
 
     def test_codex_chat_autostarts_codex_sub_agent_from_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1056,7 +1227,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(snapshot["tasks"][0]["coordination"]["followup_started_at"], "2026-05-15T00:00:00+00:00")
         agents = {agent["id"]: agent for agent in snapshot["tasks"][0]["agents"]}
-        self.assertEqual(snapshot["tasks"][0]["activity_status"], "running")
+        self.assertEqual(snapshot["tasks"][0]["activity_status"], "idle")
         self.assertEqual(agents["main"]["backend_process_status"], "running")
         self.assertEqual(agents["main"]["backend_process_pid"], 1234)
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")

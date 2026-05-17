@@ -22,6 +22,7 @@ from aha_cli.services.orchestrator import (
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
+    append_task_round,
     ensure_session,
     event_path,
     inbox_path,
@@ -49,7 +50,6 @@ BLOCKED_REPLY_MARKERS = (
     "writing is blocked",
     "写入被拦截",
     "写入失败",
-    "写入 `",
     "文件没有落盘",
     "permission denied",
     "Permission denied",
@@ -200,6 +200,16 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
             final_context = ""
             if is_finalization and existing_final:
                 final_context = f"- existing Final chars: {len(existing_final)}\n"
+            rounds = detail.get("rounds", [])
+            journal_context = ""
+            if rounds:
+                recent_rounds = rounds[-10:]
+                journal_lines = ["Task journal:"]
+                for round_item in recent_rounds:
+                    journal_lines.append(
+                        f"- {round_item.get('round_id')} [{round_item.get('trigger')}] {round_item.get('summary')}"
+                    )
+                journal_context = textwrap.indent("\n".join(journal_lines), "                ")
             commit_policy = textwrap.indent(commit_message_policy_prompt(task_id, target).rstrip(), "                ")
             task_context = textwrap.dedent(
                 f"""\
@@ -210,11 +220,15 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
                 - role selected by user: {item.get("role", "")}
                 - agents: {detail["task"].get("agents", [])}
                 {final_context.rstrip()}
+{journal_context}
 
                 Ownership and routing policy:
                 - Each sub-agent owns its assigned scope (`assignment` / `created_reason`).
                 - If a user follow-up is about a scope owned by an existing sub-agent, do not handle that work yourself.
-                - Return a JSON action `route_to_agent` with the responsible `agent_id`, a concrete `message`, and a short user-facing `response`.
+                - To route work or record a durable task update, return ONLY one JSON object with `actions` and `response`; do not wrap it in Markdown or mix it with prose.
+                - Route format: `{{"type": "route_to_agent", "agent_id": "...", "message": "..."}}`.
+                - Task update format: `{{"type": "record_task_update", "summary": "...", "changed_files": [], "verification": [], "risks": []}}`.
+                - Use `record_task_update` only after concrete completed work, decisions, validation, commits, or meaningful follow-up state; do not record pure discussion or status chatter.
                 - Handle the message yourself only when it is clearly task-main coordination, cross-agent summary, or no sub-agent owns the scope.
 
                 Commit ownership policy:
@@ -234,7 +248,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
     status = status_snapshot(root, run_id)
     mode_instruction = (
         "You are generating the task Final. Return concise Markdown only. "
-        "Summarize the stable outcome, changed files or decisions, verification, and remaining actionable risks. "
+        "Use the Task journal as the primary source when available. Preserve the task's meaningful rounds under `## 任务轮次` as a chronological ordered list (`1.`, `2.`, ...), then summarize the stable outcome, changed files or decisions, verification, and remaining actionable risks. "
         "Do not echo noisy command chatter unless it affects the outcome."
         if is_finalization
         else "Reply directly to the user. Keep the answer concise and use the user's language."
@@ -413,6 +427,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     save_session(root, session)
                 if exit_code == 0 and reply.strip():
                     executed = execute_actions(root, run_id, item_task_id, reply)
+                    delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
                     display_reply = action_response_text(reply)
                     append_message(
                         root,
@@ -425,8 +440,8 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         from_agent=args.sender,
                         to_agent=reply_target,
                     )
-                    if executed:
-                        append_event(root, run_id, "agent_delegated", {"task_id": item_task_id, "count": len(executed)})
+                    if delegating_actions:
+                        append_event(root, run_id, "agent_delegated", {"task_id": item_task_id, "count": len(delegating_actions)})
                         detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
                         if detail:
                             append_message(
@@ -459,10 +474,25 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         else:
                             detail = task_snapshot(root, run_id, item_task_id)
                             if item.get("coordination") == "subagents_complete":
+                                sub_agents = [
+                                    agent.get("id")
+                                    for agent in detail["task"].get("agents", [])
+                                    if agent.get("role") == "sub" and agent.get("id")
+                                ]
+                                append_task_round(
+                                    root,
+                                    run_id,
+                                    item_task_id,
+                                    {
+                                        "trigger": "subagents_complete",
+                                        "summary": display_reply,
+                                        "agents": ["main", *sub_agents],
+                                    },
+                                )
                                 mark_task_coordination(root, run_id, item_task_id, round_summary_completed_at=utc_now())
                                 set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                                 set_task_status(root, run_id, item_task_id, "awaiting_user")
-                            elif executed or task_has_incomplete_sub_agents(detail["task"]):
+                            elif delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
                                 set_agent_status(root, run_id, item_task_id, agent_id, "waiting")
                                 set_task_status(root, run_id, item_task_id, "running")
                             else:
