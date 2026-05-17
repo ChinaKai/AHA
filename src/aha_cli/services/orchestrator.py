@@ -21,7 +21,7 @@ from aha_cli.store.filesystem import (
     run_dir,
 )
 
-TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked"}
+TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted"}
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 
 

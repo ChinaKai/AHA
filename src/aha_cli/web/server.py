@@ -11,6 +11,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import (
     backend_status,
     start_backend,
+    stop_backend,
 )
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.tasks import create_task_and_dispatch
@@ -33,6 +34,7 @@ from aha_cli.store.filesystem import (
     run_exists,
     run_dir,
     run_summary,
+    set_agent_status,
     set_task_status,
     set_task_hidden,
     status_snapshot,
@@ -222,6 +224,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha finalize: alias for /aha final",
                 "- /aha complete: mark selected task complete and lock normal messages",
                 "- /aha reopen: cancel completion and allow follow-up messages",
+                "- /aha interrupt: interrupt the selected agent's current turn",
                 "",
                 "Agent command:",
                 "- /agent <command>: route /<command> to the selected agent",
@@ -333,6 +336,41 @@ def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
     return f"{task_id} reopened. Follow-up messages are allowed again."
 
 
+def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, target: str) -> tuple[str, dict]:
+    if not task_id:
+        return "No task is selected.", {"interrupted": False, "reason": "no_task"}
+    try:
+        detail = task_snapshot(root, run_id, task_id)
+    except KeyError:
+        return f"Task not found: {task_id}", {"interrupted": False, "reason": "task_not_found"}
+    task = detail["task"]
+    agent_id = target or "main"
+    if not any(str(agent.get("id") or "") == agent_id for agent in task.get("agents", [])):
+        return f"Agent not found: {agent_id}", {"interrupted": False, "reason": "agent_not_found", "agent_id": agent_id}
+    state = backend_status(root, run_id, agent_id, task_id=task_id)
+    if state.get("status") != "busy":
+        return (
+            f"No active turn to interrupt for {agent_id} on {task_id}.",
+            {"interrupted": False, "reason": "not_busy", "agent_id": agent_id, "task_id": task_id, "backend": state},
+        )
+    stopped = stop_backend(root, run_id, agent_id, task_id=task_id, timeout=2.0)
+    offset_file = chat_offset_path(run_dir(root, run_id), agent_id, task_id)
+    inbox = inbox_path(root, run_id, agent_id)
+    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+    set_agent_status(root, run_id, task_id, agent_id, "interrupted")
+    set_task_status(root, run_id, task_id, "awaiting_user")
+    append_event(
+        root,
+        run_id,
+        "agent_interrupted",
+        {"task_id": task_id, "agent_id": agent_id, "target": agent_id, "backend": stopped},
+    )
+    return (
+        f"Interrupted {agent_id} on {task_id}. Pending user messages were not sent automatically.",
+        {"interrupted": True, "agent_id": agent_id, "task_id": task_id, "backend": stopped},
+    )
+
+
 def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id: str | None, command: str) -> tuple[bool, str | None, str | None]:
     del root, run_id, task_id, agent_id
     suffix = command.removeprefix("/agent").strip()
@@ -363,6 +401,8 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
             reply = complete_selected_task(root, run_id, task_id)
         elif name in {"reopen", "resume"}:
             reply = reopen_selected_task(root, run_id, task_id)
+        elif name in {"interrupt", "stop"}:
+            reply, interrupt_payload = interrupt_selected_agent(root, run_id, task_id, target)
         else:
             reply = format_aha_command(root, run_id, task_id, stripped, target)
     else:
@@ -381,7 +421,10 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         to_agent="browser",
         agent_id=target if stripped.startswith("/aha") else None,
     )
-    return True, None, {"message": response}
+    command_response = {"message": response}
+    if "interrupt_payload" in locals():
+        command_response["interrupt"] = interrupt_payload
+    return True, None, command_response
 
 
 def message_backend_autostart_config(root: Path, run_id: str, task_id: str | None, target_id: str) -> dict | None:

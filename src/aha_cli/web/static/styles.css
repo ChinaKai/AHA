@@ -330,6 +330,7 @@ button, input, select { font: inherit; }
 }
 .status.failed { background: #fee2e2; color: #7f1d1d; }
 .status.blocked { background: #fef3c7; color: #92400e; }
+.status.interrupted { background: #fef3c7; color: #92400e; }
 .status.pending { background: #f2f4f7; color: #344054; }
 .status.hidden { background: #f2f4f7; color: #475467; }
 .workspace {
@@ -481,6 +482,7 @@ button, input, select { font: inherit; }
 .timeline-status.completed { border-left-color: #16a34a; }
 .timeline-status.failed { border-left-color: #dc2626; }
 .timeline-status.blocked { border-left-color: #d97706; }
+.timeline-status.interrupted { border-left-color: #d97706; }
 .timeline-status.session, .timeline-status.usage { border-left-color: #7c3aed; }
 .turn-timer {
   display: grid;
@@ -520,6 +522,7 @@ button, input, select { font: inherit; }
 .turn-timer.completed { border-left-color: #16a34a; }
 .turn-timer.failed { border-left-color: #dc2626; }
 .turn-timer.blocked { border-left-color: #d97706; }
+.turn-timer.interrupted { border-left-color: #d97706; }
 .turn-timer.running .activity-dot {
   background: #2563eb;
   box-shadow: 0 0 0 4px #dbeafe;
@@ -535,6 +538,7 @@ button, input, select { font: inherit; }
 }
 .turn-timer.failed .activity-dot { background: #dc2626; }
 .turn-timer.blocked .activity-dot { background: #d97706; }
+.turn-timer.interrupted .activity-dot { background: #d97706; }
 .conversation-filters {
   display: flex;
   align-items: center;
@@ -639,6 +643,14 @@ pre {
   white-space: nowrap;
   color: #667085;
 }
+.interrupt-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: #fecaca;
+  color: #991b1b;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .backend-status.running .activity-dot {
   background: #16a34a;
 }
@@ -649,6 +661,55 @@ pre {
 .backend-status.stopped .activity-dot,
 .backend-status.pending .activity-dot {
   background: #98a2b3;
+}
+.pending-messages {
+  display: grid;
+  gap: 8px;
+  padding: 10px 18px;
+  border-top: 1px solid #e4e7ec;
+  background: #fff7ed;
+}
+.pending-messages.hidden {
+  display: none;
+}
+.pending-note {
+  color: #92400e;
+  font-size: 12px;
+}
+.pending-message {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #ffffff;
+}
+.pending-message > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pending-message strong {
+  color: #92400e;
+  font-size: 12px;
+}
+.pending-message span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #344054;
+  font-size: 13px;
+}
+.pending-remove {
+  min-height: 28px;
+  padding: 0 8px;
+  color: #92400e;
+  font-size: 12px;
 }
 .command-menu {
   display: grid;

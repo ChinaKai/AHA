@@ -1026,6 +1026,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn("selected-task-meta", html)
                 self.assertIn("selected-agent-info", html)
                 self.assertIn("backend-status", html)
+                self.assertIn("pending-messages", html)
                 self.assertIn("command-menu", html)
                 self.assertIn("conversation-filters", html)
                 self.assertIn('data-tab="final"', html)
@@ -1162,6 +1163,84 @@ class CliTests(unittest.TestCase):
 
                 self.assertTrue(sent["ok"])
                 start_backend.assert_called_once()
+
+    def test_aha_interrupt_stops_backend_and_marks_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Interrupt turn", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+                append_message(root, run_id, "main", "in-flight", sender="browser", task_id="task-001", role="main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, 0)
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "busy", "pid": 1234}),
+                    mock.patch("aha_cli.web.server.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "role": "main",
+                            "task_id": "task-001",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "sender": "browser",
+                            "message": "/aha interrupt",
+                        },
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertTrue(result["interrupt"]["interrupted"])
+                stop_backend.assert_called_once()
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                self.assertEqual(detail["status"], "awaiting_user")
+                self.assertEqual(detail["agents"][0]["status"], "interrupted")
+                self.assertIsNotNone(detail["agents"][0]["finished_at"])
+                self.assertEqual(json.loads(offset_file.read_text(encoding="utf-8"))["offset"], inbox_path(root, run_id, "main").stat().st_size)
+
+    def test_aha_interrupt_ignores_idle_backend_listener(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Idle listener", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "running", "pid": 1234}),
+                    mock.patch("aha_cli.web.server.stop_backend") as stop_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "role": "main",
+                            "task_id": "task-001",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "sender": "browser",
+                            "message": "/aha interrupt",
+                        },
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertFalse(result["interrupt"]["interrupted"])
+                self.assertEqual(result["interrupt"]["reason"], "not_busy")
+                stop_backend.assert_not_called()
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                self.assertEqual(detail["status"], "awaiting_user")
+                self.assertEqual(detail["agents"][0]["status"], "completed")
 
     def test_task_action_resume_alias_reopens_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

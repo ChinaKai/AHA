@@ -24,7 +24,11 @@ let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
 let eventTailInitialized = false;
+let pendingMessageId = 0;
+let pendingSendInFlight = false;
 const allEvents = [];
+const pendingMessages = [];
+const interruptedContexts = new Set();
 const conversationPageLimit = 50;
 const logPageLimit = 200;
 const conversationStates = new Map();
@@ -33,7 +37,7 @@ const finalDetails = new Map();
 const contextDetails = new Map();
 const logStates = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
-const terminalAgentStatuses = new Set(["completed", "failed", "blocked"]);
+const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interrupted"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
 const collapsedMessageCharLimit = 900;
@@ -98,6 +102,7 @@ const workspaceSelectEl = document.getElementById("workspace-select");
 const workspaceCustomEl = document.getElementById("workspace-custom");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
 const backendStatusEl = document.getElementById("backend-status");
+const pendingMessagesEl = document.getElementById("pending-messages");
 const conversationFiltersEl = document.getElementById("conversation-filters");
 const commandMenuEl = document.getElementById("command-menu");
 let commandSelection = 0;
@@ -108,7 +113,8 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate or update the Final." },
   { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Mark the selected task complete and lock messages." },
-  { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." }
+  { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
+  { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." }
 ];
 
 function escapeHtml(value) {
@@ -226,6 +232,8 @@ function resetRunScopedState() {
   finalDetails.clear();
   contextDetails.clear();
   logStates.clear();
+  pendingMessages.length = 0;
+  interruptedContexts.clear();
   panelEl.innerHTML = '<div class="empty">正在切换会话...</div>';
 }
 
@@ -597,6 +605,160 @@ function backendTarget() {
   return agentTargetEl.value || "main";
 }
 
+function messageContextKey(taskId = selectedTaskId, target = backendTarget()) {
+  return `${currentRunId || ""}::${taskId || ""}::${target || "main"}`;
+}
+
+function isAhaCommand(message) {
+  return /^\/aha(?:\s|$)/i.test(String(message || "").trim());
+}
+
+function isInterruptCommand(message) {
+  return /^\/aha\s+(interrupt|stop)(?:\s|$)/i.test(String(message || "").trim());
+}
+
+function selectedBackendActive() {
+  const status = String(backendStatusData?.status || agentBackendProcessStatus(selectedAgent()) || "stopped").toLowerCase();
+  return status === "busy";
+}
+
+function pendingForContext(taskId = selectedTaskId, target = backendTarget()) {
+  const key = messageContextKey(taskId, target);
+  return pendingMessages.filter(item => item.contextKey === key);
+}
+
+function renderPendingMessages() {
+  if (!pendingMessagesEl) return;
+  const task = selectedTask();
+  const target = backendTarget();
+  const key = messageContextKey(task?.id, target);
+  const items = task ? pendingForContext(task.id, target) : [];
+  const interrupted = interruptedContexts.has(key);
+  pendingMessagesEl.classList.toggle("hidden", !items.length && !interrupted);
+  if (!items.length && !interrupted) {
+    pendingMessagesEl.innerHTML = "";
+    return;
+  }
+  const note = interrupted
+    ? '<div class="pending-note">上一轮已中断。确认 pending 后点 Send，会合并发送下一轮。</div>'
+    : '<div class="pending-note">Agent working 中的消息会先暂存，当前轮结束后自动合并发送。</div>';
+  const list = items.map((item, index) => `
+    <div class="pending-message" data-pending-id="${escapeHtml(item.id)}">
+      <div>
+        <strong>#${index + 1}</strong>
+        <span>${escapeHtml(item.message)}</span>
+      </div>
+      <button type="button" class="pending-remove" data-remove-pending="${escapeHtml(item.id)}" title="删除 pending 消息">Delete</button>
+    </div>
+  `).join("");
+  pendingMessagesEl.innerHTML = `${note}${list}`;
+}
+
+function addPendingMessage(message, task, agentId) {
+  const target = agentId || "main";
+  pendingMessageId += 1;
+  pendingMessages.push({
+    id: String(pendingMessageId),
+    contextKey: messageContextKey(task.id, target),
+    runId: currentRunId,
+    taskId: task.id,
+    agentId: target,
+    role: target === "main" ? "main" : "sub",
+    message,
+    createdAt: new Date().toISOString()
+  });
+  renderPendingMessages();
+}
+
+function removePendingMessage(id) {
+  const index = pendingMessages.findIndex(item => item.id === String(id));
+  if (index >= 0) pendingMessages.splice(index, 1);
+  renderPendingMessages();
+}
+
+function clearPendingForContext(taskId, target) {
+  const key = messageContextKey(taskId, target);
+  for (let index = pendingMessages.length - 1; index >= 0; index -= 1) {
+    if (pendingMessages[index].contextKey === key) pendingMessages.splice(index, 1);
+  }
+}
+
+function mergedPendingPrompt(items, currentMessage, interrupted) {
+  const lines = [];
+  if (interrupted) {
+    lines.push(
+      "上一轮 agent 工作被用户中断。",
+      "继续前请注意：当前工作区或命令可能已有部分副作用，请基于当前实际状态判断后继续。",
+      ""
+    );
+  }
+  if (items.length) {
+    lines.push("用户在你工作期间补充了以下消息，请按时间顺序合并理解并继续处理：");
+    items.forEach((item, index) => {
+      lines.push(`${index + 1}. [${formatLocalTimestamp(item.createdAt, item.createdAt)}] ${item.message}`);
+    });
+  }
+  if (currentMessage) {
+    if (items.length) lines.push("", "用户当前发送的新消息：");
+    lines.push(currentMessage);
+  }
+  if (!items.length && !currentMessage && interrupted) {
+    lines.push("用户中断了上一轮，但没有补充新消息。");
+  }
+  return lines.join("\n").trim();
+}
+
+async function sendBackendMessage(task, agentId, message) {
+  const target = agentId === "main" ? "main" : agentId;
+  return fetchJson(apiUrl("/api/send"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(runScopedPayload({
+      target,
+      role: agentId === "main" ? "main" : "sub",
+      task_id: task.id,
+      from_agent: "browser",
+      to_agent: agentId,
+      message,
+      sender: "browser"
+    }))
+  }, "Failed to send message");
+}
+
+async function flushPendingMessages(task, agentId, currentMessage = "", options = {}) {
+  const target = agentId || "main";
+  const key = messageContextKey(task.id, target);
+  if (pendingSendInFlight) return null;
+  const items = pendingForContext(task.id, target);
+  const interrupted = interruptedContexts.has(key);
+  if (!items.length && !currentMessage && !interrupted) return null;
+  if (options.auto && interrupted) return null;
+  if (options.auto && terminalTaskStatuses.has(taskCurrentStatus(task))) return null;
+  pendingSendInFlight = true;
+  try {
+    const message = items.length || interrupted ? mergedPendingPrompt(items, currentMessage, interrupted) : currentMessage;
+    const response = await sendBackendMessage(task, target, message);
+    clearPendingForContext(task.id, target);
+    interruptedContexts.delete(key);
+    renderPendingMessages();
+    return response;
+  } finally {
+    pendingSendInFlight = false;
+  }
+}
+
+async function maybeAutoFlushPending() {
+  const task = selectedTask();
+  if (!task || selectedBackendActive()) return null;
+  const agentId = backendTarget();
+  if (!pendingForContext(task.id, agentId).length) return null;
+  const response = await flushPendingMessages(task, agentId, "", { auto: true });
+  if (!response) return null;
+  await pollEvents();
+  conversationAutoFollow = true;
+  return response;
+}
+
 function agentBackendProcessStatus(agent) {
   const raw = String(agent?.backend_process_status || "stopped").toLowerCase();
   if (raw === "running" || raw === "busy") return raw;
@@ -800,6 +962,7 @@ const timelineEventTypes = new Set([
   "agent_created",
   "agent_config_updated",
   "agent_finished",
+  "agent_interrupted",
   "workspace_missing"
 ]);
 
@@ -1222,6 +1385,7 @@ async function loadStatus(options = {}) {
   } else {
     renderSelectedAgentInfo();
   }
+  renderPendingMessages();
 }
 
 async function loadBackendStatus() {
@@ -1473,6 +1637,7 @@ async function selectTask(taskId) {
   renderAgents();
   await loadBackendStatus();
   await ensureActiveTabData();
+  renderPendingMessages();
   renderPanel();
 }
 
@@ -1662,10 +1827,12 @@ function renderBackendStatus() {
     state.last_reply_at ? `last reply ${formatLocalTimestamp(state.last_reply_at, state.last_reply_at)}` : ""
   ].filter(Boolean).join(" | ");
   backendStatusEl.className = `backend-status ${escapeHtml(status)}`;
+  const canInterrupt = status === "busy";
   backendStatusEl.innerHTML = `
     <span class="activity-dot"></span>
     <strong>${escapeHtml(status)}</strong>
     <code title="${escapeHtml(detail)}">${escapeHtml(detail)}</code>
+    ${canInterrupt ? '<button class="interrupt-button" type="button" data-backend-action="interrupt">Interrupt</button>' : ""}
   `;
 }
 
@@ -1798,6 +1965,7 @@ function renderTimelineEvent(event) {
   if (event.type === "task_completed") return renderTimelineStatus("task completed", `exit=${data.exit_code ?? "-"}`, "completed", ts);
   if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", ts);
   if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "running", ts);
+  if (event.type === "agent_interrupted") return renderTimelineStatus("agent interrupted", data.agent_id || data.target || "main", "interrupted", ts);
   if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
   if (event.type === "agent_config_updated") return renderTimelineStatus("agent permission updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "session", ts);
   if (event.type === "agent_thread") return renderTimelineStatus("codex session", data.thread_id || "-", "session", ts);
@@ -1969,27 +2137,28 @@ sendFormEl.addEventListener("submit", async event => {
   const message = messageEl.value.trim();
   if (!task || !message) return;
   const agentId = agentTargetEl.value || "main";
-  const target = agentId === "main" ? "main" : agentId;
+  const isAha = isAhaCommand(message);
   try {
-    await fetchJson(apiUrl("/api/send"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(runScopedPayload({
-        target,
-        role: agentId === "main" ? "main" : "sub",
-        task_id: task.id,
-        from_agent: "browser",
-        to_agent: agentId,
-        message,
-        sender: "browser"
-      }))
-    }, "Failed to send message");
+    let response = null;
+    if (selectedBackendActive() && !isAha) {
+      addPendingMessage(message, task, agentId);
+    } else if (isAha) {
+      response = await sendBackendMessage(task, agentId, message);
+      if (isInterruptCommand(message) && response?.interrupt?.interrupted) {
+        interruptedContexts.add(messageContextKey(task.id, agentId));
+      }
+    } else {
+      response = await flushPendingMessages(task, agentId, message);
+    }
     messageEl.value = "";
     syncMobileComposerAction();
     commandMenuEl.classList.add("hidden");
     closeMobileActionPanel();
     await pollEvents();
+    await loadStatus({ forceAgents: Boolean(response?.interrupt) });
+    await loadBackendStatus();
     conversationAutoFollow = true;
+    renderPendingMessages();
     renderPanel();
   } catch (err) {
     alert(err.message || String(err));
@@ -2025,6 +2194,34 @@ commandMenuEl.addEventListener("mousedown", event => {
   if (!target) return;
   event.preventDefault();
   applySlashCommand(Number(target.dataset.commandIndex || "0"));
+});
+
+pendingMessagesEl.addEventListener("click", event => {
+  const button = event.target instanceof Element ? event.target.closest("[data-remove-pending]") : null;
+  if (!button) return;
+  removePendingMessage(button.dataset.removePending || "");
+});
+
+backendStatusEl.addEventListener("click", async event => {
+  const button = event.target instanceof Element ? event.target.closest("[data-backend-action='interrupt']") : null;
+  if (!button) return;
+  const task = selectedTask();
+  if (!task) return;
+  button.disabled = true;
+  const agentId = backendTarget();
+  try {
+    const response = await sendBackendMessage(task, agentId, "/aha interrupt");
+    if (response?.interrupt?.interrupted) interruptedContexts.add(messageContextKey(task.id, agentId));
+    await pollEvents();
+    await loadStatus({ forceAgents: true });
+    await loadBackendStatus();
+    renderPendingMessages();
+    renderPanel();
+  } catch (err) {
+    alert(err.message || String(err));
+  } finally {
+    button.disabled = false;
+  }
 });
 
 conversationFiltersEl.addEventListener("change", event => {
@@ -2083,6 +2280,7 @@ agentTargetEl.addEventListener("change", async () => {
   conversationAutoFollow = true;
   renderConversationFilters();
   await ensureConversationLoaded();
+  renderPendingMessages();
   renderPanel();
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
@@ -2120,9 +2318,15 @@ async function tick() {
     await loadStatus();
     await ensureConversationLoaded();
     await loadBackendStatus();
+    const autoFlushResponse = await maybeAutoFlushPending();
+    if (autoFlushResponse) {
+      await loadStatus({ forceAgents: true });
+      await loadBackendStatus();
+    }
     await pollEvents();
     tickFailureCount = 0;
     tickBackoffUntil = 0;
+    renderPendingMessages();
     renderPanel();
   } catch (err) {
     recordTickFailure();
