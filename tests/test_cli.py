@@ -1686,6 +1686,47 @@ class CliTests(unittest.TestCase):
         self.assertFalse(older["has_more"])
         self.assertEqual(older["events"][0]["data"]["message"], "one")
 
+    def test_conversation_events_api_hides_action_envelope_agent_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Conversation action envelope", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                user_facing_response = "只展示投影后的 response"
+                action_envelope = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "raw envelope should stay out of timeline",
+                                "changed_files": [],
+                                "verification": [],
+                                "risks": [],
+                            }
+                        ],
+                        "response": user_facing_response,
+                    },
+                    ensure_ascii=False,
+                )
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": action_envelope})
+                append_event(
+                    root,
+                    run_id,
+                    "message",
+                    {"task_id": "task-001", "sender": "main", "target": "browser", "message": user_facing_response},
+                )
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        timeline_texts = [str(event["data"].get("text") or event["data"].get("message") or "") for event in body["events"]]
+        self.assertEqual(timeline_texts, [user_facing_response])
+        self.assertNotIn(action_envelope, timeline_texts)
+        self.assertFalse(any('"actions"' in text and '"response"' in text for text in timeline_texts))
+
     def test_events_api_replays_from_saved_offset_after_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
