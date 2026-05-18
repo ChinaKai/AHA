@@ -1,11 +1,15 @@
 const queryParams = new URLSearchParams(location.search);
 const rawPollInterval = Number(queryParams.get("poll") || "1000");
 const rawRequestTimeoutMs = Number(queryParams.get("timeout") || "12000");
+const rawWsStaleMs = Number(queryParams.get("ws_stale_ms") || queryParams.get("ws_watchdog_ms") || "15000");
 const pollInterval = Number.isFinite(rawPollInterval) ? Math.max(250, rawPollInterval) : 1000;
 const requestTimeoutMs = Number.isFinite(rawRequestTimeoutMs) ? Math.max(1000, rawRequestTimeoutMs) : 12000;
+const eventSocketStaleMs = Number.isFinite(rawWsStaleMs) ? Math.max(5000, rawWsStaleMs) : 15000;
 const eventTransport = String(queryParams.get("transport") || queryParams.get("events") || "").toLowerCase();
 const wsConfig = String(queryParams.get("ws") || "").trim();
 const wsDisabled = eventTransport === "poll" || eventTransport === "polling" || ["0", "false", "off"].includes(wsConfig.toLowerCase());
+const realtimeDebugParam = String(queryParams.get("realtime_debug") || queryParams.get("debug") || "").toLowerCase();
+const realtimeDebugEnabled = !["0", "false", "off", "no", "none"].includes(realtimeDebugParam);
 let currentRunId = String(queryParams.get("run_id") || queryParams.get("run") || "").trim();
 let defaultRunId = "";
 let runsData = [];
@@ -34,6 +38,11 @@ let eventSocket = null;
 let eventSocketState = "idle";
 let eventSocketFailureCount = 0;
 let eventSocketReconnectAt = 0;
+let realtimeCatchupPromise = null;
+let realtimeCatchupRequested = false;
+let lastRealtimeMessageAt = 0;
+let lastRealtimeFallbackPollAt = 0;
+let realtimeDebugSeq = 0;
 const allEvents = [];
 const seenRealtimeEvents = new Set();
 const pendingMessages = [];
@@ -247,6 +256,43 @@ function runScopedPayload(payload = {}) {
   return currentRunId ? { ...payload, run_id: currentRunId } : payload;
 }
 
+function eventSocketReadyStateName() {
+  if (!eventSocket || typeof WebSocket === "undefined") return "none";
+  if (eventSocket.readyState === WebSocket.CONNECTING) return "connecting";
+  if (eventSocket.readyState === WebSocket.OPEN) return "open";
+  if (eventSocket.readyState === WebSocket.CLOSING) return "closing";
+  if (eventSocket.readyState === WebSocket.CLOSED) return "closed";
+  return String(eventSocket.readyState);
+}
+
+function realtimeDebug(stage, detail = {}) {
+  const payload = {
+    seq: ++realtimeDebugSeq,
+    stage,
+    run_id: currentRunId,
+    selected_task_id: selectedTaskId,
+    target: agentTargetEl?.value || "",
+    active_tab: activeTab,
+    visibility: document.visibilityState,
+    online: navigator.onLine,
+    ws_state: eventSocketState,
+    ws_ready_state: eventSocketReadyStateName(),
+    last_event_id: lastEventId,
+    offset,
+    tail_initialized: eventTailInitialized,
+    last_ws_message_age_ms: lastRealtimeMessageAt ? Date.now() - lastRealtimeMessageAt : null,
+    ...detail
+  };
+  if (!realtimeDebugEnabled) return;
+  console.info("[AHA realtime]", payload);
+  fetch(apiUrl("/api/debug/realtime"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(runScopedPayload(payload)),
+    keepalive: true
+  }).catch(() => {});
+}
+
 function runIdOf(run) {
   return String(run?.id || run?.run_id || "").trim();
 }
@@ -300,6 +346,8 @@ function resetRunScopedState() {
   eventSocketState = "idle";
   eventSocketFailureCount = 0;
   eventSocketReconnectAt = 0;
+  lastRealtimeMessageAt = 0;
+  lastRealtimeFallbackPollAt = 0;
   selectedTaskId = null;
   backendStatusData = null;
   restoreEventCursorFromStorage();
@@ -321,6 +369,7 @@ function realtimeTransportText() {
   if (wsDisabled || typeof WebSocket === "undefined") return "realtime Polling";
   if (eventSocketState === "open") return "realtime WebSocket";
   if (eventSocketState === "connecting") return "realtime Connecting";
+  if (eventSocketState === "stale") return "realtime Reconnecting (polling)";
   if (Date.now() < eventSocketReconnectAt) return "realtime Reconnecting (polling)";
   if (eventSocketState === "polling") return "realtime Polling fallback";
   if (eventSocketState === "error") return "realtime Polling fallback";
@@ -736,6 +785,13 @@ function selectedBackendActive() {
   return status === "busy";
 }
 
+function selectedTaskRealtimeActive() {
+  const task = selectedTask();
+  if (!task) return false;
+  const turn = latestTurnTiming(task.id);
+  return selectedBackendActive() || taskActivityStatus(task) !== "idle" || Boolean(turn?.running);
+}
+
 function pendingForContext(taskId = selectedTaskId, target = backendTarget()) {
   const key = messageContextKey(taskId, target);
   return pendingMessages.filter(item => item.contextKey === key);
@@ -824,19 +880,35 @@ function mergedPendingPrompt(items, currentMessage, interrupted) {
 
 async function sendBackendMessage(task, agentId, message) {
   const target = agentId === "main" ? "main" : agentId;
-  return fetchJson(apiUrl("/api/send"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(runScopedPayload({
-      target,
-      role: agentId === "main" ? "main" : "sub",
+  realtimeDebug("send.request", { task_id: task.id, target, message_len: message.length });
+  await prepareRealtimeCatchupBaseline();
+  try {
+    const response = await fetchJson(apiUrl("/api/send"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(runScopedPayload({
+        target,
+        role: agentId === "main" ? "main" : "sub",
+        task_id: task.id,
+        from_agent: "browser",
+        to_agent: agentId,
+        message,
+        sender: "browser"
+      }))
+    }, "Failed to send message");
+    realtimeDebug("send.response", {
       task_id: task.id,
-      from_agent: "browser",
-      to_agent: agentId,
-      message,
-      sender: "browser"
-    }))
-  }, "Failed to send message");
+      target,
+      ok: Boolean(response?.ok),
+      handled_by: response?.handled_by || "",
+      backend_started: Boolean(response?.backend),
+      interrupted: Boolean(response?.interrupt?.interrupted)
+    });
+    return response;
+  } catch (err) {
+    realtimeDebug("send.error", { task_id: task.id, target, error: err?.message || String(err) });
+    throw err;
+  }
 }
 
 async function flushPendingMessages(task, agentId, currentMessage = "", options = {}) {
@@ -868,7 +940,7 @@ async function maybeAutoFlushPending() {
   if (!pendingForContext(task.id, agentId).length) return null;
   const response = await flushPendingMessages(task, agentId, "", { auto: true });
   if (!response) return null;
-  await syncRealtimeEvents();
+  await catchUpRealtimeEvents();
   conversationAutoFollow = true;
   return response;
 }
@@ -1671,9 +1743,26 @@ async function responseError(res, fallbackMessage = "Request failed") {
 
 async function initializeEventTailOffset() {
   if (eventTailInitialized) return;
+  realtimeDebug("events.tail.request");
   const payload = await fetchJson(apiUrl("/api/events", { offset: "-1" }), {}, "Failed to initialize event stream");
   rememberEventCursor(payload);
   eventTailInitialized = true;
+  realtimeDebug("events.tail.response", {
+    last_event_id: payload.last_event_id || "",
+    offset: payload.offset,
+    snapshot_event_id: payload.snapshot_event_id || payload.snapshot_offset || "",
+    event_count: (payload.events || []).length
+  });
+}
+
+async function prepareRealtimeCatchupBaseline() {
+  if (lastEventId || eventTailInitialized) return;
+  try {
+    await initializeEventTailOffset();
+  } catch (err) {
+    realtimeDebug("events.tail.error", { error: err?.message || String(err) });
+    // Sending should still proceed; the post-send catch-up remains best effort.
+  }
 }
 
 async function markConversationUnavailable(state, err) {
@@ -1758,37 +1847,56 @@ function appendRealtimeEvents(events, startOffset = "") {
   allEvents.push(...accepted);
   appendRealtimeConversationEvents(accepted);
   invalidateRealtimeTaskDetails(accepted);
+  realtimeDebug("events.accepted", {
+    count: accepted.length,
+    start_offset: startOffset,
+    last_event_id: lastEventId,
+    types: accepted.slice(0, 8).map(event => event.type || "")
+  });
   return accepted;
 }
 
 async function pollEvents() {
   let res;
+  const params = lastEventId ? { last_event_id: lastEventId } : { offset: String(offset) };
+  realtimeDebug("poll.request", { params });
   try {
-    const params = lastEventId ? { last_event_id: lastEventId } : { offset: String(offset) };
     res = await fetchWithTimeout(apiUrl("/api/events", params));
   } catch (err) {
+    realtimeDebug("poll.fetch_error", { params, error: err?.message || String(err) });
     if (!lastEventId && offset < 0) {
       await initializeEventTailOffset();
-      return;
+      return [];
     }
     throw err;
   }
   if (!res.ok) {
+    realtimeDebug("poll.http_error", { params, status: res.status, status_text: res.statusText });
     if (lastEventId) {
       lastEventId = "";
       offset = -1;
       eventTailInitialized = false;
       clearStoredLastEventId();
       await initializeEventTailOffset();
-      return;
+      return [];
     }
     if (offset < 0) await initializeEventTailOffset();
-    return;
+    return [];
   }
   const payload = await readJsonResponse(res, "Failed to poll events");
   const startOffset = offset;
   rememberEventCursor(payload);
-  appendRealtimeEvents(payload.events || [], startOffset);
+  const accepted = appendRealtimeEvents(payload.events || [], startOffset);
+  realtimeDebug("poll.response", {
+    params,
+    event_count: (payload.events || []).length,
+    accepted_count: accepted.length,
+    response_last_event_id: payload.last_event_id || "",
+    response_offset: payload.offset,
+    snapshot_event_id: payload.snapshot_event_id || payload.snapshot_offset || "",
+    has_more: Boolean(payload.has_more)
+  });
+  return accepted;
 }
 
 function webSocketSupported() {
@@ -1799,6 +1907,7 @@ function closeEventWebSocket() {
   const socket = eventSocket;
   eventSocket = null;
   eventSocketState = "closed";
+  realtimeDebug("ws.close_local");
   if (socket && socket.readyState !== WebSocket.CLOSED) {
     socket.onclose = null;
     socket.close();
@@ -1839,19 +1948,65 @@ function scheduleEventWebSocketReconnect() {
   eventSocketFailureCount += 1;
   const multiplier = 2 ** Math.min(eventSocketFailureCount - 1, 5);
   eventSocketReconnectAt = Date.now() + Math.min(30000, pollInterval * multiplier);
+  realtimeDebug("ws.reconnect_scheduled", {
+    failure_count: eventSocketFailureCount,
+    delay_ms: Math.max(0, eventSocketReconnectAt - Date.now())
+  });
+}
+
+function realtimeStaleFallbackDue() {
+  if (wsDisabled || typeof WebSocket === "undefined") return false;
+  if (!eventSocket || eventSocket.readyState !== WebSocket.OPEN) return false;
+  if (!lastRealtimeMessageAt) return false;
+  const now = Date.now();
+  const staleAfterMs = Math.max(3000, Math.min(eventSocketStaleMs / 2, pollInterval * 5));
+  const minFallbackGapMs = Math.max(1000, pollInterval);
+  return now - lastRealtimeMessageAt >= staleAfterMs && now - lastRealtimeFallbackPollAt >= minFallbackGapMs;
+}
+
+function closeStaleEventWebSocket(reason = "stale") {
+  if (!webSocketSupported() || !eventSocket || typeof WebSocket === "undefined") return false;
+  if (eventSocket.readyState !== WebSocket.OPEN || !lastRealtimeMessageAt) return false;
+  const ageMs = Date.now() - lastRealtimeMessageAt;
+  if (ageMs < eventSocketStaleMs) return false;
+  const socket = eventSocket;
+  eventSocket = null;
+  eventSocketState = "stale";
+  eventSocketReconnectAt = 0;
+  lastRealtimeFallbackPollAt = 0;
+  realtimeDebug("ws.stale_close", { reason, age_ms: ageMs, stale_after_ms: eventSocketStaleMs });
+  socket.onclose = null;
+  try {
+    socket.close(4000, "stale");
+  } catch (err) {
+    realtimeDebug("ws.stale_close_error", { reason, error: err?.message || String(err) });
+  }
+  refreshRealtimeIndicator();
+  return true;
 }
 
 function handleEventWebSocketMessage(message) {
+  lastRealtimeMessageAt = Date.now();
   let payload;
   try {
     payload = JSON.parse(message.data);
   } catch (_err) {
+    realtimeDebug("ws.message.invalid_json", { raw_len: String(message.data || "").length });
     return;
   }
+  realtimeDebug("ws.message", {
+    type: payload.type || "",
+    event_type: payload.data?.type || "",
+    event_id: payload.data?.event_id || ""
+  });
   if (payload.type === "status") {
     statusData = payload.data || {};
     applyStatusData();
     renderPanel();
+    return;
+  }
+  if (payload.type === "heartbeat") {
+    refreshRealtimeIndicator();
     return;
   }
   if (payload.type === "event" && payload.data) {
@@ -1864,7 +2019,9 @@ function openEventWebSocket() {
   if (!webSocketSupported()) return false;
   if (eventSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(eventSocket.readyState)) return true;
   try {
-    const socket = new WebSocket(eventWebSocketUrl());
+    const url = eventWebSocketUrl();
+    realtimeDebug("ws.open_request", { url });
+    const socket = new WebSocket(url);
     eventSocket = socket;
     eventSocketState = "connecting";
     refreshRealtimeIndicator();
@@ -1873,6 +2030,9 @@ function openEventWebSocket() {
       eventSocketState = "open";
       eventSocketFailureCount = 0;
       eventSocketReconnectAt = 0;
+      lastRealtimeMessageAt = Date.now();
+      lastRealtimeFallbackPollAt = 0;
+      realtimeDebug("ws.open");
       refreshRealtimeIndicator();
     };
     socket.onmessage = message => {
@@ -1881,19 +2041,24 @@ function openEventWebSocket() {
     socket.onerror = () => {
       if (eventSocket === socket) {
         eventSocketState = "error";
+        realtimeDebug("ws.error");
         refreshRealtimeIndicator();
+        requestRealtimeCatchup();
       }
     };
-    socket.onclose = () => {
+    socket.onclose = event => {
       if (eventSocket !== socket) return;
       eventSocket = null;
       eventSocketState = "closed";
+      realtimeDebug("ws.close", { code: event.code, reason: event.reason || "", was_clean: event.wasClean });
       scheduleEventWebSocketReconnect();
       refreshRealtimeIndicator();
+      requestRealtimeCatchup();
     };
     return true;
-  } catch (_err) {
+  } catch (err) {
     eventSocketState = "error";
+    realtimeDebug("ws.open_error", { error: err?.message || String(err) });
     scheduleEventWebSocketReconnect();
     refreshRealtimeIndicator();
     return false;
@@ -1902,12 +2067,17 @@ function openEventWebSocket() {
 
 async function ensureEventWebSocket() {
   if (!webSocketSupported()) return false;
+  if (closeStaleEventWebSocket("ensure")) return false;
   if (eventSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(eventSocket.readyState)) return true;
-  if (Date.now() < eventSocketReconnectAt) return false;
+  if (Date.now() < eventSocketReconnectAt) {
+    realtimeDebug("ws.reconnect_wait", { remaining_ms: eventSocketReconnectAt - Date.now() });
+    return false;
+  }
   if (!lastEventId && !eventTailInitialized) {
     try {
       await initializeEventTailOffset();
-    } catch (_err) {
+    } catch (err) {
+      realtimeDebug("ws.tail_before_open_error", { error: err?.message || String(err) });
       scheduleEventWebSocketReconnect();
       return false;
     }
@@ -1915,11 +2085,65 @@ async function ensureEventWebSocket() {
   return openEventWebSocket();
 }
 
-async function syncRealtimeEvents() {
-  if (await ensureEventWebSocket()) return;
-  await pollEvents();
+async function syncRealtimeEvents(options = {}) {
+  const staleSocketClosed = closeStaleEventWebSocket("sync");
+  const forcePoll = Boolean(options.forcePoll || staleSocketClosed);
+  const staleFallback = !forcePoll && options.allowStalePoll && realtimeStaleFallbackDue();
+  if (!forcePoll && !staleFallback && await ensureEventWebSocket()) {
+    realtimeDebug("sync.skip_poll_ws_active", { force_poll: false, allow_stale_poll: Boolean(options.allowStalePoll) });
+    return [];
+  }
+  realtimeDebug("sync.poll", {
+    force_poll: forcePoll,
+    allow_stale_poll: Boolean(options.allowStalePoll),
+    stale_fallback: Boolean(staleFallback),
+    stale_socket_closed: Boolean(staleSocketClosed)
+  });
+  const accepted = await pollEvents();
+  if (forcePoll || staleFallback) lastRealtimeFallbackPollAt = Date.now();
   if (!wsDisabled && typeof WebSocket !== "undefined" && eventSocketState === "idle") eventSocketState = "polling";
+  if (staleSocketClosed) {
+    try {
+      await ensureEventWebSocket();
+    } catch (err) {
+      realtimeDebug("ws.reopen_after_stale_error", { error: err?.message || String(err) });
+    }
+  }
   refreshRealtimeIndicator();
+  return accepted;
+}
+
+async function catchUpRealtimeEvents() {
+  realtimeCatchupRequested = true;
+  realtimeDebug("catchup.request");
+  if (!realtimeCatchupPromise) {
+    realtimeCatchupPromise = (async () => {
+      const accepted = [];
+      try {
+        while (realtimeCatchupRequested) {
+          realtimeCatchupRequested = false;
+          accepted.push(...await syncRealtimeEvents({ forcePoll: true }));
+          realtimeDebug("catchup.batch", { accepted_count: accepted.length });
+        }
+      } catch (err) {
+        console.warn("Realtime catch-up failed", err);
+        realtimeDebug("catchup.error", { error: err?.message || String(err) });
+      }
+      return accepted;
+    })().finally(() => {
+      realtimeDebug("catchup.done");
+      realtimeCatchupPromise = null;
+    });
+  }
+  return realtimeCatchupPromise;
+}
+
+function requestRealtimeCatchup() {
+  if (!currentRunId) return;
+  realtimeDebug("catchup.schedule");
+  catchUpRealtimeEvents().then(accepted => {
+    if (accepted.length) renderPanel();
+  });
 }
 
 function renderTaskList() {
@@ -2464,6 +2688,7 @@ sendFormEl.addEventListener("submit", async event => {
   if (!task || !message) return;
   const agentId = agentTargetEl.value || "main";
   const isAha = isAhaCommand(message);
+  realtimeDebug("composer.submit", { task_id: task.id, target: agentId, is_aha: isAha, backend_active: selectedBackendActive() });
   try {
     let response = null;
     if (selectedBackendActive() && !isAha) {
@@ -2480,13 +2705,15 @@ sendFormEl.addEventListener("submit", async event => {
     syncMobileComposerAction();
     commandMenuEl.classList.add("hidden");
     closeMobileActionPanel();
-    await syncRealtimeEvents();
+    const accepted = await catchUpRealtimeEvents();
+    realtimeDebug("composer.catchup_complete", { accepted_count: accepted.length });
     await loadStatus({ forceAgents: Boolean(response?.interrupt) });
     await loadBackendStatus();
     conversationAutoFollow = true;
     renderPendingMessages();
     renderPanel();
   } catch (err) {
+    realtimeDebug("composer.error", { error: err?.message || String(err) });
     alert(err.message || String(err));
   }
 });
@@ -2538,7 +2765,8 @@ backendStatusEl.addEventListener("click", async event => {
   try {
     const response = await sendBackendMessage(task, agentId, "/aha interrupt");
     if (response?.interrupt?.interrupted) interruptedContexts.add(messageContextKey(task.id, agentId));
-    await syncRealtimeEvents();
+    const accepted = await catchUpRealtimeEvents();
+    realtimeDebug("interrupt.catchup_complete", { accepted_count: accepted.length });
     await loadStatus({ forceAgents: true });
     await loadBackendStatus();
     renderPendingMessages();
@@ -2626,6 +2854,15 @@ workspaceSelectEl.addEventListener("change", () => {
   if (isCustom) workspaceCustomEl.focus();
 });
 
+document.addEventListener("visibilitychange", () => {
+  realtimeDebug("document.visibilitychange", { state: document.visibilityState });
+  if (document.visibilityState === "visible") requestRealtimeCatchup();
+});
+window.addEventListener("online", () => {
+  realtimeDebug("window.online");
+  requestRealtimeCatchup();
+});
+
 initTaskCreateDisclosure();
 syncDelegationFields();
 initDesktopSidebars();
@@ -2651,7 +2888,7 @@ async function tick() {
       await loadStatus({ forceAgents: true });
       await loadBackendStatus();
     }
-    await syncRealtimeEvents();
+    await syncRealtimeEvents({ allowStalePoll: selectedTaskRealtimeActive() });
     tickFailureCount = 0;
     tickBackoffUntil = 0;
     renderPendingMessages();

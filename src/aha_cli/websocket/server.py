@@ -9,9 +9,27 @@ import struct
 from urllib.parse import parse_qs, urlparse
 
 from aha_cli.constants import WS_GUID
-from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position, status_snapshot_projection
+from aha_cli.domain.models import utc_now
+from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position, run_dir, status_snapshot_projection
 
 WS_EVENTS_LIMIT = 500
+WS_HEARTBEAT_INTERVAL = 5.0
+
+
+def realtime_debug_log(source: str, **fields: object) -> None:
+    root = fields.pop("_root", None)
+    run_id = str(fields.get("run_id") or "")
+    payload = {"ts": utc_now(), "source": source, **fields}
+    line = "[aha realtime] " + json.dumps(payload, ensure_ascii=False, default=str)
+    print(line, flush=True)
+    if isinstance(root, Path) and run_id:
+        try:
+            log_dir = run_dir(root, run_id) / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with (log_dir / "realtime-debug.log").open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except OSError:
+            pass
 
 
 async def ws_send_text(writer: asyncio.StreamWriter, message: str) -> None:
@@ -145,6 +163,10 @@ async def _send_events(root: Path, run_id: str, writer: asyncio.StreamWriter, la
     return last_event_id
 
 
+async def _send_heartbeat(writer: asyncio.StreamWriter, last_event_id: int) -> None:
+    await ws_send_text(writer, json.dumps({"type": "heartbeat", "ts": utc_now(), "last_event_id": last_event_id}, ensure_ascii=False))
+
+
 async def handle_ws_connection(
     root: Path,
     run_id: str,
@@ -153,30 +175,87 @@ async def handle_ws_connection(
     interval: float,
     cursor: int | None,
 ) -> None:
+    conn_id = f"{id(writer):x}"
+    realtime_debug_log(
+        "ws",
+        _root=root,
+        phase="open",
+        conn_id=conn_id,
+        run_id=run_id,
+        cursor=cursor if cursor is not None else "",
+        peer=writer.get_extra_info("peername"),
+    )
     await _send_status(root, run_id, writer)
+    last_heartbeat_at = asyncio.get_running_loop().time()
+    realtime_debug_log("ws", _root=root, phase="status_sent", conn_id=conn_id, run_id=run_id)
     offset = cursor
     if cursor is not None:
         snapshot_event_id = event_stream_position(root, run_id)
+        before_offset = cursor
         offset = await _send_events(root, run_id, writer, cursor, snapshot_event_id)
+        realtime_debug_log(
+            "ws",
+            _root=root,
+            phase="replay_sent",
+            conn_id=conn_id,
+            run_id=run_id,
+            from_event_id=before_offset,
+            to_event_id=offset,
+            snapshot_event_id=snapshot_event_id,
+            sent_count=max(0, offset - before_offset),
+        )
     else:
         offset = event_stream_position(root, run_id)
+        realtime_debug_log("ws", _root=root, phase="tail_start", conn_id=conn_id, run_id=run_id, offset=offset)
     try:
         while True:
             snapshot_event_id = event_stream_position(root, run_id)
+            before_offset = offset
             offset = await _send_events(root, run_id, writer, offset, snapshot_event_id)
+            if offset != before_offset:
+                last_heartbeat_at = asyncio.get_running_loop().time()
+                realtime_debug_log(
+                    "ws",
+                    _root=root,
+                    phase="events_sent",
+                    conn_id=conn_id,
+                    run_id=run_id,
+                    from_event_id=before_offset,
+                    to_event_id=offset,
+                    snapshot_event_id=snapshot_event_id,
+                    sent_count=max(0, offset - before_offset),
+                )
             try:
                 message = await asyncio.wait_for(ws_read_text(reader), timeout=interval)
             except asyncio.TimeoutError:
+                now = asyncio.get_running_loop().time()
+                if now - last_heartbeat_at >= WS_HEARTBEAT_INTERVAL:
+                    await _send_heartbeat(writer, offset)
+                    last_heartbeat_at = now
+                    realtime_debug_log("ws", _root=root, phase="heartbeat_sent", conn_id=conn_id, run_id=run_id, offset=offset)
                 continue
             if message is None:
+                realtime_debug_log("ws", _root=root, phase="client_close_frame", conn_id=conn_id, run_id=run_id, offset=offset)
                 break
             if not message:
+                realtime_debug_log("ws", _root=root, phase="client_non_text_frame", conn_id=conn_id, run_id=run_id)
                 continue
             try:
                 payload = json.loads(message)
             except json.JSONDecodeError:
+                realtime_debug_log("ws", _root=root, phase="client_invalid_json", conn_id=conn_id, run_id=run_id)
                 await ws_send_text(writer, json.dumps({"type": "error", "message": "invalid json"}))
                 continue
+            realtime_debug_log(
+                "ws",
+                _root=root,
+                phase="client_message",
+                conn_id=conn_id,
+                run_id=run_id,
+                message_type=payload.get("type", ""),
+                task_id=payload.get("task_id", ""),
+                target=payload.get("target", ""),
+            )
             if payload.get("type") == "send":
                 text = payload.get("message", "")
                 if text:
@@ -193,11 +272,13 @@ async def handle_ws_connection(
                     )
             elif payload.get("type") == "status":
                 await _send_status(root, run_id, writer)
+                realtime_debug_log("ws", _root=root, phase="status_sent", conn_id=conn_id, run_id=run_id)
             else:
                 await ws_send_text(writer, json.dumps({"type": "error", "message": "unknown message type"}))
-    except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
-        pass
+    except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as exc:
+        realtime_debug_log("ws", _root=root, phase="disconnect_error", conn_id=conn_id, run_id=run_id, error=type(exc).__name__, offset=offset)
     finally:
+        realtime_debug_log("ws", _root=root, phase="closed", conn_id=conn_id, run_id=run_id, offset=offset)
         writer.close()
         await writer.wait_closed()
 

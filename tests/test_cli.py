@@ -2105,9 +2105,18 @@ class CliTests(unittest.TestCase):
 
         self.assertGreaterEqual(websocket_index, 0, "frontend should open a WebSocket transport")
         websocket_block = script[max(0, websocket_index - 2000) : websocket_index + 3000]
-        self.assertRegex(websocket_block, r"last_event_id|after_event_id")
+        self.assertRegex(script, r"last_event_id|after_event_id")
         self.assertRegex(websocket_block, r"onclose|onerror|catch")
         self.assertIn("pollEvents", script)
+        self.assertIn("catchUpRealtimeEvents", script)
+        self.assertIn("forcePoll", script)
+        self.assertIn("allowStalePoll", script)
+        self.assertIn("lastRealtimeMessageAt", script)
+        self.assertIn("eventSocketStaleMs", script)
+        self.assertIn("closeStaleEventWebSocket", script)
+        self.assertIn("ws.stale_close", script)
+        self.assertIn("visibilitychange", script)
+        self.assertIn('"online"', script)
         self.assertRegex(script, r"typeof\s+WebSocket|WebSocket\s+in\s+window|window\.WebSocket")
 
     def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
@@ -2124,6 +2133,22 @@ class CliTests(unittest.TestCase):
                 messages = asyncio.run(fetch_initial_ws_messages(root, run_id))
 
         self.assertEqual([message["type"] for message in messages], ["status"])
+
+    def test_websocket_sends_heartbeat_when_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Websocket heartbeat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.websocket.server.WS_HEARTBEAT_INTERVAL", 0.01):
+                    messages = asyncio.run(fetch_ws_messages(root, run_id, timeout=0.3, max_messages=2))
+
+        self.assertEqual(messages[0]["type"], "status")
+        self.assertEqual(messages[1]["type"], "heartbeat")
+        self.assertIn("last_event_id", messages[1])
 
     def test_websocket_replays_from_last_event_id_after_reconnect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

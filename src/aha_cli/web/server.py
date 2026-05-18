@@ -62,6 +62,22 @@ DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
 
 
+def realtime_debug_log(source: str, **fields: object) -> None:
+    root = fields.pop("_root", None)
+    run_id = str(fields.get("run_id") or "")
+    payload = {"ts": utc_now(), "source": source, **fields}
+    line = "[aha realtime] " + json.dumps(payload, ensure_ascii=False, default=str)
+    print(line, flush=True)
+    if isinstance(root, Path) and run_id:
+        try:
+            log_dir = run_dir(root, run_id) / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with (log_dir / "realtime-debug.log").open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except OSError:
+            pass
+
+
 def task_final_view_snapshot(root: Path, run_id: str, task_id: str) -> dict:
     detail = task_final_snapshot(root, run_id, task_id)
     plan = require_plan(root, run_id)
@@ -624,12 +640,36 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
     if not message:
         raise ValueError("message cannot be empty")
 
+    realtime_debug_log(
+        "api.send",
+        _root=root,
+        phase="request",
+        run_id=run_id,
+        task_id=task_id or "",
+        target=target_id,
+        role=role or "",
+        sender=str(payload.get("sender", "") or ""),
+        from_agent=str(payload.get("from_agent", "") or ""),
+        to_agent=str(payload.get("to_agent", "") or ""),
+        message_len=len(message),
+        is_command=message.startswith("/"),
+    )
     handled, agent_message, command_payload = handle_slash_command(root, run_id, payload, message, task_id)
     if handled:
         backend_autostart = command_payload.pop("backend_autostart", None)
         backend = start_prepared_backend(root, run_id, backend_autostart)
         if backend:
             command_payload["backend"] = backend
+        realtime_debug_log(
+            "api.send",
+            _root=root,
+            phase="handled_command",
+            run_id=run_id,
+            task_id=task_id or "",
+            target=target_id,
+            backend_started=bool(backend),
+            reply_keys=sorted(command_payload.keys()),
+        )
         return {"ok": True, "handled_by": "aha", **command_payload}
 
     locked_status = task_locked_for_messages(root, run_id, task_id)
@@ -667,6 +707,16 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
             from_start=False,
             task_id=autostart["task_id"],
         )
+    realtime_debug_log(
+        "api.send",
+        _root=root,
+        phase="stored",
+        run_id=run_id,
+        task_id=task_id or "",
+        target=target_id,
+        backend_started=bool(response.get("backend")),
+        response_keys=sorted(response.keys()),
+    )
     return response
 
 
@@ -794,6 +844,48 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             task_id = query.get("task_id", [""])[0] or None
             response = json_response(backend_status(root, selected_run_id, target, task_id=task_id))
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method == "POST" and path == "/api/debug/realtime":
+            payload = parse_json_body(body)
+            selected_run_id = require_api_run_id(root, run_id, query, payload)
+            allowed_keys = {
+                "seq",
+                "stage",
+                "selected_task_id",
+                "target",
+                "active_tab",
+                "visibility",
+                "online",
+                "ws_state",
+                "ws_ready_state",
+                "last_event_id",
+                "offset",
+                "tail_initialized",
+                "last_ws_message_age_ms",
+                "message_len",
+                "is_aha",
+                "backend_active",
+                "force_poll",
+                "allow_stale_poll",
+                "stale_fallback",
+                "accepted_count",
+                "event_count",
+                "response_last_event_id",
+                "response_offset",
+                "snapshot_event_id",
+                "has_more",
+                "error",
+                "reason",
+                "age_ms",
+                "stale_after_ms",
+                "stale_socket_closed",
+            }
+            realtime_debug_log(
+                "client",
+                _root=root,
+                run_id=selected_run_id,
+                **{key: payload.get(key) for key in allowed_keys if key in payload},
+            )
+            writer.write(json_response({"ok": True}))
         elif method in {"GET", "HEAD"} and path == "/api/events":
             selected_run_id = require_api_run_id(root, run_id, query)
             try:
@@ -812,6 +904,21 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 page = event_stream_page(root, selected_run_id, offset, limit=safe_limit)
             new_offset = int(page["last_event_id"])
             snapshot_offset = int(page["snapshot_event_id"])
+            has_more = new_offset < snapshot_offset
+            realtime_debug_log(
+                "api.events",
+                _root=root,
+                method=method,
+                run_id=selected_run_id,
+                cursor_kind="last_event_id" if last_event_id else "offset",
+                request_cursor=last_event_id or offset,
+                limit=safe_limit,
+                returned_offset=new_offset,
+                snapshot_event_id=snapshot_offset,
+                event_count=len(page["events"]),
+                has_more=has_more,
+                event_types=[str(event.get("type") or "") for event in page["events"][:8]],
+            )
             response = json_response(
                 {
                     "run_id": selected_run_id,
@@ -819,7 +926,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     "last_event_id": page["last_event_id"],
                     "snapshot_offset": snapshot_offset,
                     "snapshot_event_id": page["snapshot_event_id"],
-                    "has_more": new_offset < snapshot_offset,
+                    "has_more": has_more,
                     "limit": safe_limit,
                     "events": page["events"],
                 }
