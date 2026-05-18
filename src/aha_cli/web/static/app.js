@@ -1561,7 +1561,7 @@ async function ensureActiveTabData() {
   } else if (activeTab === "logs") {
     await loadLogPage(selectedTaskId);
   } else if (activeTab === "final") {
-    await loadFinalDetail(selectedTaskId);
+    await loadFinalDetail(selectedTaskId, true);
   } else {
     await loadContextDetail(selectedTaskId);
   }
@@ -1677,6 +1677,31 @@ function appendRealtimeConversationEvents(events) {
   }
 }
 
+const finalDetailInvalidatingEvents = new Set([
+  "task_result_written",
+  "task_journal_rendered",
+  "task_round_recorded",
+  "task_reopened",
+  "task_status_changed"
+]);
+
+function invalidateRealtimeTaskDetails(events) {
+  const finalTaskIds = new Set();
+  events.forEach(event => {
+    if (!finalDetailInvalidatingEvents.has(event.type)) return;
+    const taskId = eventTaskId(event);
+    if (taskId) finalTaskIds.add(taskId);
+  });
+  finalTaskIds.forEach(taskId => finalDetails.delete(taskId));
+  if (activeTab === "final" && selectedTaskId && finalTaskIds.has(selectedTaskId)) {
+    loadFinalDetail(selectedTaskId, true)
+      .then(() => renderPanel())
+      .catch(err => {
+        panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+      });
+  }
+}
+
 function realtimeEventCursor(event, index = 0, startOffset = "") {
   return String(event?.event_id || event?._cursor || (startOffset !== "" ? `${startOffset}-${index}` : eventIdentity(event))).trim();
 }
@@ -1695,6 +1720,7 @@ function appendRealtimeEvents(events, startOffset = "") {
   if (!accepted.length) return accepted;
   allEvents.push(...accepted);
   appendRealtimeConversationEvents(accepted);
+  invalidateRealtimeTaskDetails(accepted);
   return accepted;
 }
 

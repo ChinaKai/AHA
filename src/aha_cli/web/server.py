@@ -33,10 +33,12 @@ from aha_cli.store.filesystem import (
     list_run_summaries,
     load_config,
     mark_task_coordination,
+    require_plan,
     reopen_task,
     run_exists,
     run_dir,
     run_summary,
+    read_json,
     set_agent_status,
     set_task_status,
     set_task_hidden,
@@ -58,6 +60,22 @@ APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
+
+
+def task_final_view_snapshot(root: Path, run_id: str, task_id: str) -> dict:
+    detail = task_final_snapshot(root, run_id, task_id)
+    plan = require_plan(root, run_id)
+    task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
+    output_name = str((task or {}).get("output_file") or "")
+    if not output_name:
+        return detail
+    output_file = run_dir(root, run_id) / output_name
+    output_meta_file = output_file.with_suffix(".meta.json")
+    output_meta = read_json(output_meta_file) if output_meta_file.exists() else {}
+    if output_file.exists() and output_meta.get("policy") in {"finalize", "journal", "overview"}:
+        detail["result"] = output_file.read_text(encoding="utf-8")
+        detail["result_meta"] = output_meta
+    return detail
 TASK_OUTCOME_SCAN_LIMIT = 10000
 
 
@@ -802,7 +820,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                         before = None
                     response = json_response(task_log_page(root, selected_run_id, task_id, limit=limit, before=before, source=source))
                 elif detail_name == "final":
-                    response = json_response(task_final_snapshot(root, selected_run_id, task_id))
+                    response = json_response(task_final_view_snapshot(root, selected_run_id, task_id))
                 elif detail_name == "context":
                     response = json_response(task_context_snapshot(root, selected_run_id, task_id))
                 elif not detail_name:
