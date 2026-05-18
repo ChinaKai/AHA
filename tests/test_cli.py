@@ -846,6 +846,54 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((run_dir(root, run_id) / final_rounds[0]["final_path"]).read_text(encoding="utf-8").strip(), first_final)
                 self.assertEqual((run_dir(root, run_id) / final_rounds[1]["final_path"]).read_text(encoding="utf-8").strip(), second_final)
 
+    def test_final_api_returns_task_overview_and_preserves_round_finals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Final overview", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                task = task_snapshot(root, run_id, "task-001")["task"]
+                first_final = "#### Final\n## 阶段总览\n第一轮 raw final 正文只应保留在 round 快照文件中"
+                second_final = "#### Final\n## 阶段总览\n第二轮 raw final 正文只应保留在 round 快照文件中"
+
+                write_task_result(root, run_id, "task-001", first_final)
+                complete_task(root, run_id, "task-001", 0)
+                first_round = list_task_lifecycle_rounds(root, run_id, "task-001")[0]
+                first_round_final = run_dir(root, run_id) / first_round["final_path"]
+
+                reopen_task(root, run_id, "task-001")
+                write_task_result(root, run_id, "task-001", second_final)
+                complete_task(root, run_id, "task-001", 0)
+                second_round = list_task_lifecycle_rounds(root, run_id, "task-001")[1]
+                second_round_final = run_dir(root, run_id) / second_round["final_path"]
+                reopen_task(root, run_id, "task-001")
+
+                snapshot = task_final_snapshot(root, run_id, "task-001")
+                api_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/final"))
+                api_body = json_response_body(api_response)
+                overview_text = (run_dir(root, run_id) / "results/task-001.md").read_text(encoding="utf-8")
+
+                self.assertTrue(api_response.startswith(b"HTTP/1.1 200 OK"))
+                self.assertEqual(api_body["result"], overview_text)
+                self.assertNotEqual(api_body["result"].strip(), second_final)
+                self.assertIn("task-001", api_body["result"])
+                self.assertIn(task["title"], api_body["result"])
+                for expected in ("round-001", "round-002", "round-003"):
+                    self.assertIn(expected, api_body["result"])
+                self.assertIn("Raw final:", api_body["result"])
+                self.assertNotIn(first_final, api_body["result"])
+                self.assertNotIn(second_final, api_body["result"])
+                self.assertNotIn("#### Final", api_body["result"])
+                self.assertNotIn("## 阶段总览", api_body["result"])
+                self.assertIn(first_round["final_path"], api_body["result"])
+                self.assertIn(second_round["final_path"], api_body["result"])
+                self.assertRegex(api_body["result"].lower(), r"reopen|reopened|复开|重开|重新打开|继续")
+                self.assertEqual(first_round_final.read_text(encoding="utf-8").strip(), first_final)
+                self.assertEqual(second_round_final.read_text(encoding="utf-8").strip(), second_final)
+                self.assertEqual([item["round_id"] for item in snapshot["finals"]], ["round-001", "round-002"])
+
     def test_record_task_update_uses_current_lifecycle_round_after_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -888,7 +936,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn("round-002", prompt)
                 self.assertNotIn("round-001", prompt)
                 final = task_final_snapshot(root, run_id, "task-001")
-                self.assertEqual(final["result"].strip(), "第一轮 Final")
+                self.assertIn("round-001", final["result"])
                 self.assertEqual(final["finals"][0]["round_id"], "round-001")
                 self.assertEqual((run_dir(root, run_id) / final["finals"][0]["final_path"]).read_text(encoding="utf-8").strip(), "第一轮 Final")
 
@@ -1029,7 +1077,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(snapshot["result_meta"]["policy"], "journal")
                 self.assertIn("修复 action schema 误解析", snapshot["result"])
                 self.assertIn("## 任务轮次", snapshot["result"])
-                self.assertIn("1. **修复 action schema 误解析**", snapshot["result"])
+                self.assertIn("1. `round-001` 修复 action schema 误解析", snapshot["result"])
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 self.assertTrue(any(event["type"] == "task_round_recorded" for event in events))
 
