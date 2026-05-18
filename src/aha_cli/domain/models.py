@@ -90,6 +90,7 @@ def make_task(
     backend: str = "codex",
     model: str | None = None,
     workspace_path: str | None = None,
+    workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
     delegation_policy: str = "auto",
@@ -100,6 +101,7 @@ def make_task(
     return {
         "id": task_id,
         "title": title,
+        "workspace_id": workspace_id,
         "workspace_path": workspace_path,
         "preferred_backend": backend,
         "preferred_model": model,

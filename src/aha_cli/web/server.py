@@ -14,12 +14,15 @@ from aha_cli.services.backend_runtime import (
     stop_backend,
 )
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
+from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
+    add_workspace,
     append_event,
     append_message,
     append_task_round,
+    config_path,
     conversation_events_page,
     create_plan,
     delete_task,
@@ -31,10 +34,12 @@ from aha_cli.store.filesystem import (
     iter_jsonl_reverse,
     list_task_rounds,
     list_run_summaries,
+    list_workspaces,
     load_config,
     mark_task_coordination,
     require_plan,
     reopen_task,
+    resolve_workspace_path,
     run_exists,
     run_dir,
     run_summary,
@@ -193,20 +198,47 @@ def request_run_id(default_run_id: str, query: dict[str, list[str]], payload: di
     return payload_run_id or query_run_id or default_run_id
 
 
+def default_api_run_id(root: Path, default_run_id: str) -> str:
+    if default_run_id and run_exists(root, default_run_id):
+        return default_run_id
+    runs = list_run_summaries(root)
+    return str(runs[0]["id"]) if runs else ""
+
+
 def require_api_run_id(root: Path, default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
     selected_run_id = request_run_id(default_run_id, query, payload)
+    if not selected_run_id:
+        selected_run_id = default_api_run_id(root, default_run_id)
     if not run_exists(root, selected_run_id):
         raise ApiRunNotFound(selected_run_id)
     return selected_run_id
 
 
-def workspace_options(roots: list[Path] | None = None) -> list[dict[str, str]]:
+def workspace_options(roots: list[Path] | None = None, aha_home: Path | None = None) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if aha_home is not None:
+        for workspace in list_workspaces(aha_home):
+            workspace_path = str(workspace["path"])
+            seen.add(workspace_path)
+            options.append(
+                {
+                    "id": str(workspace["id"]),
+                    "name": str(workspace.get("name") or workspace["id"]),
+                    "label": str(workspace.get("name") or workspace["path"]),
+                    "path": workspace_path,
+                    "root": str(Path(workspace_path).parent),
+                    "source": "registry",
+                }
+            )
     workspace_roots = WORKSPACE_ROOTS if roots is None else roots
     for root in workspace_roots:
         if not root.is_dir():
             continue
         for path in sorted(item for item in root.iterdir() if item.is_dir()):
+            if str(path) in seen:
+                continue
+            seen.add(str(path))
             options.append(
                 {
                     "name": path.name,
@@ -760,7 +792,21 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             else:
                 writer.write(static_response(STATIC_DIR / static_name, method))
         elif method in {"GET", "HEAD"} and path == "/api/runs":
-            response = json_response({"default_run_id": run_id, "runs": list_run_summaries(root)})
+            response = json_response({"default_run_id": default_api_run_id(root, run_id), "runs": list_run_summaries(root)})
+            writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method in {"GET", "HEAD"} and path == "/api/bootstrap":
+            runs = list_run_summaries(root)
+            default_run_id = default_api_run_id(root, run_id)
+            response = json_response(
+                {
+                    "aha_home": str(root),
+                    "initialized": config_path(root).exists(),
+                    "default_workspace_path": str(Path.cwd()),
+                    "default_run_id": default_run_id,
+                    "runs": runs,
+                    "workspaces": workspace_options(aha_home=root),
+                }
+            )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method == "POST" and path == "/api/runs":
             payload = parse_json_body(body)
@@ -801,6 +847,18 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"error": "agents must be an integer"}, "400 Bad Request"))
                     await writer.drain()
                     return
+                dispatch = bool(payload.get("dispatch", False))
+                try:
+                    workspace_path, workspace_id = resolve_workspace_path(
+                        root,
+                        workspace_id=str(payload.get("workspace_id", payload.get("workspace", "")) or "") or None,
+                        workspace_path=str(payload.get("workspace_path", "") or "") or None,
+                        default=Path.cwd(),
+                    )
+                except ValueError as exc:
+                    writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
+                    await writer.drain()
+                    return
                 plan = create_plan(
                     root=root,
                     goal=goal,
@@ -810,11 +868,22 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     write_scopes=[str(item) for item in (write_scopes or []) if str(item).strip()],
                     backend=backend,
                     model=str(payload.get("model", "") or "") or None,
-                    workspace_path=str(payload.get("workspace_path", "") or "") or str(root),
+                    workspace_path=workspace_path,
+                    workspace_id=workspace_id,
                     sandbox=sandbox,
                     approval=approval,
                 )
-                writer.write(json_response({"ok": True, "run": run_summary(root, plan["id"])}, "201 Created"))
+                backend_states = []
+                if dispatch:
+                    for task in plan.get("tasks", []):
+                        dispatch_task_to_main(root, plan["id"], task)
+                        backend_state = start_dispatched_task_backend(root, plan["id"], task, True)
+                        if backend_state:
+                            backend_states.append(backend_state)
+                response = {"ok": True, "run": run_summary(root, plan["id"])}
+                if backend_states:
+                    response["backends"] = backend_states
+                writer.write(json_response(response, "201 Created"))
         elif method in {"GET", "HEAD"} and path == "/api/status":
             selected_run_id = require_api_run_id(root, run_id, query)
             response = json_response(web_status_snapshot(root, selected_run_id))
@@ -832,12 +901,28 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         elif method in {"GET", "HEAD"} and path == "/api/workspaces":
             response = json_response(
                 {
+                    "aha_home": str(root),
+                    "default_workspace_path": str(Path.cwd()),
                     "root": str(HL_PROJECT_ROOT),
                     "roots": [str(root) for root in WORKSPACE_ROOTS if root.is_dir()],
-                    "workspaces": workspace_options(),
+                    "workspaces": workspace_options(aha_home=root),
                 }
             )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method == "POST" and path == "/api/workspaces":
+            payload = parse_json_body(body)
+            workspace_path = str(payload.get("path", payload.get("workspace_path", "")) or "").strip()
+            if not workspace_path:
+                writer.write(json_response({"error": "workspace path is required"}, "400 Bad Request"))
+                await writer.drain()
+                return
+            try:
+                workspace = add_workspace(root, workspace_path, name=str(payload.get("name", "") or "") or None)
+            except ValueError as exc:
+                writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
+                await writer.drain()
+                return
+            writer.write(json_response({"ok": True, "workspace": workspace}, "201 Created"))
         elif method in {"GET", "HEAD"} and path == "/api/backend":
             selected_run_id = require_api_run_id(root, run_id, query)
             target = query.get("target", ["main"])[0] or "main"
@@ -1034,6 +1119,17 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
                     await writer.drain()
                     return
+                try:
+                    workspace_path, workspace_id = resolve_workspace_path(
+                        root,
+                        workspace_id=str(payload.get("workspace_id", payload.get("workspace", "")) or "") or None,
+                        workspace_path=str(payload.get("workspace_path", "") or "") or None,
+                        default=Path.cwd(),
+                    )
+                except ValueError as exc:
+                    writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
+                    await writer.drain()
+                    return
                 dispatch = bool(payload.get("dispatch", True))
                 task = create_task_and_dispatch(
                     root,
@@ -1041,7 +1137,8 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     title,
                     backend=backend,
                     model=str(payload.get("model", "") or "") or None,
-                    workspace_path=str(payload.get("workspace_path", "") or "") or str(root),
+                    workspace_path=workspace_path,
+                    workspace_id=workspace_id,
                     sandbox=sandbox,
                     approval=approval,
                     delegation_policy=str(payload.get("delegation_policy", "auto") or "auto"),
@@ -1117,14 +1214,20 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
     except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
         pass
     finally:
-        writer.close()
-        await writer.wait_closed()
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
 
 
 async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_interval_ms: int) -> None:
     server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w), host, port)
     addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
-    print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
+    if run_id:
+        print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
+    else:
+        print(f"AHA dashboard for {root}: http://{host}:{port}")
     print(f"Listening on {addresses}")
     async with server:
         await server.serve_forever()

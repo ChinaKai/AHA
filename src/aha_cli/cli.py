@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -20,18 +21,25 @@ from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
     add_task,
+    add_workspace,
+    AHA_HOME_ENV,
     append_message,
     config_path,
     create_plan,
+    default_aha_home,
     event_path,
+    find_aha_home,
     find_project_root,
     iter_jsonl_from,
+    latest_run_id,
     list_sessions,
+    list_workspaces,
     load_config,
     plan_path,
     read_json,
     require_plan,
     reopen_task,
+    resolve_workspace_path,
     resolve_run_id,
     run_dir,
     save_session,
@@ -45,6 +53,29 @@ from aha_cli.websocket.server import run_ws_server
 
 WATCH_EVENTS_LIMIT = 500
 MAX_WATCH_EVENTS_LIMIT = 2000
+COMMANDS = {
+    "init",
+    "plan",
+    "run",
+    "status",
+    "collect",
+    "merge",
+    "list",
+    "workspace",
+    "watch",
+    "send",
+    "chat",
+    "auto-reply",
+    "commit",
+    "commit-check",
+    "codex-runner",
+    "codex-chat",
+    "task",
+    "agent",
+    "session",
+    "serve",
+    "ui",
+}
 
 
 def visible_plan_tasks(plan: dict) -> list[dict]:
@@ -56,10 +87,8 @@ def task_dashboard_html(run_id: str, poll_interval_ms: int) -> str:
     return (Path(__file__).parent / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
 
-def cmd_init(args: argparse.Namespace) -> int:
-    root = Path.cwd().resolve() if args.path == "." else Path(args.path).resolve()
-    aha = root / ".aha"
-    aha.mkdir(parents=True, exist_ok=True)
+def initialize_aha_home(root: Path, args: argparse.Namespace) -> int:
+    root.mkdir(parents=True, exist_ok=True)
     cfg = config_path(root)
     if cfg.exists() and not args.force:
         print(f"AHA already initialized: {cfg}")
@@ -69,15 +98,42 @@ def cmd_init(args: argparse.Namespace) -> int:
     data["runner_command"] = args.runner_command
     data["default_parallel"] = args.parallel
     write_json(cfg, data)
-    print(f"Initialized AHA project: {root}")
+    print(f"Initialized AHA home: {root}")
     return 0
 
 
+def command_aha_home(args: argparse.Namespace) -> Path:
+    return find_aha_home(explicit=getattr(args, "home", None))
+
+
+def ensure_aha_home(root: Path) -> None:
+    if not config_path(root).exists():
+        initialize_aha_home(root, argparse.Namespace(force=False, backend=None, runner_command=None, parallel=4))
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    if args.portable or (args.path != "." and not getattr(args, "home", None) and not os.environ.get(AHA_HOME_ENV)):
+        root = Path.cwd().resolve() if args.path == "." else Path(args.path).expanduser().resolve()
+        return initialize_aha_home(root / ".aha", args)
+    if getattr(args, "home", None) or os.environ.get(AHA_HOME_ENV):
+        return initialize_aha_home(command_aha_home(args), args)
+    return initialize_aha_home(default_aha_home(), args)
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
-    root = find_project_root()
-    if not (root / ".aha").exists():
-        cmd_init(argparse.Namespace(path=str(root), force=False, backend=None, runner_command=None, parallel=4))
+    root = command_aha_home(args)
+    ensure_aha_home(root)
     cfg = load_config(root)
+    try:
+        workspace_path, workspace_id = resolve_workspace_path(
+            root,
+            workspace_id=args.workspace,
+            workspace_path=args.workspace_path,
+            default=Path.cwd(),
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     plan = create_plan(
         root=root,
         goal=args.goal,
@@ -86,6 +142,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
         task_titles=args.task or [],
         write_scopes=args.write_scope or [],
         backend=agent_backend_or_default(cfg.get("backend"), "stub"),
+        workspace_path=workspace_path,
+        workspace_id=workspace_id,
     )
     print(f"Created run: {plan['id']}")
     print(f"Plan file: {plan_path(root, plan['id'])}")
@@ -95,13 +153,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     return run_pending_tasks(root, run_id, args, codex_runner_command)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     plan = require_plan(root, run_id)
     print(f"Run: {run_id}")
@@ -114,7 +172,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     plan = require_plan(root, run_id)
     run = run_dir(root, run_id)
@@ -131,7 +189,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 
 def cmd_merge(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     plan = require_plan(root, run_id)
     run = run_dir(root, run_id)
@@ -151,8 +209,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    root = find_project_root()
-    runs = root / ".aha" / "runs"
+    root = command_aha_home(args)
+    runs = run_dir(root, "_").parent
     if not runs.is_dir():
         print("No runs found")
         return 0
@@ -165,8 +223,28 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_workspace(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    if args.workspace_cmd == "add":
+        ensure_aha_home(root)
+        try:
+            workspace = add_workspace(root, args.path, name=args.name)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"{workspace['id']} {workspace['name']} {workspace['path']}")
+    elif args.workspace_cmd == "list":
+        workspaces = list_workspaces(root)
+        if not workspaces:
+            print("No workspaces found")
+            return 0
+        for workspace in workspaces:
+            print(f"{workspace['id']} {workspace.get('name') or '-'} {workspace['path']}")
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     print(json.dumps(status_snapshot(root, run_id), indent=2, ensure_ascii=False))
     events = event_path(root, run_id)
@@ -188,7 +266,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def cmd_send(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
     message = " ".join(args.message).strip()
@@ -200,7 +278,7 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
     print(f"Chatting with {args.target} in run {run_id}. Ctrl-D or Ctrl-C to exit.")
@@ -216,7 +294,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
 
 
 def cmd_auto_reply(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     return auto_reply(root, run_id, args)
 
@@ -226,22 +304,33 @@ def cmd_codex_runner(args: argparse.Namespace) -> int:
 
 
 def cmd_codex_chat(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     return codex_chat(root, run_id, args)
 
 
 def cmd_task(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     if args.task_cmd == "add":
+        try:
+            workspace_path, workspace_id = resolve_workspace_path(
+                root,
+                workspace_id=args.workspace,
+                workspace_path=args.workspace_path,
+                default=Path.cwd(),
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         task = create_task_and_dispatch(
             root,
             run_id,
             args.title,
             backend=args.backend,
             model=args.model,
-            workspace_path=args.workspace_path,
+            workspace_path=workspace_path,
+            workspace_id=workspace_id,
             sandbox=args.sandbox,
             approval=args.approval,
             delegation_policy=args.delegation_policy,
@@ -275,7 +364,7 @@ def cmd_task(args: argparse.Namespace) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     if args.agent_cmd == "add":
         agent = add_agent(root, run_id, args.task_id, backend=args.backend, role=args.role, model=args.model, sandbox=args.sandbox, approval=args.approval, created_by="debug-cli", created_reason="manual CLI add")
@@ -291,7 +380,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
 
 
 def cmd_session(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     if args.session_cmd == "list":
         sessions = list_sessions(root, run_id, args.task_id)
@@ -310,7 +399,7 @@ def cmd_session(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    root = find_project_root()
+    root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
     try:
@@ -321,9 +410,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_ui(args: argparse.Namespace) -> int:
-    root = find_project_root()
-    run_id = resolve_run_id(root, args.run_id)
-    require_plan(root, run_id)
+    root = command_aha_home(args)
+    ensure_aha_home(root)
+    run_id = args.run_id or latest_run_id(root) or ""
+    if run_id:
+        require_plan(root, run_id)
     try:
         asyncio.run(run_ui_server(root, run_id, args.host, args.port, args.poll_interval))
     except KeyboardInterrupt:
@@ -393,10 +484,12 @@ def add_codex_options(parser: argparse.ArgumentParser, prefix: str = "codex") ->
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aha", description="Agent-help-agent CLI prototype")
+    parser.add_argument("--home", default=None, help="AHA_HOME data directory. Defaults to $AHA_HOME, a nearby .aha, or ~/.aha.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init_p = sub.add_parser("init", help="Initialize .aha metadata")
-    init_p.add_argument("path", nargs="?", default=".")
+    init_p = sub.add_parser("init", help="Initialize AHA metadata")
+    init_p.add_argument("path", nargs="?", default=".", help="Project path for --portable initialization")
+    init_p.add_argument("--portable", action="store_true", help="Initialize PATH/.aha instead of the default AHA_HOME")
     init_p.add_argument("--force", action="store_true")
     init_p.add_argument("--backend", choices=backend_names(), default=None)
     init_p.add_argument("--runner-command", default=None)
@@ -409,6 +502,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("--mode", choices=["research", "implementation"], default="research")
     plan_p.add_argument("--task", action="append")
     plan_p.add_argument("--write-scope", action="append")
+    plan_p.add_argument("--workspace", default=None, help="Registered workspace id, such as ws-001")
+    plan_p.add_argument("--workspace-path", default=None, help="Workspace path for the created tasks")
     plan_p.set_defaults(func=cmd_plan)
 
     run_p = sub.add_parser("run", help="Run pending tasks")
@@ -433,6 +528,15 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--output", "-o")
         p.set_defaults(func=func)
     sub.add_parser("list", help="List runs").set_defaults(func=cmd_list)
+
+    workspace_p = sub.add_parser("workspace", help="Manage registered workspaces")
+    workspace_sub = workspace_p.add_subparsers(dest="workspace_cmd", required=True)
+    workspace_add = workspace_sub.add_parser("add")
+    workspace_add.add_argument("path")
+    workspace_add.add_argument("--name", default=None)
+    workspace_add.set_defaults(func=cmd_workspace)
+    workspace_list = workspace_sub.add_parser("list")
+    workspace_list.set_defaults(func=cmd_workspace)
 
     watch_p = sub.add_parser("watch")
     watch_p.add_argument("run_id", nargs="?")
@@ -515,6 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_add.add_argument("title")
     task_add.add_argument("--backend", choices=agent_backend_names(), default="codex")
     task_add.add_argument("--model", default=None)
+    task_add.add_argument("--workspace", default=None, help="Registered workspace id, such as ws-001")
     task_add.add_argument("--workspace-path", default=None)
     task_add.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
     task_add.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
@@ -592,9 +697,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def with_default_command(argv: list[str]) -> list[str]:
+    if not argv:
+        return ["ui"]
+    if any(arg in {"-h", "--help"} for arg in argv):
+        return argv
+    skip_next = False
+    for arg in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--home":
+            skip_next = True
+            continue
+        if arg.startswith("--home="):
+            continue
+        if arg in COMMANDS:
+            return argv
+    return [*argv, "ui"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(with_default_command(list(sys.argv[1:] if argv is None else argv)))
     return args.func(args)
 
 

@@ -5,6 +5,7 @@ import concurrent.futures
 import io
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import tempfile
 import textwrap
@@ -38,6 +39,7 @@ from aha_cli.store.filesystem import (
     iter_jsonl_reverse,
     list_task_lifecycle_rounds,
     list_task_rounds,
+    read_json,
     run_dir,
     mark_task_coordination,
     reopen_task,
@@ -189,7 +191,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Timing", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -212,7 +214,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "No reopen", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -230,7 +232,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Agent timing", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -260,7 +262,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Parallel writers", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -311,7 +313,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Offsets", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -340,7 +342,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Task scoped workers", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -366,7 +368,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Task scoped offsets", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -437,7 +439,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                code, _ = self.run_cli("init")
+                code, _ = self.run_cli("init", "--portable")
                 self.assertEqual(code, 0)
 
                 code, plan_output = self.run_cli("plan", "Study a repo", "--agents", "2")
@@ -456,11 +458,144 @@ class CliTests(unittest.TestCase):
                 self.assertIn("merged-report.md", merge_output)
                 self.assertTrue((root / ".aha" / "runs" / run_id / "merged-report.md").exists())
 
+    def test_plan_uses_aha_home_env_without_local_init(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "workspace"
+            home = Path(tmp) / "aha-home"
+            cwd.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=cwd), mock.patch.dict(os.environ, {"AHA_HOME": str(home)}):
+                code, plan_output = self.run_cli("plan", "Home env", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run:"))
+
+                self.assertTrue((home / "config.json").exists())
+                self.assertTrue((home / "runs" / run_id / "plan.json").exists())
+                self.assertFalse((cwd / ".aha").exists())
+                plan = read_json(home / "runs" / run_id / "plan.json")
+                self.assertEqual(plan["tasks"][0]["workspace_path"], str(cwd))
+
+                code, status = self.run_cli("status", run_id)
+                self.assertEqual(code, 0)
+                self.assertIn("Goal: Home env", status)
+
+    def test_global_home_option_uses_custom_aha_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "workspace"
+            home = Path(tmp) / "custom-home"
+            cwd.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=cwd):
+                code, plan_output = self.run_cli("--home", str(home), "plan", "Custom home", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run:"))
+
+                self.assertTrue((home / "config.json").exists())
+                self.assertTrue((home / "runs" / run_id / "plan.json").exists())
+                self.assertFalse((cwd / ".aha").exists())
+
+                code, status = self.run_cli("--home", str(home), "status", run_id)
+                self.assertEqual(code, 0)
+                self.assertIn("Goal: Custom home", status)
+
+    def test_init_uses_aha_home_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "workspace"
+            home = Path(tmp) / "env-home"
+            cwd.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=cwd), mock.patch.dict(os.environ, {"AHA_HOME": str(home)}):
+                code, output = self.run_cli("init")
+
+                self.assertEqual(code, 0)
+                self.assertIn(f"Initialized AHA home: {home}", output)
+                self.assertTrue((home / "config.json").exists())
+                self.assertFalse((cwd / ".aha").exists())
+
+    def test_init_defaults_to_user_aha_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "workspace"
+            user_home = Path(tmp) / "user-home"
+            expected_home = user_home / ".aha"
+            cwd.mkdir()
+            user_home.mkdir()
+            with (
+                mock.patch("pathlib.Path.cwd", return_value=cwd),
+                mock.patch("pathlib.Path.home", return_value=user_home),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                code, output = self.run_cli("init")
+
+                self.assertEqual(code, 0)
+                self.assertIn(f"Initialized AHA home: {expected_home}", output)
+                self.assertTrue((expected_home / "config.json").exists())
+                self.assertFalse((cwd / ".aha").exists())
+
+    def test_init_portable_uses_local_dot_aha(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "workspace"
+            cwd.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=cwd), mock.patch.dict(os.environ, {}, clear=True):
+                code, output = self.run_cli("init", "--portable")
+
+                self.assertEqual(code, 0)
+                self.assertIn(f"Initialized AHA home: {cwd / '.aha'}", output)
+                self.assertTrue((cwd / ".aha" / "config.json").exists())
+
+    def test_workspace_registry_can_drive_plan_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "launcher"
+            home = Path(tmp) / "aha-home"
+            workspace = Path(tmp) / "repo"
+            cwd.mkdir()
+            workspace.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=cwd):
+                code, add_output = self.run_cli("--home", str(home), "workspace", "add", str(workspace), "--name", "demo")
+                self.assertEqual(code, 0)
+                self.assertIn(f"ws-001 demo {workspace}", add_output)
+                self.assertTrue((home / "workspaces" / "ws-001.json").exists())
+
+                code, list_output = self.run_cli("--home", str(home), "workspace", "list")
+                self.assertEqual(code, 0)
+                self.assertIn(f"ws-001 demo {workspace}", list_output)
+
+                code, plan_output = self.run_cli("--home", str(home), "plan", "Workspace plan", "--agents", "1", "--workspace", "ws-001")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run:"))
+                plan = read_json(home / "runs" / run_id / "plan.json")
+                self.assertEqual(plan["tasks"][0]["workspace_id"], "ws-001")
+                self.assertEqual(plan["tasks"][0]["workspace_path"], str(workspace))
+
+    def test_ui_can_start_without_existing_run(self) -> None:
+        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int) -> None:
+            calls.append((root, run_id, host, port, poll_interval))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            calls: list[tuple[Path, str, str, int, int]] = []
+            with mock.patch("aha_cli.cli.run_ui_server", side_effect=fake_ui_server):
+                code, _ = self.run_cli("--home", str(home), "ui", "--host", "127.0.0.1", "--port", "0")
+
+            self.assertEqual(code, 0)
+            self.assertTrue((home / "config.json").exists())
+            self.assertEqual(calls, [(home, "", "127.0.0.1", 0, 1000)])
+
+    def test_empty_command_defaults_to_ui(self) -> None:
+        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int) -> None:
+            calls.append((root, run_id, host, port, poll_interval))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            calls: list[tuple[Path, str, str, int, int]] = []
+            with mock.patch("aha_cli.cli.run_ui_server", side_effect=fake_ui_server):
+                code, _ = self.run_cli("--home", str(home))
+
+            self.assertEqual(code, 0)
+            self.assertTrue((home / "config.json").exists())
+            self.assertEqual(calls, [(home, "", "0.0.0.0", 8766, 1000)])
+
     def test_explicit_tasks_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, output = self.run_cli(
                     "plan",
                     "Goal",
@@ -477,7 +612,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init")
+                self.run_cli("init", "--portable")
                 code, plan_output = self.run_cli("plan", "Observe agents", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -495,7 +630,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init")
+                self.run_cli("init", "--portable")
                 code, plan_output = self.run_cli("plan", "Reply demo", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -516,7 +651,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init")
+                self.run_cli("init", "--portable")
                 code, plan_output = self.run_cli("plan", "Codex backend", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -529,7 +664,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Codex chat", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -552,7 +687,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Agent command", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -583,7 +718,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Agent command prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -638,7 +773,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Commit routing", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -708,7 +843,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Stale result", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -722,7 +857,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Finalize chat", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -752,7 +887,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Final loop", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -850,7 +985,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Final overview", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -898,7 +1033,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Journal lifecycle", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -944,7 +1079,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Final cleanup", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -972,7 +1107,7 @@ class CliTests(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 stop_backends.assert_called_once()
-                self.assertEqual(stop_backends.call_args.args[:3], (root, run_id, "task-001"))
+                self.assertEqual(stop_backends.call_args.args[:3], (root / ".aha", run_id, "task-001"))
                 self.assertIn("exclude_pid", stop_backends.call_args.kwargs)
                 mark_stopped.assert_called_once()
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "completed")
@@ -981,7 +1116,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Spawn sub", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1018,7 +1153,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Bad route schema", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1047,7 +1182,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Journal task", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1085,7 +1220,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Record round", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1134,7 +1269,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Checkpoint task", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1158,7 +1293,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Spawn codex sub", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1173,7 +1308,7 @@ class CliTests(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 start_backend.assert_called_once()
-                self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "sub-001"))
+                self.assertEqual(start_backend.call_args.args[:3], (root / ".aha", run_id, "sub-001"))
                 self.assertTrue(start_backend.call_args.kwargs["from_start"])
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
                 self.assertEqual(messages[-1]["message"], "Inspect one slice")
@@ -1186,7 +1321,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Owned follow-up", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1245,7 +1380,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Terminal follow-up", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1283,7 +1418,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Sub reports", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1313,7 +1448,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Watchdog", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1334,7 +1469,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "No loops", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1353,7 +1488,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Terminal sub", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1372,7 +1507,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init")
+                self.run_cli("init", "--portable")
                 code, plan_output = self.run_cli("plan", "Task UI", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1406,7 +1541,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Backend badges", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1437,7 +1572,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Follow-up state", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1460,7 +1595,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Web follow-up", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1502,7 +1637,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Locked task", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1539,7 +1674,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Interrupt turn", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1580,7 +1715,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Idle listener", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1617,7 +1752,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Resume alias", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1634,7 +1769,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Task create autostart", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1690,7 +1825,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Conversation action envelope", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1731,7 +1866,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Replay events", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1772,7 +1907,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Logs", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1793,7 +1928,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Event logs", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1815,7 +1950,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Lightweight", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1864,7 +1999,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Command help", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1931,11 +2066,85 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("invalid choice: 'backend'", err.getvalue())
 
+    def test_api_bootstrap_works_without_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(body["aha_home"], str(root))
+        self.assertFalse(body["initialized"])
+        self.assertIn("default_workspace_path", body)
+        self.assertEqual(body["default_run_id"], "")
+        self.assertEqual(body["runs"], [])
+
+    def test_api_workspace_registration_can_create_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            workspace = Path(tmp) / "repo"
+            root.mkdir()
+            workspace.mkdir()
+            add_response = asyncio.run(
+                fetch_ui_response(root, "", "/api/workspaces", method="POST", payload={"path": str(workspace), "name": "demo"})
+            )
+            add_body = json_response_body(add_response)
+            create_response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/runs",
+                    method="POST",
+                    payload={"goal": "Web setup", "mode": "research", "workspace_id": add_body["workspace"]["id"]},
+                )
+            )
+            create_body = json_response_body(create_response)
+            plan = read_json(root / "runs" / create_body["run"]["id"] / "plan.json")
+
+        self.assertTrue(add_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(create_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(plan["tasks"][0]["workspace_id"], "ws-001")
+        self.assertEqual(plan["tasks"][0]["workspace_path"], str(workspace))
+
+    def test_api_run_creation_can_dispatch_initial_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            with mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend:
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        "",
+                        "/api/runs",
+                        method="POST",
+                        payload={
+                            "goal": "Web setup",
+                            "mode": "research",
+                            "backend": "codex",
+                            "task_titles": ["Web setup"],
+                            "dispatch": True,
+                        },
+                    )
+                )
+                body = json_response_body(response)
+            run_id = body["run"]["id"]
+            plan = read_json(root / "runs" / run_id / "plan.json")
+            events, _ = iter_jsonl_from(root / "runs" / run_id / "events.jsonl", 0)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(plan["tasks"][0]["title"], "Web setup")
+        self.assertTrue(any(event["type"] == "task_dispatched" and event["data"]["task_id"] == "task-001" for event in events))
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
+        self.assertTrue(start_backend.call_args.kwargs["from_start"])
+
     def test_api_runs_lists_and_creates_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Default session", "--agents", "1")
                 self.assertEqual(code, 0)
                 default_run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1967,7 +2176,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, first_output = self.run_cli("plan", "First session", "--agents", "1")
                 self.assertEqual(code, 0)
                 first_run_id = first_output.splitlines()[0].split(": ", 1)[1]
@@ -2021,11 +2230,31 @@ class CliTests(unittest.TestCase):
         self.assertEqual(first_manual, [])
         self.assertEqual(second_manual[-1]["message"], "sent to second")
 
+    def test_api_routes_fallback_to_latest_run_without_server_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Default fallback", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                runs_response = asyncio.run(fetch_ui_response(root, "", "/api/runs"))
+                status_response = asyncio.run(fetch_ui_response(root, "", "/api/status"))
+
+        self.assertTrue(runs_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(status_response.startswith(b"HTTP/1.1 200 OK"))
+        runs_body = json_response_body(runs_response)
+        status_body = json_response_body(status_response)
+        self.assertEqual(runs_body["default_run_id"], run_id)
+        self.assertEqual(status_body["run_id"], run_id)
+        self.assertEqual(status_body["goal"], "Default fallback")
+
     def test_ui_core_endpoints_return_without_full_event_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Fast UI endpoints", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2050,7 +2279,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Paged events", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2070,7 +2299,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Recent prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2086,7 +2315,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Tail watch", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2119,11 +2348,25 @@ class CliTests(unittest.TestCase):
         self.assertIn('"online"', script)
         self.assertRegex(script, r"typeof\s+WebSocket|WebSocket\s+in\s+window|window\.WebSocket")
 
+    def test_frontend_uses_bootstrap_for_empty_state(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("/api/bootstrap", script)
+        self.assertIn("renderFirstRunState", script)
+        self.assertIn("data-bootstrap-run-form", script)
+        self.assertIn("createRunFromBootstrapForm", script)
+        self.assertIn("Start Run and Initial Task", script)
+        self.assertIn("renderBootstrapError", script)
+        self.assertIn("body.empty-run .sidebar", styles)
+        self.assertIn("bootstrap-panel", styles)
+
     def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Websocket tail", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2138,7 +2381,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Websocket heartbeat", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2154,7 +2397,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Websocket replay", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2176,7 +2419,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Websocket multi replay", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2208,7 +2451,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Backend start lock", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2231,11 +2474,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(sum(1 for result in results if result.get("started")), 1)
         self.assertEqual(sum(1 for result in results if result.get("already_running")), 1)
 
+    def test_start_backend_preserves_home_and_absolute_pythonpath(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Backend env", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch.dict(os.environ, {"PYTHONPATH": "src"}, clear=False),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        command = popen.call_args.args[0]
+        env = popen.call_args.kwargs["env"]
+        self.assertIn("--home", command)
+        self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
+        self.assertTrue(Path(env["PYTHONPATH"].split(os.pathsep)[0]).is_absolute())
+
     def test_backend_activity_can_be_filtered_by_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Scoped backend activity", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2252,7 +2520,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Stop task workers", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2280,7 +2548,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Permissions", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2298,7 +2566,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Task visibility", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -2320,7 +2588,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--backend", "codex")
+                self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Manage agents", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]

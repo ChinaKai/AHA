@@ -11,10 +11,13 @@ const wsDisabled = eventTransport === "poll" || eventTransport === "polling" || 
 const realtimeDebugParam = String(queryParams.get("realtime_debug") || queryParams.get("debug") || "").toLowerCase();
 const realtimeDebugEnabled = !["0", "false", "off", "no", "none"].includes(realtimeDebugParam);
 let currentRunId = String(queryParams.get("run_id") || queryParams.get("run") || "").trim();
+let bootstrapData = null;
+let bootstrapError = "";
 let defaultRunId = "";
 let runsData = [];
 let runsLoaded = false;
 let runsError = "";
+let workspaceData = [];
 let sessionMenuOpen = false;
 let runActionInFlight = false;
 let offset = -1;
@@ -297,6 +300,43 @@ function runIdOf(run) {
   return String(run?.id || run?.run_id || "").trim();
 }
 
+function applyRunListData(payload = {}) {
+  defaultRunId = String(payload.default_run_id || defaultRunId || "").trim();
+  runsData = Array.isArray(payload.runs) ? payload.runs : [];
+  const knownRunIds = new Set(runsData.map(runIdOf).filter(Boolean));
+  if (currentRunId && !knownRunIds.has(currentRunId)) {
+    currentRunId = "";
+    syncRunUrl();
+  }
+  const preferred = currentRunId || defaultRunId || runIdOf(runsData[0]) || String(statusData?.run_id || "").trim();
+  if (preferred && preferred !== currentRunId) {
+    currentRunId = preferred;
+    syncRunUrl();
+  }
+  if (!preferred && currentRunId) {
+    currentRunId = "";
+    syncRunUrl();
+  }
+  if (currentRunId) restoreEventCursorFromStorage();
+}
+
+function applyWorkspaceData(workspaces = []) {
+  workspaceData = Array.isArray(workspaces) ? workspaces : [];
+  renderWorkspaceSelect();
+}
+
+async function loadBootstrap() {
+  const payload = await fetchJson("/api/bootstrap", {}, "Failed to bootstrap AHA");
+  bootstrapError = "";
+  bootstrapData = payload;
+  applyRunListData(payload);
+  applyWorkspaceData(payload.workspaces || workspaceData);
+  runsError = "";
+  runsLoaded = true;
+  renderSessionMenu();
+  return payload;
+}
+
 function runTitleOf(run) {
   const goal = String(run?.goal || "").trim();
   return goal || runIdOf(run) || "未命名 Run";
@@ -385,11 +425,11 @@ function renderSessionSummary() {
   const run = currentRunSummary() || fallbackCurrentRun();
   const runId = currentRunId || runIdOf(run);
   if (!run && !statusData) {
-    if (sessionTitleEl) sessionTitleEl.textContent = currentRunId || "加载中...";
+    if (sessionTitleEl) sessionTitleEl.textContent = currentRunId || "未选择 Run";
     if (runIdEl) runIdEl.textContent = currentRunId || "-";
-    if (runStateEl) runStateEl.textContent = "";
-    if (sessionDetailTextEl) sessionDetailTextEl.textContent = "Run 详情";
-    if (taskRunContextEl) taskRunContextEl.textContent = "当前 Run 加载中...";
+    if (runStateEl) runStateEl.textContent = bootstrapData?.aha_home ? `AHA_HOME ${bootstrapData.aha_home}` : "";
+    if (sessionDetailTextEl) sessionDetailTextEl.textContent = "创建 Run 后开始";
+    if (taskRunContextEl) taskRunContextEl.textContent = "当前没有 Run";
     return;
   }
   const title = statusData?.goal || runTitleOf(run);
@@ -459,15 +499,8 @@ async function loadRuns(force = false) {
   }
   try {
     const payload = await fetchJson("/api/runs", {}, "Failed to load runs");
-    defaultRunId = String(payload.default_run_id || defaultRunId || "").trim();
-    runsData = Array.isArray(payload.runs) ? payload.runs : [];
+    applyRunListData(payload);
     runsError = "";
-    const preferred = currentRunId || defaultRunId || runIdOf(runsData[0]) || String(statusData?.run_id || "").trim();
-    if (preferred && preferred !== currentRunId) {
-      currentRunId = preferred;
-      syncRunUrl();
-    }
-    restoreEventCursorFromStorage();
   } catch (err) {
     runsError = err?.message || String(err || "Run 列表不可用");
     runsData = fallbackCurrentRun() ? [fallbackCurrentRun()] : [];
@@ -484,6 +517,10 @@ function setSessionMenu(open) {
 }
 
 async function refreshRunScopedView() {
+  if (!currentRunId) {
+    renderFirstRunState();
+    return;
+  }
   await loadStatus({ forceAgents: true });
   await ensureConversationLoaded();
   await loadBackendStatus();
@@ -514,24 +551,39 @@ async function switchRun(runId) {
   }
 }
 
-async function createRun(goal, mode) {
+async function createRun(goal, mode, options = {}) {
   const trimmedGoal = String(goal || "").trim();
   if (!trimmedGoal) return;
   const selectedMode = String(mode || "research").trim() || "research";
+  const body = {
+    goal: trimmedGoal,
+    mode: selectedMode,
+    backend: options.backend || "codex",
+    dispatch: options.dispatch !== false,
+    task_titles: options.taskTitles || [trimmedGoal]
+  };
+  if (options.workspaceId) body.workspace_id = options.workspaceId;
+  if (options.workspacePath) body.workspace_path = options.workspacePath;
   runActionInFlight = true;
   try {
     const payload = await fetchJson("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal: trimmedGoal, mode: selectedMode })
+      body: JSON.stringify(body)
     }, "Failed to create run");
     const run = payload.run || payload;
     const nextRunId = runIdOf(run);
     if (!nextRunId) throw new Error("New run did not include an id");
     if (newRunGoalEl) newRunGoalEl.value = "";
+    const previousRunId = currentRunId;
     runsLoaded = false;
     await loadRuns(true);
-    await switchRun(nextRunId);
+    if (currentRunId === nextRunId) {
+      if (previousRunId !== nextRunId) resetRunScopedState();
+      await refreshRunScopedView();
+    } else {
+      await switchRun(nextRunId);
+    }
   } catch (err) {
     alert(err?.message || String(err));
   } finally {
@@ -743,7 +795,10 @@ function initSessionControl() {
   runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
   runCreateFormEl?.addEventListener("submit", async event => {
     event.preventDefault();
-    await createRun(newRunGoalEl?.value || "", newRunModeEl?.value || "research");
+    await createRun(newRunGoalEl?.value || "", newRunModeEl?.value || "research", {
+      workspaceId: selectedWorkspaceId(),
+      workspacePath: selectedWorkspacePath()
+    });
   });
   document.addEventListener("click", event => {
     const target = event.target instanceof Element ? event.target : null;
@@ -1568,10 +1623,20 @@ function renderModelOptions() {
 
 async function loadWorkspaces() {
   const payload = await fetchJson("/api/workspaces", {}, "Failed to load workspaces");
+  if (payload.default_workspace_path) {
+    bootstrapData = { ...(bootstrapData || {}), default_workspace_path: payload.default_workspace_path };
+  }
+  applyWorkspaceData(payload.workspaces || []);
+}
+
+function renderWorkspaceSelect() {
+  if (!workspaceSelectEl || !workspaceCustomEl) return;
+  const previous = workspaceSelectEl.value;
   workspaceSelectEl.innerHTML = "";
-  for (const workspace of payload.workspaces || []) {
+  for (const workspace of workspaceData) {
     const opt = document.createElement("option");
     opt.value = workspace.path;
+    opt.dataset.workspaceId = workspace.id || "";
     opt.textContent = workspace.label || workspace.name;
     workspaceSelectEl.appendChild(opt);
   }
@@ -1580,12 +1645,23 @@ async function loadWorkspaces() {
   custom.textContent = "Custom path...";
   workspaceSelectEl.appendChild(custom);
 
-  const preferred = (payload.workspaces || []).find(item => item.name === "fw_omni_builder") || (payload.workspaces || [])[0];
-  if (preferred) workspaceSelectEl.value = preferred.path;
+  const preferred =
+    workspaceData.find(item => item.path === previous) ||
+    workspaceData.find(item => item.name === "fw_omni_builder") ||
+    workspaceData[0];
+  if (preferred) {
+    workspaceSelectEl.value = preferred.path;
+  } else {
+    workspaceSelectEl.value = "__custom__";
+    if (!workspaceCustomEl.value && bootstrapData?.default_workspace_path) {
+      workspaceCustomEl.value = bootstrapData.default_workspace_path;
+    }
+  }
   workspaceCustomEl.classList.toggle("hidden", workspaceSelectEl.value !== "__custom__");
 }
 
 function applyStatusData(options = {}) {
+  document.body.classList.remove("empty-run");
   if (statusData.run_id && statusData.run_id !== currentRunId) {
     closeEventWebSocket();
     currentRunId = String(statusData.run_id);
@@ -1607,15 +1683,27 @@ function applyStatusData(options = {}) {
 }
 
 async function loadStatus(options = {}) {
+  if (!currentRunId) {
+    statusData = null;
+    renderFirstRunState();
+    return null;
+  }
   statusData = await fetchJson(apiUrl("/api/status"), {}, "Failed to load status");
   applyStatusData(options);
+  return statusData;
 }
 
 async function loadBackendStatus() {
+  if (!currentRunId) {
+    backendStatusData = null;
+    renderBackendStatus();
+    return null;
+  }
   const params = new URLSearchParams({ target: backendTarget() });
   if (selectedTaskId) params.set("task_id", selectedTaskId);
   backendStatusData = await fetchJson(apiUrl("/api/backend", params), {}, "Failed to load backend status");
   renderBackendStatus();
+  return backendStatusData;
 }
 
 async function loadFinalDetail(taskId, force = false) {
@@ -2358,6 +2446,15 @@ function renderSelectedAgentInfo() {
 
 function renderBackendStatus() {
   if (!backendStatusEl) return;
+  if (!currentRunId) {
+    backendStatusEl.className = "backend-status pending";
+    backendStatusEl.innerHTML = `
+      <span class="activity-dot"></span>
+      <strong>Backend</strong>
+      <code>waiting for run</code>
+    `;
+    return;
+  }
   const state = backendStatusData;
   if (!state) {
     backendStatusEl.className = "backend-status pending";
@@ -2436,7 +2533,14 @@ function renderMessageBody(body, key = "") {
 }
 
 function selectedWorkspacePath() {
-  return workspaceSelectEl.value === "__custom__" ? workspaceCustomEl.value.trim() : workspaceSelectEl.value;
+  if (!workspaceSelectEl) return "";
+  return workspaceSelectEl.value === "__custom__" ? (workspaceCustomEl?.value || "").trim() : workspaceSelectEl.value;
+}
+
+function selectedWorkspaceId() {
+  if (!workspaceSelectEl || workspaceSelectEl.value === "__custom__") return "";
+  const option = workspaceSelectEl.options[workspaceSelectEl.selectedIndex];
+  return option?.dataset.workspaceId || "";
 }
 
 function renderConversationFilters() {
@@ -2576,8 +2680,145 @@ function renderTimelineStatus(title, body, status, ts = "") {
   `;
 }
 
+function renderBootstrapWorkspaceOptions() {
+  const options = workspaceData.map((workspace, index) => `
+    <option value="${escapeHtml(workspace.path || "")}" data-workspace-id="${escapeHtml(workspace.id || "")}" ${index === 0 ? "selected" : ""}>
+      ${escapeHtml(workspace.label || workspace.name || workspace.path || "Workspace")}
+    </option>
+  `).join("");
+  const selected = workspaceData.length ? "" : " selected";
+  return `${options}<option value="__custom__"${selected}>Custom path...</option>`;
+}
+
+function renderFirstRunState(force = false) {
+  if (bootstrapError) {
+    renderBootstrapError(bootstrapError);
+    return;
+  }
+  document.body.classList.add("empty-run");
+  currentRunId = "";
+  statusData = null;
+  selectedTaskId = null;
+  backendStatusData = null;
+  if (eventSocket) closeEventWebSocket();
+  renderSessionMenu();
+  if (summaryEl) summaryEl.textContent = "No runs yet";
+  renderTaskList();
+  renderSelectedHeader();
+  if (selectedTitleEl) selectedTitleEl.textContent = "Create a run";
+  renderAgents();
+  renderBackendStatus();
+  renderPendingMessages();
+  conversationFiltersEl?.classList.add("hidden");
+  if (!force && panelEl.querySelector("[data-bootstrap-run-form]")) return;
+
+  const defaultWorkspacePath = bootstrapData?.default_workspace_path || "";
+  const customHidden = workspaceData.length ? " hidden" : "";
+  panelEl.innerHTML = `
+    <div class="bootstrap-panel">
+      <div class="bootstrap-head">
+        <h3>First Run</h3>
+        <code>${escapeHtml(bootstrapData?.aha_home || "")}</code>
+      </div>
+      <form class="bootstrap-form" data-bootstrap-run-form>
+        <label class="field-label">
+          <span>Workspace</span>
+          <select data-bootstrap-workspace-select>${renderBootstrapWorkspaceOptions()}</select>
+        </label>
+        <input data-bootstrap-workspace-custom class="${customHidden}" placeholder="Workspace path" value="${escapeHtml(workspaceData.length ? "" : defaultWorkspacePath)}">
+        <label class="field-label">
+          <span>Run goal</span>
+          <input data-bootstrap-run-goal placeholder="What should AHA work on?" autofocus>
+        </label>
+        <label class="field-label">
+          <span>Mode</span>
+          <select data-bootstrap-run-mode>
+            <option value="research">research</option>
+            <option value="implementation">implementation</option>
+          </select>
+        </label>
+        <button type="submit">Start Run and Initial Task</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderBootstrapError(error) {
+  document.body.classList.add("empty-run");
+  currentRunId = "";
+  statusData = null;
+  selectedTaskId = null;
+  backendStatusData = null;
+  if (eventSocket) closeEventWebSocket();
+  if (summaryEl) summaryEl.textContent = "Bootstrap failed";
+  renderSessionMenu();
+  renderTaskList();
+  renderSelectedHeader();
+  if (selectedTitleEl) selectedTitleEl.textContent = "Backend version mismatch";
+  renderAgents();
+  renderBackendStatus();
+  renderPendingMessages();
+  conversationFiltersEl?.classList.add("hidden");
+  panelEl.innerHTML = `
+    <div class="bootstrap-panel">
+      <div class="bootstrap-head">
+        <h3>Backend Not Ready</h3>
+        <code>${escapeHtml(location.origin)}</code>
+      </div>
+      <p class="meta">前端已经加载，但当前 Web 后端不支持新的 bootstrap API。请重启后端或确认浏览器连接的是同一份 AHA 代码。</p>
+      <pre>${escapeHtml(String(error || ""))}</pre>
+    </div>
+  `;
+}
+
+function bootstrapWorkspaceSelection(form) {
+  const select = form.querySelector("[data-bootstrap-workspace-select]");
+  const custom = form.querySelector("[data-bootstrap-workspace-custom]");
+  const selectedOption = select?.options?.[select.selectedIndex];
+  const customSelected = select?.value === "__custom__";
+  return {
+    workspaceId: customSelected ? "" : (selectedOption?.dataset.workspaceId || ""),
+    workspacePath: customSelected ? String(custom?.value || "").trim() : String(select?.value || "").trim(),
+    customSelected
+  };
+}
+
+async function createRunFromBootstrapForm(form) {
+  const goalEl = form.querySelector("[data-bootstrap-run-goal]");
+  const modeEl = form.querySelector("[data-bootstrap-run-mode]");
+  const submit = form.querySelector('button[type="submit"]');
+  const goal = String(goalEl?.value || "").trim();
+  if (!goal) {
+    goalEl?.focus();
+    return;
+  }
+  let { workspaceId, workspacePath, customSelected } = bootstrapWorkspaceSelection(form);
+  if (submit) submit.disabled = true;
+  try {
+    if (customSelected && workspacePath) {
+      const payload = await fetchJson("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: workspacePath, name: pathName(workspacePath) })
+      }, "Failed to add workspace");
+      workspaceId = payload.workspace?.id || "";
+      workspacePath = payload.workspace?.path || workspacePath;
+      await loadWorkspaces().catch(() => {});
+    }
+    await createRun(goal, modeEl?.value || "research", { workspaceId, workspacePath });
+  } catch (err) {
+    alert(err?.message || String(err));
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
 function renderPanel(options = {}) {
   renderConversationFilters();
+  if (!currentRunId) {
+    renderFirstRunState();
+    return;
+  }
   const task = selectedTask();
   if (!task) {
     panelEl.innerHTML = '<div class="empty">No task selected.</div>';
@@ -2653,6 +2894,10 @@ document.querySelectorAll(".tab").forEach(button => {
 
 document.getElementById("task-form").addEventListener("submit", async event => {
   event.preventDefault();
+  if (!currentRunId) {
+    alert("请先创建 Run，再添加任务。");
+    return;
+  }
   const title = document.getElementById("new-task-title").value.trim();
   if (!title) return;
   const delegationPolicy = delegationPolicyEl?.value || "disabled";
@@ -2666,6 +2911,7 @@ document.getElementById("task-form").addEventListener("submit", async event => {
         model: taskModelEl.value || null,
         sandbox: taskSandboxEl.value,
         approval: taskApprovalEl.value,
+        workspace_id: selectedWorkspaceId(),
         workspace_path: selectedWorkspacePath(),
         delegation_policy: delegationPolicy,
         max_sub_agents: delegationPolicy === "auto" ? Number(maxSubAgentsEl?.value || "0") : 0,
@@ -2807,6 +3053,21 @@ panelEl.addEventListener("scroll", () => {
     if (panelEl.scrollTop < 48) loadOlderLogs();
   }
 });
+panelEl.addEventListener("submit", event => {
+  const form = event.target instanceof Element ? event.target.closest("[data-bootstrap-run-form]") : null;
+  if (!form) return;
+  event.preventDefault();
+  createRunFromBootstrapForm(form);
+});
+panelEl.addEventListener("change", event => {
+  const select = event.target instanceof HTMLSelectElement ? event.target : null;
+  if (!select?.matches("[data-bootstrap-workspace-select]")) return;
+  const form = select.closest("[data-bootstrap-run-form]");
+  const custom = form?.querySelector("[data-bootstrap-workspace-custom]");
+  const isCustom = select.value === "__custom__";
+  custom?.classList.toggle("hidden", !isCustom);
+  if (isCustom) custom?.focus();
+});
 panelEl.addEventListener("click", event => {
   const button = event.target instanceof Element ? event.target.closest("[data-load-older]") : null;
   if (button) loadOlderConversation();
@@ -2878,6 +3139,11 @@ function recordTickFailure() {
 
 async function tick() {
   if (tickInFlight || taskActionInFlight || runActionInFlight || Date.now() < tickBackoffUntil) return;
+  if (bootstrapError) return;
+  if (!currentRunId) {
+    renderFirstRunState();
+    return;
+  }
   tickInFlight = true;
   try {
     await loadStatus();
@@ -2902,10 +3168,15 @@ async function tick() {
 }
 
 Promise.all([loadBackends(), loadWorkspaces()]).then(async () => {
-  await loadRuns().catch(() => {});
-  await tick();
+  await loadBootstrap();
+  if (currentRunId) {
+    await tick();
+  } else {
+    renderFirstRunState(true);
+  }
 }).catch(err => {
-  panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+  bootstrapError = err?.message || String(err);
+  renderBootstrapError(bootstrapError);
 });
 setInterval(tick, pollInterval);
 setInterval(() => {

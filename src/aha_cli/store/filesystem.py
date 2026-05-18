@@ -8,7 +8,7 @@ from pathlib import Path
 import threading
 import uuid
 
-from aha_cli.constants import CONFIG_DIR, CONFIG_FILE, EVENTS_FILE, PLAN_FILE, RUNS_DIR
+from aha_cli.constants import CONFIG_DIR, CONFIG_FILE, EVENTS_FILE, PLAN_FILE, RUNS_DIR, WORKSPACES_DIR
 from aha_cli.domain.models import (
     default_config,
     default_tasks,
@@ -27,6 +27,8 @@ from aha_cli.domain.models import (
 PLAN_LOCK = threading.RLock()
 EVENT_LOCK = threading.Lock()
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+AHA_HOME_ENV = "AHA_HOME"
+_EXPLICIT_AHA_HOMES: set[str] = set()
 
 
 def read_json(path: Path) -> dict:
@@ -103,6 +105,47 @@ def iter_jsonl_records_from(
         return records, offset
 
 
+def _normalized_path(path: Path) -> Path:
+    return path.expanduser().resolve()
+
+
+def default_aha_home() -> Path:
+    return _normalized_path(Path.home() / CONFIG_DIR)
+
+
+def mark_aha_home(path: Path) -> Path:
+    home = _normalized_path(path)
+    _EXPLICIT_AHA_HOMES.add(str(home))
+    return home
+
+
+def aha_home_path(root: Path) -> Path:
+    root = _normalized_path(root)
+    env_home = os.environ.get(AHA_HOME_ENV)
+    if env_home and _normalized_path(Path(env_home)) == root:
+        return root
+    if str(root) in _EXPLICIT_AHA_HOMES:
+        return root
+    if root.name == CONFIG_DIR:
+        return root
+    if (root / CONFIG_FILE).exists() or (root / RUNS_DIR).is_dir():
+        return root
+    return root / CONFIG_DIR
+
+
+def find_aha_home(start: Path | None = None, explicit: str | Path | None = None) -> Path:
+    if explicit:
+        return mark_aha_home(Path(explicit))
+    env_home = os.environ.get(AHA_HOME_ENV)
+    if env_home:
+        return mark_aha_home(Path(env_home))
+    current = (start or Path.cwd()).resolve()
+    for path in [current, *current.parents]:
+        if (path / CONFIG_DIR).is_dir():
+            return path / CONFIG_DIR
+    return mark_aha_home(default_aha_home())
+
+
 def find_project_root(start: Path | None = None) -> Path:
     current = (start or Path.cwd()).resolve()
     for path in [current, *current.parents]:
@@ -112,7 +155,7 @@ def find_project_root(start: Path | None = None) -> Path:
 
 
 def config_path(root: Path) -> Path:
-    return root / CONFIG_DIR / CONFIG_FILE
+    return aha_home_path(root) / CONFIG_FILE
 
 
 def load_config(root: Path) -> dict:
@@ -129,7 +172,94 @@ def load_config(root: Path) -> dict:
 
 
 def run_dir(root: Path, run_id: str) -> Path:
-    return root / CONFIG_DIR / RUNS_DIR / run_id
+    return aha_home_path(root) / RUNS_DIR / run_id
+
+
+def workspaces_dir(root: Path) -> Path:
+    return aha_home_path(root) / WORKSPACES_DIR
+
+
+def list_workspaces(root: Path) -> list[dict]:
+    base = workspaces_dir(root)
+    if not base.is_dir():
+        return []
+    workspaces: list[dict] = []
+    for path in sorted(base.glob("*.json")):
+        try:
+            workspace = read_json(path)
+        except (OSError, ValueError):
+            continue
+        if workspace.get("id") and workspace.get("path"):
+            workspaces.append(workspace)
+    return sorted(workspaces, key=lambda item: (str(item.get("name") or ""), str(item.get("id") or "")))
+
+
+def get_workspace(root: Path, workspace_id: str) -> dict | None:
+    if not workspace_id:
+        return None
+    path = workspaces_dir(root) / f"{workspace_id}.json"
+    if path.exists():
+        return read_json(path)
+    return next((workspace for workspace in list_workspaces(root) if workspace.get("id") == workspace_id), None)
+
+
+def _next_workspace_id(root: Path) -> str:
+    used: set[int] = set()
+    for workspace in list_workspaces(root):
+        workspace_id = str(workspace.get("id") or "")
+        if workspace_id.startswith("ws-") and workspace_id[3:].isdigit():
+            used.add(int(workspace_id[3:]))
+    index = 1
+    while index in used:
+        index += 1
+    return f"ws-{index:03d}"
+
+
+def add_workspace(root: Path, workspace_path: str | Path, name: str | None = None) -> dict:
+    path = _normalized_path(Path(workspace_path))
+    if not path.is_dir():
+        raise ValueError(f"workspace path is not a directory: {path}")
+    now = utc_now()
+    for workspace in list_workspaces(root):
+        if _normalized_path(Path(str(workspace.get("path")))) == path:
+            if name and workspace.get("name") != name:
+                workspace["name"] = name
+            workspace["last_used_at"] = now
+            write_json(workspaces_dir(root) / f"{workspace['id']}.json", workspace)
+            return workspace
+    workspace = {
+        "id": _next_workspace_id(root),
+        "name": name or path.name,
+        "path": str(path),
+        "created_at": now,
+        "last_used_at": now,
+    }
+    write_json(workspaces_dir(root) / f"{workspace['id']}.json", workspace)
+    return workspace
+
+
+def resolve_workspace_path(
+    root: Path,
+    workspace_id: str | None = None,
+    workspace_path: str | Path | None = None,
+    default: str | Path | None = None,
+) -> tuple[str, str | None]:
+    if workspace_path:
+        resolved = _normalized_path(Path(workspace_path))
+        if workspace_id:
+            workspace = get_workspace(root, workspace_id)
+            if workspace is None:
+                raise ValueError(f"workspace not found: {workspace_id}")
+            if _normalized_path(Path(str(workspace["path"]))) != resolved:
+                raise ValueError(f"workspace path does not match registered workspace: {workspace_id}")
+        return str(resolved), workspace_id
+    if workspace_id:
+        workspace = get_workspace(root, workspace_id)
+        if workspace is None:
+            raise ValueError(f"workspace not found: {workspace_id}")
+        return str(workspace["path"]), str(workspace["id"])
+    fallback = _normalized_path(Path(default)) if default is not None else _normalized_path(Path.cwd())
+    return str(fallback), None
 
 
 def _round_sequence_from_id(round_id: object) -> int | None:
@@ -301,7 +431,7 @@ def save_plan(root: Path, plan: dict) -> None:
 
 
 def latest_run_id(root: Path) -> str | None:
-    runs = root / CONFIG_DIR / RUNS_DIR
+    runs = aha_home_path(root) / RUNS_DIR
     if not runs.is_dir():
         return None
     candidates = sorted(p.name for p in runs.iterdir() if (p / PLAN_FILE).exists())
@@ -348,7 +478,7 @@ def run_summary(root: Path, run_id: str) -> dict:
 
 
 def list_run_summaries(root: Path) -> list[dict]:
-    runs = root / CONFIG_DIR / RUNS_DIR
+    runs = aha_home_path(root) / RUNS_DIR
     if not runs.is_dir():
         return []
     summaries: list[dict] = []
@@ -768,6 +898,7 @@ def create_plan(
     backend: str = "codex",
     model: str | None = None,
     workspace_path: str | None = None,
+    workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
 ) -> dict:
@@ -782,6 +913,7 @@ def create_plan(
             backend,
             model=model,
             workspace_path=workspace_path or str(root),
+            workspace_id=workspace_id,
             sandbox=sandbox,
             approval=approval,
         )
@@ -794,14 +926,22 @@ def create_plan(
         "created_at": created,
         "updated_at": created,
         "write_scopes": write_scopes,
-        "main_agent": make_agent("main", "run-main", backend, status="active", sandbox=sandbox, approval=approval),
+        "main_agent": make_agent(
+            "main",
+            "run-main",
+            backend,
+            status="active",
+            workspace_path=workspace_path,
+            sandbox=sandbox,
+            approval=approval,
+        ),
         "tasks": tasks,
     }
     base = run_dir(root, run_id)
     for task in tasks:
         write_task_artifacts(root, plan, task)
         ensure_session(root, run_id, task["id"], "main", backend, model=model, workspace_path=task.get("workspace_path"))
-    ensure_session(root, run_id, None, "main", backend, model=model, workspace_path=str(root))
+    ensure_session(root, run_id, None, "main", backend, model=model, workspace_path=workspace_path or str(root))
     save_plan(root, plan)
     append_event(root, run_id, "plan_created", {"goal": goal, "mode": mode, "tasks": len(tasks)})
     return plan
@@ -830,6 +970,7 @@ def add_task(
     sub_agents: int = 0,
     model: str | None = None,
     workspace_path: str | None = None,
+    workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
     delegation_policy: str = "auto",
@@ -846,6 +987,7 @@ def add_task(
             backend,
             model=model,
             workspace_path=workspace_path or str(root),
+            workspace_id=workspace_id,
             sandbox=sandbox,
             approval=approval,
             delegation_policy=delegation_policy,
@@ -890,6 +1032,7 @@ def add_task(
             "model": model,
             "sandbox": sandbox,
             "approval": approval,
+            "workspace_id": task.get("workspace_id"),
             "workspace_path": task.get("workspace_path"),
             "delegation_policy": delegation_policy,
             "max_sub_agents": max_sub_agents,

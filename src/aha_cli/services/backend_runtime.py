@@ -268,6 +268,7 @@ def _codex_chat_command(
     run_id: str,
     target: str,
     *,
+    aha_home: Path,
     codex_bin: str = "codex",
     model: str | None = None,
     sandbox: str = "workspace-write",
@@ -283,6 +284,8 @@ def _codex_chat_command(
         sys.executable,
         "-m",
         "aha_cli",
+        "--home",
+        str(aha_home),
         "codex-chat",
         run_id,
         target,
@@ -312,6 +315,18 @@ def _codex_chat_command(
     return command
 
 
+def _backend_process_env() -> dict[str, str]:
+    env = os.environ.copy()
+    pythonpath = env.get("PYTHONPATH", "")
+    if pythonpath:
+        cwd = Path.cwd()
+        env["PYTHONPATH"] = os.pathsep.join(
+            str((cwd / item).resolve()) if item and not Path(item).is_absolute() else item
+            for item in pythonpath.split(os.pathsep)
+        )
+    return env
+
+
 def start_backend(
     root: Path,
     run_id: str,
@@ -338,6 +353,7 @@ def start_backend(
         command = _codex_chat_command(
             run_id,
             target,
+            aha_home=root,
             codex_bin=codex_bin,
             model=model,
             sandbox=sandbox,
@@ -356,6 +372,7 @@ def start_backend(
             process = subprocess.Popen(
                 command,
                 cwd=root,
+                env=_backend_process_env(),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,

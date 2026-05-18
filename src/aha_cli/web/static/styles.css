@@ -879,6 +879,58 @@ button {
   color: #667085;
 }
 .empty.compact { padding: 16px 8px; }
+body.empty-run .tabs,
+body.empty-run .conversation-filters,
+body.empty-run .composer,
+body.empty-run .sidebar,
+body.empty-run .agentbar,
+body.empty-run .task-header,
+body.empty-run .mobile-task-summary,
+body.empty-run .mobile-context-actions,
+body.empty-run .mobile-action-panel,
+body.empty-run #backend-status {
+  display: none;
+}
+body.empty-run main {
+  grid-template-columns: minmax(0, 1fr);
+}
+body.empty-run .panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bootstrap-panel {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #d8dde4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.bootstrap-head {
+  display: grid;
+  gap: 4px;
+}
+.bootstrap-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+.bootstrap-head code {
+  color: #667085;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.bootstrap-form {
+  display: grid;
+  gap: 10px;
+}
+.bootstrap-form button {
+  justify-self: start;
+  border-color: #1f6feb;
+  background: #1f6feb;
+  color: #ffffff;
+}
 @media (min-width: 981px) {
   header {
     min-height: 48px;
