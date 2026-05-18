@@ -13,21 +13,25 @@
       <div id="run-state" class="meta"></div>
     </div>
     <div id="session-control" class="session-control">
-      <button id="session-toggle" class="session-toggle" type="button" aria-label="会话历史" title="会话历史" aria-controls="session-menu" aria-expanded="false">
+      <button id="session-toggle" class="session-toggle" type="button" aria-label="Run 操作台" title="Run 操作台" aria-controls="session-menu" aria-expanded="false">
         <span class="session-icon" aria-hidden="true">⋯</span>
         <strong id="session-title" class="sr-only">加载中...</strong>
       </button>
       <div id="session-menu" class="session-menu hidden">
         <div class="session-menu-head">
-          <span>会话历史</span>
+          <span>Run 操作台</span>
           <button id="session-refresh" type="button">刷新</button>
         </div>
         <select id="run-select"></select>
         <form id="run-create-form" class="session-create">
-          <input id="new-run-goal" placeholder="新会话目标">
+          <input id="new-run-goal" placeholder="新 Run goal">
+          <select id="new-run-mode" aria-label="Run mode">
+            <option value="research">research</option>
+            <option value="implementation">implementation</option>
+          </select>
           <button type="submit">新建</button>
         </form>
-        <div id="session-detail" class="meta"><span id="session-detail-text">会话详情</span><code id="run-id"></code></div>
+        <div id="session-detail" class="meta"><span id="session-detail-text">Run 详情</span><code id="run-id"></code></div>
       </div>
     </div>
     <button id="mobile-task-summary" class="mobile-task-summary" type="button" aria-controls="overview-sidebar" aria-expanded="false">
@@ -49,45 +53,61 @@
         <details id="task-create" class="task-create">
           <summary>Add Task</summary>
           <form id="task-form" class="stack-form">
-            <input id="new-task-title" placeholder="New task title">
-            <select id="workspace-select"></select>
-            <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
-            <div class="field-row">
-              <label class="field-label">
-                <span>Backend</span>
-                <select id="task-backend"></select>
-              </label>
-              <label class="field-label">
-                <span>Model</span>
-                <select id="task-model"></select>
-              </label>
-            </div>
-            <div class="field-row">
-              <label class="field-label">
-                <span>Sandbox</span>
-                <select id="task-sandbox">
-                  <option value="workspace-write">workspace-write</option>
-                  <option value="read-only">read-only</option>
-                  <option value="danger-full-access">danger-full-access</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>Approval</span>
-                <select id="task-approval">
-                  <option value="never">never</option>
-                  <option value="on-failure">on-failure</option>
-                  <option value="on-request">on-request</option>
-                  <option value="untrusted">untrusted</option>
-                </select>
-              </label>
-            </div>
-            <div class="field-row">
-              <select id="delegation-policy">
-                <option value="auto">auto delegation</option>
-                <option value="disabled">no delegation</option>
-              </select>
-              <input id="max-sub-agents" type="number" min="0" max="16" value="3" placeholder="Max sub">
-            </div>
+            <div id="task-run-context" class="task-run-context meta">当前 Run 加载中...</div>
+            <fieldset class="form-section">
+              <legend>Task</legend>
+              <input id="new-task-title" placeholder="New task title">
+              <select id="workspace-select" aria-label="Workspace"></select>
+              <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
+            </fieldset>
+            <fieldset class="form-section">
+              <legend>Defaults</legend>
+              <div class="field-row">
+                <label class="field-label">
+                  <span>Default backend</span>
+                  <select id="task-backend"></select>
+                </label>
+                <label class="field-label">
+                  <span>Default model</span>
+                  <select id="task-model"></select>
+                </label>
+              </div>
+            </fieldset>
+            <details class="form-section advanced-task-options">
+              <summary>Advanced</summary>
+              <div class="field-row">
+                <label class="field-label">
+                  <span>Default sandbox</span>
+                  <select id="task-sandbox">
+                    <option value="workspace-write">workspace-write</option>
+                    <option value="read-only">read-only</option>
+                    <option value="danger-full-access">danger-full-access</option>
+                  </select>
+                </label>
+                <label class="field-label">
+                  <span>Default approval</span>
+                  <select id="task-approval">
+                    <option value="never">never</option>
+                    <option value="on-failure">on-failure</option>
+                    <option value="on-request">on-request</option>
+                    <option value="untrusted">untrusted</option>
+                  </select>
+                </label>
+              </div>
+              <div class="field-row">
+                <label class="field-label">
+                  <span>Delegation</span>
+                  <select id="delegation-policy">
+                    <option value="auto">auto</option>
+                    <option value="disabled">off</option>
+                  </select>
+                </label>
+                <label id="max-sub-agents-field" class="field-label">
+                  <span>Max auto sub-agents</span>
+                  <input id="max-sub-agents" type="number" min="1" max="16" value="3">
+                </label>
+              </div>
+            </details>
             <button type="submit">Add Task</button>
           </form>
         </details>

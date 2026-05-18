@@ -118,7 +118,7 @@ header > div:first-child h1 {
 }
 .session-create {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(112px, auto) auto;
   gap: 8px;
 }
 .session-create button {
@@ -229,6 +229,45 @@ button, input, select { font: inherit; }
 .task-create > .stack-form {
   margin-top: 10px;
 }
+.task-run-context {
+  min-height: 24px;
+  padding: 6px 8px;
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  background: #f9fafb;
+  overflow-wrap: anywhere;
+}
+.form-section {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.form-section legend,
+.advanced-task-options > summary {
+  margin-bottom: 6px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+.advanced-task-options > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.advanced-task-options > summary::-webkit-details-marker {
+  display: none;
+}
+.advanced-task-options > summary::after {
+  content: "+";
+  float: right;
+  color: #667085;
+}
+.advanced-task-options[open] > summary::after {
+  content: "-";
+}
+.advanced-task-options > .field-row + .field-row {
+  margin-top: 8px;
+}
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -237,6 +276,9 @@ button, input, select { font: inherit; }
 .field-label {
   display: grid;
   gap: 4px;
+}
+.field-label.hidden {
+  display: none;
 }
 .field-label span {
   color: #667085;

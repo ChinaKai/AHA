@@ -74,6 +74,7 @@ const sessionRefreshEl = document.getElementById("session-refresh");
 const runSelectEl = document.getElementById("run-select");
 const runCreateFormEl = document.getElementById("run-create-form");
 const newRunGoalEl = document.getElementById("new-run-goal");
+const newRunModeEl = document.getElementById("new-run-mode");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
 const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
@@ -107,6 +108,10 @@ const taskBackendEl = document.getElementById("task-backend");
 const taskModelEl = document.getElementById("task-model");
 const taskSandboxEl = document.getElementById("task-sandbox");
 const taskApprovalEl = document.getElementById("task-approval");
+const taskRunContextEl = document.getElementById("task-run-context");
+const delegationPolicyEl = document.getElementById("delegation-policy");
+const maxSubAgentsEl = document.getElementById("max-sub-agents");
+const maxSubAgentsFieldEl = document.getElementById("max-sub-agents-field");
 const workspaceSelectEl = document.getElementById("workspace-select");
 const workspaceCustomEl = document.getElementById("workspace-custom");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
@@ -248,7 +253,7 @@ function runIdOf(run) {
 
 function runTitleOf(run) {
   const goal = String(run?.goal || "").trim();
-  return goal || runIdOf(run) || "未命名会话";
+  return goal || runIdOf(run) || "未命名 Run";
 }
 
 function runUpdatedAtOf(run) {
@@ -264,7 +269,7 @@ function fallbackCurrentRun() {
   if (!id) return null;
   return {
     id,
-    goal: statusData?.goal || "当前会话",
+    goal: statusData?.goal || "当前 Run",
     mode: statusData?.mode || "",
     status: statusData?.status || "",
     updated_at: statusData?.updated_at || ""
@@ -308,7 +313,7 @@ function resetRunScopedState() {
   logStates.clear();
   pendingMessages.length = 0;
   interruptedContexts.clear();
-  panelEl.innerHTML = '<div class="empty">正在切换会话...</div>';
+  panelEl.innerHTML = '<div class="empty">正在切换 Run...</div>';
 }
 
 function realtimeTransportText() {
@@ -334,16 +339,17 @@ function renderSessionSummary() {
     if (sessionTitleEl) sessionTitleEl.textContent = currentRunId || "加载中...";
     if (runIdEl) runIdEl.textContent = currentRunId || "-";
     if (runStateEl) runStateEl.textContent = "";
-    if (sessionDetailTextEl) sessionDetailTextEl.textContent = "会话详情";
+    if (sessionDetailTextEl) sessionDetailTextEl.textContent = "Run 详情";
+    if (taskRunContextEl) taskRunContextEl.textContent = "当前 Run 加载中...";
     return;
   }
   const title = statusData?.goal || runTitleOf(run);
   if (sessionTitleEl) {
-    sessionTitleEl.textContent = title || "未选择会话";
+    sessionTitleEl.textContent = title || "未选择 Run";
     sessionTitleEl.title = title || "";
   }
   if (sessionToggleEl) {
-    const label = runId ? `会话历史: ${title || runId}` : "会话历史";
+    const label = runId ? `Run 操作台: ${title || runId}` : "Run 操作台";
     sessionToggleEl.title = label;
     sessionToggleEl.setAttribute("aria-label", label);
   }
@@ -358,14 +364,21 @@ function renderSessionSummary() {
     runStateEl.title = runStateText;
   }
   if (sessionDetailTextEl) {
-    const taskCount = Number.isFinite(run?.task_count) ? `${run.completed_count || 0}/${run.task_count} 个任务` : "";
+    const taskCount = Number.isFinite(run?.task_count) ? `${run.completed_count || 0}/${run.task_count} tasks` : "";
     sessionDetailTextEl.textContent = [
+      run?.mode ? `mode ${run.mode}` : statusData?.mode ? `mode ${statusData.mode}` : "",
       run?.status ? `状态 ${run.status}` : "",
       taskCount,
       updatedAt ? `更新 ${formatLocalTimestamp(updatedAt, updatedAt)}` : "",
       realtimeTransportText(),
       runsError ? `提示 ${runsError}` : ""
-    ].filter(Boolean).join(" · ") || "会话详情";
+    ].filter(Boolean).join(" · ") || "Run 详情";
+  }
+  if (taskRunContextEl) {
+    const mode = statusData?.mode || run?.mode || "-";
+    const runLabel = title || runId || "-";
+    taskRunContextEl.textContent = `当前 Run: ${runLabel} / ${mode}`;
+    taskRunContextEl.title = runId || "";
   }
 }
 
@@ -386,6 +399,7 @@ function renderSessionMenu() {
   runSelectEl.disabled = runActionInFlight || runSelectEl.options.length === 0;
   if (sessionRefreshEl) sessionRefreshEl.disabled = runActionInFlight;
   if (newRunGoalEl) newRunGoalEl.disabled = runActionInFlight;
+  if (newRunModeEl) newRunModeEl.disabled = runActionInFlight;
   renderSessionSummary();
 }
 
@@ -395,7 +409,7 @@ async function loadRuns(force = false) {
     return;
   }
   try {
-    const payload = await fetchJson("/api/runs", {}, "Failed to load sessions");
+    const payload = await fetchJson("/api/runs", {}, "Failed to load runs");
     defaultRunId = String(payload.default_run_id || defaultRunId || "").trim();
     runsData = Array.isArray(payload.runs) ? payload.runs : [];
     runsError = "";
@@ -406,7 +420,7 @@ async function loadRuns(force = false) {
     }
     restoreEventCursorFromStorage();
   } catch (err) {
-    runsError = err?.message || String(err || "会话列表不可用");
+    runsError = err?.message || String(err || "Run 列表不可用");
     runsData = fallbackCurrentRun() ? [fallbackCurrentRun()] : [];
   } finally {
     runsLoaded = true;
@@ -451,19 +465,20 @@ async function switchRun(runId) {
   }
 }
 
-async function createRun(goal) {
+async function createRun(goal, mode) {
   const trimmedGoal = String(goal || "").trim();
   if (!trimmedGoal) return;
+  const selectedMode = String(mode || "research").trim() || "research";
   runActionInFlight = true;
   try {
     const payload = await fetchJson("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal: trimmedGoal })
-    }, "Failed to create session");
+      body: JSON.stringify({ goal: trimmedGoal, mode: selectedMode })
+    }, "Failed to create run");
     const run = payload.run || payload;
     const nextRunId = runIdOf(run);
-    if (!nextRunId) throw new Error("New session did not include an id");
+    if (!nextRunId) throw new Error("New run did not include an id");
     if (newRunGoalEl) newRunGoalEl.value = "";
     runsLoaded = false;
     await loadRuns(true);
@@ -497,6 +512,15 @@ function initTaskCreateDisclosure() {
     mobileQuery.addListener(applyDefault);
   }
   applyDefault();
+}
+
+function syncDelegationFields() {
+  const isAuto = delegationPolicyEl?.value === "auto";
+  if (maxSubAgentsFieldEl) {
+    maxSubAgentsFieldEl.hidden = !isAuto;
+    maxSubAgentsFieldEl.classList.toggle("hidden", !isAuto);
+  }
+  if (maxSubAgentsEl) maxSubAgentsEl.disabled = !isAuto;
 }
 
 function sidebarStorageKey(side) {
@@ -670,7 +694,7 @@ function initSessionControl() {
   runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
   runCreateFormEl?.addEventListener("submit", async event => {
     event.preventDefault();
-    await createRun(newRunGoalEl?.value || "");
+    await createRun(newRunGoalEl?.value || "", newRunModeEl?.value || "research");
   });
   document.addEventListener("click", event => {
     const target = event.target instanceof Element ? event.target : null;
@@ -1918,14 +1942,14 @@ function renderTaskList() {
         <span class="task-statuses">${taskStatusBadges(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
+      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
     `;
-    item.title = `${task.title}\nbackend=${task.preferred_backend || "-"}\nworkspace=${task.workspace_path || "-"}`;
+    item.title = `${task.title}\ndefault backend=${task.preferred_backend || "-"}\nworkspace=${task.workspace_path || "-"}`;
     item.addEventListener("click", async event => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("button")) return;
@@ -2407,6 +2431,7 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   event.preventDefault();
   const title = document.getElementById("new-task-title").value.trim();
   if (!title) return;
+  const delegationPolicy = delegationPolicyEl?.value || "disabled";
   try {
     await fetchJson(apiUrl("/api/tasks"), {
       method: "POST",
@@ -2418,8 +2443,8 @@ document.getElementById("task-form").addEventListener("submit", async event => {
         sandbox: taskSandboxEl.value,
         approval: taskApprovalEl.value,
         workspace_path: selectedWorkspacePath(),
-        delegation_policy: document.getElementById("delegation-policy").value,
-        max_sub_agents: Number(document.getElementById("max-sub-agents").value || "0"),
+        delegation_policy: delegationPolicy,
+        max_sub_agents: delegationPolicy === "auto" ? Number(maxSubAgentsEl?.value || "0") : 0,
         preferred_sub_backend: taskBackendEl.value,
         dispatch: true
       }))
@@ -2585,6 +2610,7 @@ agentTargetEl.addEventListener("change", async () => {
   renderPanel();
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
+delegationPolicyEl?.addEventListener("change", syncDelegationFields);
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
   if (!tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
@@ -2601,6 +2627,7 @@ workspaceSelectEl.addEventListener("change", () => {
 });
 
 initTaskCreateDisclosure();
+syncDelegationFields();
 initDesktopSidebars();
 initMobileSheets();
 initMobileActionPanel();
