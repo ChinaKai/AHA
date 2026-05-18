@@ -76,6 +76,42 @@ def task_final_view_snapshot(root: Path, run_id: str, task_id: str) -> dict:
         detail["result"] = output_file.read_text(encoding="utf-8")
         detail["result_meta"] = output_meta
     return detail
+
+
+def is_aha_action_envelope_text(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return False
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return isinstance(payload.get("actions"), list) and isinstance(payload.get("response"), str)
+
+
+def is_raw_action_agent_message(event: dict) -> bool:
+    if event.get("type") != "agent_message":
+        return False
+    data = event.get("data") or {}
+    return is_aha_action_envelope_text(str(data.get("text") or ""))
+
+
+def conversation_view_page(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    target: str,
+    limit: int = 50,
+    before: int | None = None,
+) -> dict:
+    page = conversation_events_page(root, run_id, task_id, target, limit=limit, before=before)
+    events = [event for event in page.get("events", []) if not is_raw_action_agent_message(event)]
+    view = dict(page)
+    view["events"] = events
+    view["count"] = len(events)
+    return view
 TASK_OUTCOME_SCAN_LIMIT = 10000
 
 
@@ -802,7 +838,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             if not task_id:
                 writer.write(json_response({"error": "task_id required"}, "400 Bad Request"))
             else:
-                response = json_response(conversation_events_page(root, selected_run_id, task_id, target, limit=limit, before=before))
+                response = json_response(conversation_view_page(root, selected_run_id, task_id, target, limit=limit, before=before))
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path.startswith("/api/task/"):
             selected_run_id = require_api_run_id(root, run_id, query)

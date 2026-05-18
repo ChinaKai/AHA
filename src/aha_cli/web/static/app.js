@@ -1008,6 +1008,17 @@ function eventData(event) {
   return event.data || {};
 }
 
+function isAhaActionEnvelopeText(text) {
+  const raw = String(text || "").trim();
+  if (!raw.startsWith("{") || !raw.endsWith("}")) return false;
+  try {
+    const payload = JSON.parse(raw);
+    return Boolean(payload && Array.isArray(payload.actions) && typeof payload.response === "string");
+  } catch (_err) {
+    return false;
+  }
+}
+
 function eventTaskId(event) {
   const data = eventData(event);
   if (data.task_id) return data.task_id;
@@ -1152,7 +1163,9 @@ function dedupedConversationEvents(taskId) {
   return conversationSourceEvents(taskId).filter(event => {
     const data = eventData(event);
     if (event.type === "agent_message") {
-      latestAgentMessage = String(data.text || "").trim();
+      const text = String(data.text || "").trim();
+      if (isAhaActionEnvelopeText(text)) return false;
+      latestAgentMessage = text;
       return true;
     }
     if (
