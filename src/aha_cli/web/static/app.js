@@ -1978,6 +1978,7 @@ function renderSelectedHeader() {
     selectedIdEl.textContent = "";
     selectedTitleEl.textContent = "No tasks";
     selectedTaskMetaEl.textContent = "";
+    selectedTaskMetaEl.hidden = true;
     selectedStatusEl.textContent = "empty";
     selectedStatusEl.className = "status pending";
     return;
@@ -1986,11 +1987,8 @@ function renderSelectedHeader() {
   renderMobileTaskSummary(task);
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
-  const timing = taskMetaTiming(task.id, task);
-  const outcome = taskOutcomeStatus(task) || "-";
-  const activity = taskActivityStatus(task);
-  selectedTaskMetaEl.textContent =
-    `outcome=${outcome} | activity=${activity} | ${task.preferred_backend || "backend?"} | ${task.preferred_model || "default"} | sandbox=${task.preferred_sandbox || "process default"} | approval=${task.preferred_approval || "process default"}${timing ? ` | ${timing}` : ""} | ${task.workspace_path || "workspace not set"}`;
+  selectedTaskMetaEl.textContent = "";
+  selectedTaskMetaEl.hidden = true;
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
   selectedStatusEl.textContent = displayStatus;
   selectedStatusEl.className = `status ${displayStatus}`;
@@ -2026,6 +2024,7 @@ function renderAgents() {
   agentTargetEl.innerHTML = "";
   if (!task) {
     selectedAgentInfoEl.textContent = "";
+    selectedAgentInfoEl.hidden = true;
     return;
   }
   for (const agent of task.agents || []) {
@@ -2105,15 +2104,8 @@ function syncAgentCards() {
 }
 
 function renderSelectedAgentInfo() {
-  const task = selectedTask();
-  const agent = (task?.agents || []).find(item => item.id === agentTargetEl.value);
-  if (!task || !agent) {
-    selectedAgentInfoEl.textContent = "";
-    return;
-  }
-  const lifecycleTiming = agentStatusTimingText(agent) || agentLifecycleStatus(agent);
-  selectedAgentInfoEl.textContent =
-    `To ${agent.id} | status=${lifecycleTiming} | process=${agent.backend_process_status || "stopped"} | pid=${agent.backend_process_pid || "-"} | role=${agent.role} | backend=${agent.backend} | model=${agent.model || "default"} | sandbox=${agent.sandbox || task.preferred_sandbox || "process default"} | approval=${agent.approval || task.preferred_approval || "process default"} | session=${agent.backend_session_id || "-"} | scope=${agent.session_scope || "-"} | workspace=${agent.workspace_path || task.workspace_path || "-"}`;
+  selectedAgentInfoEl.textContent = "";
+  selectedAgentInfoEl.hidden = true;
 }
 
 function renderBackendStatus() {

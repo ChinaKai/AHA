@@ -838,6 +838,95 @@ button {
 }
 .empty.compact { padding: 16px 8px; }
 @media (min-width: 981px) {
+  header {
+    min-height: 48px;
+    padding: 8px 16px;
+    gap: 12px;
+  }
+  header > div:first-child {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: baseline;
+    gap: 10px;
+  }
+  h1 {
+    flex: 0 1 auto;
+    font-size: 16px;
+    line-height: 1.2;
+  }
+  .header-workspace-dir {
+    font-size: 12px;
+  }
+  #run-state {
+    flex: 1 1 auto;
+    min-width: 120px;
+    overflow: hidden;
+    color: #667085;
+    font-size: 11px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-toggle {
+    width: 24px;
+    min-width: 24px;
+    min-height: 24px;
+  }
+  main {
+    height: calc(100vh - 48px);
+  }
+  .task-header {
+    padding: 8px 14px 6px;
+  }
+  .task-header-top {
+    align-items: center;
+    gap: 10px;
+  }
+  .task-header-top > div {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
+  }
+  #selected-id {
+    grid-column: 1;
+    line-height: 1.2;
+  }
+  .task-heading {
+    grid-column: 2;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    font-size: 15px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #selected-task-meta {
+    grid-column: 1 / -1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #selected-status {
+    min-height: 20px;
+    padding: 1px 7px;
+    font-size: 11px;
+  }
+  .tabs {
+    padding: 7px 14px;
+  }
+  .tab {
+    min-height: 28px;
+    padding: 0 9px;
+  }
+  .conversation-filters {
+    padding: 7px 14px;
+  }
   body.overview-collapsed main { --overview-width: 46px; }
   body.agents-collapsed main { --agents-width: 46px; }
   body.overview-collapsed .sidebar,
