@@ -15,8 +15,17 @@ Keep each commit focused on one behavior or refactor step.
 Prefer `aha commit` over raw `git commit` so the trailers are generated consistently:
 
 ```bash
-aha commit --type feat --scope web --summary "add task creation API" --task-id task-001 --agent main --aha-scope task-creation-api
+aha commit \
+  --type feat \
+  --scope web \
+  --summary "add task creation API" \
+  --task-id task-001 \
+  --agent main \
+  --aha-scope task-creation-api \
+  --add README.md src/aha_cli/web
 ```
+
+Use `--dry-run` to print the generated commit message without committing.
 
 Validate hand-written commit messages with:
 

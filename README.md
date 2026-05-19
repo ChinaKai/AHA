@@ -18,20 +18,30 @@ AHA keeps the orchestration model backend-aware but loosely coupled. It can writ
 ```text
 .aha/
   config.json
+  workspaces/
+    ws-001.json
   runs/
     <run-id>/
       plan.json
       events.jsonl
       sessions/
+        main.json
       prompts/
       inbox/
       results/
       logs/
+      runtime/
       tasks/
         task-001/
           task.json
           messages.jsonl
           sessions/
+            main.json
+          rounds/
+            round-001/
+              round.json
+              final.md
+              final.meta.json
       merged-report.md
 ```
 
@@ -43,8 +53,12 @@ aha plan "goal" --agents 4
 aha run <run-id>
 aha status <run-id>
 aha task add <run-id> "extra task" --workspace-path /path/to/project --max-sub-agents 3
+aha task proxy <run-id> task-001 --enable-proxy --http-proxy http://127.0.0.1:7890
 aha agent add <run-id> task-001 --backend codex
+aha agent set <run-id> task-001 main --sandbox workspace-write --approval never
 aha session list <run-id> --task-id task-001
+aha workspace add /path/to/project --name firmware
+aha workspace list
 aha watch <run-id>
 aha send <run-id> task-001 "please inspect the package flow"
 aha chat <run-id> task-001
@@ -52,8 +66,8 @@ aha auto-reply <run-id> main
 aha codex-chat <run-id> main
 aha serve <run-id>
 aha ui <run-id>
-aha run export <run-id> --output run.tar.gz
-aha run import run.tar.gz
+aha run export <run-id> --output run.tar.gz --no-logs
+aha run import run.tar.gz --run-id restored-demo
 aha package onebin --output dist/aha
 aha commit --type feat --scope web --summary "add lazy loading" --task-id task-001 --agent main --aha-scope web-lazy-loading
 aha commit-check .git/COMMIT_EDITMSG
@@ -143,8 +157,14 @@ aha task list <run-id>
 aha task show <run-id> task-001
 aha task final <run-id> task-001
 aha task reopen <run-id> task-001
+aha task proxy <run-id> task-001 \
+  --enable-proxy \
+  --http-proxy http://127.0.0.1:7890 \
+  --https-proxy http://127.0.0.1:7890 \
+  --no-proxy localhost,127.0.0.1,::1
 
 aha agent add <run-id> task-001 --role sub --backend codex
+aha agent set <run-id> task-001 main --enable-proxy
 aha agent list <run-id> task-001
 
 aha session list <run-id> --task-id task-001
@@ -286,8 +306,16 @@ It stores the latest `event_id` in browser local storage, reconnects with that c
 The dashboard uses local HTTP endpoints:
 
 ```text
+GET  /api/bootstrap
+GET  /api/runs
+POST /api/runs
+GET  /api/run/export?run_id=<run-id>&no_logs=1
+POST /api/run/import
 GET  /api/status
 GET  /api/backends
+GET  /api/models?backend=codex
+GET  /api/workspaces
+POST /api/workspaces
 GET  /api/events?offset=<byte-offset>
 GET  /api/events?last_event_id=<event-id>
 GET  /api/conversation-events?task_id=<task-id>&target=<agent-id>&limit=50&before_offset=<byte-offset>
@@ -298,9 +326,14 @@ GET  /api/task/<task-id>/context
 GET  /api/backend?target=<agent-id>&task_id=<task-id>
 POST /api/task/<task-id>/final
 POST /api/task/<task-id>/reopen
+POST /api/task/<task-id>/hide
+POST /api/task/<task-id>/restore
+POST /api/task/<task-id>/delete
+POST /api/task/<task-id>/proxy
 POST /api/task-config
 POST /api/tasks
 POST /api/agents
+POST /api/agent-config
 POST /api/send
 ```
 
@@ -319,6 +352,27 @@ right: task-main/sub agents and backend session details
 Messages still use JSONL inbox/event files, but browser messages carry `task_id`, `from_agent`, and `to_agent` so the backend can keep task conversations separated.
 
 The task form dispatches the assignment immediately. Users should not need to repeat the task in the conversation box after creation.
+
+When AHA starts with no selected run, the dashboard shows a First Run bootstrap form. That form can initialize a run, register a workspace, choose backend/model/sandbox/approval, and set initial task proxy values before the first backend is started.
+
+## Run Import And Export
+
+Export one run as a tar archive:
+
+```bash
+aha run export <run-id> -o run.tar.gz
+aha run export <run-id> -o run.tar.gz --no-logs
+```
+
+Import creates a new run id by default:
+
+```bash
+aha run import run.tar.gz
+aha run import run.tar.gz --run-id restored-demo
+aha run import run.tar.gz --preserve-id --force
+```
+
+The archive includes `aha-run-manifest.json` plus the run directory under `run/`. Runtime files are excluded, log files can be excluded with `--no-logs`, proxy fields are redacted, and backend session ids are cleared and marked as imported. The browser dashboard exposes the same flow through `/api/run/export` and `/api/run/import`.
 
 ## Suggested Operating Model
 
@@ -404,6 +458,8 @@ Run it directly on a machine with Python 3.10+:
 ```
 
 The artifact includes the CLI modules and dashboard static files. It still uses the local filesystem for `.aha/` data and external agent backends such as `codex`.
+
+When the one-bin dashboard autostarts a backend, AHA launches the child backend through the same one-bin artifact instead of requiring `python -m aha_cli` to be importable on the target machine. External backend commands such as `codex` still need to be installed and authenticated separately.
 
 ## Why This Exists
 

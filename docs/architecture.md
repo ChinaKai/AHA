@@ -4,6 +4,23 @@
 
 Web is the core entry point. CLI remains useful for automation, debugging, and local scripting.
 
+The browser UI now has two operating modes:
+
+```text
+First Run bootstrap
+  create an initial run
+  optionally register a workspace
+  choose backend/model/sandbox/approval
+  set initial task proxy defaults
+
+Run workspace
+  switch between local runs
+  create and manage tasks
+  chat with task agents
+  inspect results, logs, context, sessions, and backend runtime
+  import or export run archives
+```
+
 The orchestration hierarchy is:
 
 ```text
@@ -37,6 +54,17 @@ websocket/    low-level WebSocket stream
 cli.py        argparse only
 ```
 
+Important service responsibilities:
+
+```text
+services/backend_runtime.py  managed backend processes and runtime locks
+services/chat.py             Codex chat loop and task finalization handling
+services/orchestrator.py     AHA action execution and sub-agent coordination
+services/proxy.py            task proxy normalization and backend env injection
+services/run_archive.py      run import/export archive format
+services/onebin.py           single-file zipapp packaging
+```
+
 ## Context Ownership
 
 AHA owns context assembly. Backend sessions preserve local continuity but do not define task boundaries.
@@ -58,6 +86,43 @@ Task-scoped proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are sto
 
 If run-main is activated later, it should work from summaries and decision records, not every task's full message history.
 
+## Persistence Model
+
+The active data root is an AHA home, not necessarily the repository root:
+
+```text
+$AHA_HOME
+repo/.aha when initialized with --portable
+~/.aha by default
+```
+
+A run is persisted as append-only event and message logs plus JSON snapshots:
+
+```text
+runs/<run-id>/
+  plan.json
+  events.jsonl
+  inbox/<agent-id>.jsonl
+  sessions/main.json
+  runtime/
+  tasks/<task-id>/
+    task.json
+    messages.jsonl
+    sessions/<agent-id>.json
+    rounds/<round-id>/round.json
+```
+
+`runtime/` contains process locks, offsets, and backend state. It is intentionally local-only and is excluded from run archives.
+
+Task finals are lifecycle artifacts, not just the latest result file. A finalized round writes:
+
+```text
+tasks/<task-id>/rounds/<round-id>/final.md
+tasks/<task-id>/rounds/<round-id>/final.meta.json
+```
+
+Reopening a finalized task starts the next `round-NNN` and preserves the previous final.
+
 ## Backend Model
 
 All backends are addressed through a registry. A backend may be stateless or session-capable. If a backend cannot resume sessions, AHA still keeps the logical session scope and falls back to fresh calls.
@@ -74,3 +139,30 @@ Runner backends execute tasks as batch jobs and are not valid task-main or sub-a
 ```text
 command
 ```
+
+Managed chat backends are started through `services/backend_runtime.py`. In source checkouts the runtime launches `python -m aha_cli codex-chat ...`. In a one-bin zipapp it launches the current one-bin artifact instead, so a packaged dashboard does not require `aha_cli` to be installed as an importable Python module.
+
+## Distribution And Portability
+
+Run archive import/export is handled by `services/run_archive.py`.
+
+Export:
+
+```text
+include run metadata, events, messages, tasks, sessions, prompts, results, and optionally logs
+exclude runtime state and transient lock/tmp files
+redact proxy values
+clear backend_session_id while preserving imported_backend_session_id
+```
+
+Import:
+
+```text
+safe-extract the archive
+assign a new run id by default
+rewrite run_id and session scope references
+mark sessions as imported
+append a run_imported event
+```
+
+`aha package onebin` builds a Python zipapp containing `aha_cli` and `web/static`. The artifact still stores data in `.aha/` or the selected `--home`, and still depends on external backend CLIs such as `codex`.
