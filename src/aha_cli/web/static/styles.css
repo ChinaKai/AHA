@@ -1099,6 +1099,20 @@ body.empty-run .panel {
   display: grid;
   gap: 10px;
 }
+.bootstrap-proxy {
+  border: 1px solid #d8dde4;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.bootstrap-proxy > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #344054;
+}
+.bootstrap-proxy .proxy-form {
+  margin-top: 10px;
+}
 .bootstrap-form button {
   justify-self: start;
   border-color: #1f6feb;

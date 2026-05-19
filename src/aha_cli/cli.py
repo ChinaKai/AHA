@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from importlib import resources
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ from aha_cli.services.chat import auto_reply, codex_chat
 from aha_cli.services.commit_policy import CONVENTIONAL_TYPES, format_commit_message, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
+from aha_cli.services.onebin import build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_tasks import run_pending_tasks
 from aha_cli.services.tasks import create_task_and_dispatch
@@ -72,6 +74,7 @@ COMMANDS = {
     "auto-reply",
     "commit",
     "commit-check",
+    "package",
     "codex-runner",
     "codex-chat",
     "task",
@@ -88,7 +91,7 @@ def visible_plan_tasks(plan: dict) -> list[dict]:
 
 def task_dashboard_html(run_id: str, poll_interval_ms: int) -> str:
     del run_id, poll_interval_ms
-    return (Path(__file__).parent / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    return resources.files("aha_cli.web").joinpath("static", "index.html").read_text(encoding="utf-8")
 
 
 def initialize_aha_home(root: Path, args: argparse.Namespace) -> int:
@@ -489,6 +492,23 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_package(args: argparse.Namespace) -> int:
+    if args.package_cmd == "onebin":
+        try:
+            artifact = build_onebin(
+                Path(args.output),
+                source_root=Path(args.source_root).expanduser().resolve() if args.source_root else None,
+                interpreter=args.interpreter,
+                compressed=not args.no_compress,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"Built one-bin executable: {artifact}")
+        return 0
+    raise SystemExit(f"Unknown package command: {args.package_cmd}")
+
+
 def cmd_commit(args: argparse.Namespace) -> int:
     try:
         message = format_commit_message(
@@ -668,6 +688,15 @@ def build_parser() -> argparse.ArgumentParser:
     commit_check_p = sub.add_parser("commit-check", help="Validate an AHA commit message file")
     commit_check_p.add_argument("message_file", help="Commit message file path, or '-' for stdin")
     commit_check_p.set_defaults(func=cmd_commit_check)
+
+    package_p = sub.add_parser("package", help="Build distributable artifacts")
+    package_sub = package_p.add_subparsers(dest="package_cmd", required=True)
+    onebin_p = package_sub.add_parser("onebin", help="Build a single-file executable zipapp")
+    onebin_p.add_argument("--output", "-o", default="dist/aha", help="Output executable path")
+    onebin_p.add_argument("--interpreter", default="/usr/bin/env python3", help="Shebang interpreter for the artifact")
+    onebin_p.add_argument("--no-compress", action="store_true", help="Store files without ZIP compression")
+    onebin_p.add_argument("--source-root", default=None, help=argparse.SUPPRESS)
+    onebin_p.set_defaults(func=cmd_package)
 
     codex_runner_p = sub.add_parser("codex-runner")
     codex_runner_p.add_argument("--codex-bin", default="codex")

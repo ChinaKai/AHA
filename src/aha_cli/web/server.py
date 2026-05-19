@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from email.parser import BytesParser
 from email.policy import default as email_policy
+from importlib import resources
 import json
 from pathlib import Path
 import tempfile
@@ -61,7 +62,7 @@ from aha_cli.store.filesystem import (
 )
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
 
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_PACKAGE = "aha_cli.web"
 HL_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/hl_project")
 MY_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/my_project")
 WORKSPACE_ROOTS = [HL_PROJECT_ROOT, MY_PROJECT_ROOT]
@@ -182,16 +183,20 @@ def json_response(data: dict, status: str = "200 OK") -> bytes:
     return http_response(status, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
 
-def static_response(path: Path, method: str) -> bytes:
-    if not path.exists() or not path.is_file():
+def static_response(name: str, method: str) -> bytes:
+    try:
+        resource = resources.files(STATIC_PACKAGE).joinpath("static", name)
+        if not resource.is_file():
+            return http_response("404 Not Found", b"not found\n")
+        body = resource.read_bytes()
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
         return http_response("404 Not Found", b"not found\n")
-    suffix = path.suffix
+    suffix = Path(name).suffix
     content_type = {
         ".html": "text/html; charset=utf-8",
         ".css": "text/css; charset=utf-8",
         ".js": "application/javascript; charset=utf-8",
     }.get(suffix, "application/octet-stream")
-    body = path.read_bytes()
     return http_response("200 OK", b"" if method == "HEAD" else body, content_type)
 
 
@@ -907,13 +912,13 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 await handle_ws_connection(root, selected_run_id, reader, writer, 1.0, cursor)
             return
         if method in {"GET", "HEAD"} and path == "/":
-            writer.write(static_response(STATIC_DIR / "index.html", method))
+            writer.write(static_response("index.html", method))
         elif method in {"GET", "HEAD"} and path.startswith("/static/"):
             static_name = unquote(path.removeprefix("/static/"))
             if "/" in static_name or static_name.startswith("."):
                 writer.write(http_response("404 Not Found", b"not found\n"))
             else:
-                writer.write(static_response(STATIC_DIR / static_name, method))
+                writer.write(static_response(static_name, method))
         elif method in {"GET", "HEAD"} and path == "/api/runs":
             response = json_response({"default_run_id": default_api_run_id(root, run_id), "runs": list_run_summaries(root)})
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)

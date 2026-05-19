@@ -7,10 +7,16 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import socket
+import subprocess
+import sys
 import tarfile
 import tempfile
 import textwrap
+import time
 import unittest
+import urllib.error
+import urllib.request
 from unittest import mock
 
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event
@@ -1672,6 +1678,78 @@ class CliTests(unittest.TestCase):
                 self.assertIn("conversation-filters", html)
                 self.assertIn('data-tab="final"', html)
 
+    def test_package_onebin_builds_executable_with_ui_static(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "aha"
+            code, output = self.run_cli("package", "onebin", "--output", str(artifact))
+            self.assertEqual(code, 0, output)
+            self.assertTrue(artifact.is_file())
+            self.assertTrue(os.access(artifact, os.X_OK))
+
+            help_run = subprocess.run([str(artifact), "--help"], capture_output=True, text=True, timeout=10)
+            self.assertEqual(help_run.returncode, 0, help_run.stderr)
+            self.assertIn("Agent-help-agent", help_run.stdout)
+
+            aha_home = root / ".aha"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            init_run = subprocess.run(
+                [str(artifact), "--home", str(aha_home), "init", "--backend", "stub"],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(init_run.returncode, 0, init_run.stderr)
+            plan_run = subprocess.run(
+                [str(artifact), "--home", str(aha_home), "plan", "One-bin run", "--agents", "1", "--workspace-path", str(workspace)],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(plan_run.returncode, 0, plan_run.stderr)
+            run_id = plan_run.stdout.splitlines()[0].split(": ", 1)[1]
+
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            proc = subprocess.Popen(
+                [str(artifact), "--home", str(aha_home), "ui", run_id, "--host", "127.0.0.1", "--port", str(port)],
+                cwd=workspace,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                html = ""
+                for _ in range(50):
+                    try:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=0.2) as response:
+                            html = response.read().decode("utf-8")
+                        break
+                    except (urllib.error.URLError, TimeoutError):
+                        time.sleep(0.1)
+                if not html:
+                    stdout, stderr = proc.communicate(timeout=1)
+                    self.fail(f"one-bin UI did not start\nstdout={stdout}\nstderr={stderr}")
+                self.assertIn('id="run-export"', html)
+
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/static/app.js", timeout=1) as response:
+                    script = response.read().decode("utf-8")
+                self.assertIn("runExportEl", script)
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.communicate(timeout=5)
+                else:
+                    proc.communicate(timeout=1)
+
     def test_web_status_snapshot_includes_agent_backend_process_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2282,6 +2360,38 @@ class CliTests(unittest.TestCase):
         self.assertEqual(plan["tasks"][0]["workspace_id"], "ws-001")
         self.assertEqual(plan["tasks"][0]["workspace_path"], str(workspace))
 
+    def test_api_run_creation_accepts_proxy_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/runs",
+                    method="POST",
+                    payload={
+                        "goal": "Proxy setup",
+                        "mode": "research",
+                        "backend": "codex",
+                        "proxy_enabled": True,
+                        "http_proxy": "http://127.0.0.1:7890",
+                        "https_proxy": "http://127.0.0.1:7890",
+                        "no_proxy": "localhost,127.0.0.1",
+                    },
+                )
+            )
+            body = json_response_body(response)
+            plan = read_json(root / "runs" / body["run"]["id"] / "plan.json")
+            task = plan["tasks"][0]
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(task["preferred_proxy_enabled"])
+        self.assertEqual(task["preferred_http_proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(task["preferred_https_proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(task["preferred_no_proxy"], "localhost,127.0.0.1")
+        self.assertTrue(task["agents"][0]["proxy_enabled"])
+
     def test_api_run_creation_can_dispatch_initial_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
@@ -2604,10 +2714,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("renderFirstRunState", script)
         self.assertIn("data-bootstrap-run-form", script)
         self.assertIn("createRunFromBootstrapForm", script)
+        self.assertIn("data-bootstrap-proxy-enabled", script)
+        self.assertIn("data-bootstrap-http-proxy", script)
+        self.assertIn("data-bootstrap-https-proxy", script)
+        self.assertIn("data-bootstrap-no-proxy", script)
         self.assertIn("Start Run and Initial Task", script)
         self.assertIn("renderBootstrapError", script)
         self.assertIn("body.empty-run .sidebar", styles)
         self.assertIn("bootstrap-panel", styles)
+        self.assertIn("bootstrap-proxy", styles)
 
     def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2745,6 +2860,34 @@ class CliTests(unittest.TestCase):
         self.assertIn("--home", command)
         self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
         self.assertTrue(Path(env["PYTHONPATH"].split(os.pathsep)[0]).is_absolute())
+
+    def test_start_backend_uses_zipapp_invocation_for_onebin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "aha"
+            code, output = self.run_cli("package", "onebin", "--output", str(artifact))
+            self.assertEqual(code, 0, output)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "One-bin backend start", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.sys.argv", [str(artifact)]),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[:2], [sys.executable, str(artifact.resolve())])
+        self.assertIn("codex-chat", command)
+        self.assertIn("--home", command)
+        self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
 
     def test_start_backend_applies_task_proxy_env_for_enabled_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

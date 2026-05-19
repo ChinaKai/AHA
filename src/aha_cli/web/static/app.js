@@ -592,6 +592,10 @@ async function createRun(goal, mode, options = {}) {
   };
   if (options.workspaceId) body.workspace_id = options.workspaceId;
   if (options.workspacePath) body.workspace_path = options.workspacePath;
+  if (options.proxyEnabled !== undefined) body.proxy_enabled = Boolean(options.proxyEnabled);
+  if (options.httpProxy !== undefined) body.http_proxy = options.httpProxy;
+  if (options.httpsProxy !== undefined) body.https_proxy = options.httpsProxy;
+  if (options.noProxy !== undefined) body.no_proxy = options.noProxy;
   runActionInFlight = true;
   try {
     const payload = await fetchJson("/api/runs", {
@@ -2996,6 +3000,27 @@ function renderFirstRunState(force = false) {
             <option value="implementation">implementation</option>
           </select>
         </label>
+        <details class="bootstrap-proxy">
+          <summary>Proxy</summary>
+          <div class="proxy-form">
+            <label class="field-label">
+              <span>HTTP proxy</span>
+              <input data-bootstrap-http-proxy placeholder="http://127.0.0.1:7890">
+            </label>
+            <label class="field-label">
+              <span>HTTPS proxy</span>
+              <input data-bootstrap-https-proxy placeholder="http://127.0.0.1:7890">
+            </label>
+            <label class="field-label">
+              <span>NO_PROXY</span>
+              <input data-bootstrap-no-proxy placeholder="localhost,127.0.0.1,::1">
+            </label>
+            <label class="proxy-toggle">
+              <input data-bootstrap-proxy-enabled type="checkbox">
+              <span>Enable proxy for initial agents</span>
+            </label>
+          </div>
+        </details>
         <button type="submit">Start Run and Initial Task</button>
       </form>
     </div>
@@ -3045,6 +3070,10 @@ function bootstrapWorkspaceSelection(form) {
 async function createRunFromBootstrapForm(form) {
   const goalEl = form.querySelector("[data-bootstrap-run-goal]");
   const modeEl = form.querySelector("[data-bootstrap-run-mode]");
+  const proxyEnabledEl = form.querySelector("[data-bootstrap-proxy-enabled]");
+  const httpProxyEl = form.querySelector("[data-bootstrap-http-proxy]");
+  const httpsProxyEl = form.querySelector("[data-bootstrap-https-proxy]");
+  const noProxyEl = form.querySelector("[data-bootstrap-no-proxy]");
   const submit = form.querySelector('button[type="submit"]');
   const goal = String(goalEl?.value || "").trim();
   if (!goal) {
@@ -3064,7 +3093,17 @@ async function createRunFromBootstrapForm(form) {
       workspacePath = payload.workspace?.path || workspacePath;
       await loadWorkspaces().catch(() => {});
     }
-    await createRun(goal, modeEl?.value || "research", { workspaceId, workspacePath });
+    const httpProxy = String(httpProxyEl?.value || "").trim();
+    const httpsProxy = String(httpsProxyEl?.value || "").trim();
+    const proxyEnabled = Boolean(proxyEnabledEl?.checked || httpProxy || httpsProxy);
+    await createRun(goal, modeEl?.value || "research", {
+      workspaceId,
+      workspacePath,
+      proxyEnabled,
+      httpProxy,
+      httpsProxy,
+      noProxy: proxyEnabled ? String(noProxyEl?.value || "").trim() : ""
+    });
   } catch (err) {
     alert(err?.message || String(err));
   } finally {

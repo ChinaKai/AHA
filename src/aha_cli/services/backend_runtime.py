@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+import zipfile
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
@@ -265,6 +266,29 @@ def stop_task_backends(root: Path, run_id: str, task_id: str, *, exclude_pid: in
     return stopped
 
 
+def _running_zipapp_path() -> Path | None:
+    raw_path = sys.argv[0] if sys.argv else ""
+    if not raw_path:
+        return None
+    try:
+        candidate = Path(raw_path).expanduser().resolve()
+    except OSError:
+        return None
+    try:
+        if candidate.is_file() and zipfile.is_zipfile(candidate):
+            return candidate
+    except OSError:
+        return None
+    return None
+
+
+def _aha_cli_invocation() -> list[str]:
+    zipapp_path = _running_zipapp_path()
+    if zipapp_path:
+        return [sys.executable, str(zipapp_path)]
+    return [sys.executable, "-m", "aha_cli"]
+
+
 def _codex_chat_command(
     run_id: str,
     target: str,
@@ -282,9 +306,7 @@ def _codex_chat_command(
     task_id: str | None = None,
 ) -> list[str]:
     command = [
-        sys.executable,
-        "-m",
-        "aha_cli",
+        *_aha_cli_invocation(),
         "--home",
         str(aha_home),
         "codex-chat",

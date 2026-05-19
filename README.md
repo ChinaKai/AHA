@@ -52,6 +52,9 @@ aha auto-reply <run-id> main
 aha codex-chat <run-id> main
 aha serve <run-id>
 aha ui <run-id>
+aha run export <run-id> --output run.tar.gz
+aha run import run.tar.gz
+aha package onebin --output dist/aha
 aha commit --type feat --scope web --summary "add lazy loading" --task-id task-001 --agent main --aha-scope web-lazy-loading
 aha commit-check .git/COMMIT_EDITMSG
 aha collect <run-id>
@@ -377,6 +380,30 @@ Enable the repository hook locally:
 ```bash
 git config core.hooksPath .githooks
 ```
+
+## Single-File Executable
+
+Build a one-bin executable zipapp:
+
+```bash
+python3 -m aha_cli package onebin --output dist/aha
+```
+
+From a source checkout, the wrapper script does the same thing without installing the package:
+
+```bash
+python3 scripts/build_onebin.py --output dist/aha
+```
+
+Run it directly on a machine with Python 3.10+:
+
+```bash
+./dist/aha --help
+./dist/aha init --portable
+./dist/aha ui <run-id> --host 127.0.0.1 --port 8766
+```
+
+The artifact includes the CLI modules and dashboard static files. It still uses the local filesystem for `.aha/` data and external agent backends such as `codex`.
 
 ## Why This Exists
 
