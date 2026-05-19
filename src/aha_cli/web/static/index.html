@@ -31,6 +31,18 @@
           </select>
           <button type="submit">新建</button>
         </form>
+        <div class="run-archive">
+          <div class="run-archive-actions">
+            <button id="run-export" type="button">导出</button>
+            <button id="run-import" type="button">导入</button>
+            <label class="run-archive-logs">
+              <input id="run-export-logs" type="checkbox">
+              <span>包含日志</span>
+            </label>
+          </div>
+          <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
+          <div id="run-archive-state" class="meta"></div>
+        </div>
         <div id="session-detail" class="meta"><span id="session-detail-text">Run 详情</span><code id="run-id"></code></div>
       </div>
     </div>

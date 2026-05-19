@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from email.parser import BytesParser
+from email.policy import default as email_policy
 import json
 from pathlib import Path
+import tempfile
 import textwrap
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -15,6 +18,7 @@ from aha_cli.services.backend_runtime import (
 )
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import dispatch_task_to_main
+from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
@@ -154,15 +158,24 @@ class ApiRunNotFound(Exception):
         super().__init__(run_id)
 
 
-def http_response(status: str, body: bytes, content_type: str = "text/plain; charset=utf-8") -> bytes:
-    return (
-        f"HTTP/1.1 {status}\r\n"
-        f"Content-Type: {content_type}\r\n"
-        f"Content-Length: {len(body)}\r\n"
-        "Cache-Control: no-store\r\n"
-        "Connection: close\r\n"
-        "\r\n"
-    ).encode("ascii") + body
+def http_response(
+    status: str,
+    body: bytes,
+    content_type: str = "text/plain; charset=utf-8",
+    headers: dict[str, str] | None = None,
+) -> bytes:
+    header_lines = [
+        f"HTTP/1.1 {status}",
+        f"Content-Type: {content_type}",
+        f"Content-Length: {len(body)}",
+        "Cache-Control: no-store",
+    ]
+    for key, value in (headers or {}).items():
+        safe_key = str(key).replace("\r", "").replace("\n", "")
+        safe_value = str(value).replace("\r", " ").replace("\n", " ")
+        header_lines.append(f"{safe_key}: {safe_value}")
+    header_lines.append("Connection: close")
+    return ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii") + body
 
 
 def json_response(data: dict, status: str = "200 OK") -> bytes:
@@ -202,6 +215,48 @@ async def read_http_request(reader: asyncio.StreamReader) -> tuple[str, str, dic
 
 def parse_json_body(body: bytes) -> dict:
     return json.loads(body.decode("utf-8") or "{}")
+
+
+def parse_query_bool(query: dict[str, list[str]], key: str, default: bool = False) -> bool:
+    if key not in query:
+        return default
+    return parse_optional_bool(query.get(key, [""])[0], key)
+
+
+def safe_download_name(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value)
+
+
+def parse_multipart_form(headers: dict[str, str], body: bytes) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
+    content_type = headers.get("content-type", "")
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise ValueError("content-type must be multipart/form-data")
+    message = BytesParser(policy=email_policy).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+    )
+    if not message.is_multipart():
+        raise ValueError("invalid multipart form")
+    fields: dict[str, str] = {}
+    files: dict[str, dict[str, object]] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        payload = part.get_payload(decode=True) or b""
+        filename = part.get_filename()
+        if filename is None:
+            fields[str(name)] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        else:
+            files[str(name)] = {"filename": filename, "body": payload}
+    return fields, files
+
+
+def archive_upload_suffix(filename: str) -> str:
+    name = filename.lower()
+    for suffix in (".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"):
+        if name.endswith(suffix):
+            return suffix
+    return ".tar.gz"
 
 
 def request_run_id(default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
@@ -862,6 +917,83 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         elif method in {"GET", "HEAD"} and path == "/api/runs":
             response = json_response({"default_run_id": default_api_run_id(root, run_id), "runs": list_run_summaries(root)})
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method in {"GET", "HEAD"} and path == "/api/run/export":
+            selected_run_id = require_api_run_id(root, run_id, query)
+            no_logs = parse_query_bool(query, "no_logs", False)
+            safe_run_id = safe_download_name(selected_run_id)
+            with tempfile.TemporaryDirectory(prefix="aha-run-export-") as tmp:
+                archive_path = export_run_archive(
+                    root,
+                    selected_run_id,
+                    Path(tmp) / f"aha-run-{safe_run_id}.tar.gz",
+                    include_logs=not no_logs,
+                )
+                payload = b"" if method == "HEAD" else archive_path.read_bytes()
+            writer.write(
+                http_response(
+                    "200 OK",
+                    payload,
+                    "application/gzip",
+                    {
+                        "Content-Disposition": f'attachment; filename="aha-run-{safe_run_id}.tar.gz"',
+                    },
+                )
+            )
+        elif method == "POST" and path == "/api/run/import":
+            temp_archive_path: Path | None = None
+            try:
+                content_type = headers.get("content-type", "")
+                if content_type.lower().startswith("multipart/form-data"):
+                    fields, files = parse_multipart_form(headers, body)
+                    upload = files.get("archive") or files.get("file")
+                    if not upload:
+                        writer.write(json_response({"error": "archive file is required"}, "400 Bad Request"))
+                        await writer.drain()
+                        return
+                    upload_body = upload.get("body")
+                    if not isinstance(upload_body, bytes) or not upload_body:
+                        writer.write(json_response({"error": "archive file is empty"}, "400 Bad Request"))
+                        await writer.drain()
+                        return
+                    suffix = archive_upload_suffix(str(upload.get("filename") or "archive.tar.gz"))
+                    with tempfile.NamedTemporaryFile(prefix="aha-run-import-", suffix=suffix, delete=False) as handle:
+                        handle.write(upload_body)
+                        temp_archive_path = Path(handle.name)
+                    payload = fields
+                    archive_path = temp_archive_path
+                else:
+                    payload = parse_json_body(body)
+                    archive_path_text = str(payload.get("archive_path", "") or "").strip()
+                    if not archive_path_text:
+                        writer.write(json_response({"error": "archive_path is required"}, "400 Bad Request"))
+                        await writer.drain()
+                        return
+                    archive_path = Path(archive_path_text)
+                target_run_id = str(payload.get("target_run_id", "") or "").strip() or None
+                preserve_id = parse_optional_bool(payload.get("preserve_id", False), "preserve_id")
+                force = parse_optional_bool(payload.get("force", False), "force")
+                source_run_id, imported_run_id = import_run_archive(
+                    root,
+                    archive_path,
+                    target_run_id=target_run_id,
+                    preserve_id=preserve_id,
+                    force=force,
+                )
+                writer.write(
+                    json_response(
+                        {
+                            "ok": True,
+                            "source_run_id": source_run_id,
+                            "imported_run_id": imported_run_id,
+                            "run": run_summary(root, imported_run_id),
+                            "runs": list_run_summaries(root),
+                        },
+                        "201 Created",
+                    )
+                )
+            finally:
+                if temp_archive_path is not None:
+                    temp_archive_path.unlink(missing_ok=True)
         elif method in {"GET", "HEAD"} and path == "/api/bootstrap":
             runs = list_run_summaries(root)
             default_run_id = default_api_run_id(root, run_id)
@@ -1320,6 +1452,9 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         await writer.drain()
     except json.JSONDecodeError:
         writer.write(json_response({"error": "invalid json"}, "400 Bad Request"))
+        await writer.drain()
+    except RunArchiveError as exc:
+        writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
         await writer.drain()
     except ValueError as exc:
         writer.write(json_response({"error": str(exc)}, "400 Bad Request"))

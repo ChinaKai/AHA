@@ -126,6 +126,32 @@ header > div:first-child h1 {
   background: #1f6feb;
   color: #ffffff;
 }
+.run-archive {
+  display: grid;
+  gap: 6px;
+}
+.run-archive-actions {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(72px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.run-archive-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+.run-archive-logs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #475467;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.run-archive-logs input {
+  margin: 0;
+}
 #session-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -140,6 +166,7 @@ header > div:first-child h1 {
 h2 { margin: 0 0 10px; font-size: 15px; }
 button, input, select { font: inherit; }
 .meta { color: #667085; font-size: 12px; }
+.meta.error { color: #b42318; }
 .hidden { display: none; }
 .sr-only {
   position: absolute;

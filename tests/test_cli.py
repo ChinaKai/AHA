@@ -88,22 +88,23 @@ async def fetch_ui_response(
     timeout: float = 1.0,
     method: str = "GET",
     payload: dict | None = None,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
 ) -> bytes:
     server = await asyncio.start_server(lambda reader, writer: handle_ui_client(root, run_id, reader, writer), "127.0.0.1", 0)
     host, port = server.sockets[0].getsockname()
     try:
         reader, writer = await asyncio.open_connection(host, port)
-        body = json.dumps(payload).encode("utf-8") if payload is not None else b""
+        body_bytes = body if body is not None else (json.dumps(payload).encode("utf-8") if payload is not None else b"")
+        request_headers = {"Host": "test", "Connection": "close", **(headers or {})}
+        if payload is not None and not any(key.lower() == "content-type" for key in request_headers):
+            request_headers["Content-Type"] = "application/json"
+        header_lines = [f"{method} {target} HTTP/1.1"]
+        header_lines.extend(f"{key}: {value}" for key, value in request_headers.items())
+        header_lines.append(f"Content-Length: {len(body_bytes)}")
         writer.write(
-            (
-                f"{method} {target} HTTP/1.1\r\n"
-                "Host: test\r\n"
-                "Connection: close\r\n"
-                "Content-Type: application/json\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                "\r\n"
-            ).encode("ascii")
-            + body
+            ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii")
+            + body_bytes
         )
         await writer.drain()
         response = await asyncio.wait_for(reader.read(), timeout=timeout)
@@ -2345,6 +2346,78 @@ class CliTests(unittest.TestCase):
         self.assertTrue(create_body["ok"])
         self.assertEqual(create_body["run"]["goal"], "Second session")
         self.assertIn(create_body["run"]["id"], {item["id"] for item in updated_body["runs"]})
+
+    def test_api_run_archive_exports_and_imports_uploads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "UI archive",
+                    "--agents",
+                    "1",
+                    "--enable-proxy",
+                    "--http-proxy",
+                    "http://user:secret@example.test:8080",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "ui-backend-secret"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                log_file = run_dir(root, run_id) / "logs" / "backend.log"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                log_file.write_text("backend log", encoding="utf-8")
+
+                export_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/run/export?run_id={run_id}&no_logs=1", timeout=2.0)
+                )
+                export_headers, archive_bytes = export_response.split(b"\r\n\r\n", 1)
+                with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as exported:
+                    names = set(exported.getnames())
+                    plan = json.load(exported.extractfile("run/plan.json"))
+
+                boundary = "----aha-test-boundary"
+                multipart_body = (
+                    (
+                        f"--{boundary}\r\n"
+                        'Content-Disposition: form-data; name="archive"; filename="run.tar.gz"\r\n'
+                        "Content-Type: application/gzip\r\n"
+                        "\r\n"
+                    ).encode("ascii")
+                    + archive_bytes
+                    + f"\r\n--{boundary}--\r\n".encode("ascii")
+                )
+                import_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/run/import",
+                        timeout=3.0,
+                        method="POST",
+                        body=multipart_body,
+                        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                    )
+                )
+                import_body = json_response_body(import_response)
+                imported_run_id = import_body["imported_run_id"]
+                imported_status = status_snapshot(root, imported_run_id)
+
+        self.assertTrue(export_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b'Content-Disposition: attachment; filename="aha-run-', export_headers)
+        self.assertIn("aha-run-manifest.json", names)
+        self.assertIn("run/plan.json", names)
+        self.assertNotIn("run/logs/backend.log", names)
+        self.assertEqual(plan["tasks"][0]["preferred_http_proxy"], "<redacted>")
+        self.assertNotIn("secret", json.dumps(plan))
+        self.assertTrue(import_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(import_body["source_run_id"], run_id)
+        self.assertNotEqual(imported_run_id, run_id)
+        self.assertIn(imported_run_id, {item["id"] for item in import_body["runs"]})
+        self.assertEqual(imported_status["tasks"][0]["agents"][0]["session_status"], "imported")
+        self.assertIsNone(imported_status["tasks"][0]["agents"][0]["backend_session_id"])
 
     def test_api_routes_can_target_non_default_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

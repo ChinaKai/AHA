@@ -20,6 +20,8 @@ let runsError = "";
 let workspaceData = [];
 let sessionMenuOpen = false;
 let runActionInFlight = false;
+let runArchiveMessage = "";
+let runArchiveError = false;
 let offset = -1;
 let lastEventId = "";
 let statusData = null;
@@ -89,6 +91,11 @@ const runSelectEl = document.getElementById("run-select");
 const runCreateFormEl = document.getElementById("run-create-form");
 const newRunGoalEl = document.getElementById("new-run-goal");
 const newRunModeEl = document.getElementById("new-run-mode");
+const runExportEl = document.getElementById("run-export");
+const runImportEl = document.getElementById("run-import");
+const runExportLogsEl = document.getElementById("run-export-logs");
+const runImportFileEl = document.getElementById("run-import-file");
+const runArchiveStateEl = document.getElementById("run-archive-state");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
 const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
@@ -504,6 +511,12 @@ function renderSessionMenu() {
   if (sessionRefreshEl) sessionRefreshEl.disabled = runActionInFlight;
   if (newRunGoalEl) newRunGoalEl.disabled = runActionInFlight;
   if (newRunModeEl) newRunModeEl.disabled = runActionInFlight;
+  const hasRun = Boolean(currentRunId);
+  if (runExportEl) runExportEl.disabled = runActionInFlight || !hasRun;
+  if (runImportEl) runImportEl.disabled = runActionInFlight;
+  if (runExportLogsEl) runExportLogsEl.disabled = runActionInFlight || !hasRun;
+  if (runImportFileEl) runImportFileEl.disabled = runActionInFlight;
+  renderRunArchiveState();
   renderSessionSummary();
 }
 
@@ -601,6 +614,70 @@ async function createRun(goal, mode, options = {}) {
     }
   } catch (err) {
     alert(err?.message || String(err));
+  } finally {
+    runActionInFlight = false;
+    renderSessionMenu();
+  }
+}
+
+function setRunArchiveState(message, isError = false) {
+  runArchiveMessage = String(message || "");
+  runArchiveError = Boolean(isError);
+  renderRunArchiveState();
+}
+
+function renderRunArchiveState() {
+  if (!runArchiveStateEl) return;
+  runArchiveStateEl.textContent = runArchiveMessage;
+  runArchiveStateEl.title = runArchiveMessage;
+  runArchiveStateEl.classList.toggle("error", runArchiveError);
+}
+
+function exportCurrentRun() {
+  if (!currentRunId) {
+    alert("请先选择 Run");
+    return;
+  }
+  const includeLogs = Boolean(runExportLogsEl?.checked);
+  const link = document.createElement("a");
+  link.href = apiUrl("/api/run/export", { no_logs: includeLogs ? "0" : "1" });
+  link.download = `aha-run-${currentRunId}.tar.gz`;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setRunArchiveState(includeLogs ? "导出已开始，包含日志" : "导出已开始，未包含原始日志");
+}
+
+async function importRunArchive(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append("archive", file);
+  runActionInFlight = true;
+  setRunArchiveState("正在导入...");
+  renderSessionMenu();
+  try {
+    const response = await fetchWithTimeout(
+      apiUrl("/api/run/import"),
+      { method: "POST", body: form },
+      Math.max(requestTimeoutMs, 60000)
+    );
+    const payload = await readJsonResponse(response, "导入失败");
+    const nextRunId = String(payload.imported_run_id || runIdOf(payload.run) || "").trim();
+    if (Array.isArray(payload.runs)) {
+      applyRunListData({ default_run_id: defaultRunId, runs: payload.runs });
+      runsLoaded = true;
+      renderSessionMenu();
+    } else {
+      runsLoaded = false;
+      await loadRuns(true);
+    }
+    if (nextRunId) await switchRun(nextRunId);
+    setRunArchiveState(nextRunId ? `已导入 ${nextRunId}` : "导入完成");
+  } catch (err) {
+    const message = err?.message || String(err || "导入失败");
+    setRunArchiveState(message, true);
+    alert(message);
   } finally {
     runActionInFlight = false;
     renderSessionMenu();
@@ -808,6 +885,16 @@ function initSessionControl() {
   sessionMenuEl?.addEventListener("click", event => event.stopPropagation());
   sessionRefreshEl?.addEventListener("click", async () => loadRuns(true));
   runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
+  runExportEl?.addEventListener("click", exportCurrentRun);
+  runImportEl?.addEventListener("click", () => {
+    if (runActionInFlight) return;
+    runImportFileEl?.click();
+  });
+  runImportFileEl?.addEventListener("change", async () => {
+    const file = runImportFileEl.files?.[0] || null;
+    runImportFileEl.value = "";
+    await importRunArchive(file);
+  });
   runCreateFormEl?.addEventListener("submit", async event => {
     event.preventDefault();
     await createRun(newRunGoalEl?.value || "", newRunModeEl?.value || "research", {
