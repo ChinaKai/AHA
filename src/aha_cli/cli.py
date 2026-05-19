@@ -16,6 +16,7 @@ from aha_cli.services.chat import auto_reply, codex_chat
 from aha_cli.services.commit_policy import CONVENTIONAL_TYPES, format_commit_message, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
+from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_tasks import run_pending_tasks
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
@@ -58,6 +59,8 @@ COMMANDS = {
     "init",
     "plan",
     "run",
+    "run-export",
+    "run-import",
     "status",
     "collect",
     "merge",
@@ -161,6 +164,37 @@ def cmd_run(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     return run_pending_tasks(root, run_id, args, codex_runner_command)
+
+
+def cmd_run_export(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    output = Path(args.output or f"{run_id}.tar.gz")
+    try:
+        archive = export_run_archive(root, run_id, output, include_logs=not args.no_logs)
+    except RunArchiveError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"Exported run {run_id}: {archive}")
+    return 0
+
+
+def cmd_run_import(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    ensure_aha_home(root)
+    try:
+        source_run_id, imported_run_id = import_run_archive(
+            root,
+            Path(args.archive),
+            target_run_id=args.run_id,
+            preserve_id=args.preserve_id,
+            force=args.force,
+        )
+    except RunArchiveError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"Imported run {source_run_id} as {imported_run_id}")
+    return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -558,6 +592,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--no-codex-json", action="store_true")
     run_p.set_defaults(func=cmd_run)
 
+    run_export_p = sub.add_parser("run-export", help=argparse.SUPPRESS)
+    run_export_p.add_argument("run_id", nargs="?")
+    run_export_p.add_argument("--output", "-o", default=None)
+    run_export_p.add_argument("--no-logs", action="store_true")
+    run_export_p.set_defaults(func=cmd_run_export)
+
+    run_import_p = sub.add_parser("run-import", help=argparse.SUPPRESS)
+    run_import_p.add_argument("archive")
+    run_import_p.add_argument("--run-id", default=None)
+    run_import_p.add_argument("--preserve-id", action="store_true")
+    run_import_p.add_argument("--force", action="store_true")
+    run_import_p.set_defaults(func=cmd_run_import)
+
     for name, func in [("status", cmd_status), ("collect", cmd_collect), ("merge", cmd_merge)]:
         p = sub.add_parser(name)
         p.add_argument("run_id", nargs="?")
@@ -757,6 +804,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def normalize_run_subcommand(argv: list[str]) -> list[str]:
+    command_index = _first_command_index(argv)
+    if command_index is None or argv[command_index] != "run" or command_index + 1 >= len(argv):
+        return argv
+    action = argv[command_index + 1]
+    if action not in {"export", "import"}:
+        return argv
+    return [*argv[:command_index], f"run-{action}", *argv[command_index + 2 :]]
+
+
+def _first_command_index(argv: list[str]) -> int | None:
+    skip_next = False
+    for index, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--home":
+            skip_next = True
+            continue
+        if arg.startswith("--home="):
+            continue
+        if arg.startswith("-"):
+            continue
+        return index
+    return None
+
+
 def with_default_command(argv: list[str]) -> list[str]:
     if not argv:
         return ["ui"]
@@ -779,7 +853,8 @@ def with_default_command(argv: list[str]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(with_default_command(list(sys.argv[1:] if argv is None else argv)))
+    normalized = normalize_run_subcommand(list(sys.argv[1:] if argv is None else argv))
+    args = parser.parse_args(with_default_command(normalized))
     return args.func(args)
 
 
