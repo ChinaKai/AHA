@@ -166,8 +166,9 @@ def load_config(root: Path) -> dict:
     if not path.exists():
         return defaults
     loaded = read_json(path)
-    cfg = defaults | {key: value for key, value in loaded.items() if key != "codex"}
+    cfg = defaults | {key: value for key, value in loaded.items() if key not in {"codex", "claude"}}
     cfg["codex"] = defaults["codex"] | loaded.get("codex", {})
+    cfg["claude"] = defaults["claude"] | loaded.get("claude", {})
     if cfg.get("runner_command") and cfg.get("backend") == "stub":
         cfg["backend"] = "command"
     return cfg

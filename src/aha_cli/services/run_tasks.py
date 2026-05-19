@@ -147,7 +147,7 @@ def run_one_task(root: Path, plan: dict, task_id: str, command_template: str | N
     return task_id, exit_code
 
 
-def run_pending_tasks(root: Path, run_id: str, args, codex_command_builder) -> int:
+def run_pending_tasks(root: Path, run_id: str, args, codex_command_builder, claude_command_builder=None) -> int:
     cfg = load_config(root)
     plan = require_plan(root, run_id)
     command = args.runner_command if args.runner_command is not None else cfg.get("runner_command")
@@ -160,6 +160,8 @@ def run_pending_tasks(root: Path, run_id: str, args, codex_command_builder) -> i
         command = None
     elif backend == "codex":
         command = codex_command_builder(args, cfg)
+    elif backend == "claude" and claude_command_builder is not None:
+        command = claude_command_builder(args, cfg)
     elif backend == "command":
         if not command:
             raise SystemExit("backend=command requires --runner-command or config runner_command")

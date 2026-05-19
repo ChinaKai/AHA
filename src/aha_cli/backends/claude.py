@@ -1,0 +1,302 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+from aha_cli.backends.codex import tail_text
+from aha_cli.services.proxy import apply_proxy_environment
+from aha_cli.store.filesystem import append_event_to_file
+
+CLAUDE_AUTH_ENV_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+CLAUDE_CONFIG_ENV_ALIASES = {
+    "api_key": "ANTHROPIC_API_KEY",
+    "auth_token": "ANTHROPIC_AUTH_TOKEN",
+    "base_url": "ANTHROPIC_BASE_URL",
+    "model": "ANTHROPIC_MODEL",
+    "small_fast_model": "ANTHROPIC_SMALL_FAST_MODEL",
+}
+
+
+def _normalize_claude_env_key(key: str) -> str | None:
+    cleaned = key.strip()
+    if not cleaned:
+        return None
+    alias = CLAUDE_CONFIG_ENV_ALIASES.get(cleaned.lower())
+    if alias:
+        return alias
+    upper = cleaned.upper()
+    if upper.startswith(("ANTHROPIC_", "CLAUDE_")):
+        return upper
+    return None
+
+
+def claude_config_env(claude_config: dict | None) -> dict[str, str]:
+    if not isinstance(claude_config, dict):
+        return {}
+    configured = claude_config.get("env")
+    if not isinstance(configured, dict):
+        configured = {}
+    env: dict[str, str] = {}
+    for raw_key, raw_value in configured.items():
+        key = _normalize_claude_env_key(str(raw_key))
+        value = str(raw_value or "").strip()
+        if key and value:
+            env[key] = value
+    return env
+
+
+def apply_claude_environment(env: dict[str, str], claude_config: dict | None = None) -> dict[str, str]:
+    env.update(claude_config_env(claude_config))
+    return env
+
+
+def claude_auth_configured(env: dict[str, str]) -> bool:
+    return any(str(env.get(key) or "").strip() for key in CLAUDE_AUTH_ENV_KEYS)
+
+
+def claude_missing_auth_message() -> str:
+    return (
+        "Claude authentication is not configured for AHA. "
+        "Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN in the AHA process environment, "
+        "or add it under claude.env in AHA config."
+    )
+
+
+def claude_permission_mode(mode: str, requested: str) -> str:
+    if requested == "danger-full-access":
+        return "bypassPermissions"
+    if requested == "workspace-write":
+        return "acceptEdits"
+    if requested == "auto":
+        return "plan" if mode == "research" else "acceptEdits"
+    return "plan"
+
+
+def _content_items(message: dict) -> list[dict]:
+    content = message.get("content", [])
+    if isinstance(content, list):
+        return [item for item in content if isinstance(item, dict)]
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return []
+
+
+def _tool_command(item: dict) -> str:
+    name = str(item.get("name") or "tool")
+    tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+    if name == "Bash" and tool_input.get("command"):
+        return str(tool_input.get("command"))
+    if tool_input:
+        return f"{name} {json.dumps(tool_input, ensure_ascii=False, sort_keys=True)}"
+    return name
+
+
+def handle_claude_event(
+    line: str,
+    *,
+    events_file: Path | None,
+    run_id: str,
+    task_id: str | None,
+    source: str,
+    target: str | None = None,
+    session: dict | None = None,
+) -> dict:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return {}
+    raw_type = event.get("type")
+    data: dict = {"source": source, "raw_type": raw_type}
+    result: dict = {}
+    if task_id:
+        data["task_id"] = task_id
+    if target:
+        data["target"] = target
+
+    if raw_type == "system" and event.get("subtype") == "init":
+        session_id = event.get("session_id")
+        data["thread_id"] = session_id
+        if session is not None and session_id and not session.get("backend_session_id"):
+            session["backend_session_id"] = session_id
+        append_event_to_file(events_file, run_id, "agent_thread", data)
+    elif raw_type == "error":
+        data["message"] = event.get("message") or event.get("error") or ""
+        append_event_to_file(events_file, run_id, "agent_error", data)
+    elif raw_type == "assistant":
+        message = event.get("message") if isinstance(event.get("message"), dict) else event
+        for item in _content_items(message):
+            item_type = item.get("type")
+            if item_type == "text" and item.get("text"):
+                text = str(item.get("text") or "")
+                append_event_to_file(events_file, run_id, "agent_message", data | {"item_type": "agent_message", "text": text})
+                result.setdefault("assistant_texts", []).append(text)
+            elif item_type == "tool_use":
+                append_event_to_file(
+                    events_file,
+                    run_id,
+                    "agent_command_started",
+                    data
+                    | {
+                        "item_type": "tool_use",
+                        "tool_use_id": item.get("id"),
+                        "tool_name": item.get("name"),
+                        "command": _tool_command(item),
+                        "status": "in_progress",
+                        "exit_code": None,
+                    },
+                )
+    elif raw_type == "user":
+        message = event.get("message") if isinstance(event.get("message"), dict) else event
+        for item in _content_items(message):
+            if item.get("type") != "tool_result":
+                continue
+            content = item.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            is_error = bool(item.get("is_error"))
+            append_event_to_file(
+                events_file,
+                run_id,
+                "agent_command_finished",
+                data
+                | {
+                    "item_type": "tool_result",
+                    "tool_use_id": item.get("tool_use_id"),
+                    "status": "failed" if is_error else "completed",
+                    "exit_code": 1 if is_error else 0,
+                    "output_tail": tail_text(content),
+                },
+            )
+    elif raw_type == "result":
+        session_id = event.get("session_id")
+        if session is not None and session_id and not session.get("backend_session_id"):
+            session["backend_session_id"] = session_id
+        usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+        for key in ("duration_ms", "duration_api_ms", "total_cost_usd", "num_turns", "subtype"):
+            if key in event:
+                usage[key] = event.get(key)
+        append_event_to_file(events_file, run_id, "agent_usage", data | {"usage": usage})
+        if event.get("result"):
+            result["result_text"] = str(event.get("result") or "")
+    return result
+
+
+def run_claude_exec(
+    prompt: str,
+    *,
+    cwd: Path,
+    output_file: Path,
+    claude_bin: str = "claude",
+    model: str | None = None,
+    permission_mode: str = "plan",
+    extra_args: list[str] | None = None,
+    events_file: Path | None = None,
+    run_id: str = "",
+    task_id: str | None = None,
+    source: str = "claude",
+    target: str | None = None,
+    session: dict | None = None,
+    proxy_env: dict[str, str] | None = None,
+    claude_config: dict | None = None,
+) -> tuple[int, str, dict | None]:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    session_id = session.get("backend_session_id") if session else None
+    cmd = build_claude_exec_command(
+        claude_bin=claude_bin,
+        model=model,
+        permission_mode=permission_mode,
+        session_id=session_id,
+    )
+    for raw in extra_args or []:
+        cmd.extend(shlex.split(raw))
+
+    env = apply_claude_environment(os.environ.copy(), claude_config)
+    apply_proxy_environment(env, proxy_env)
+    if not claude_auth_configured(env):
+        message = claude_missing_auth_message()
+        append_event_to_file(
+            events_file,
+            run_id,
+            "agent_error",
+            {"source": source, "task_id": task_id, "target": target, "message": message},
+        )
+        output_file.write_text(message, encoding="utf-8")
+        return 1, message, session
+
+    print(f"Running Claude backend: {' '.join(shlex.quote(part) for part in cmd)}", flush=True)
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    try:
+        process.stdin.write(prompt)
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+
+    assistant_texts: list[str] = []
+    result_text = ""
+    for raw_line in process.stdout:
+        print(raw_line, end="", flush=True)
+        parsed = handle_claude_event(
+            raw_line.strip(),
+            events_file=events_file,
+            run_id=run_id,
+            task_id=task_id,
+            source=source,
+            target=target,
+            session=session,
+        )
+        assistant_texts.extend(parsed.get("assistant_texts", []))
+        if parsed.get("result_text"):
+            result_text = str(parsed["result_text"])
+    exit_code = process.wait()
+    final_text = result_text or "\n".join(text for text in assistant_texts if text).strip()
+    output_file.write_text(final_text, encoding="utf-8")
+    return exit_code, final_text, session
+
+
+def build_claude_exec_command(
+    *,
+    claude_bin: str,
+    model: str | None,
+    permission_mode: str,
+    session_id: str | None,
+) -> list[str]:
+    cmd = [claude_bin, "-p", "--output-format", "stream-json", "--verbose"]
+    if model:
+        cmd.extend(["--model", model])
+    if permission_mode:
+        cmd.extend(["--permission-mode", permission_mode])
+    if session_id:
+        cmd.extend(["--resume", session_id])
+    return cmd
+
+
+def claude_runner_command(args, cfg: dict) -> str:
+    claude_cfg = cfg.get("claude", {})
+    parts = [shlex.quote(sys.executable), "-m", "aha_cli", "claude-runner"]
+    parts.extend(["--claude-bin", shlex.quote(args.claude_bin or claude_cfg.get("bin") or "claude")])
+    model = args.claude_model if args.claude_model is not None else claude_cfg.get("model")
+    if model:
+        parts.extend(["--model", shlex.quote(model)])
+    sandbox = args.claude_sandbox or claude_cfg.get("sandbox") or "auto"
+    parts.extend(["--sandbox", shlex.quote(sandbox)])
+    permission_mode = args.claude_permission_mode if args.claude_permission_mode is not None else claude_cfg.get("permission_mode")
+    if permission_mode:
+        parts.extend(["--permission-mode", shlex.quote(permission_mode)])
+    for extra in args.claude_extra_arg or []:
+        parts.extend(["--extra-arg", shlex.quote(extra)])
+    return " ".join(parts)

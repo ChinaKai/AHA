@@ -6,6 +6,7 @@ import textwrap
 import time
 import uuid
 
+from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
@@ -30,6 +31,7 @@ from aha_cli.store.filesystem import (
     iter_jsonl_from,
     iter_jsonl_records_from,
     iter_jsonl_reverse,
+    load_config,
     mark_task_coordination,
     read_json,
     require_plan,
@@ -295,7 +297,16 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
 
 
 def codex_chat(root: Path, run_id: str, args) -> int:
+    return agent_chat(root, run_id, args, backend_name="codex")
+
+
+def claude_chat(root: Path, run_id: str, args) -> int:
+    return agent_chat(root, run_id, args, backend_name="claude")
+
+
+def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     require_plan(root, run_id)
+    cfg = load_config(root)
     inbox = inbox_path(root, run_id, args.target)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
@@ -304,7 +315,8 @@ def codex_chat(root: Path, run_id: str, args) -> int:
     offset = load_chat_offset(inbox, offset_file, args.from_start)
     last_coordination_check = 0.0
     task_label = f" task={worker_task_id}" if worker_task_id else ""
-    print(f"Codex chat backend listening to {args.target}{task_label} in run {run_id}. Ctrl-C to exit.")
+    source_name = f"{backend_name}-chat"
+    print(f"{backend_name.title()} chat backend listening to {args.target}{task_label} in run {run_id}. Ctrl-C to exit.")
     try:
         while True:
             if args.target == "main" and not worker_task_id and not args.once and time.monotonic() - last_coordination_check >= max(10.0, args.interval):
@@ -345,7 +357,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         run_id,
                         "agent_message_skipped",
                         {
-                            "source": "codex-chat",
+                            "source": source_name,
                             "target": args.target,
                             "task_id": item_task_id,
                             "sender": original_sender,
@@ -363,7 +375,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         run_id,
                         "agent_message_skipped",
                         {
-                            "source": "codex-chat",
+                            "source": source_name,
                             "target": args.target,
                             "task_id": item_task_id,
                             "sender": original_sender,
@@ -375,16 +387,16 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                         return 0
                     continue
-                if agent and agent.get("backend") != "codex":
+                if agent and agent.get("backend") != backend_name:
                     append_event(
                         root,
                         run_id,
                         "agent_skipped",
                         {
-                            "source": "codex-chat",
+                            "source": source_name,
                             "target": args.target,
                             "task_id": item_task_id,
-                            "reason": f"agent backend is {agent.get('backend')}, not codex",
+                            "reason": f"agent backend is {agent.get('backend')}, not {backend_name}",
                         },
                     )
                     continue
@@ -393,7 +405,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     run_id,
                     item_task_id,
                     agent_id,
-                    "codex",
+                    backend_name,
                     model=(agent or {}).get("model") or task.get("preferred_model"),
                     workspace_path=(agent or {}).get("workspace_path") or task.get("workspace_path"),
                 )
@@ -401,7 +413,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                 output_file = run / "chat" / f"{args.target}-{uuid.uuid4().hex[:8]}.md"
                 requested_sandbox = (agent or {}).get("sandbox") or task.get("preferred_sandbox") or args.sandbox
                 requested_approval = (agent or {}).get("approval") or task.get("preferred_approval") or args.approval
-                sandbox = codex_sandbox("research", requested_sandbox)
+                sandbox = codex_sandbox("research", requested_sandbox) if backend_name == "codex" else requested_sandbox
                 workspace = Path(task.get("workspace_path") or root)
                 if not workspace.exists():
                     append_event(root, run_id, "workspace_missing", {"task_id": item_task_id, "workspace_path": str(workspace)})
@@ -414,7 +426,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     run_id,
                     "agent_started",
                     {
-                        "source": "codex-chat",
+                        "source": source_name,
                         "target": args.target,
                         "sender": original_sender,
                         "task_id": item_task_id,
@@ -424,24 +436,45 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     },
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task)
-                exit_code, reply, session = run_codex_exec(
-                    chat_prompt(root, run_id, args.target, item, args.prompt_prefix),
-                    cwd=workspace,
-                    output_file=output_file,
-                    codex_bin=args.codex_bin,
-                    model=args.model or (agent or {}).get("model") or task.get("preferred_model") or session.get("model"),
-                    sandbox=sandbox,
-                    approval=requested_approval,
-                    json_events=not args.no_json,
-                    extra_args=args.extra_arg or [],
-                    events_file=events_file,
-                    run_id=run_id,
-                    task_id=item_task_id,
-                    source="codex-chat",
-                    target=args.target,
-                    session=session,
-                    proxy_env=proxy_env,
-                )
+                prompt = chat_prompt(root, run_id, args.target, item, args.prompt_prefix)
+                model = args.model or (agent or {}).get("model") or task.get("preferred_model") or session.get("model")
+                if backend_name == "claude":
+                    exit_code, reply, session = run_claude_exec(
+                        prompt,
+                        cwd=workspace,
+                        output_file=output_file,
+                        claude_bin=getattr(args, "claude_bin", "claude"),
+                        model=model,
+                        permission_mode=claude_permission_mode("research", sandbox),
+                        extra_args=args.extra_arg or [],
+                        events_file=events_file,
+                        run_id=run_id,
+                        task_id=item_task_id,
+                        source=source_name,
+                        target=args.target,
+                        session=session,
+                        proxy_env=proxy_env,
+                        claude_config=cfg.get("claude", {}),
+                    )
+                else:
+                    exit_code, reply, session = run_codex_exec(
+                        prompt,
+                        cwd=workspace,
+                        output_file=output_file,
+                        codex_bin=args.codex_bin,
+                        model=model,
+                        sandbox=sandbox,
+                        approval=requested_approval,
+                        json_events=not getattr(args, "no_json", False),
+                        extra_args=args.extra_arg or [],
+                        events_file=events_file,
+                        run_id=run_id,
+                        task_id=item_task_id,
+                        source=source_name,
+                        target=args.target,
+                        session=session,
+                        proxy_env=proxy_env,
+                    )
                 if session:
                     save_session(root, session)
                 if exit_code == 0 and reply.strip():
@@ -534,8 +567,8 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                             set_task_status(root, run_id, item_task_id, "failed", exit_code)
                             stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
                             exit_after_message = bool(worker_task_id)
-                    append_event(root, run_id, "agent_error", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
-                append_event(root, run_id, "agent_finished", {"source": "codex-chat", "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                    append_event(root, run_id, "agent_error", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if exit_after_message and worker_task_id:
                     save_chat_offset(offset_file, item_offset)
                     mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())

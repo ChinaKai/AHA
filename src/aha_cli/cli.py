@@ -10,10 +10,12 @@ import subprocess
 import sys
 import tempfile
 
+from aha_cli.backends.claude import claude_runner_command
 from aha_cli.backends.codex import codex_runner_command
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, backend_names
 from aha_cli.domain.models import default_config
-from aha_cli.services.chat import auto_reply, codex_chat
+from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
+from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import CONVENTIONAL_TYPES, format_commit_message, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
@@ -76,7 +78,9 @@ COMMANDS = {
     "commit-check",
     "package",
     "codex-runner",
+    "claude-runner",
     "codex-chat",
+    "claude-chat",
     "task",
     "agent",
     "session",
@@ -166,7 +170,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
-    return run_pending_tasks(root, run_id, args, codex_runner_command)
+    return run_pending_tasks(root, run_id, args, codex_runner_command, claude_runner_command)
 
 
 def cmd_run_export(args: argparse.Namespace) -> int:
@@ -345,10 +349,20 @@ def cmd_codex_runner(args: argparse.Namespace) -> int:
     return run_codex_task(args)
 
 
+def cmd_claude_runner(args: argparse.Namespace) -> int:
+    return run_claude_task(args)
+
+
 def cmd_codex_chat(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     return codex_chat(root, run_id, args)
+
+
+def cmd_claude_chat(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    return claude_chat(root, run_id, args)
 
 
 def cmd_task(args: argparse.Namespace) -> int:
@@ -610,6 +624,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--codex-approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
     run_p.add_argument("--codex-extra-arg", action="append", default=[])
     run_p.add_argument("--no-codex-json", action="store_true")
+    run_p.add_argument("--claude-bin", default=None)
+    run_p.add_argument("--claude-model", default=None)
+    run_p.add_argument("--claude-sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default=None)
+    run_p.add_argument("--claude-permission-mode", choices=["default", "acceptEdits", "bypassPermissions", "plan"], default=None)
+    run_p.add_argument("--claude-extra-arg", action="append", default=[])
     run_p.set_defaults(func=cmd_run)
 
     run_export_p = sub.add_parser("run-export", help=argparse.SUPPRESS)
@@ -707,6 +726,14 @@ def build_parser() -> argparse.ArgumentParser:
     codex_runner_p.add_argument("--no-json", action="store_true")
     codex_runner_p.set_defaults(func=cmd_codex_runner)
 
+    claude_runner_p = sub.add_parser("claude-runner")
+    claude_runner_p.add_argument("--claude-bin", default="claude")
+    claude_runner_p.add_argument("--model", default=None)
+    claude_runner_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="auto")
+    claude_runner_p.add_argument("--permission-mode", choices=["default", "acceptEdits", "bypassPermissions", "plan"], default=None)
+    claude_runner_p.add_argument("--extra-arg", action="append", default=[])
+    claude_runner_p.set_defaults(func=cmd_claude_runner)
+
     codex_chat_p = sub.add_parser("codex-chat")
     codex_chat_p.add_argument("run_id", nargs="?")
     codex_chat_p.add_argument("target", nargs="?", default="main")
@@ -724,6 +751,23 @@ def build_parser() -> argparse.ArgumentParser:
     codex_chat_p.add_argument("--no-json", action="store_true")
     codex_chat_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
     codex_chat_p.set_defaults(func=cmd_codex_chat)
+
+    claude_chat_p = sub.add_parser("claude-chat")
+    claude_chat_p.add_argument("run_id", nargs="?")
+    claude_chat_p.add_argument("target", nargs="?", default="main")
+    claude_chat_p.add_argument("--task-id", default=None)
+    claude_chat_p.add_argument("--sender", default="main")
+    claude_chat_p.add_argument("--reply-target", default=None)
+    claude_chat_p.add_argument("--interval", type=float, default=1.0)
+    claude_chat_p.add_argument("--from-start", action="store_true")
+    claude_chat_p.add_argument("--once", action="store_true")
+    claude_chat_p.add_argument("--claude-bin", default="claude")
+    claude_chat_p.add_argument("--model", default=None)
+    claude_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
+    claude_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
+    claude_chat_p.add_argument("--extra-arg", action="append", default=[])
+    claude_chat_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
+    claude_chat_p.set_defaults(func=cmd_claude_chat)
 
     task_p = sub.add_parser("task")
     task_sub = task_p.add_subparsers(dest="task_cmd", required=True)

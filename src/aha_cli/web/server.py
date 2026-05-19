@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, agent_backends, model_options
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import (
+    PROCESS_AGENT_BACKENDS,
     backend_status,
     start_backend,
     stop_backend,
@@ -580,6 +581,7 @@ def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> d
         root,
         run_id,
         autostart["target"],
+        backend=autostart["backend"],
         model=autostart["model"],
         sandbox=autostart["sandbox"],
         approval=autostart["approval"],
@@ -757,12 +759,14 @@ def message_backend_autostart_config(root: Path, run_id: str, task_id: str | Non
     agent = next((item for item in task.get("agents", []) if item.get("id") == target_id), None)
     if not agent:
         return None
-    if (agent.get("backend") or task.get("preferred_backend")) != "codex":
+    backend = str(agent.get("backend") or task.get("preferred_backend") or "codex")
+    if backend not in PROCESS_AGENT_BACKENDS:
         return None
     state = backend_status(root, run_id, target_id, task_id=task_id)
     if state.get("status") != "stopped":
         return None
     return {
+        "backend": backend,
         "target": target_id,
         "task_id": task_id,
         "model": agent.get("model") or task.get("preferred_model"),
@@ -861,6 +865,7 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
             root,
             run_id,
             autostart["target"],
+            backend=autostart["backend"],
             model=autostart["model"],
             sandbox=autostart["sandbox"],
             approval=autostart["approval"],
@@ -891,6 +896,7 @@ def start_dispatched_task_backend(root: Path, run_id: str, task: dict, dispatch:
         root,
         run_id,
         "main",
+        backend=autostart["backend"],
         model=autostart["model"],
         sandbox=autostart["sandbox"],
         approval=autostart["approval"],

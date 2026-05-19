@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.backend_runtime import backend_status, start_backend
+from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.store.filesystem import (
     add_agent,
@@ -61,7 +61,7 @@ def task_assignment_prompt(task: dict) -> str:
         Preferred sub-agent backend:
         {task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex"}
 
-        Default Codex permission:
+        Default agent permission:
         - sandbox: {task.get("preferred_sandbox") or "process default"}
         - approval: {task.get("preferred_approval") or "process default"}
 
@@ -301,11 +301,13 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                     "chars": len(message),
                 },
             )
-            if target_agent.get("backend") == "codex":
+            backend = str(target_agent.get("backend") or task.get("preferred_backend") or "codex")
+            if backend in PROCESS_AGENT_BACKENDS:
                 start_backend(
                     root,
                     run_id,
                     target_id,
+                    backend=backend,
                     model=target_agent.get("model"),
                     sandbox=target_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
                     approval=target_agent.get("approval") or task.get("preferred_approval") or "never",
@@ -366,11 +368,13 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             from_agent="main",
             to_agent=agent["id"],
         )
-        if agent.get("backend") == "codex":
+        backend = str(agent.get("backend") or task.get("preferred_backend") or "codex")
+        if backend in PROCESS_AGENT_BACKENDS:
             start_backend(
                 root,
                 run_id,
                 agent["id"],
+                backend=backend,
                 model=agent.get("model"),
                 sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
                 approval=agent.get("approval") or task.get("preferred_approval") or "never",
@@ -510,7 +514,8 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
             set_task_status(root, run_id, task["id"], "running")
             actions.append({"type": "task_running", "task_id": task["id"]})
         for agent in pending_sub_agents(task):
-            if agent.get("backend") != "codex":
+            backend = str(agent.get("backend") or task.get("preferred_backend") or "codex")
+            if backend not in PROCESS_AGENT_BACKENDS:
                 continue
             state = backend_status(root, run_id, agent["id"], task_id=task["id"])
             if state.get("status") != "stopped":
@@ -530,6 +535,7 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
                 root,
                 run_id,
                 agent["id"],
+                backend=backend,
                 model=agent.get("model"),
                 sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
                 approval=agent.get("approval") or task.get("preferred_approval") or "never",

@@ -28,6 +28,14 @@ def default_config() -> dict:
             "json": True,
             "session_policy": "sticky",
         },
+        "claude": {
+            "bin": "claude",
+            "model": None,
+            "sandbox": "auto",
+            "permission_mode": None,
+            "session_policy": "sticky",
+            "env": {},
+        },
     }
 
 

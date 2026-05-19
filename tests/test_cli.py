@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
+from aha_cli.backends.claude import build_claude_exec_command, claude_permission_mode, handle_claude_event, run_claude_exec
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event
 from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
@@ -179,13 +180,16 @@ class CliTests(unittest.TestCase):
         self.assertIn("command", backend_names())
         self.assertNotIn("command", agent_backend_names())
         self.assertIn("codex", agent_backend_names())
+        self.assertIn("claude", agent_backend_names())
 
     def test_model_options_are_bound_to_agent_backend(self) -> None:
         codex_options = model_options("codex")
+        claude_options = model_options("claude")
         stub_options = model_options("stub")
         self.assertEqual(codex_options[0]["name"], "")
         self.assertEqual(codex_options[0]["label"], "default")
         self.assertIn("gpt-5.3-codex", {item["name"] for item in codex_options})
+        self.assertEqual(claude_options, [{"name": "", "label": "default"}])
         self.assertEqual(stub_options, [{"name": "", "label": "default"}])
         self.assertIn("commands", agent_backends()[0])
 
@@ -572,6 +576,86 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rows[1]["data"]["target"], "sub-001")
             self.assertEqual(len(rows[1]["data"]["output_tail"]), 1200)
 
+    def test_claude_permission_mode_maps_sandbox(self) -> None:
+        self.assertEqual(claude_permission_mode("research", "read-only"), "plan")
+        self.assertEqual(claude_permission_mode("research", "workspace-write"), "acceptEdits")
+        self.assertEqual(claude_permission_mode("research", "danger-full-access"), "bypassPermissions")
+        self.assertEqual(claude_permission_mode("research", "auto"), "plan")
+        self.assertEqual(claude_permission_mode("implementation", "auto"), "acceptEdits")
+
+    def test_claude_resume_command_uses_stream_json(self) -> None:
+        cmd = build_claude_exec_command(
+            claude_bin="claude",
+            model="sonnet",
+            permission_mode="acceptEdits",
+            session_id="session-123",
+        )
+        self.assertEqual(cmd[:5], ["claude", "-p", "--output-format", "stream-json", "--verbose"])
+        self.assertIn("--model", cmd)
+        self.assertIn("sonnet", cmd)
+        self.assertIn("--permission-mode", cmd)
+        self.assertIn("acceptEdits", cmd)
+        self.assertIn("--resume", cmd)
+        self.assertIn("session-123", cmd)
+
+    def test_claude_stream_events_are_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            session: dict = {}
+            handle_claude_event(
+                json.dumps({"type": "system", "subtype": "init", "session_id": "claude-session"}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+                session=session,
+            )
+            handle_claude_event(
+                json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+                session=session,
+            )
+            handle_claude_event(
+                json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "pwd"}}]}}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+                session=session,
+            )
+            handle_claude_event(
+                json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}]}}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+                session=session,
+            )
+            handle_claude_event(
+                json.dumps({"type": "result", "result": "done", "usage": {"input_tokens": 1}, "session_id": "claude-session"}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+                session=session,
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(session["backend_session_id"], "claude-session")
+        self.assertEqual([row["type"] for row in rows], ["agent_thread", "agent_message", "agent_command_started", "agent_command_finished", "agent_usage"])
+        self.assertEqual(rows[1]["data"]["text"], "hello")
+        self.assertEqual(rows[2]["data"]["command"], "pwd")
+        self.assertEqual(rows[3]["data"]["output_tail"], "ok")
+        self.assertEqual(rows[4]["data"]["usage"]["input_tokens"], 1)
+
     def test_plan_run_merge_with_stub_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -796,6 +880,19 @@ class CliTests(unittest.TestCase):
                 code, output = self.run_cli("run", run_id, "--backend", "codex", "--dry-run")
                 self.assertEqual(code, 0)
                 self.assertIn("aha_cli codex-runner", output)
+
+    def test_claude_backend_dry_run_uses_claude_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable")
+                code, plan_output = self.run_cli("plan", "Claude backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                code, output = self.run_cli("run", run_id, "--backend", "claude", "--dry-run")
+                self.assertEqual(code, 0)
+                self.assertIn("aha_cli claude-runner", output)
 
     def test_codex_chat_does_not_auto_write_final_or_complete_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1875,6 +1972,38 @@ class CliTests(unittest.TestCase):
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
                 self.assertEqual([item["message"] for item in messages], ["new follow-up"])
 
+    def test_web_send_autostarts_claude_task_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude web follow-up", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_agent_runtime(root, run_id, "task-001", "main", backend="claude")
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "role": "main",
+                            "task_id": "task-001",
+                            "sender": "browser",
+                            "message": "new follow-up",
+                        },
+                    )
+
+        self.assertTrue(result["ok"])
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.kwargs["backend"], "claude")
+
     def test_web_send_blocks_completed_task_until_reopened(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2888,6 +3017,105 @@ class CliTests(unittest.TestCase):
         self.assertIn("codex-chat", command)
         self.assertIn("--home", command)
         self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
+
+    def test_start_backend_uses_claude_chat_command_for_claude_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude backend start", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001", claude_bin="claude-dev")
+
+        command = popen.call_args.args[0]
+        self.assertIn("claude-chat", command)
+        self.assertIn("--claude-bin", command)
+        self.assertEqual(command[command.index("--claude-bin") + 1], "claude-dev")
+
+    def test_backend_status_reports_discovered_claude_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude backend discovery", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with (
+                    mock.patch(
+                        "aha_cli.services.backend_runtime._discover_backend_process",
+                        return_value=(4242, "claude-chat"),
+                    ),
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
+
+        self.assertEqual(status["backend"], "claude-chat")
+        self.assertEqual(status["status"], "running")
+        self.assertEqual(status["pid"], 4242)
+
+    def test_start_backend_injects_claude_env_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg["claude"]["env"] = {
+                    "ANTHROPIC_API_KEY": "test-key",
+                    "base_url": "https://claude.test",
+                }
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+                code, plan_output = self.run_cli("plan", "Claude env", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "test-key")
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://claude.test")
+
+    def test_claude_exec_reports_missing_auth_env_before_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            events = Path(tmp) / "events.jsonl"
+            with (
+                mock.patch.dict(os.environ, {}, clear=True),
+                mock.patch("aha_cli.backends.claude.subprocess.Popen") as popen,
+            ):
+                code, reply, _ = run_claude_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="claude-chat",
+                    target="main",
+                )
+
+            self.assertEqual(code, 1)
+            self.assertIn("Claude authentication is not configured", reply)
+            self.assertEqual(output.read_text(encoding="utf-8"), reply)
+            popen.assert_not_called()
 
     def test_start_backend_applies_task_proxy_env_for_enabled_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

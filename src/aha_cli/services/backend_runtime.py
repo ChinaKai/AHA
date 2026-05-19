@@ -10,12 +10,14 @@ import sys
 import time
 import zipfile
 
+from aha_cli.backends.claude import apply_claude_environment
 from aha_cli.domain.models import utc_now
 from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
     iter_jsonl_reverse,
+    load_config,
     read_json,
     require_plan,
     run_dir,
@@ -23,6 +25,7 @@ from aha_cli.store.filesystem import (
 )
 
 BACKEND_ACTIVITY_SCAN_LIMIT = 5000
+PROCESS_AGENT_BACKENDS = {"codex", "claude"}
 
 
 def safe_target(target: str) -> str:
@@ -143,7 +146,11 @@ def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
     return len(parts) > index + 1 and parts[index + 1] == task_id
 
 
-def _discover_backend_process(run_id: str, target: str, task_id: str | None = None) -> int | None:
+def _backend_name_from_state(state: dict, fallback: str = "unknown") -> str:
+    return str(state.get("backend") or fallback)
+
+
+def _discover_backend_process(run_id: str, target: str, task_id: str | None = None) -> tuple[int, str] | None:
     proc = Path("/proc")
     if not proc.is_dir():
         return None
@@ -159,9 +166,10 @@ def _discover_backend_process(run_id: str, target: str, task_id: str | None = No
         except OSError:
             continue
         parts = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
-        if "codex-chat" not in parts:
+        chat_commands = [command for command in ("codex-chat", "claude-chat") if command in parts]
+        if not chat_commands:
             continue
-        index = parts.index("codex-chat")
+        index = parts.index(chat_commands[0])
         if (
             len(parts) > index + 2
             and parts[index + 1] == run_id
@@ -169,7 +177,7 @@ def _discover_backend_process(run_id: str, target: str, task_id: str | None = No
             and _process_matches_task(parts, task_id)
             and pid_is_running(pid)
         ):
-            return pid
+            return pid, chat_commands[0]
     return None
 
 
@@ -182,9 +190,10 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     pid = None if state.get("status") == "stopped" else state_pid
     managed = bool(state.get("managed")) if state else False
     running = pid_is_running(pid)
-    discovered_pid = None if running else _discover_backend_process(run_id, target, task_id)
-    if discovered_pid:
-        pid = discovered_pid
+    discovered_backend = None
+    discovered = None if running else _discover_backend_process(run_id, target, task_id)
+    if discovered:
+        pid, discovered_backend = discovered
         running = True
         managed = bool(state.get("managed")) if state and state.get("pid") == pid else False
     activity = _backend_activity(root, run_id, target, task_id)
@@ -192,7 +201,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     return {
         "target": target,
         "task_id": task_id,
-        "backend": state.get("backend", "codex-chat"),
+        "backend": _backend_name_from_state(state, discovered_backend or "unknown"),
         "status": status,
         "pid": pid if running else None,
         "last_pid": state_pid if not running else None,
@@ -224,7 +233,7 @@ def mark_backend_stopped(root: Path, run_id: str, target: str = "main", *, task_
             {
                 "target": target,
                 "task_id": task_id,
-                "backend": state.get("backend", "codex-chat"),
+                "backend": _backend_name_from_state(state),
                 "status": "stopped",
                 "pid": previous_pid,
                 "managed": bool(state),
@@ -289,12 +298,14 @@ def _aha_cli_invocation() -> list[str]:
     return [sys.executable, "-m", "aha_cli"]
 
 
-def _codex_chat_command(
+def _agent_chat_command(
     run_id: str,
     target: str,
     *,
+    backend: str = "codex",
     aha_home: Path,
     codex_bin: str = "codex",
+    claude_bin: str = "claude",
     model: str | None = None,
     sandbox: str = "workspace-write",
     approval: str = "never",
@@ -305,17 +316,17 @@ def _codex_chat_command(
     prompt_prefix: str = "You are connected to AHA as the real backend agent.",
     task_id: str | None = None,
 ) -> list[str]:
+    if backend not in PROCESS_AGENT_BACKENDS:
+        raise ValueError(f"backend {backend} does not have a chat process")
     command = [
         *_aha_cli_invocation(),
         "--home",
         str(aha_home),
-        "codex-chat",
+        f"{backend}-chat",
         run_id,
         target,
         "--sender",
         target,
-        "--codex-bin",
-        codex_bin,
         "--sandbox",
         sandbox,
         "--approval",
@@ -325,13 +336,17 @@ def _codex_chat_command(
         "--prompt-prefix",
         prompt_prefix,
     ]
+    if backend == "codex":
+        command.extend(["--codex-bin", codex_bin])
+    else:
+        command.extend(["--claude-bin", claude_bin])
     if task_id:
         command.extend(["--task-id", task_id])
     if model:
         command.extend(["--model", model])
     if from_start:
         command.append("--from-start")
-    if no_json:
+    if no_json and backend == "codex":
         command.append("--no-json")
     for item in extra_args or []:
         command.extend(["--extra-arg", item])
@@ -354,7 +369,7 @@ def _backend_proxy_env(root: Path, run_id: str, target: str, task_id: str | None
     return proxy_env_for_agent(agent, task)
 
 
-def _backend_process_env(proxy_env: dict[str, str] | None = None) -> dict[str, str]:
+def _backend_process_env(proxy_env: dict[str, str] | None = None, claude_config: dict | None = None) -> dict[str, str]:
     env = os.environ.copy()
     pythonpath = env.get("PYTHONPATH", "")
     if pythonpath:
@@ -363,6 +378,7 @@ def _backend_process_env(proxy_env: dict[str, str] | None = None) -> dict[str, s
             str((cwd / item).resolve()) if item and not Path(item).is_absolute() else item
             for item in pythonpath.split(os.pathsep)
         )
+    apply_claude_environment(env, claude_config)
     apply_proxy_environment(env, proxy_env)
     return env
 
@@ -372,7 +388,9 @@ def start_backend(
     run_id: str,
     target: str = "main",
     *,
+    backend: str = "codex",
     codex_bin: str = "codex",
+    claude_bin: str = "claude",
     model: str | None = None,
     sandbox: str = "workspace-write",
     approval: str = "never",
@@ -385,16 +403,20 @@ def start_backend(
 ) -> dict:
     task_id = task_id or None
     target = target or "main"
+    if backend not in PROCESS_AGENT_BACKENDS:
+        raise ValueError(f"backend {backend} does not have a chat process")
     with locked_backend(root, run_id, target, task_id):
         current = backend_status(root, run_id, target, task_id)
         if current["status"] in {"running", "busy"}:
             current["already_running"] = True
             return current
-        command = _codex_chat_command(
+        command = _agent_chat_command(
             run_id,
             target,
+            backend=backend,
             aha_home=root,
             codex_bin=codex_bin,
+            claude_bin=claude_bin,
             model=model,
             sandbox=sandbox,
             approval=approval,
@@ -409,11 +431,12 @@ def start_backend(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = log_path.open("ab")
         proxy_env = _backend_proxy_env(root, run_id, target, task_id)
+        claude_config = load_config(root).get("claude", {}) if backend == "claude" else None
         try:
             process = subprocess.Popen(
                 command,
                 cwd=root,
-                env=_backend_process_env(proxy_env),
+                env=_backend_process_env(proxy_env, claude_config),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -424,7 +447,7 @@ def start_backend(
         state = {
             "target": target,
             "task_id": task_id,
-            "backend": "codex-chat",
+            "backend": f"{backend}-chat",
             "status": "running",
             "pid": process.pid,
             "managed": True,
@@ -479,7 +502,7 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str 
             {
                 "target": target,
                 "task_id": task_id,
-                "backend": state.get("backend", "codex-chat"),
+                "backend": _backend_name_from_state(state),
                 "status": "stopped",
                 "pid": pid,
                 "managed": bool(state),
