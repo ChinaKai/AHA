@@ -53,6 +53,7 @@ from aha_cli.store.filesystem import (
     task_log_page,
     task_snapshot,
     update_agent_config,
+    update_task_proxy_config,
 )
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
 
@@ -65,6 +66,17 @@ APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
+
+
+def parse_optional_bool(value: object, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{field_name} must be a boolean")
 
 
 def realtime_debug_log(source: str, **fields: object) -> None:
@@ -359,6 +371,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 f"- {agent.get('id')} role={agent.get('role')} backend={agent.get('backend')} "
                 f"sandbox={agent.get('sandbox') or task.get('preferred_sandbox') or '-'} "
                 f"approval={agent.get('approval') or task.get('preferred_approval') or '-'} "
+                f"proxy={'on' if agent.get('proxy_enabled') else 'off'} "
                 f"assignment={agent.get('assignment') or agent.get('created_reason') or '-'}"
             )
         return "\n".join(lines)
@@ -492,6 +505,19 @@ def request_task_finalization_with_backend(
     return payload
 
 
+def parse_task_proxy_fields(payload: dict) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    if "proxy_enabled" in payload:
+        fields["proxy_enabled"] = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled")
+    if "http_proxy" in payload:
+        fields["http_proxy"] = str(payload.get("http_proxy", "") or "")
+    if "https_proxy" in payload:
+        fields["https_proxy"] = str(payload.get("https_proxy", "") or "")
+    if "no_proxy" in payload:
+        fields["no_proxy"] = str(payload.get("no_proxy", "") or "")
+    return fields
+
+
 def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command: str) -> str:
     if not task_id:
         return "No task is selected."
@@ -569,7 +595,9 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
     backend_autostart = None
     if not stripped.startswith("/"):
         return False, message, {}
-    if stripped == "/agent" or stripped.startswith("/agent "):
+    if stripped == "/":
+        reply = format_aha_command(root, run_id, task_id, "/aha help", str(payload.get("to_agent") or payload.get("target") or "main"))
+    elif stripped == "/agent" or stripped.startswith("/agent "):
         handled, agent_message, reply = format_agent_command(root, run_id, task_id, str(payload.get("to_agent") or payload.get("target") or "main"), stripped)
         if not handled:
             if agent_message:
@@ -872,6 +900,10 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     workspace_id=workspace_id,
                     sandbox=sandbox,
                     approval=approval,
+                    proxy_enabled=parse_optional_bool(payload.get("proxy_enabled", False), "proxy_enabled"),
+                    http_proxy=str(payload.get("http_proxy", "") or "") or None,
+                    https_proxy=str(payload.get("https_proxy", "") or "") or None,
+                    no_proxy=str(payload.get("no_proxy", "") or "") or None,
                 )
                 backend_states = []
                 if dispatch:
@@ -1085,6 +1117,9 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                         task = reopen_task(root, selected_run_id, task_id)
                     elif action == "delete":
                         task = delete_task(root, selected_run_id, task_id)
+                    elif action == "proxy":
+                        payload = parse_json_body(body)
+                        task = update_task_proxy_config(root, selected_run_id, task_id, **parse_task_proxy_fields(payload))
                     else:
                         writer.write(json_response({"error": f"unknown task action: {action}"}, "400 Bad Request"))
                         await writer.drain()
@@ -1141,6 +1176,10 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     workspace_id=workspace_id,
                     sandbox=sandbox,
                     approval=approval,
+                    proxy_enabled=parse_optional_bool(payload.get("proxy_enabled", False), "proxy_enabled"),
+                    http_proxy=str(payload.get("http_proxy", "") or "") or None,
+                    https_proxy=str(payload.get("https_proxy", "") or "") or None,
+                    no_proxy=str(payload.get("no_proxy", "") or "") or None,
                     delegation_policy=str(payload.get("delegation_policy", "auto") or "auto"),
                     max_sub_agents=int(payload.get("max_sub_agents", 3) or 0),
                     preferred_sub_backend=preferred_sub_backend,
@@ -1174,7 +1213,17 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
                     await writer.drain()
                     return
-                agent = add_agent(root, selected_run_id, task_id, backend=backend, role=str(payload.get("role", "sub") or "sub"), sandbox=sandbox, approval=approval)
+                proxy_enabled = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None
+                agent = add_agent(
+                    root,
+                    selected_run_id,
+                    task_id,
+                    backend=backend,
+                    role=str(payload.get("role", "sub") or "sub"),
+                    sandbox=sandbox,
+                    approval=approval,
+                    proxy_enabled=proxy_enabled,
+                )
                 writer.write(json_response({"ok": True, "agent": agent}))
         elif method == "POST" and path == "/api/agent-config":
             payload = parse_json_body(body)
@@ -1183,6 +1232,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             agent_id = str(payload.get("agent_id", "")).strip()
             sandbox = str(payload.get("sandbox", "") or "") or None
             approval = str(payload.get("approval", "") or "") or None
+            proxy_enabled = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None
             if not task_id or not agent_id:
                 writer.write(json_response({"error": "task_id and agent_id are required"}, "400 Bad Request"))
             elif sandbox is not None and sandbox not in SANDBOX_OPTIONS:
@@ -1191,8 +1241,28 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request"))
             else:
                 try:
-                    agent = update_agent_config(root, selected_run_id, task_id, agent_id, sandbox=sandbox, approval=approval)
+                    agent = update_agent_config(
+                        root,
+                        selected_run_id,
+                        task_id,
+                        agent_id,
+                        sandbox=sandbox,
+                        approval=approval,
+                        proxy_enabled=proxy_enabled,
+                    )
                     writer.write(json_response({"ok": True, "agent": agent}))
+                except SystemExit as exc:
+                    writer.write(json_response({"error": str(exc)}, "404 Not Found"))
+        elif method == "POST" and path == "/api/task-config":
+            payload = parse_json_body(body)
+            selected_run_id = require_api_run_id(root, run_id, query, payload)
+            task_id = str(payload.get("task_id", "")).strip()
+            if not task_id:
+                writer.write(json_response({"error": "task_id is required"}, "400 Bad Request"))
+            else:
+                try:
+                    task = update_task_proxy_config(root, selected_run_id, task_id, **parse_task_proxy_fields(payload))
+                    writer.write(json_response({"ok": True, "task": task}))
                 except SystemExit as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
         elif method == "POST" and path == "/api/send":
@@ -1210,6 +1280,9 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         await writer.drain()
     except json.JSONDecodeError:
         writer.write(json_response({"error": "invalid json"}, "400 Bad Request"))
+        await writer.drain()
+    except ValueError as exc:
+        writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
         await writer.drain()
     except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
         pass

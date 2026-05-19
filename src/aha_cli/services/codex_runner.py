@@ -5,7 +5,8 @@ from pathlib import Path
 import textwrap
 
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
-from aha_cli.store.filesystem import append_event_to_file, ensure_session, save_session
+from aha_cli.services.proxy import proxy_env_for_agent
+from aha_cli.store.filesystem import append_event_to_file, ensure_session, save_session, task_snapshot
 
 
 def run_codex_task(args) -> int:
@@ -31,6 +32,8 @@ def run_codex_task(args) -> int:
     events_file = Path(os.environ["AHA_EVENTS_FILE"])
     sandbox = codex_sandbox(mode, args.sandbox)
     session = ensure_session(root, run_id, task_id, "main", "codex")
+    task = task_snapshot(root, run_id, task_id)["task"]
+    agent = next((item for item in task.get("agents", []) if item.get("id") == "main"), {})
 
     inbox_preview = ""
     if inbox_file.exists() and inbox_file.stat().st_size:
@@ -77,6 +80,7 @@ def run_codex_task(args) -> int:
         task_id=task_id,
         source="codex-runner",
         session=session,
+        proxy_env=proxy_env_for_agent(agent, task),
     )
     if session:
         save_session(root, session)

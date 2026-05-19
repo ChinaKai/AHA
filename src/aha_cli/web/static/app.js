@@ -34,6 +34,7 @@ let tickBackoffUntil = 0;
 let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
+let taskProxyEditingUntil = 0;
 let eventTailInitialized = false;
 let pendingMessageId = 0;
 let pendingSendInFlight = false;
@@ -61,6 +62,7 @@ const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interrupted"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
+const defaultNoProxy = "localhost,127.0.0.1,::1";
 const collapsedMessageCharLimit = 900;
 const collapsedMessageLineLimit = 2;
 const conversationFilters = {
@@ -120,12 +122,23 @@ const taskBackendEl = document.getElementById("task-backend");
 const taskModelEl = document.getElementById("task-model");
 const taskSandboxEl = document.getElementById("task-sandbox");
 const taskApprovalEl = document.getElementById("task-approval");
+const taskProxyEnabledEl = document.getElementById("task-proxy-enabled");
+const taskHttpProxyEl = document.getElementById("task-http-proxy");
+const taskHttpsProxyEl = document.getElementById("task-https-proxy");
+const taskNoProxyEl = document.getElementById("task-no-proxy");
 const taskRunContextEl = document.getElementById("task-run-context");
 const delegationPolicyEl = document.getElementById("delegation-policy");
 const maxSubAgentsEl = document.getElementById("max-sub-agents");
 const maxSubAgentsFieldEl = document.getElementById("max-sub-agents-field");
 const workspaceSelectEl = document.getElementById("workspace-select");
 const workspaceCustomEl = document.getElementById("workspace-custom");
+const taskProxyEditorEl = document.getElementById("task-proxy-editor");
+const taskProxyFormEl = document.getElementById("task-proxy-form");
+const selectedTaskProxyEnabledEl = document.getElementById("selected-task-proxy-enabled");
+const selectedTaskHttpProxyEl = document.getElementById("selected-task-http-proxy");
+const selectedTaskHttpsProxyEl = document.getElementById("selected-task-https-proxy");
+const selectedTaskNoProxyEl = document.getElementById("selected-task-no-proxy");
+const taskProxyStateEl = document.getElementById("task-proxy-state");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
 const backendStatusEl = document.getElementById("backend-status");
 const pendingMessagesEl = document.getElementById("pending-messages");
@@ -1071,6 +1084,53 @@ function taskStatusBadges(task) {
   return badges.join("");
 }
 
+function taskProxyConfigured(task) {
+  return Boolean(task?.preferred_http_proxy || task?.preferred_https_proxy);
+}
+
+function taskProxyBadge(task) {
+  if (!taskProxyConfigured(task)) return '<span class="status proxy-unset">proxy unset</span>';
+  if (task?.preferred_proxy_enabled) return '<span class="status proxy-on">proxy default on</span>';
+  return '<span class="status proxy-off">proxy default off</span>';
+}
+
+function taskProxySummary(task) {
+  if (!task) return "";
+  const parts = [];
+  if (task.preferred_http_proxy) parts.push("HTTP");
+  if (task.preferred_https_proxy) parts.push("HTTPS");
+  if (task.preferred_no_proxy) parts.push("NO_PROXY");
+  return parts.length ? `${task.preferred_proxy_enabled ? "default on" : "default off"} · ${parts.join(" · ")}` : "not configured";
+}
+
+function setCreateProxyDefaultsFromInputs() {
+  const configured = Boolean(taskHttpProxyEl?.value.trim() || taskHttpsProxyEl?.value.trim());
+  if (configured && taskProxyEnabledEl && !taskProxyEnabledEl.checked) taskProxyEnabledEl.checked = true;
+  if (configured && taskNoProxyEl && !taskNoProxyEl.value.trim()) taskNoProxyEl.value = defaultNoProxy;
+}
+
+function renderTaskProxyEditor() {
+  if (!taskProxyEditorEl || !taskProxyFormEl) return;
+  const task = selectedTask();
+  const disabled = !task;
+  taskProxyFormEl.querySelectorAll("input, button").forEach(item => {
+    item.disabled = disabled;
+  });
+  if (!task) {
+    if (taskProxyStateEl) taskProxyStateEl.textContent = "Select a task to edit proxy.";
+    if (selectedTaskProxyEnabledEl) selectedTaskProxyEnabledEl.checked = false;
+    if (selectedTaskHttpProxyEl) selectedTaskHttpProxyEl.value = "";
+    if (selectedTaskHttpsProxyEl) selectedTaskHttpsProxyEl.value = "";
+    if (selectedTaskNoProxyEl) selectedTaskNoProxyEl.value = defaultNoProxy;
+    return;
+  }
+  if (selectedTaskProxyEnabledEl) selectedTaskProxyEnabledEl.checked = Boolean(task.preferred_proxy_enabled);
+  if (selectedTaskHttpProxyEl) selectedTaskHttpProxyEl.value = task.preferred_http_proxy || "";
+  if (selectedTaskHttpsProxyEl) selectedTaskHttpsProxyEl.value = task.preferred_https_proxy || "";
+  if (selectedTaskNoProxyEl) selectedTaskNoProxyEl.value = task.preferred_no_proxy || defaultNoProxy;
+  if (taskProxyStateEl) taskProxyStateEl.textContent = taskProxySummary(task);
+}
+
 function visibleTasks() {
   const tasks = statusData?.tasks || [];
   return showHiddenEl.checked ? tasks : tasks.filter(task => !task.hidden);
@@ -1155,6 +1215,18 @@ function isAgentsPanelEditing() {
   );
 }
 
+function markTaskProxyEditing(durationMs = 10000) {
+  taskProxyEditingUntil = Date.now() + durationMs;
+}
+
+function isTaskProxyEditing() {
+  const active = document.activeElement;
+  return (
+    Date.now() < taskProxyEditingUntil ||
+    (active instanceof Element && Boolean(taskProxyFormEl?.contains(active)))
+  );
+}
+
 function eventData(event) {
   return event.data || {};
 }
@@ -1193,6 +1265,7 @@ const timelineEventTypes = new Set([
   "task_result_written",
   "task_final_requested",
   "task_round_summary_requested",
+  "task_proxy_config_updated",
   "task_reopened",
   "task_completed",
   "task_waiting_for_subagents",
@@ -1674,6 +1747,9 @@ function applyStatusData(options = {}) {
   if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
   renderTaskList();
   renderSelectedHeader();
+  if (options.forceTaskProxy || !isTaskProxyEditing()) {
+    renderTaskProxyEditor();
+  }
   if (options.forceAgents || !isAgentsPanelEditing()) {
     renderAgents();
   } else {
@@ -2251,17 +2327,17 @@ function renderTaskList() {
     item.innerHTML = `
       <div class="task-row">
         <strong>${escapeHtml(task.id)}</strong>
-        <span class="task-statuses">${taskStatusBadges(task)}</span>
+        <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
+      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
     `;
-    item.title = `${task.title}\ndefault backend=${task.preferred_backend || "-"}\nworkspace=${task.workspace_path || "-"}`;
+    item.title = `${task.title}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nworkspace=${task.workspace_path || "-"}`;
     item.addEventListener("click", async event => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("button")) return;
@@ -2273,12 +2349,14 @@ function renderTaskList() {
 
 async function selectTask(taskId) {
   selectedTaskId = taskId;
+  taskProxyEditingUntil = 0;
   conversationAutoFollow = true;
   if (activeTab === "logs") logState(taskId).autoFollow = true;
   closeMobileSheets();
   closeMobileActionPanel();
   renderTaskList();
   renderSelectedHeader();
+  renderTaskProxyEditor();
   renderAgents();
   await loadBackendStatus();
   await ensureActiveTabData();
@@ -2306,11 +2384,37 @@ async function updateTaskVisibility(taskId, action) {
   }
 }
 
+async function saveTaskProxyConfig() {
+  const task = selectedTask();
+  if (!task) return;
+  const httpProxy = selectedTaskHttpProxyEl?.value.trim() || "";
+  const httpsProxy = selectedTaskHttpsProxyEl?.value.trim() || "";
+  let noProxy = selectedTaskNoProxyEl?.value.trim() || "";
+  if ((httpProxy || httpsProxy) && !noProxy) {
+    noProxy = defaultNoProxy;
+    if (selectedTaskNoProxyEl) selectedTaskNoProxyEl.value = noProxy;
+  }
+  const proxyEnabled = Boolean(selectedTaskProxyEnabledEl?.checked);
+  await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/proxy`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(runScopedPayload({
+      proxy_enabled: proxyEnabled,
+      http_proxy: httpProxy,
+      https_proxy: httpsProxy,
+      no_proxy: noProxy
+    }))
+  }, "Failed to update task proxy");
+  taskProxyEditingUntil = 0;
+  await loadStatus({ forceAgents: true, forceTaskProxy: true });
+}
+
 function renderSelectedHeader() {
   const task = selectedTask();
   if (!task) {
     renderHeaderWorkspace(null);
     renderMobileTaskSummary(null);
+    renderTaskProxyEditor();
     selectedIdEl.textContent = "";
     selectedTitleEl.textContent = "No tasks";
     selectedTaskMetaEl.textContent = "";
@@ -2366,6 +2470,7 @@ function renderAgents() {
   for (const agent of task.agents || []) {
     const sandbox = agent.sandbox || task.preferred_sandbox || "workspace-write";
     const approval = agent.approval || task.preferred_approval || "never";
+    const proxyEnabled = Boolean(agent.proxy_enabled);
     const processStatus = agentBackendProcessStatus(agent);
     const rawProcessStatus = agent.backend_process_status || processStatus;
     const lifecycleStatus = agentLifecycleStatus(agent);
@@ -2389,6 +2494,7 @@ function renderAgents() {
       `model=${agent.model || "default"}`,
       `sandbox=${sandbox}`,
       `approval=${approval}`,
+      `proxy=${proxyEnabled ? "on" : "off"} (${taskProxySummary(task)})`,
       lifecycleTimingText ? `status=${lifecycleTimingText}` : `status=${lifecycleStatus}`,
       lifecycleTiming?.startedAt ? `status_started=${formatClock(lifecycleTiming.startedAt)}` : "",
       lifecycleTiming?.finishedAt ? `status_finished=${formatClock(lifecycleTiming.finishedAt)}` : "",
@@ -2403,23 +2509,29 @@ function renderAgents() {
       </div>
       <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
+      <div class="meta truncate">proxy=${escapeHtml(proxyEnabled ? "on" : "off")} | task proxy=${escapeHtml(taskProxySummary(task))}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
         <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
         <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>
       </div>
+      <label class="agent-proxy">
+        <input type="checkbox" data-agent-field="proxy_enabled" data-agent-id="${escapeHtml(agent.id)}" ${proxyEnabled ? "checked" : ""}>
+        <span>Proxy</span>
+      </label>
     `;
     card.addEventListener("click", event => {
       const clicked = event.target instanceof Element ? event.target : null;
-      if (clicked?.closest("select")) return;
+      if (clicked?.closest("select") || clicked?.closest("input")) return;
       agentTargetEl.value = agent.id;
       agentTargetEl.dispatchEvent(new Event("change"));
       closeMobileSheets();
     });
     card.addEventListener("change", event => {
-      const target = event.target instanceof HTMLSelectElement ? event.target : null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
       if (!target?.dataset.agentField) return;
-      updateAgentConfig(agent.id, target.dataset.agentField, target.value);
+      const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
+      updateAgentConfig(agent.id, target.dataset.agentField, value);
     });
     agentsEl.appendChild(card);
   }
@@ -2494,7 +2606,7 @@ async function updateAgentConfig(agentId, field, value) {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    alert(body.error || "Failed to update agent permission");
+    alert(body.error || "Failed to update agent config");
     return;
   }
   await loadStatus({ forceAgents: true });
@@ -2617,10 +2729,11 @@ function renderTimelineEvent(event) {
   if (event.type === "task_reopened") return renderTimelineStatus("task reopened", data.task_id || "-", "awaiting_user", ts);
   if (event.type === "task_completed") return renderTimelineStatus("task completed", `exit=${data.exit_code ?? "-"}`, "completed", ts);
   if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", ts);
-  if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "running", ts);
+  if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "running", ts);
   if (event.type === "agent_interrupted") return renderTimelineStatus("agent interrupted", data.agent_id || data.target || "main", "interrupted", ts);
   if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
-  if (event.type === "agent_config_updated") return renderTimelineStatus("agent permission updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"}`, "session", ts);
+  if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
+  if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy updated", `default=${data.proxy_enabled ? "on" : "off"} http=${data.http_proxy_configured ? "set" : "-"} https=${data.https_proxy_configured ? "set" : "-"} no_proxy=${data.no_proxy_configured ? "set" : "-"}`, "session", ts);
   if (event.type === "agent_thread") return renderTimelineStatus("codex session", data.thread_id || "-", "session", ts);
   if (event.type === "agent_finished") return renderTimelineStatus("agent finished", `exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", ts);
   if (event.type === "task_dispatched") return renderTimelineStatus("task dispatched", `target=${data.target || "-"}`, "session", ts);
@@ -2901,6 +3014,10 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   const title = document.getElementById("new-task-title").value.trim();
   if (!title) return;
   const delegationPolicy = delegationPolicyEl?.value || "disabled";
+  setCreateProxyDefaultsFromInputs();
+  const createHttpProxy = taskHttpProxyEl?.value.trim() || "";
+  const createHttpsProxy = taskHttpsProxyEl?.value.trim() || "";
+  const createProxyEnabled = Boolean(taskProxyEnabledEl?.checked);
   try {
     await fetchJson(apiUrl("/api/tasks"), {
       method: "POST",
@@ -2911,6 +3028,10 @@ document.getElementById("task-form").addEventListener("submit", async event => {
         model: taskModelEl.value || null,
         sandbox: taskSandboxEl.value,
         approval: taskApprovalEl.value,
+        proxy_enabled: createProxyEnabled,
+        http_proxy: createHttpProxy,
+        https_proxy: createHttpsProxy,
+        no_proxy: (createProxyEnabled || createHttpProxy || createHttpsProxy) ? (taskNoProxyEl?.value.trim() || "") : "",
         workspace_id: selectedWorkspaceId(),
         workspace_path: selectedWorkspacePath(),
         delegation_policy: delegationPolicy,
@@ -2984,6 +3105,12 @@ messageEl.addEventListener("keydown", event => {
   } else if (event.key === "Tab") {
     event.preventDefault();
     applySlashCommand(commandSelection);
+  } else if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const command = commands[commandSelection];
+    if (command && messageEl.value.trim() !== command.insert.trim()) {
+      event.preventDefault();
+      applySlashCommand(commandSelection);
+    }
   } else if (event.key === "Escape") {
     commandMenuEl.classList.add("hidden");
   }
@@ -3088,6 +3215,25 @@ panelEl.addEventListener("toggle", event => {
 agentsEl.addEventListener("pointerdown", () => markAgentsPanelEditing());
 agentsEl.addEventListener("focusin", () => markAgentsPanelEditing());
 agentsEl.addEventListener("change", () => markAgentsPanelEditing(1500));
+taskProxyFormEl?.addEventListener("pointerdown", () => markTaskProxyEditing());
+taskProxyFormEl?.addEventListener("focusin", () => markTaskProxyEditing());
+taskProxyFormEl?.addEventListener("input", () => markTaskProxyEditing());
+taskProxyFormEl?.addEventListener("change", () => markTaskProxyEditing());
+taskProxyFormEl?.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await saveTaskProxyConfig();
+  } catch (err) {
+    alert(err?.message || String(err));
+  }
+});
+[selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl].forEach(input => {
+  input?.addEventListener("input", () => {
+    const configured = Boolean(selectedTaskHttpProxyEl?.value.trim() || selectedTaskHttpsProxyEl?.value.trim());
+    if (configured && selectedTaskProxyEnabledEl && !selectedTaskProxyEnabledEl.checked) selectedTaskProxyEnabledEl.checked = true;
+    if (configured && selectedTaskNoProxyEl && !selectedTaskNoProxyEl.value.trim()) selectedTaskNoProxyEl.value = defaultNoProxy;
+  });
+});
 agentTargetEl.addEventListener("change", async () => {
   syncAgentCards();
   renderSelectedAgentInfo();
@@ -3100,11 +3246,13 @@ agentTargetEl.addEventListener("change", async () => {
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
 delegationPolicyEl?.addEventListener("change", syncDelegationFields);
+[taskHttpProxyEl, taskHttpsProxyEl].forEach(input => input?.addEventListener("input", setCreateProxyDefaultsFromInputs));
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
   if (!tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
   renderTaskList();
   renderSelectedHeader();
+  renderTaskProxyEditor();
   renderAgents();
   renderConversationFilters();
   renderPanel();
@@ -3125,6 +3273,7 @@ window.addEventListener("online", () => {
 });
 
 initTaskCreateDisclosure();
+if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
 syncDelegationFields();
 initDesktopSidebars();
 initMobileSheets();

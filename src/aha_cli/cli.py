@@ -46,6 +46,7 @@ from aha_cli.store.filesystem import (
     status_snapshot,
     task_snapshot,
     update_agent_config,
+    update_task_proxy_config,
     write_json,
 )
 from aha_cli.web.server import request_task_finalization_with_backend, run_ui_server
@@ -144,6 +145,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
         backend=agent_backend_or_default(cfg.get("backend"), "stub"),
         workspace_path=workspace_path,
         workspace_id=workspace_id,
+        proxy_enabled=args.proxy_enabled or bool(args.http_proxy or args.https_proxy),
+        http_proxy=args.http_proxy,
+        https_proxy=args.https_proxy,
+        no_proxy=args.no_proxy,
     )
     print(f"Created run: {plan['id']}")
     print(f"Plan file: {plan_path(root, plan['id'])}")
@@ -333,6 +338,10 @@ def cmd_task(args: argparse.Namespace) -> int:
             workspace_id=workspace_id,
             sandbox=args.sandbox,
             approval=args.approval,
+            proxy_enabled=args.proxy_enabled or bool(args.http_proxy or args.https_proxy),
+            http_proxy=args.http_proxy,
+            https_proxy=args.https_proxy,
+            no_proxy=args.no_proxy,
             delegation_policy=args.delegation_policy,
             max_sub_agents=args.max_sub_agents,
             preferred_sub_backend=args.preferred_sub_backend,
@@ -360,6 +369,18 @@ def cmd_task(args: argparse.Namespace) -> int:
     elif args.task_cmd == "reopen":
         reopen_task(root, run_id, args.task_id)
         print(f"{args.task_id} reopened. Follow-up messages are allowed again.")
+    elif args.task_cmd == "proxy":
+        fields = {}
+        if args.proxy_enabled is not None:
+            fields["proxy_enabled"] = args.proxy_enabled
+        if args.http_proxy is not None:
+            fields["http_proxy"] = args.http_proxy
+        if args.https_proxy is not None:
+            fields["https_proxy"] = args.https_proxy
+        if args.no_proxy is not None:
+            fields["no_proxy"] = args.no_proxy
+        task = update_task_proxy_config(root, run_id, args.task_id, **fields)
+        print(json.dumps(task, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -367,10 +388,22 @@ def cmd_agent(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     if args.agent_cmd == "add":
-        agent = add_agent(root, run_id, args.task_id, backend=args.backend, role=args.role, model=args.model, sandbox=args.sandbox, approval=args.approval, created_by="debug-cli", created_reason="manual CLI add")
+        agent = add_agent(
+            root,
+            run_id,
+            args.task_id,
+            backend=args.backend,
+            role=args.role,
+            model=args.model,
+            sandbox=args.sandbox,
+            approval=args.approval,
+            proxy_enabled=args.proxy_enabled,
+            created_by="debug-cli",
+            created_reason="manual CLI add",
+        )
         print(json.dumps(agent, indent=2, ensure_ascii=False))
     elif args.agent_cmd == "set":
-        agent = update_agent_config(root, run_id, args.task_id, args.agent_id, sandbox=args.sandbox, approval=args.approval)
+        agent = update_agent_config(root, run_id, args.task_id, args.agent_id, sandbox=args.sandbox, approval=args.approval, proxy_enabled=args.proxy_enabled)
         print(json.dumps(agent, indent=2, ensure_ascii=False))
     elif args.agent_cmd == "list":
         task = task_snapshot(root, run_id, args.task_id)["task"]
@@ -504,6 +537,10 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("--write-scope", action="append")
     plan_p.add_argument("--workspace", default=None, help="Registered workspace id, such as ws-001")
     plan_p.add_argument("--workspace-path", default=None, help="Workspace path for the created tasks")
+    plan_p.add_argument("--enable-proxy", dest="proxy_enabled", action="store_true", help="Enable task proxy for created agents")
+    plan_p.add_argument("--http-proxy", default=None)
+    plan_p.add_argument("--https-proxy", default=None)
+    plan_p.add_argument("--no-proxy", default=None, help="NO_PROXY value for created tasks")
     plan_p.set_defaults(func=cmd_plan)
 
     run_p = sub.add_parser("run", help="Run pending tasks")
@@ -623,6 +660,10 @@ def build_parser() -> argparse.ArgumentParser:
     task_add.add_argument("--workspace-path", default=None)
     task_add.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
     task_add.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
+    task_add.add_argument("--enable-proxy", dest="proxy_enabled", action="store_true", help="Enable task proxy for created agents")
+    task_add.add_argument("--http-proxy", default=None)
+    task_add.add_argument("--https-proxy", default=None)
+    task_add.add_argument("--no-proxy", default=None, help="NO_PROXY value for this task")
     task_add.add_argument("--delegation-policy", choices=["auto", "disabled"], default="auto")
     task_add.add_argument("--max-sub-agents", type=int, default=3)
     task_add.add_argument("--preferred-sub-backend", choices=agent_backend_names(), default=None)
@@ -645,6 +686,17 @@ def build_parser() -> argparse.ArgumentParser:
     task_reopen.add_argument("run_id")
     task_reopen.add_argument("task_id")
     task_reopen.set_defaults(func=cmd_task)
+    task_proxy = task_sub.add_parser("proxy", help="Update task proxy defaults")
+    task_proxy.add_argument("run_id")
+    task_proxy.add_argument("task_id")
+    proxy_group = task_proxy.add_mutually_exclusive_group()
+    proxy_group.add_argument("--enable-proxy", dest="proxy_enabled", action="store_true")
+    proxy_group.add_argument("--disable-proxy", dest="proxy_enabled", action="store_false")
+    task_proxy.set_defaults(proxy_enabled=None)
+    task_proxy.add_argument("--http-proxy", default=None)
+    task_proxy.add_argument("--https-proxy", default=None)
+    task_proxy.add_argument("--no-proxy", default=None, help="NO_PROXY value; pass an empty string to clear")
+    task_proxy.set_defaults(func=cmd_task)
 
     agent_p = sub.add_parser("agent")
     agent_sub = agent_p.add_subparsers(dest="agent_cmd", required=True)
@@ -656,6 +708,10 @@ def build_parser() -> argparse.ArgumentParser:
     agent_add.add_argument("--model", default=None)
     agent_add.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
     agent_add.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
+    add_proxy_group = agent_add.add_mutually_exclusive_group()
+    add_proxy_group.add_argument("--enable-proxy", dest="proxy_enabled", action="store_true")
+    add_proxy_group.add_argument("--disable-proxy", dest="proxy_enabled", action="store_false")
+    agent_add.set_defaults(proxy_enabled=None)
     agent_add.set_defaults(func=cmd_agent)
     agent_set = agent_sub.add_parser("set")
     agent_set.add_argument("run_id")
@@ -663,6 +719,10 @@ def build_parser() -> argparse.ArgumentParser:
     agent_set.add_argument("agent_id")
     agent_set.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
     agent_set.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
+    set_proxy_group = agent_set.add_mutually_exclusive_group()
+    set_proxy_group.add_argument("--enable-proxy", dest="proxy_enabled", action="store_true")
+    set_proxy_group.add_argument("--disable-proxy", dest="proxy_enabled", action="store_false")
+    agent_set.set_defaults(proxy_enabled=None)
     agent_set.set_defaults(func=cmd_agent)
     agent_list = agent_sub.add_parser("list")
     agent_list.add_argument("run_id")

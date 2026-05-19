@@ -23,12 +23,14 @@ from aha_cli.domain.models import (
     utc_now,
     new_run_id,
 )
+from aha_cli.services.proxy import DEFAULT_NO_PROXY, normalize_proxy_value, task_has_proxy_config
 
 PLAN_LOCK = threading.RLock()
 EVENT_LOCK = threading.Lock()
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 AHA_HOME_ENV = "AHA_HOME"
 _EXPLICIT_AHA_HOMES: set[str] = set()
+UNSET = object()
 
 
 def read_json(path: Path) -> dict:
@@ -761,6 +763,7 @@ TIMELINE_EVENT_TYPES = {
     "task_result_written",
     "task_final_requested",
     "task_round_summary_requested",
+    "task_proxy_config_updated",
     "task_reopened",
     "task_completed",
     "task_waiting_for_subagents",
@@ -901,10 +904,18 @@ def create_plan(
     workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool = False,
+    http_proxy: str | None = None,
+    https_proxy: str | None = None,
+    no_proxy: str | None = None,
 ) -> dict:
     run_id = new_run_id()
     titles = task_titles or default_tasks(goal, agents, mode)
     created = utc_now()
+    http_proxy = normalize_proxy_value(http_proxy)
+    https_proxy = normalize_proxy_value(https_proxy)
+    no_proxy = normalize_proxy_value(no_proxy) or (DEFAULT_NO_PROXY if (http_proxy or https_proxy) else None)
+    proxy_enabled = bool(proxy_enabled or http_proxy or https_proxy)
     tasks = [
         make_task(
             f"task-{idx:03d}",
@@ -916,6 +927,10 @@ def create_plan(
             workspace_id=workspace_id,
             sandbox=sandbox,
             approval=approval,
+            proxy_enabled=proxy_enabled,
+            http_proxy=http_proxy,
+            https_proxy=https_proxy,
+            no_proxy=no_proxy,
         )
         for idx, title in enumerate(titles, start=1)
     ]
@@ -934,6 +949,7 @@ def create_plan(
             workspace_path=workspace_path,
             sandbox=sandbox,
             approval=approval,
+            proxy_enabled=proxy_enabled,
         ),
         "tasks": tasks,
     }
@@ -973,6 +989,10 @@ def add_task(
     workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool = False,
+    http_proxy: str | None = None,
+    https_proxy: str | None = None,
+    no_proxy: str | None = None,
     delegation_policy: str = "auto",
     max_sub_agents: int = 3,
     preferred_sub_backend: str | None = None,
@@ -980,6 +1000,10 @@ def add_task(
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
+        http_proxy = normalize_proxy_value(http_proxy)
+        https_proxy = normalize_proxy_value(https_proxy)
+        no_proxy = normalize_proxy_value(no_proxy) or (DEFAULT_NO_PROXY if (http_proxy or https_proxy) else None)
+        proxy_enabled = bool(proxy_enabled or http_proxy or https_proxy)
         task = make_task(
             next_task_id(plan["tasks"]),
             title,
@@ -990,6 +1014,10 @@ def add_task(
             workspace_id=workspace_id,
             sandbox=sandbox,
             approval=approval,
+            proxy_enabled=proxy_enabled,
+            http_proxy=http_proxy,
+            https_proxy=https_proxy,
+            no_proxy=no_proxy,
             delegation_policy=delegation_policy,
             max_sub_agents=max_sub_agents,
             preferred_sub_backend=preferred_sub_backend,
@@ -1003,6 +1031,7 @@ def add_task(
                 workspace_path=workspace_path or str(root),
                 sandbox=sandbox,
                 approval=approval,
+                proxy_enabled=proxy_enabled,
                 created_by="system",
                 created_reason="task creation requested initial sub-agent",
             )
@@ -1032,6 +1061,8 @@ def add_task(
             "model": model,
             "sandbox": sandbox,
             "approval": approval,
+            "proxy_enabled": proxy_enabled,
+            "proxy_configured": task_has_proxy_config(task),
             "workspace_id": task.get("workspace_id"),
             "workspace_path": task.get("workspace_path"),
             "delegation_policy": delegation_policy,
@@ -1049,6 +1080,7 @@ def add_agent_to_task_dict(
     workspace_path: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool | None = None,
     created_by: str = "system",
     created_reason: str = "",
 ) -> dict:
@@ -1061,6 +1093,7 @@ def add_agent_to_task_dict(
         workspace_path=workspace_path or task.get("workspace_path"),
         sandbox=sandbox if sandbox is not None else task.get("preferred_sandbox"),
         approval=approval if approval is not None else task.get("preferred_approval"),
+        proxy_enabled=bool(task.get("preferred_proxy_enabled")) if proxy_enabled is None else bool(proxy_enabled),
         created_by=created_by,
         created_reason=created_reason,
     )
@@ -1077,6 +1110,7 @@ def add_agent(
     model: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool | None = None,
     created_by: str = "system",
     created_reason: str = "",
 ) -> dict:
@@ -1093,6 +1127,7 @@ def add_agent(
             workspace_path=task.get("workspace_path"),
             sandbox=sandbox,
             approval=approval,
+            proxy_enabled=proxy_enabled,
             created_by=created_by,
             created_reason=created_reason,
         )
@@ -1111,6 +1146,7 @@ def add_agent(
             "model": model,
             "sandbox": agent.get("sandbox"),
             "approval": agent.get("approval"),
+            "proxy_enabled": agent.get("proxy_enabled"),
             "created_by": created_by,
             "created_reason": created_reason,
         },
@@ -1125,6 +1161,7 @@ def update_agent_config(
     agent_id: str,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool | None = None,
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -1142,6 +1179,8 @@ def update_agent_config(
             agent["approval"] = approval
             if agent_id == "main":
                 task["preferred_approval"] = approval
+        if proxy_enabled is not None:
+            agent["proxy_enabled"] = bool(proxy_enabled)
         agent["last_active_at"] = utc_now()
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
@@ -1150,9 +1189,66 @@ def update_agent_config(
         root,
         run_id,
         "agent_config_updated",
-        {"task_id": task_id, "agent_id": agent_id, "sandbox": agent.get("sandbox"), "approval": agent.get("approval")},
+        {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "sandbox": agent.get("sandbox"),
+            "approval": agent.get("approval"),
+            "proxy_enabled": agent.get("proxy_enabled"),
+        },
     )
     return agent
+
+
+def update_task_proxy_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    proxy_enabled: object = UNSET,
+    http_proxy: object = UNSET,
+    https_proxy: object = UNSET,
+    no_proxy: object = UNSET,
+) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        for agent in task.get("agents", []):
+            if "proxy_enabled" not in agent:
+                agent["proxy_enabled"] = bool(task.get("preferred_proxy_enabled"))
+        if proxy_enabled is not UNSET:
+            task["preferred_proxy_enabled"] = bool(proxy_enabled)
+        if http_proxy is not UNSET:
+            task["preferred_http_proxy"] = normalize_proxy_value(http_proxy)
+        if https_proxy is not UNSET:
+            task["preferred_https_proxy"] = normalize_proxy_value(https_proxy)
+        if no_proxy is not UNSET:
+            task["preferred_no_proxy"] = normalize_proxy_value(no_proxy)
+        if (
+            not task.get("preferred_no_proxy")
+            and (task.get("preferred_http_proxy") or task.get("preferred_https_proxy"))
+        ):
+            task["preferred_no_proxy"] = DEFAULT_NO_PROXY
+        if proxy_enabled is UNSET and (http_proxy is not UNSET or https_proxy is not UNSET):
+            task["preferred_proxy_enabled"] = bool(task.get("preferred_http_proxy") or task.get("preferred_https_proxy"))
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "task_proxy_config_updated",
+        {
+            "task_id": task_id,
+            "proxy_enabled": task.get("preferred_proxy_enabled"),
+            "http_proxy_configured": bool(task.get("preferred_http_proxy")),
+            "https_proxy_configured": bool(task.get("preferred_https_proxy")),
+            "no_proxy_configured": bool(task.get("preferred_no_proxy")),
+        },
+    )
+    return task
 
 
 def set_agent_status(
@@ -1780,6 +1876,7 @@ def status_snapshot(root: Path, run_id: str) -> dict:
         merged = dict(agent)
         merged["sandbox"] = agent.get("sandbox") or task.get("preferred_sandbox")
         merged["approval"] = agent.get("approval") or task.get("preferred_approval")
+        merged["proxy_enabled"] = bool(agent.get("proxy_enabled"))
         merged["session_id"] = session.get("id")
         merged["backend_session_id"] = session.get("backend_session_id")
         merged["session_scope"] = session.get("scope")
@@ -1803,6 +1900,10 @@ def status_snapshot(root: Path, run_id: str) -> dict:
                 "preferred_model": task.get("preferred_model"),
                 "preferred_sandbox": task.get("preferred_sandbox"),
                 "preferred_approval": task.get("preferred_approval"),
+                "preferred_proxy_enabled": bool(task.get("preferred_proxy_enabled")),
+                "preferred_http_proxy": task.get("preferred_http_proxy"),
+                "preferred_https_proxy": task.get("preferred_https_proxy"),
+                "preferred_no_proxy": task.get("preferred_no_proxy"),
                 "delegation_policy": task.get("delegation_policy", "auto"),
                 "max_sub_agents": task.get("max_sub_agents", 3),
                 "status": task["status"],

@@ -295,12 +295,15 @@ GET  /api/task/<task-id>/context
 GET  /api/backend?target=<agent-id>&task_id=<task-id>
 POST /api/task/<task-id>/final
 POST /api/task/<task-id>/reopen
+POST /api/task-config
 POST /api/tasks
 POST /api/agents
 POST /api/send
 ```
 
 There is no explicit HTTP start/stop backend endpoint yet. `POST /api/send` autostarts a stopped Codex backend for the addressed task agent when possible.
+
+Task proxy configuration lives on the task (`http_proxy`, `https_proxy`, `no_proxy`, and the default enable flag). Agents only store a `proxy_enabled` switch. When an enabled Codex agent runs, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` plus their lowercase variants into the backend command environment; disabled agents have those proxy variables removed from the child environment.
 
 It shows a task list on the left, a task workspace in the center, and task agents on the right. Selecting a task opens that task's conversation, result, logs, and prompt context.
 

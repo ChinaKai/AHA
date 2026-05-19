@@ -10,6 +10,7 @@ import sys
 import time
 
 from aha_cli.domain.models import utc_now
+from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -315,7 +316,23 @@ def _codex_chat_command(
     return command
 
 
-def _backend_process_env() -> dict[str, str]:
+def _backend_proxy_env(root: Path, run_id: str, target: str, task_id: str | None) -> dict[str, str] | None:
+    if not task_id:
+        return None
+    try:
+        plan = require_plan(root, run_id)
+    except SystemExit:
+        return None
+    task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
+    if not task:
+        return None
+    agent = next((item for item in task.get("agents", []) if item.get("id") == target), None)
+    if not agent:
+        return None
+    return proxy_env_for_agent(agent, task)
+
+
+def _backend_process_env(proxy_env: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     pythonpath = env.get("PYTHONPATH", "")
     if pythonpath:
@@ -324,6 +341,7 @@ def _backend_process_env() -> dict[str, str]:
             str((cwd / item).resolve()) if item and not Path(item).is_absolute() else item
             for item in pythonpath.split(os.pathsep)
         )
+    apply_proxy_environment(env, proxy_env)
     return env
 
 
@@ -368,11 +386,12 @@ def start_backend(
         log_path = backend_log_path(root, run_id, target, task_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = log_path.open("ab")
+        proxy_env = _backend_proxy_env(root, run_id, target, task_id)
         try:
             process = subprocess.Popen(
                 command,
                 cwd=root,
-                env=_backend_process_env(),
+                env=_backend_process_env(proxy_env),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -395,6 +414,7 @@ def start_backend(
             "approval": approval,
             "model": model,
             "from_start": from_start,
+            "proxy_enabled": proxy_env is not None and bool(proxy_env),
         }
         _write_state(root, run_id, target, state, task_id)
         append_event(root, run_id, "backend_started", {"target": target, "task_id": task_id, "pid": process.pid, "log_path": str(log_path)})

@@ -284,22 +284,78 @@ button, input, select { font: inherit; }
   color: #667085;
   font-size: 11px;
 }
+.checkbox-field {
+  align-content: start;
+}
+.checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: #475467;
+  font-size: 12px;
+}
+.checkbox-line input {
+  min-width: auto;
+  min-height: auto;
+  margin: 0;
+}
 .task-list { padding: 8px; }
 .task-list-tools {
+  display: grid;
+  gap: 8px;
   padding: 8px 16px;
   border-bottom: 1px solid #e4e7ec;
 }
-.task-list-tools label {
+.task-list-tools > label {
   display: flex;
   align-items: center;
   gap: 8px;
   color: #475467;
   font-size: 12px;
 }
-.task-list-tools input {
+.task-list-tools > label input {
   min-width: auto;
   min-height: auto;
   margin: 0;
+}
+.task-proxy-editor {
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  background: #ffffff;
+}
+.task-proxy-editor > summary {
+  padding: 7px 9px;
+  cursor: pointer;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+.task-proxy-editor > summary::-webkit-details-marker {
+  display: none;
+}
+.task-proxy-editor > summary::after {
+  content: "+";
+  float: right;
+  color: #667085;
+}
+.task-proxy-editor[open] > summary::after {
+  content: "-";
+}
+.proxy-form {
+  display: grid;
+  gap: 7px;
+  padding: 0 9px 9px;
+}
+.proxy-form input {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.proxy-form button {
+  min-height: 32px;
+  font-size: 12px;
 }
 .task {
   width: 100%;
@@ -375,6 +431,9 @@ button, input, select { font: inherit; }
 .status.interrupted { background: #fef3c7; color: #92400e; }
 .status.pending { background: #f2f4f7; color: #344054; }
 .status.hidden { background: #f2f4f7; color: #475467; }
+.status.proxy-on { background: #dcfce7; color: #14532d; }
+.status.proxy-off { background: #f2f4f7; color: #475467; }
+.status.proxy-unset { background: #fef3c7; color: #92400e; }
 .workspace {
   display: flex;
   flex-direction: column;
@@ -867,6 +926,19 @@ button {
   grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin-top: 7px;
+}
+.agent-proxy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: #475467;
+  font-size: 12px;
+}
+.agent-proxy input {
+  min-width: auto;
+  min-height: auto;
+  margin: 0;
 }
 .agent-permissions select {
   min-height: 30px;

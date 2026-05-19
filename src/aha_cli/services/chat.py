@@ -19,6 +19,7 @@ from aha_cli.services.orchestrator import (
     task_has_incomplete_sub_agents,
     waiting_for_subagents_message,
 )
+from aha_cli.services.proxy import proxy_env_for_agent
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -57,6 +58,7 @@ BLOCKED_REPLY_MARKERS = (
 )
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+PROMPT_REDACTED_PROXY_FIELDS = {"preferred_http_proxy", "preferred_https_proxy", "preferred_no_proxy"}
 
 
 def recent_run_events(root: Path, run_id: str, limit: int) -> list[dict]:
@@ -103,6 +105,20 @@ def status_from_agent_result(exit_code: int, reply: str) -> str:
     if any(marker in reply for marker in BLOCKED_REPLY_MARKERS):
         return "blocked"
     return "completed"
+
+
+def redact_proxy_fields_for_prompt(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if key in PROMPT_REDACTED_PROXY_FIELDS:
+                redacted[key] = "<set>" if item else None
+            else:
+                redacted[key] = redact_proxy_fields_for_prompt(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_proxy_fields_for_prompt(item) for item in value]
+    return value
 
 
 def auto_reply(root: Path, run_id: str, args) -> int:
@@ -245,7 +261,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
     event_limit = 80 if is_finalization else 20
     events = recent_run_events(root, run_id, event_limit)
     recent = "\n".join(format_event(event) for event in events) or "(no events)"
-    status = status_snapshot(root, run_id)
+    status = redact_proxy_fields_for_prompt(status_snapshot(root, run_id))
     mode_instruction = (
         "You are generating the task Final. Return concise Markdown only. "
         "Use the Task journal as the primary source when available. Preserve the task's meaningful rounds under `## 任务轮次` as a chronological ordered list (`1.`, `2.`, ...), then summarize the stable outcome, changed files or decisions, verification, and remaining actionable risks. "
@@ -404,8 +420,10 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                         "task_id": item_task_id,
                         "sandbox": sandbox,
                         "approval": requested_approval,
+                        "proxy_enabled": bool((agent or {}).get("proxy_enabled")),
                     },
                 )
+                proxy_env = proxy_env_for_agent(agent or {}, task)
                 exit_code, reply, session = run_codex_exec(
                     chat_prompt(root, run_id, args.target, item, args.prompt_prefix),
                     cwd=workspace,
@@ -422,6 +440,7 @@ def codex_chat(root: Path, run_id: str, args) -> int:
                     source="codex-chat",
                     target=args.target,
                     session=session,
+                    proxy_env=proxy_env,
                 )
                 if session:
                     save_session(root, session)

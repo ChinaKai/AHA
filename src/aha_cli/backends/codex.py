@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
 import sys
 
+from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
 OUTPUT_TAIL_LIMIT = 1200
@@ -92,6 +94,7 @@ def run_codex_exec(
     source: str = "codex",
     target: str | None = None,
     session: dict | None = None,
+    proxy_env: dict[str, str] | None = None,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     session_id = session.get("backend_session_id") if session else None
@@ -115,6 +118,7 @@ def run_codex_exec(
     process = subprocess.Popen(
         cmd,
         cwd=cwd,
+        env=apply_proxy_environment(os.environ.copy(), proxy_env),
         text=True,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

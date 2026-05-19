@@ -54,6 +54,8 @@ Current user message
 
 Each task also records a `workspace_path`. Backend agents execute from that workspace when starting a new scoped session, so task context points at the project being worked on rather than the AHA tool repository.
 
+Task-scoped proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are stored on the task so users can update them after creation. Each agent stores only a `proxy_enabled` switch. Backend launches and per-turn Codex executions read the latest task proxy values and apply them only when the selected agent switch is enabled.
+
 If run-main is activated later, it should work from summaries and decision records, not every task's full message history.
 
 ## Backend Model

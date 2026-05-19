@@ -60,6 +60,7 @@ def make_agent(
     workspace_path: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool = False,
     created_by: str = "system",
     created_reason: str = "",
 ) -> dict:
@@ -70,6 +71,7 @@ def make_agent(
         "model": model,
         "sandbox": sandbox,
         "approval": approval,
+        "proxy_enabled": bool(proxy_enabled),
         "status": status,
         "session_policy": "sticky",
         "session_id": None,
@@ -93,6 +95,10 @@ def make_task(
     workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
+    proxy_enabled: bool = False,
+    http_proxy: str | None = None,
+    https_proxy: str | None = None,
+    no_proxy: str | None = None,
     delegation_policy: str = "auto",
     max_sub_agents: int = 3,
     preferred_sub_backend: str | None = None,
@@ -107,6 +113,10 @@ def make_task(
         "preferred_model": model,
         "preferred_sandbox": sandbox,
         "preferred_approval": approval,
+        "preferred_proxy_enabled": bool(proxy_enabled),
+        "preferred_http_proxy": http_proxy,
+        "preferred_https_proxy": https_proxy,
+        "preferred_no_proxy": no_proxy,
         "preferred_sub_backend": preferred_sub_backend or backend,
         "preferred_sub_model": preferred_sub_model if preferred_sub_model is not None else model,
         "delegation_policy": delegation_policy,
@@ -137,6 +147,7 @@ def make_task(
                 workspace_path=workspace_path,
                 sandbox=sandbox,
                 approval=approval,
+                proxy_enabled=proxy_enabled,
                 created_by="system",
                 created_reason="task creation",
             )
@@ -185,6 +196,7 @@ def ensure_task_agents(task: dict, backend: str = "codex") -> list[dict]:
         agent.setdefault("model", task.get("preferred_model"))
         agent.setdefault("sandbox", task.get("preferred_sandbox"))
         agent.setdefault("approval", task.get("preferred_approval"))
+        agent.setdefault("proxy_enabled", bool(task.get("preferred_proxy_enabled")))
         agent.setdefault("backend_session_id", None)
         agent.setdefault("workspace_path", task.get("workspace_path"))
         agent.setdefault("created_by", "system")
@@ -303,6 +315,10 @@ def enrich_plan(plan: dict, backend: str = "codex") -> dict:
         task.setdefault("deleted_at", None)
         task.setdefault("preferred_sandbox", None)
         task.setdefault("preferred_approval", None)
+        task.setdefault("preferred_proxy_enabled", False)
+        task.setdefault("preferred_http_proxy", None)
+        task.setdefault("preferred_https_proxy", None)
+        task.setdefault("preferred_no_proxy", None)
         ensure_task_agents(task, backend)
     plan.setdefault("main_agent", make_agent("main", "run-main", backend, status="active"))
     return plan

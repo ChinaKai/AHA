@@ -50,6 +50,7 @@ from aha_cli.store.filesystem import (
     task_context_snapshot,
     task_final_snapshot,
     task_log_page,
+    update_task_proxy_config,
     update_agent_config,
     update_agent_runtime,
     write_task_result,
@@ -393,6 +394,75 @@ class CliTests(unittest.TestCase):
         self.assertIn("first", run_agent.call_args_list[0].args[0])
         self.assertIn("second", run_agent.call_args_list[1].args[0])
         self.assertEqual([item["message"] for item in browser_messages[-2:]], ["reply one", "reply two"])
+
+    def test_codex_chat_passes_latest_task_proxy_env_to_codex_exec(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "Chat proxy env",
+                    "--agents",
+                    "1",
+                    "--http-proxy",
+                    "http://127.0.0.1:7890",
+                    "--https-proxy",
+                    "http://127.0.0.1:7890",
+                    "--no-proxy",
+                    "localhost,127.0.0.1",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_proxy_config(root, run_id, "task-001", http_proxy="http://127.0.0.1:8888")
+                append_message(root, run_id, "main", "use proxy", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)) as run_agent:
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+        self.assertEqual(code, 0)
+        proxy_env = run_agent.call_args.kwargs["proxy_env"]
+        self.assertEqual(proxy_env["HTTP_PROXY"], "http://127.0.0.1:8888")
+        self.assertEqual(proxy_env["HTTPS_PROXY"], "http://127.0.0.1:7890")
+        self.assertEqual(proxy_env["NO_PROXY"], "localhost,127.0.0.1")
+        self.assertEqual(proxy_env["http_proxy"], "http://127.0.0.1:8888")
+
+    def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "Prompt redaction",
+                    "--agents",
+                    "1",
+                    "--http-proxy",
+                    "http://user:secret@proxy.local:7890",
+                    "--https-proxy",
+                    "http://user:secret@proxy.local:7890",
+                    "--no-proxy",
+                    "internal.local",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                prompt = chat_prompt(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "hello",
+                        "task_id": "task-001",
+                        "role": "main",
+                    },
+                    "prefix",
+                )
+
+        self.assertNotIn("secret", prompt)
+        self.assertNotIn("proxy.local:7890", prompt)
+        self.assertNotIn("internal.local", prompt)
+        self.assertIn("'preferred_http_proxy': '<set>'", prompt)
 
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
@@ -1529,6 +1599,10 @@ class CliTests(unittest.TestCase):
                 self.assertIn('id="task-model"', html)
                 self.assertIn('id="task-sandbox"', html)
                 self.assertIn('id="task-approval"', html)
+                self.assertIn('id="task-http-proxy"', html)
+                self.assertIn('id="task-https-proxy"', html)
+                self.assertIn('id="task-no-proxy"', html)
+                self.assertIn('id="task-proxy-editor"', html)
                 self.assertIn("selected-task-meta", html)
                 self.assertIn("selected-agent-info", html)
                 self.assertIn("backend-status", html)
@@ -2031,6 +2105,17 @@ class CliTests(unittest.TestCase):
                     root,
                     run_id,
                     {"sender": "browser", "target": "main", "to_agent": "main"},
+                    "/",
+                    "task-001",
+                )
+                self.assertTrue(handled)
+                self.assertIsNone(agent_message)
+                self.assertIn("AHA commands:", payload["message"]["message"])
+
+                handled, agent_message, payload = handle_slash_command(
+                    root,
+                    run_id,
+                    {"sender": "browser", "target": "main", "to_agent": "main"},
                     "/aha final",
                     "task-001",
                 )
@@ -2499,6 +2584,81 @@ class CliTests(unittest.TestCase):
         self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
         self.assertTrue(Path(env["PYTHONPATH"].split(os.pathsep)[0]).is_absolute())
 
+    def test_start_backend_applies_task_proxy_env_for_enabled_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "Backend proxy env",
+                    "--agents",
+                    "1",
+                    "--http-proxy",
+                    "http://127.0.0.1:7890",
+                    "--https-proxy",
+                    "http://127.0.0.1:7890",
+                    "--no-proxy",
+                    "localhost,127.0.0.1",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch.dict(os.environ, {"HTTP_PROXY": "http://outer", "NO_PROXY": "outer"}, clear=False),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["HTTP_PROXY"], "http://127.0.0.1:7890")
+        self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:7890")
+        self.assertEqual(env["NO_PROXY"], "localhost,127.0.0.1")
+        self.assertEqual(env["http_proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(env["https_proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(env["no_proxy"], "localhost,127.0.0.1")
+
+    def test_start_backend_clears_inherited_proxy_env_for_disabled_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "Backend no proxy env",
+                    "--agents",
+                    "1",
+                    "--http-proxy",
+                    "http://127.0.0.1:7890",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_agent_config(root / ".aha", run_id, "task-001", "main", proxy_enabled=False)
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"HTTP_PROXY": "http://outer", "HTTPS_PROXY": "http://outer", "NO_PROXY": "outer"},
+                        clear=False,
+                    ),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        self.assertNotIn("HTTP_PROXY", env)
+        self.assertNotIn("HTTPS_PROXY", env)
+        self.assertNotIn("NO_PROXY", env)
+        self.assertNotIn("http_proxy", env)
+
     def test_backend_activity_can_be_filtered_by_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2561,6 +2721,107 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(task["preferred_sandbox"], "workspace-write")
                 self.assertEqual(task["agents"][0]["sandbox"], "workspace-write")
                 self.assertEqual(task["agents"][0]["approval"], "never")
+
+    def test_task_proxy_config_and_agent_toggle_are_in_status_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "Proxy defaults",
+                    "--agents",
+                    "1",
+                    "--http-proxy",
+                    "http://127.0.0.1:7890",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                update_agent_config(root, run_id, "task-001", "sub-001", proxy_enabled=False)
+                task = update_task_proxy_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    proxy_enabled=False,
+                    http_proxy="http://127.0.0.1:8888",
+                    https_proxy="http://127.0.0.1:8888",
+                    no_proxy="localhost,127.0.0.1",
+                )
+                self.assertFalse(task["preferred_proxy_enabled"])
+
+                snapshot = status_snapshot(root, run_id)
+                task = snapshot["tasks"][0]
+                agents = {agent["id"]: agent for agent in task["agents"]}
+
+        self.assertEqual(task["preferred_http_proxy"], "http://127.0.0.1:8888")
+        self.assertEqual(task["preferred_https_proxy"], "http://127.0.0.1:8888")
+        self.assertEqual(task["preferred_no_proxy"], "localhost,127.0.0.1")
+        self.assertFalse(task["preferred_proxy_enabled"])
+        self.assertTrue(agents["main"]["proxy_enabled"])
+        self.assertFalse(agents["sub-001"]["proxy_enabled"])
+
+    def test_task_proxy_config_api_updates_existing_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Proxy API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-config",
+                        method="POST",
+                        payload={
+                            "task_id": "task-001",
+                            "proxy_enabled": True,
+                            "http_proxy": "http://proxy.local:8080",
+                            "https_proxy": "http://proxy.local:8080",
+                            "no_proxy": "localhost,127.0.0.1",
+                        },
+                    )
+                )
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["task"]["preferred_proxy_enabled"])
+        self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
+        self.assertEqual(body["task"]["preferred_no_proxy"], "localhost,127.0.0.1")
+
+    def test_task_proxy_action_api_updates_existing_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Proxy action API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/proxy",
+                        method="POST",
+                        payload={
+                            "proxy_enabled": True,
+                            "http_proxy": "http://proxy.local:8080",
+                            "https_proxy": "http://proxy.local:8080",
+                            "no_proxy": "localhost,127.0.0.1",
+                        },
+                    )
+                )
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["task"]["preferred_proxy_enabled"])
+        self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
 
     def test_task_hide_restore_and_soft_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
