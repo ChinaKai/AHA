@@ -300,6 +300,45 @@ def task_activity_status(task: dict) -> str:
     return "idle"
 
 
+def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict, backend_state: dict) -> bool:
+    task_id = str(task.get("id") or "")
+    agent_id = str(agent.get("id") or "main")
+    agent_status = str(agent.get("status") or "")
+    backend_process_status = str(backend_state.get("status") or "stopped").lower()
+    if not task_id or not agent_id or agent_status != "running" or backend_process_status != "stopped":
+        return False
+
+    updated_agent = set_agent_status(root, run_id, task_id, agent_id, "interrupted")
+    agent.update(updated_agent)
+
+    task_recovered = False
+    other_agent_running = any(
+        str(item.get("id") or "") != agent_id and str(item.get("status") or "") == "running"
+        for item in task.get("agents", [])
+    )
+    if str(task.get("status") or "") == "running" and not other_agent_running:
+        updated_task = set_task_status(root, run_id, task_id, "awaiting_user")
+        for field in ("status", "exit_code", "started_at", "finished_at"):
+            task[field] = updated_task.get(field)
+        task_recovered = True
+
+    append_event(
+        root,
+        run_id,
+        "agent_status_recovered",
+        {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "from_status": "running",
+            "status": "interrupted",
+            "reason": "backend_process_stopped",
+            "backend": {"status": backend_process_status, "pid": backend_state.get("pid")},
+            "task_recovered": task_recovered,
+        },
+    )
+    return True
+
+
 def web_status_snapshot(root: Path, run_id: str) -> dict:
     snapshot = status_snapshot(root, run_id)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
@@ -308,18 +347,19 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
     for task in snapshot.get("tasks", []):
         raw_task_id = str(task.get("id") or "")
         task_id = raw_task_id or None
-        current_status = str(task.get("status") or "pending")
-        outcome = current_status if current_status in TERMINAL_TASK_STATUSES else outcomes.get(raw_task_id, {}).get("status")
-        display_status = current_status if current_status in {"running", "awaiting_user"} else outcome or current_status
         for agent in task.get("agents", []):
             target = str(agent.get("id") or "main")
             key = (task_id, target)
             if key not in backend_cache:
                 backend_cache[key] = backend_status(root, run_id, target, task_id=task_id)
             state = backend_cache[key]
+            recover_stale_running_agent(root, run_id, task, agent, state)
             agent["backend_process_status"] = state.get("status") or "stopped"
             agent["backend_process_pid"] = state.get("pid")
             agent["backend_process_last_reply_at"] = state.get("last_reply_at")
+        current_status = str(task.get("status") or "pending")
+        outcome = current_status if current_status in TERMINAL_TASK_STATUSES else outcomes.get(raw_task_id, {}).get("status")
+        display_status = current_status if current_status in {"running", "awaiting_user"} else outcome or current_status
         task["current_status"] = current_status
         task["outcome_status"] = outcome
         task["activity_status"] = task_activity_status(task)

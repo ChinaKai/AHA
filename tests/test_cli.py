@@ -1642,6 +1642,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
 
+    def test_web_status_snapshot_recovers_stale_running_agent_after_backend_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Interrupted service restart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}):
+                    snapshot = web_status_snapshot(root, run_id)
+                persisted = task_snapshot(root, run_id, "task-001")["task"]
+                event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+        task = snapshot["tasks"][0]
+        agent = task["agents"][0]
+        self.assertEqual(task["status"], "awaiting_user")
+        self.assertEqual(task["current_status"], "awaiting_user")
+        self.assertEqual(task["display_status"], "awaiting_user")
+        self.assertEqual(task["activity_status"], "idle")
+        self.assertEqual(agent["status"], "interrupted")
+        self.assertEqual(agent["backend_process_status"], "stopped")
+
+        self.assertEqual(persisted["status"], "awaiting_user")
+        self.assertEqual(persisted["agents"][0]["status"], "interrupted")
+        self.assertIn("agent_status_recovered", event_log)
+
     def test_web_status_snapshot_keeps_outcome_during_active_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
