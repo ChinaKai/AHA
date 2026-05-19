@@ -104,10 +104,12 @@ Every task has a logical `main` agent. A task may have zero or more sub-agents:
 {
   "id": "sub-001",
   "role": "sub",
-  "backend": "codex",
+  "backend": "claude",
   "status": "pending"
 }
 ```
+
+The backend is stored per agent. Valid chat backends include `codex` and `claude`, so one task may contain agents backed by different providers.
 
 ## Task Assignment
 
@@ -159,6 +161,21 @@ If `task-main` needs sub-agents or must route follow-up work to an existing owne
 ```
 
 `spawn_sub` creates a new task-scoped sub-agent. `sandbox` and `approval` may be `null` to inherit the task defaults. `route_to_agent` sends a concrete follow-up message to an existing sub-agent and is used when ownership already belongs to that agent.
+
+`spawn_sub.backend` may explicitly choose the child agent backend:
+
+```json
+{
+  "type": "spawn_sub",
+  "title": "Check Claude-specific behavior",
+  "backend": "claude",
+  "sandbox": "read-only",
+  "approval": "never",
+  "reason": "independent cross-backend validation"
+}
+```
+
+When `backend` is omitted, AHA uses `preferred_sub_backend`, then `preferred_backend`, then `codex`. This allows a Codex task-main to start a Claude sub-agent, or a Claude task-main to start a Codex sub-agent. `route_to_agent` does not choose a new backend; it starts the target agent with that agent's stored backend.
 
 `record_task_update` writes a durable task journal row in:
 

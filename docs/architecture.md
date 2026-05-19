@@ -58,7 +58,7 @@ Important service responsibilities:
 
 ```text
 services/backend_runtime.py  managed backend processes and runtime locks
-services/chat.py             Codex chat loop and task finalization handling
+services/chat.py             backend chat loop and task finalization handling
 services/orchestrator.py     AHA action execution and sub-agent coordination
 services/proxy.py            task proxy normalization and backend env injection
 services/run_archive.py      run import/export archive format
@@ -132,6 +132,7 @@ Agent backends are valid choices for task-main and sub-agent sessions:
 ```text
 stub
 codex
+claude
 ```
 
 Runner backends execute tasks as batch jobs and are not valid task-main or sub-agent choices:
@@ -140,7 +141,16 @@ Runner backends execute tasks as batch jobs and are not valid task-main or sub-a
 command
 ```
 
-Managed chat backends are started through `services/backend_runtime.py`. In source checkouts the runtime launches `python -m aha_cli codex-chat ...`. In a one-bin zipapp it launches the current one-bin artifact instead, so a packaged dashboard does not require `aha_cli` to be installed as an importable Python module.
+Managed chat backends are started through `services/backend_runtime.py`. In source checkouts the runtime launches the backend-specific chat command, such as:
+
+```text
+python -m aha_cli codex-chat ...
+python -m aha_cli claude-chat ...
+```
+
+In a one-bin zipapp it launches the current one-bin artifact instead, so a packaged dashboard does not require `aha_cli` to be installed as an importable Python module. External backend CLIs such as `codex` and `claude` are still resolved from the target machine.
+
+Claude uses the same AHA task/session model as Codex. Its backend authentication and provider overrides may come from process environment variables or from `claude.env` in the AHA config. Secrets must not be written to task journals, exported documentation, or user-visible logs.
 
 ## Distribution And Portability
 
@@ -165,4 +175,4 @@ mark sessions as imported
 append a run_imported event
 ```
 
-`aha package onebin` builds a Python zipapp containing `aha_cli` and `web/static`. The artifact still stores data in `.aha/` or the selected `--home`, and still depends on external backend CLIs such as `codex`.
+`aha package onebin` builds a Python zipapp containing `aha_cli` and `web/static`. The artifact still stores data in `.aha/` or the selected `--home`, and still depends on external backend CLIs such as `codex` or `claude`.

@@ -48,6 +48,10 @@ sub-agent: sticky
 
 Backends that do not expose resumable sessions leave `backend_session_id` empty.
 
+`backend_session_id` stores the backend-native resumable session identifier. For Codex this is the Codex thread id. For Claude this is the Claude session id. The durable field stays backend-neutral so task and session storage do not need provider-specific columns.
+
+Some events still expose the backend-native id as `thread_id` for compatibility with older logs and UI replay code. Treat that event field as a legacy transport name, not as a Codex-only concept.
+
 Session files live beside the scope they belong to:
 
 ```text
@@ -70,19 +74,23 @@ Runtime files contain child process pid, command, sandbox, approval, log path, a
 
 ## Managed Backend Launch
 
-For source checkouts, a managed Codex chat backend is launched as:
+For source checkouts, managed chat backends are launched with backend-specific commands:
 
 ```text
 <python> -m aha_cli --home <aha-home> codex-chat <run-id> <agent-id> --task-id <task-id> ...
+<python> -m aha_cli --home <aha-home> claude-chat <run-id> <agent-id> --task-id <task-id> ...
 ```
 
 For a packaged one-bin zipapp, AHA launches the current artifact instead:
 
 ```text
 <python> <path-to-aha-onebin> --home <aha-home> codex-chat <run-id> <agent-id> --task-id <task-id> ...
+<python> <path-to-aha-onebin> --home <aha-home> claude-chat <run-id> <agent-id> --task-id <task-id> ...
 ```
 
-This keeps one-bin deployments from depending on an installed `aha_cli` Python module. External tools such as `codex` are still resolved from the target machine.
+This keeps one-bin deployments from depending on an installed `aha_cli` Python module. External tools such as `codex` and `claude` are still resolved from the target machine.
+
+Claude backend launches receive `ANTHROPIC_*` and `CLAUDE_*` variables from the process environment plus `claude.env` in the AHA config. Store only configuration shape in docs and logs; never persist real secret values in task-visible output.
 
 ## Imported Sessions
 
