@@ -139,6 +139,8 @@ const selectedTaskHttpProxyEl = document.getElementById("selected-task-http-prox
 const selectedTaskHttpsProxyEl = document.getElementById("selected-task-https-proxy");
 const selectedTaskNoProxyEl = document.getElementById("selected-task-no-proxy");
 const taskProxyStateEl = document.getElementById("task-proxy-state");
+const taskCreateConfirmDialogEl = document.getElementById("task-create-confirm");
+const taskCreateConfirmDetailsEl = document.getElementById("task-create-confirm-details");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
 const backendStatusEl = document.getElementById("backend-status");
 const pendingMessagesEl = document.getElementById("pending-messages");
@@ -2655,6 +2657,63 @@ function selectedWorkspaceId() {
   return option?.dataset.workspaceId || "";
 }
 
+function selectedWorkspaceLabel() {
+  if (!workspaceSelectEl) return "";
+  if (workspaceSelectEl.value === "__custom__") return selectedWorkspacePath();
+  const option = workspaceSelectEl.options[workspaceSelectEl.selectedIndex];
+  return option?.textContent || selectedWorkspacePath();
+}
+
+function addTaskConfirmRows(payload) {
+  const proxyConfigured = Boolean(payload.http_proxy || payload.https_proxy);
+  const proxyLabel = payload.proxy_enabled
+    ? `enabled${proxyConfigured ? ", configured" : ""}`
+    : proxyConfigured
+      ? "configured, disabled by default"
+      : "off";
+  return [
+    ["Run", currentRunId || "-"],
+    ["Title", payload.title],
+    ["Workspace", selectedWorkspaceLabel() || payload.workspace_path || payload.workspace_id || "-"],
+    ["Backend", `${payload.backend || "default"} / ${payload.model || "default"}`],
+    ["Sandbox", payload.sandbox || "-"],
+    ["Approval", payload.approval || "-"],
+    ["Delegation", payload.delegation_policy === "auto" ? `auto (${payload.max_sub_agents || 0})` : "off"],
+    ["Proxy", proxyLabel]
+  ];
+}
+
+function confirmAddTask(payload) {
+  const fallbackText = [
+    `Create task "${payload.title}"?`,
+    `Run: ${currentRunId || "-"}`,
+    `Workspace: ${selectedWorkspaceLabel() || payload.workspace_path || payload.workspace_id || "-"}`
+  ].join("\n");
+  if (!taskCreateConfirmDialogEl || typeof taskCreateConfirmDialogEl.showModal !== "function") {
+    return Promise.resolve(window.confirm(fallbackText));
+  }
+  if (taskCreateConfirmDetailsEl) {
+    taskCreateConfirmDetailsEl.innerHTML = addTaskConfirmRows(payload).map(([label, value]) => `
+      <div>
+        <dt>${escapeHtml(label)}</dt>
+        <dd>${escapeHtml(value || "-")}</dd>
+      </div>
+    `).join("");
+  }
+  if (taskCreateConfirmDialogEl.open) taskCreateConfirmDialogEl.close("cancel");
+  return new Promise(resolve => {
+    const onClose = () => resolve(taskCreateConfirmDialogEl.returnValue === "confirm");
+    taskCreateConfirmDialogEl.returnValue = "cancel";
+    taskCreateConfirmDialogEl.addEventListener("close", onClose, { once: true });
+    try {
+      taskCreateConfirmDialogEl.showModal();
+    } catch (_err) {
+      taskCreateConfirmDialogEl.removeEventListener("close", onClose);
+      resolve(window.confirm(fallbackText));
+    }
+  });
+}
+
 function renderConversationFilters() {
   if (!conversationFiltersEl) return;
   conversationFiltersEl.classList.toggle("hidden", activeTab !== "conversation");
@@ -3018,27 +3077,30 @@ document.getElementById("task-form").addEventListener("submit", async event => {
   const createHttpProxy = taskHttpProxyEl?.value.trim() || "";
   const createHttpsProxy = taskHttpsProxyEl?.value.trim() || "";
   const createProxyEnabled = Boolean(taskProxyEnabledEl?.checked);
+  const payload = {
+    title,
+    backend: taskBackendEl.value,
+    model: taskModelEl.value || null,
+    sandbox: taskSandboxEl.value,
+    approval: taskApprovalEl.value,
+    proxy_enabled: createProxyEnabled,
+    http_proxy: createHttpProxy,
+    https_proxy: createHttpsProxy,
+    no_proxy: (createProxyEnabled || createHttpProxy || createHttpsProxy) ? (taskNoProxyEl?.value.trim() || "") : "",
+    workspace_id: selectedWorkspaceId(),
+    workspace_path: selectedWorkspacePath(),
+    delegation_policy: delegationPolicy,
+    max_sub_agents: delegationPolicy === "auto" ? Number(maxSubAgentsEl?.value || "0") : 0,
+    preferred_sub_backend: taskBackendEl.value,
+    dispatch: true
+  };
+  const confirmed = await confirmAddTask(payload);
+  if (!confirmed) return;
   try {
     await fetchJson(apiUrl("/api/tasks"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(runScopedPayload({
-        title,
-        backend: taskBackendEl.value,
-        model: taskModelEl.value || null,
-        sandbox: taskSandboxEl.value,
-        approval: taskApprovalEl.value,
-        proxy_enabled: createProxyEnabled,
-        http_proxy: createHttpProxy,
-        https_proxy: createHttpsProxy,
-        no_proxy: (createProxyEnabled || createHttpProxy || createHttpsProxy) ? (taskNoProxyEl?.value.trim() || "") : "",
-        workspace_id: selectedWorkspaceId(),
-        workspace_path: selectedWorkspacePath(),
-        delegation_policy: delegationPolicy,
-        max_sub_agents: delegationPolicy === "auto" ? Number(maxSubAgentsEl?.value || "0") : 0,
-        preferred_sub_backend: taskBackendEl.value,
-        dispatch: true
-      }))
+      body: JSON.stringify(runScopedPayload(payload))
     }, "Failed to create task");
     document.getElementById("new-task-title").value = "";
     await loadStatus();
