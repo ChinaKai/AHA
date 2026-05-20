@@ -146,11 +146,25 @@ def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
     return len(parts) > index + 1 and parts[index + 1] == task_id
 
 
+def _process_matches_home(parts: list[str], root: Path) -> bool:
+    if "--home" not in parts:
+        return False
+    index = parts.index("--home")
+    if len(parts) <= index + 1:
+        return False
+    try:
+        process_home = Path(parts[index + 1]).expanduser().resolve()
+        expected_home = root.expanduser().resolve()
+    except OSError:
+        return False
+    return process_home == expected_home
+
+
 def _backend_name_from_state(state: dict, fallback: str = "unknown") -> str:
     return str(state.get("backend") or fallback)
 
 
-def _discover_backend_process(run_id: str, target: str, task_id: str | None = None) -> tuple[int, str] | None:
+def _discover_backend_process(root: Path, run_id: str, target: str, task_id: str | None = None) -> tuple[int, str] | None:
     proc = Path("/proc")
     if not proc.is_dir():
         return None
@@ -175,6 +189,7 @@ def _discover_backend_process(run_id: str, target: str, task_id: str | None = No
             and parts[index + 1] == run_id
             and parts[index + 2] == target
             and _process_matches_task(parts, task_id)
+            and _process_matches_home(parts, root)
             and pid_is_running(pid)
         ):
             return pid, chat_commands[0]
@@ -191,7 +206,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     managed = bool(state.get("managed")) if state else False
     running = pid_is_running(pid)
     discovered_backend = None
-    discovered = None if running else _discover_backend_process(run_id, target, task_id)
+    discovered = None if running else _discover_backend_process(root, run_id, target, task_id)
     if discovered:
         pid, discovered_backend = discovered
         running = True

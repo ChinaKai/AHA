@@ -25,7 +25,7 @@ from aha_cli.backends.registry import agent_backend_names, agent_backends, backe
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
-from aha_cli.services.backend_runtime import backend_status, start_backend, stop_task_backends
+from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
 from aha_cli.services.orchestrator import (
     action_response_text,
     execute_actions,
@@ -3116,6 +3116,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status["backend"], "claude-chat")
         self.assertEqual(status["status"], "running")
         self.assertEqual(status["pid"], 4242)
+
+    def test_backend_process_home_matching_rejects_other_aha_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current_home = root / "current" / ".aha"
+            other_home = root / "other" / ".aha"
+            current_home.mkdir(parents=True)
+            other_home.mkdir(parents=True)
+            parts = [
+                sys.executable,
+                "-m",
+                "aha_cli",
+                "--home",
+                str(other_home),
+                "claude-chat",
+                "run-001",
+                "main",
+                "--task-id",
+                "task-024",
+            ]
+
+            self.assertFalse(_process_matches_home(parts, current_home))
+            parts[parts.index("--home") + 1] = str(current_home)
+            self.assertTrue(_process_matches_home(parts, current_home))
 
     def test_start_backend_injects_claude_env_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
