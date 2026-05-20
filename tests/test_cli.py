@@ -20,11 +20,11 @@ import urllib.request
 from unittest import mock
 
 from aha_cli.backends.claude import build_claude_exec_command, claude_permission_mode, handle_claude_event, run_claude_exec
-from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event
+from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message
 from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
-from aha_cli.services.chat import chat_offset_path, chat_prompt, load_chat_offset, save_chat_offset, status_from_agent_result
+from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
 from aha_cli.services.orchestrator import (
     action_response_text,
@@ -559,6 +559,38 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("internal.local", prompt)
         self.assertIn("'preferred_http_proxy': '<set>'", prompt)
 
+    def test_chat_prompt_with_metrics_reports_sizes_without_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Prompt metrics", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "old-event"})
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "super-secret-user-text",
+                        "task_id": "task-001",
+                        "role": "main",
+                    },
+                    "prefix",
+                )
+
+        metrics_json = json.dumps(metrics, ensure_ascii=False)
+        self.assertEqual(metrics["total"]["chars"], len(prompt))
+        self.assertEqual(metrics["components"]["user_message"]["chars"], len("super-secret-user-text"))
+        self.assertGreater(metrics["components"]["status_snapshot"]["chars"], 0)
+        self.assertGreater(metrics["components"]["recent_events"]["chars"], 0)
+        self.assertGreater(metrics["components"]["task_context"]["chars"], 0)
+        self.assertNotIn("super-secret-user-text", metrics_json)
+        self.assertNotIn("old-event", metrics_json)
+
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
             codex_bin="codex",
@@ -599,6 +631,24 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rows[1]["data"]["command"], "pwd")
             self.assertEqual(rows[1]["data"]["target"], "sub-001")
             self.assertEqual(len(rows[1]["data"]["output_tail"]), 1200)
+
+    def test_codex_context_overflow_event_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            handle_codex_event(
+                json.dumps({"type": "error", "message": "Codex ran out of room in the model's context window."}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="codex-chat",
+                target="main",
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(is_context_overflow_message("prompt is too long: context length exceeded"))
+        self.assertFalse(is_context_overflow_message("authentication failed"))
+        self.assertEqual([row["type"] for row in rows], ["agent_error", "agent_context_overflow"])
+        self.assertEqual(rows[1]["data"]["reason"], "context_window")
 
     def test_claude_permission_mode_maps_sandbox(self) -> None:
         self.assertEqual(claude_permission_mode("research", "read-only"), "plan")
@@ -679,6 +729,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rows[2]["data"]["command"], "pwd")
         self.assertEqual(rows[3]["data"]["output_tail"], "ok")
         self.assertEqual(rows[4]["data"]["usage"]["input_tokens"], 1)
+
+    def test_claude_context_overflow_event_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            handle_claude_event(
+                json.dumps({"type": "error", "message": "prompt is too long: context length exceeded"}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([row["type"] for row in rows], ["agent_error", "agent_context_overflow"])
+        self.assertEqual(rows[1]["data"]["reason"], "context_window")
 
     def test_plan_run_merge_with_stub_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -940,6 +1006,30 @@ class CliTests(unittest.TestCase):
                 self.assertIn("message task=task-001 main -> browser: 真实回复", watch_output)
                 self.assertIn("task_status_changed", watch_output)
                 self.assertNotIn("task_result_written", watch_output)
+
+    def test_codex_chat_records_prompt_metrics_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Codex prompt metrics", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "measure prompt", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+
+        metrics_events = [row for row in rows if row["type"] == "agent_prompt_metrics"]
+        self.assertEqual(code, 0)
+        self.assertEqual(len(metrics_events), 1)
+        metrics = metrics_events[0]["data"]
+        self.assertEqual(metrics["source"], "codex-chat")
+        self.assertEqual(metrics["task_id"], "task-001")
+        self.assertGreater(metrics["total"]["chars"], 0)
+        self.assertGreater(metrics["components"]["status_snapshot"]["chars"], 0)
+        self.assertGreater(metrics["components"]["task_context"]["chars"], 0)
 
     def test_agent_command_does_not_write_task_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2906,6 +2996,18 @@ class CliTests(unittest.TestCase):
         self.assertIn("body.empty-run .sidebar", styles)
         self.assertIn("bootstrap-panel", styles)
         self.assertIn("bootstrap-proxy", styles)
+
+    def test_frontend_renders_prompt_metrics_visualization(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("agent_prompt_metrics", script)
+        self.assertIn("agent_context_overflow", script)
+        self.assertIn("renderPromptMetricsPanel", script)
+        self.assertIn("prompt-component-bars", script)
+        self.assertIn("prompt-metrics", styles)
+        self.assertIn("prompt-component-track", styles)
 
     def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

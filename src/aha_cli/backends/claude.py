@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import sys
 
-from aha_cli.backends.codex import tail_text
+from aha_cli.backends.codex import is_context_overflow_message, tail_text
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
@@ -126,6 +126,8 @@ def handle_claude_event(
     elif raw_type == "error":
         data["message"] = event.get("message") or event.get("error") or ""
         append_event_to_file(events_file, run_id, "agent_error", data)
+        if is_context_overflow_message(data["message"]):
+            append_event_to_file(events_file, run_id, "agent_context_overflow", data | {"reason": "context_window"})
     elif raw_type == "assistant":
         message = event.get("message") if isinstance(event.get("message"), dict) else event
         for item in _content_items(message):

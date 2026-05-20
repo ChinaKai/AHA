@@ -122,6 +122,44 @@ def redact_proxy_fields_for_prompt(value):
     return value
 
 
+def _text_metrics(value) -> dict:
+    text = "" if value is None else str(value)
+    return {
+        "chars": len(text),
+        "bytes": len(text.encode("utf-8")),
+        "lines": text.count("\n") + 1 if text else 0,
+    }
+
+
+def _fill_prompt_metrics(
+    metrics: dict | None,
+    prompt: str,
+    *,
+    target: str,
+    item: dict,
+    components: dict,
+    is_finalization: bool,
+    is_agent_command: bool,
+    event_limit: int | None = None,
+) -> None:
+    if metrics is None:
+        return
+    metrics.clear()
+    metrics.update(
+        {
+            "target": target,
+            "task_id": item.get("task_id"),
+            "sender": item.get("sender"),
+            "is_finalization": is_finalization,
+            "is_agent_command": is_agent_command,
+            "total": _text_metrics(prompt),
+            "components": {name: _text_metrics(value) for name, value in components.items()},
+        }
+    )
+    if event_limit is not None:
+        metrics["event_limit"] = event_limit
+
+
 def auto_reply(root: Path, run_id: str, args) -> int:
     require_plan(root, run_id)
     inbox = inbox_path(root, run_id, args.target)
@@ -168,11 +206,22 @@ def auto_reply(root: Path, run_id: str, args) -> int:
         return 130
 
 
-def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -> str:
+def chat_prompt_with_metrics(root: Path, run_id: str, target: str, item: dict, prefix: str) -> tuple[str, dict]:
+    metrics: dict = {}
+    prompt = chat_prompt(root, run_id, target, item, prefix, metrics=metrics)
+    return prompt, metrics
+
+
+def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *, metrics: dict | None = None) -> str:
     plan = require_plan(root, run_id)
     task_id = item.get("task_id")
     is_finalization = item.get("result_policy") == "finalize"
     is_agent_command = item.get("command_namespace") == "agent"
+    components: dict = {
+        "prefix": prefix,
+        "run_goal": plan.get("goal", ""),
+        "user_message": item.get("message", ""),
+    }
     task_context = ""
     if task_id:
         try:
@@ -182,7 +231,28 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
             if is_agent_command:
                 command = str(item.get("message", "") or "")
                 original_command = str(item.get("original_command", "") or "")
-                return textwrap.dedent(
+                agent_metadata = textwrap.dedent(
+                    f"""\
+                    - task_id: {task_id}
+                    - task_title: {task.get("title", "")}
+                    - agent_id: {target}
+                    - role: {(agent or {}).get("role") or item.get("role", "")}
+                    - backend: {(agent or {}).get("backend") or task.get("preferred_backend") or "codex"}
+                    - model: {(agent or {}).get("model") or task.get("preferred_model") or "default"}
+                    - workspace: {(agent or {}).get("workspace_path") or task.get("workspace_path") or "-"}
+                    - sandbox: {(agent or {}).get("sandbox") or task.get("preferred_sandbox") or "-"}
+                    - approval: {(agent or {}).get("approval") or task.get("preferred_approval") or "-"}
+                    """
+                ).rstrip()
+                agent_metadata_prompt = textwrap.indent(agent_metadata, "                    ")
+                components.update(
+                    {
+                        "agent_command": command,
+                        "original_agent_command": original_command,
+                        "agent_metadata": agent_metadata,
+                    }
+                )
+                prompt = textwrap.dedent(
                     f"""\
                     {prefix}
 
@@ -195,15 +265,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
                     - routed: {command}
 
                     Agent metadata:
-                    - task_id: {task_id}
-                    - task_title: {task.get("title", "")}
-                    - agent_id: {target}
-                    - role: {(agent or {}).get("role") or item.get("role", "")}
-                    - backend: {(agent or {}).get("backend") or task.get("preferred_backend") or "codex"}
-                    - model: {(agent or {}).get("model") or task.get("preferred_model") or "default"}
-                    - workspace: {(agent or {}).get("workspace_path") or task.get("workspace_path") or "-"}
-                    - sandbox: {(agent or {}).get("sandbox") or task.get("preferred_sandbox") or "-"}
-                    - approval: {(agent or {}).get("approval") or task.get("preferred_approval") or "-"}
+{agent_metadata_prompt}
 
                     Command semantics:
                     - /status: report this agent's runtime/session metadata only.
@@ -213,6 +275,16 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
                     Keep the reply concise and use the user's language.
                     """
                 )
+                _fill_prompt_metrics(
+                    metrics,
+                    prompt,
+                    target=target,
+                    item=item,
+                    components=components,
+                    is_finalization=is_finalization,
+                    is_agent_command=is_agent_command,
+                )
+                return prompt
             existing_final = detail.get("result", "").strip()
             final_context = ""
             if is_finalization and existing_final:
@@ -228,6 +300,13 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
                     )
                 journal_context = textwrap.indent("\n".join(journal_lines), "                ")
             commit_policy = textwrap.indent(commit_message_policy_prompt(task_id, target).rstrip(), "                ")
+            components.update(
+                {
+                    "task_agents": detail["task"].get("agents", []),
+                    "task_journal": journal_context,
+                    "commit_policy": commit_policy,
+                }
+            )
             task_context = textwrap.dedent(
                 f"""\
                 Current task context:
@@ -257,8 +336,10 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
 {commit_policy}
                 """
             )
+            components["task_context"] = task_context
         except KeyError:
             task_context = f"Current task context: task_id={task_id} was referenced but not found.\n"
+            components["task_context"] = task_context
     event_limit = 80 if is_finalization else 20
     events = recent_run_events(root, run_id, event_limit)
     recent = "\n".join(format_event(event) for event in events) or "(no events)"
@@ -270,7 +351,15 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
         if is_finalization
         else "Reply directly to the user. Keep the answer concise and use the user's language."
     )
-    return textwrap.dedent(
+    components.update(
+        {
+            "mode_instruction": mode_instruction,
+            "status_snapshot": status,
+            "recent_events": recent,
+            "task_context": task_context or "Current task context: none",
+        }
+    )
+    prompt = textwrap.dedent(
         f"""\
         {prefix}
 
@@ -293,6 +382,17 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str) -
         {item.get("message", "")}
         """
     )
+    _fill_prompt_metrics(
+        metrics,
+        prompt,
+        target=target,
+        item=item,
+        components=components,
+        is_finalization=is_finalization,
+        is_agent_command=is_agent_command,
+        event_limit=event_limit,
+    )
+    return prompt
 
 
 def codex_chat(root: Path, run_id: str, args) -> int:
@@ -435,7 +535,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     },
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task)
-                prompt = chat_prompt(root, run_id, args.target, item, args.prompt_prefix)
+                prompt, prompt_metrics = chat_prompt_with_metrics(root, run_id, args.target, item, args.prompt_prefix)
+                append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
                 model = args.model or (agent or {}).get("model") or task.get("preferred_model") or session.get("model")
                 if backend_name == "claude":
                     exit_code, reply, session = run_claude_exec(

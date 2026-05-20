@@ -11,12 +11,25 @@ from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
 OUTPUT_TAIL_LIMIT = 1200
+CONTEXT_OVERFLOW_MARKERS = (
+    "context window",
+    "context length",
+    "out of room",
+    "maximum context",
+    "too many tokens",
+    "prompt is too long",
+)
 
 
 def tail_text(value: str, limit: int = OUTPUT_TAIL_LIMIT) -> str:
     if len(value) <= limit:
         return value
     return value[-limit:]
+
+
+def is_context_overflow_message(message: object) -> bool:
+    text = str(message or "").casefold()
+    return any(marker in text for marker in CONTEXT_OVERFLOW_MARKERS)
 
 
 def codex_sandbox(mode: str, requested: str) -> str:
@@ -54,6 +67,8 @@ def handle_codex_event(
     elif raw_type == "error":
         data["message"] = event.get("message", "")
         append_event_to_file(events_file, run_id, "agent_error", data)
+        if is_context_overflow_message(data["message"]):
+            append_event_to_file(events_file, run_id, "agent_context_overflow", data | {"reason": "context_window"})
     elif raw_type == "turn.completed":
         data["usage"] = event.get("usage", {})
         append_event_to_file(events_file, run_id, "agent_usage", data)

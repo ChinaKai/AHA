@@ -235,21 +235,30 @@ async function copyTimelineMessage(button) {
   const key = button.dataset.copyMessageKey || "";
   const text = copyTextByKey.get(key) || "";
   if (!text) return;
-  const original = button.textContent || "Copy";
+  const originalLabel = button.getAttribute("aria-label") || "Copy message";
+  const label = button.querySelector(".message-copy-label");
+  const setState = (state, textLabel) => {
+    button.dataset.copyState = state;
+    button.setAttribute("aria-label", textLabel);
+    button.title = textLabel;
+    if (label) label.textContent = textLabel;
+  };
   button.disabled = true;
+  setState("copying", "Copying");
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
     } else if (!fallbackCopyText(text)) {
       throw new Error("copy failed");
     }
-    button.textContent = "Copied";
+    setState("copied", "Copied");
   } catch (_err) {
-    button.textContent = fallbackCopyText(text) ? "Copied" : "Copy failed";
+    const copied = fallbackCopyText(text);
+    setState(copied ? "copied" : "failed", copied ? "Copied" : "Copy failed");
   } finally {
     window.setTimeout(() => {
       button.disabled = false;
-      button.textContent = original;
+      setState("idle", originalLabel);
     }, 1200);
   }
 }
@@ -1448,8 +1457,10 @@ const timelineEventTypes = new Set([
   "agent_command_started",
   "agent_command_finished",
   "agent_message",
+  "agent_prompt_metrics",
   "agent_usage",
   "agent_error",
+  "agent_context_overflow",
   "agent_delegated",
   "agent_message_routed",
   "sub_agent_reported",
@@ -1580,7 +1591,7 @@ function dedupedConversationEvents(taskId) {
 function conversationEventCategory(event) {
   const data = eventData(event);
   if (event.type === "agent_message") return "chat";
-  if (event.type === "agent_usage") return "usage";
+  if (event.type === "agent_usage" || event.type === "agent_prompt_metrics") return "usage";
   if (event.type === "agent_command_started" || event.type === "agent_command_finished") return "commands";
   if (event.type === "message") return "chat";
   return "runtime";
@@ -1596,6 +1607,118 @@ function conversationFilterCounts(taskId) {
     counts[conversationEventCategory(event)] += 1;
   }
   return counts;
+}
+
+function promptMetricCandidateEvents(taskId, target = backendTarget()) {
+  const candidates = [...conversationSourceEvents(taskId), ...taskEvents(taskId)];
+  const seen = new Set();
+  return candidates
+    .filter(event => isTaskEvent(event, taskId) && eventMatchesAgent(event, target))
+    .filter(event => {
+      const id = eventIdentity(event);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .sort((left, right) => conversationEventOrder(left) - conversationEventOrder(right));
+}
+
+function latestPromptMetricsEvent(taskId, target = backendTarget()) {
+  const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_prompt_metrics");
+  return events.length ? events[events.length - 1] : null;
+}
+
+function latestContextOverflowEvent(taskId, target = backendTarget()) {
+  const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_context_overflow");
+  return events.length ? events[events.length - 1] : null;
+}
+
+function formatMetricNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "0";
+  return new Intl.NumberFormat("en-US").format(number);
+}
+
+function formatMetricBytes(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return "0 B";
+  if (number < 1024) return `${formatMetricNumber(number)} B`;
+  if (number < 1024 * 1024) return `${(number / 1024).toFixed(1)} KB`;
+  return `${(number / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function componentMetricRows(components, totalChars) {
+  return Object.entries(components || {})
+    .map(([name, metric]) => ({
+      name,
+      chars: Number(metric?.chars || 0),
+      bytes: Number(metric?.bytes || 0),
+      lines: Number(metric?.lines || 0)
+    }))
+    .sort((left, right) => right.chars - left.chars)
+    .map(item => {
+      const percent = totalChars > 0 ? Math.min(100, Math.max(0, item.chars / totalChars * 100)) : 0;
+      return { ...item, percent };
+    });
+}
+
+function renderPromptMetricsPanel(taskId) {
+  const metricsEvent = latestPromptMetricsEvent(taskId);
+  const overflowEvent = latestContextOverflowEvent(taskId);
+  if (!metricsEvent && !overflowEvent) {
+    return `
+      <section class="prompt-metrics empty-metrics">
+        <div>
+          <span>Prompt Input</span>
+          <strong>No metrics yet</strong>
+        </div>
+        <code>send a message after the metrics build is running</code>
+      </section>
+    `;
+  }
+
+  const data = eventData(metricsEvent || {});
+  const total = data.total || {};
+  const totalChars = Number(total.chars || 0);
+  const rows = componentMetricRows(data.components || {}, totalChars);
+  const largest = rows[0];
+  const overflow = Boolean(overflowEvent && (!metricsEvent || conversationEventOrder(overflowEvent) >= conversationEventOrder(metricsEvent)));
+  const statusLabel = overflow ? "overflow" : "latest";
+  const statusClass = overflow ? "prompt-overflow" : "prompt-ok";
+  const source = data.source || eventData(overflowEvent || {}).source || "backend";
+  const parts = [
+    `${formatMetricNumber(totalChars)} chars`,
+    `${formatMetricBytes(total.bytes)} bytes`,
+    `${formatMetricNumber(total.lines)} lines`,
+    data.event_limit ? `${formatMetricNumber(data.event_limit)} events` : ""
+  ].filter(Boolean);
+  const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
+  return `
+    <section class="prompt-metrics ${overflow ? "has-overflow" : ""}">
+      <div class="prompt-metrics-head">
+        <div>
+          <span>Prompt Input</span>
+          <strong>${escapeHtml(parts[0] || "0 chars")}</strong>
+          <code>${escapeHtml([source, topLabel].filter(Boolean).join(" · "))}</code>
+        </div>
+        <span class="status ${statusClass}">${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="prompt-metric-kpis">
+        ${parts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+      </div>
+      <div class="prompt-component-bars">
+        ${rows.map(row => `
+          <div class="prompt-component-row">
+            <span>${escapeHtml(row.name)}</span>
+            <div class="prompt-component-track" aria-hidden="true">
+              <i style="width: ${row.percent.toFixed(2)}%"></i>
+            </div>
+            <code>${escapeHtml(formatMetricNumber(row.chars))}</code>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
 }
 
 function parseTimestamp(value) {
@@ -2912,10 +3035,11 @@ function renderConversation(taskId) {
     return `<div class="empty">Conversation unavailable. Realtime updates will start from the latest event offset.<br><code>${escapeHtml(state.error)}</code></div>`;
   }
   const events = taskConversationEvents(taskId);
-  if (!events.length && !state.hasMore) return `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
+  const metrics = renderPromptMetricsPanel(taskId);
+  if (!events.length && !state.hasMore) return `${metrics}<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
   const older = state.hasMore ? `<button class="load-older" type="button" data-load-older="true">${state.loading ? "Loading..." : "Load older"}</button>` : "";
   const timer = renderTurnTimer(taskId);
-  return `<div class="conversation timeline">${older}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
+  return `<div class="conversation timeline">${metrics}${older}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
 }
 
 function renderTimelineEvent(event) {
@@ -2945,6 +3069,20 @@ function renderTimelineEvent(event) {
       "usage",
       eventTimeLabel(event)
     );
+  }
+  if (event.type === "agent_prompt_metrics") {
+    const total = data.total || {};
+    const rows = componentMetricRows(data.components || {}, Number(total.chars || 0));
+    const top = rows[0]?.name ? ` top=${rows[0].name}:${rows[0].chars}` : "";
+    return renderTimelineStatus(
+      "prompt metrics",
+      `chars=${total.chars ?? "-"} bytes=${total.bytes ?? "-"} lines=${total.lines ?? "-"}${top}`,
+      "usage",
+      eventTimeLabel(event)
+    );
+  }
+  if (event.type === "agent_context_overflow") {
+    return renderTimelineStatus("context overflow", data.message || data.reason || "context_window", "failed", eventTimeLabel(event));
   }
   const ts = eventTimeLabel(event);
   if (event.type === "task_status_changed") return renderTimelineStatus(`task ${data.status}`, `exit=${data.exit_code ?? "-"}`, data.status, ts);
@@ -3005,7 +3143,7 @@ function renderTimelineCard(title, body, ts, cls, key = "") {
   const copyKey = String(key || "");
   if (copyKey) copyTextByKey.set(copyKey, String(body || ""));
   const copyButton = copyKey
-    ? `<button class="message-copy" type="button" data-copy-message-key="${escapeHtml(copyKey)}" title="Copy message">Copy</button>`
+    ? `<button class="message-copy" type="button" data-copy-message-key="${escapeHtml(copyKey)}" data-copy-state="idle" title="Copy message" aria-label="Copy message"><span class="message-copy-icon" aria-hidden="true"></span><span class="message-copy-label sr-only">Copy message</span></button>`
     : "";
   return `
     <div class="message ${cls}">
