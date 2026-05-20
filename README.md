@@ -461,6 +461,19 @@ The artifact includes the CLI modules and dashboard static files. It still uses 
 
 When the one-bin dashboard autostarts a backend, AHA launches the child backend through the same one-bin artifact instead of requiring `python -m aha_cli` to be importable on the target machine. External backend commands such as `codex` still need to be installed and authenticated separately.
 
+Install the one-bin artifact into `~/.local/bin/aha` and enable the dashboard as a user systemd service:
+
+```bash
+scripts/install_user_service.sh
+```
+
+By default the service runs `aha --home ~/.aha ui --host 0.0.0.0 --port 8788`. The script enables `aha.service`, starts or restarts it immediately, and tries to enable user lingering for boot-time startup. Override the defaults when needed:
+
+```bash
+scripts/install_user_service.sh --port 8788 --run-id <run-id>
+systemctl --user status aha.service
+```
+
 ## Why This Exists
 
 The CLI captures the multi-agent project-manager pattern:
