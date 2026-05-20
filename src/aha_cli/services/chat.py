@@ -52,7 +52,6 @@ BLOCKED_REPLY_MARKERS = (
     "只读沙箱",
     "writing is blocked",
     "写入被拦截",
-    "写入失败",
     "文件没有落盘",
     "permission denied",
     "Permission denied",
