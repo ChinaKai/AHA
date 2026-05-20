@@ -32,9 +32,11 @@ from aha_cli.store.filesystem import (
     conversation_events_page,
     create_plan,
     delete_task,
+    event_agent_refs,
     event_path,
     event_stream_page,
     event_stream_position,
+    event_task_id,
     inbox_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
@@ -53,6 +55,7 @@ from aha_cli.store.filesystem import (
     set_agent_status,
     set_task_status,
     set_task_hidden,
+    session_path,
     status_snapshot,
     task_context_snapshot,
     task_final_snapshot,
@@ -72,6 +75,63 @@ APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
+
+
+def backend_session_jsonl_info(session: dict) -> dict:
+    session_id = str(session.get("backend_session_id") or "").strip()
+    backend = str(session.get("backend") or "").strip()
+    if not session_id:
+        return {"id": "", "backend": backend, "path": "", "size_bytes": None, "exists": False}
+
+    candidates: list[Path] = []
+    home = Path.home()
+    if backend == "claude":
+        candidates.extend((home / ".claude" / "projects").glob(f"*/*{session_id}.jsonl"))
+    else:
+        candidates.extend((home / ".codex" / "sessions").glob(f"**/*{session_id}.jsonl"))
+
+    path = candidates[0] if candidates else None
+    if not path or not path.exists():
+        return {"id": session_id, "backend": backend, "path": "", "size_bytes": None, "exists": False}
+    try:
+        stat = path.stat()
+    except OSError:
+        return {"id": session_id, "backend": backend, "path": str(path), "size_bytes": None, "exists": False}
+    return {
+        "id": session_id,
+        "backend": backend,
+        "path": str(path),
+        "size_bytes": stat.st_size,
+        "modified_at": stat.st_mtime,
+        "exists": True,
+    }
+
+
+def conversation_turn_events(root: Path, run_id: str, task_id: str, target: str, limit: int = 500) -> list[dict]:
+    events_file = event_path(root, run_id)
+    events: list[dict] = []
+    safe_limit = max(1, min(limit, 2000))
+    target = target or "main"
+    for offset, event in iter_jsonl_reverse(events_file) or ():
+        if (
+            str(event.get("type") or "") in {
+                "agent_started",
+                "agent_prompt_metrics",
+                "agent_usage",
+                "agent_context_overflow",
+                "agent_thread",
+                "agent_finished",
+                "agent_status_changed",
+            }
+            and event_task_id(event) == task_id
+            and target in event_agent_refs(event)
+        ):
+            item = dict(event)
+            item["_cursor"] = offset
+            events.append(item)
+            if event.get("type") == "agent_started" or len(events) >= safe_limit:
+                break
+    return list(reversed(events))
 
 
 def parse_optional_bool(value: object, field_name: str) -> bool:
@@ -150,6 +210,9 @@ def conversation_view_page(
     view = dict(page)
     view["events"] = events
     view["count"] = len(events)
+    view["turn_events"] = conversation_turn_events(root, run_id, task_id, target) if before is None else []
+    session_file = session_path(root, run_id, task_id, target)
+    view["backend_session"] = backend_session_jsonl_info(read_json(session_file)) if session_file.exists() else {}
     return view
 TASK_OUTCOME_SCAN_LIMIT = 10000
 

@@ -2377,6 +2377,48 @@ class CliTests(unittest.TestCase):
         self.assertNotIn(action_envelope, timeline_texts)
         self.assertFalse(any('"actions"' in text and '"response"' in text for text in timeline_texts))
 
+    def test_conversation_events_api_restores_latest_turn_metrics_outside_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Conversation prompt metrics", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "agent_started", {"task_id": "task-001", "target": "main", "sender": "browser"})
+                append_event(
+                    root,
+                    run_id,
+                    "agent_prompt_metrics",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "source": "codex-chat",
+                        "total": {"chars": 1234, "bytes": 1234, "lines": 12},
+                        "components": {"status_snapshot": {"chars": 1000, "bytes": 1000, "lines": 1}},
+                    },
+                )
+                append_event(root, run_id, "agent_thread", {"task_id": "task-001", "target": "main", "thread_id": "thread-1"})
+                append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
+                append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+                for index in range(10):
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_command_finished",
+                        {"task_id": "task-001", "target": "main", "command": f"cmd-{index}", "exit_code": 0},
+                    )
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=5"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertNotIn("agent_prompt_metrics", [event["type"] for event in body["events"]])
+        turn_event_types = [event["type"] for event in body["turn_events"]]
+        self.assertEqual(turn_event_types, ["agent_started", "agent_prompt_metrics", "agent_thread", "agent_usage", "agent_finished"])
+        metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
+        self.assertEqual(metrics["data"]["total"]["chars"], 1234)
+
     def test_events_api_replays_from_saved_offset_after_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

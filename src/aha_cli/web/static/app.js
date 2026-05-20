@@ -51,6 +51,7 @@ let lastRealtimeFallbackPollAt = 0;
 let realtimeDebugSeq = 0;
 let deferredPanelRender = false;
 let deferredPanelRenderTimer = 0;
+let openPromptMetricsKey = "";
 const allEvents = [];
 const seenRealtimeEvents = new Set();
 const pendingMessages = [];
@@ -202,6 +203,82 @@ function renderPanelForRealtime(options = {}) {
   deferredPanelRender = false;
   renderPanel(options);
   return true;
+}
+
+function activePromptMetricsPopover() {
+  return panelEl.querySelector(".turn-metrics[open] .turn-metrics-popover");
+}
+
+function activePromptMetricsTrigger() {
+  return panelEl.querySelector(".turn-metrics[open] .turn-metrics-trigger");
+}
+
+function closePromptMetricsPopover() {
+  openPromptMetricsKey = "";
+  panelEl.querySelectorAll(".turn-metrics[open]").forEach(details => {
+    if (details instanceof HTMLDetailsElement) details.open = false;
+  });
+}
+
+function targetInsidePromptMetrics(target) {
+  const element = target instanceof Element ? target : null;
+  return Boolean(element?.closest?.(".turn-metrics"));
+}
+
+function closePromptMetricsPopoverForOutsideEvent(event) {
+  if (!openPromptMetricsKey) return;
+  if (targetInsidePromptMetrics(event.target)) return;
+  closePromptMetricsPopover();
+}
+
+function capturePromptMetricsPopoverState() {
+  const popover = activePromptMetricsPopover();
+  if (!popover) return null;
+  const trigger = activePromptMetricsTrigger();
+  return {
+    popoverScrollTop: popover.scrollTop,
+    triggerTop: trigger?.getBoundingClientRect?.().top ?? null
+  };
+}
+
+function positionPromptMetricsPopover() {
+  const popover = activePromptMetricsPopover();
+  const trigger = activePromptMetricsTrigger();
+  if (!popover || !trigger) return;
+  const margin = 16;
+  const gap = 8;
+  const composerTop = sendFormEl?.getBoundingClientRect?.().top ?? window.innerHeight;
+  const lowerBoundary = Math.max(margin + 120, Math.min(window.innerHeight - margin, composerTop - gap));
+  const maxHeight = Math.max(120, Math.min(window.innerHeight * 0.62, 520, lowerBoundary - margin));
+  popover.style.maxHeight = `${maxHeight}px`;
+  popover.style.left = "";
+  popover.style.top = "";
+  const triggerRect = trigger.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+  const width = popoverRect.width || Math.min(480, window.innerWidth - margin * 2);
+  const height = popover.offsetHeight || popoverRect.height || Math.min(window.innerHeight * 0.62, 520);
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+  const left = Math.min(Math.max(margin, triggerRect.right - width), maxLeft);
+  let top = triggerRect.top - height - gap;
+  if (top < margin) top = triggerRect.bottom + gap;
+  if (top + height > lowerBoundary) top = Math.max(margin, lowerBoundary - height);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function restorePromptMetricsPopoverState(state) {
+  if (!state) return;
+  const restore = () => {
+    const popover = activePromptMetricsPopover();
+    const trigger = activePromptMetricsTrigger();
+    if (trigger && state.triggerTop != null) {
+      panelEl.scrollTop += trigger.getBoundingClientRect().top - state.triggerTop;
+    }
+    if (popover && state.popoverScrollTop != null) popover.scrollTop = state.popoverScrollTop;
+    positionPromptMetricsPopover();
+  };
+  restore();
+  window.requestAnimationFrame(restore);
 }
 
 function flushDeferredPanelRender() {
@@ -881,6 +958,17 @@ function closeMobileActionPanel() {
   setMobileActionPanel(false);
 }
 
+function targetInsideMobileActionPanel(target) {
+  const element = target instanceof Element ? target : null;
+  return Boolean(element && (mobileActionPanelEl?.contains(element) || mobileActionsToggleEl?.contains(element)));
+}
+
+function closeMobileActionPanelForOutsideEvent(event) {
+  if (!mobileActionPanelEl || mobileActionPanelEl.hidden) return;
+  if (targetInsideMobileActionPanel(event.target)) return;
+  closeMobileActionPanel();
+}
+
 async function handleMobileAction(action) {
   closeMobileActionPanel();
   if (action === "tasks") {
@@ -964,6 +1052,8 @@ function initMobileActionPanel() {
     if (!button) return;
     handleMobileAction(button.dataset.mobileAction || "");
   });
+  document.addEventListener("pointerdown", closeMobileActionPanelForOutsideEvent, true);
+  document.addEventListener("focusin", closeMobileActionPanelForOutsideEvent, true);
   syncMobileActionPanel();
   syncMobileComposerAction();
 }
@@ -1555,7 +1645,7 @@ function mergeConversationEvents(current, incoming, prepend = false) {
 function conversationState(taskId = selectedTaskId, target = backendTarget()) {
   const key = conversationKey(taskId, target);
   if (!conversationStates.has(key)) {
-    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false, error: "" });
+    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false, error: "", backendSession: null });
   }
   return conversationStates.get(key);
 }
@@ -1563,6 +1653,11 @@ function conversationState(taskId = selectedTaskId, target = backendTarget()) {
 function conversationSourceEvents(taskId) {
   const state = conversationStates.get(conversationKey(taskId));
   return state?.initialized ? state.events : agentTimelineEvents(taskId);
+}
+
+function conversationBackendSession(taskId, target = backendTarget()) {
+  const state = conversationStates.get(conversationKey(taskId, target));
+  return state?.backendSession || null;
 }
 
 function dedupedConversationEvents(taskId) {
@@ -1623,20 +1718,65 @@ function promptMetricCandidateEvents(taskId, target = backendTarget()) {
     .sort((left, right) => conversationEventOrder(left) - conversationEventOrder(right));
 }
 
+function latestTurnStartOrder(taskId, target = backendTarget()) {
+  const events = conversationSourceEvents(taskId).filter(event => eventMatchesAgent(event, target));
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].type === "agent_started") return conversationEventOrder(events[index]);
+  }
+  return null;
+}
+
+function latestTurnEvent(taskId, type, target = backendTarget()) {
+  const startOrder = latestTurnStartOrder(taskId, target);
+  const events = promptMetricCandidateEvents(taskId, target).filter(event => (
+    event.type === type &&
+    (startOrder == null || conversationEventOrder(event) >= startOrder)
+  ));
+  return events.length ? events[events.length - 1] : null;
+}
+
 function latestPromptMetricsEvent(taskId, target = backendTarget()) {
   const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_prompt_metrics");
-  return events.length ? events[events.length - 1] : null;
+  return latestTurnEvent(taskId, "agent_prompt_metrics", target) || (events.length ? events[events.length - 1] : null);
+}
+
+function hasPromptMetricsForLatestTurn(taskId, target = backendTarget()) {
+  const startOrder = latestTurnStartOrder(taskId, target);
+  if (startOrder != null) return Boolean(latestTurnEvent(taskId, "agent_prompt_metrics", target));
+  return Boolean(latestPromptMetricsEvent(taskId, target));
+}
+
+function latestAgentUsageEvent(taskId, target = backendTarget()) {
+  const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_usage");
+  return latestTurnEvent(taskId, "agent_usage", target) || (events.length ? events[events.length - 1] : null);
 }
 
 function latestContextOverflowEvent(taskId, target = backendTarget()) {
   const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_context_overflow");
+  const latestTurnOverflow = latestTurnEvent(taskId, "agent_context_overflow", target);
+  if (latestTurnOverflow) return latestTurnOverflow;
   return events.length ? events[events.length - 1] : null;
+}
+
+function promptMetricsKey(taskId, target = backendTarget()) {
+  return `${taskId || ""}:${target || ""}`;
 }
 
 function formatMetricNumber(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0";
   return new Intl.NumberFormat("en-US").format(number);
+}
+
+function formatMetricCompact(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return "0";
+  if (number < 1000) return String(Math.round(number));
+  if (number < 1000000) {
+    const valueInK = number / 1000;
+    return `${valueInK < 10 ? valueInK.toFixed(1) : Math.round(valueInK)}k`;
+  }
+  return `${(number / 1000000).toFixed(1)}m`;
 }
 
 function formatMetricBytes(value) {
@@ -1662,9 +1802,22 @@ function componentMetricRows(components, totalChars) {
     });
 }
 
-function renderPromptMetricsPanel(taskId) {
+function promptMetricsState(taskId) {
   const metricsEvent = latestPromptMetricsEvent(taskId);
+  const usageEvent = latestAgentUsageEvent(taskId);
   const overflowEvent = latestContextOverflowEvent(taskId);
+  const data = eventData(metricsEvent || {});
+  const total = data.total || {};
+  const totalChars = Number(total.chars || 0);
+  const rows = componentMetricRows(data.components || {}, totalChars);
+  const largest = rows[0];
+  const overflow = Boolean(overflowEvent && (!metricsEvent || conversationEventOrder(overflowEvent) >= conversationEventOrder(metricsEvent)));
+  return { backendSession: conversationBackendSession(taskId), data, largest, metricsEvent, overflow, overflowEvent, rows, total, totalChars, usageEvent };
+}
+
+function renderPromptMetricsPanel(taskId) {
+  const metrics = promptMetricsState(taskId);
+  const { backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, total, totalChars, usageEvent } = metrics;
   if (!metricsEvent && !overflowEvent) {
     return `
       <section class="prompt-metrics empty-metrics">
@@ -1677,20 +1830,28 @@ function renderPromptMetricsPanel(taskId) {
     `;
   }
 
-  const data = eventData(metricsEvent || {});
-  const total = data.total || {};
-  const totalChars = Number(total.chars || 0);
-  const rows = componentMetricRows(data.components || {}, totalChars);
-  const largest = rows[0];
-  const overflow = Boolean(overflowEvent && (!metricsEvent || conversationEventOrder(overflowEvent) >= conversationEventOrder(metricsEvent)));
   const statusLabel = overflow ? "overflow" : "latest";
   const statusClass = overflow ? "prompt-overflow" : "prompt-ok";
   const source = data.source || eventData(overflowEvent || {}).source || "backend";
+  const usage = eventData(usageEvent || {}).usage || {};
+  const sessionSize = Number(backendSession?.size_bytes);
+  const sessionLabel = backendSession?.exists && Number.isFinite(sessionSize)
+    ? `${backendSession.backend || "backend"} jsonl · ${formatMetricBytes(sessionSize)}`
+    : backendSession?.id
+      ? `${backendSession.backend || "backend"} jsonl · missing`
+      : "";
   const parts = [
     `${formatMetricNumber(totalChars)} chars`,
     `${formatMetricBytes(total.bytes)} bytes`,
     `${formatMetricNumber(total.lines)} lines`,
-    data.event_limit ? `${formatMetricNumber(data.event_limit)} events` : ""
+    data.event_limit ? `${formatMetricNumber(data.event_limit)} events` : "",
+    Number.isFinite(sessionSize) ? `session ${formatMetricBytes(sessionSize)}` : ""
+  ].filter(Boolean);
+  const usageParts = [
+    usage.input_tokens != null ? `input ${formatMetricNumber(usage.input_tokens)}` : "",
+    usage.cached_input_tokens != null ? `cached ${formatMetricNumber(usage.cached_input_tokens)}` : "",
+    usage.output_tokens != null ? `output ${formatMetricNumber(usage.output_tokens)}` : "",
+    usage.reasoning_output_tokens != null ? `reasoning ${formatMetricNumber(usage.reasoning_output_tokens)}` : ""
   ].filter(Boolean);
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `
@@ -1699,12 +1860,12 @@ function renderPromptMetricsPanel(taskId) {
         <div>
           <span>Prompt Input</span>
           <strong>${escapeHtml(parts[0] || "0 chars")}</strong>
-          <code>${escapeHtml([source, topLabel].filter(Boolean).join(" · "))}</code>
+          <code>${escapeHtml([source, topLabel, sessionLabel].filter(Boolean).join(" · "))}</code>
         </div>
         <span class="status ${statusClass}">${escapeHtml(statusLabel)}</span>
       </div>
       <div class="prompt-metric-kpis">
-        ${parts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+        ${[...parts, ...usageParts].map(part => `<code>${escapeHtml(part)}</code>`).join("")}
       </div>
       <div class="prompt-component-bars">
         ${rows.map(row => `
@@ -1719,6 +1880,34 @@ function renderPromptMetricsPanel(taskId) {
       </div>
     </section>
   `;
+}
+
+function renderPromptMetricsPopover(taskId) {
+  const metrics = promptMetricsState(taskId);
+  const hasMetrics = Boolean(metrics.metricsEvent || metrics.overflowEvent);
+  const summary = metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
+  const top = metrics.largest?.name || "no components";
+  const key = promptMetricsKey(taskId);
+  const open = openPromptMetricsKey === key ? " open" : "";
+  const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
+  const label = hasMetrics ? `Prompt metrics: ${formatMetricNumber(metrics.totalChars)} chars, top ${top}` : "Prompt metrics unavailable";
+  return `
+    <details class="${classes}" data-turn-metrics-key="${escapeHtml(key)}"${open}>
+      <summary class="turn-metrics-trigger" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+        <span class="turn-metrics-dot" aria-hidden="true"></span>
+        <code>${escapeHtml(summary)}</code>
+      </summary>
+      <div class="turn-metrics-popover">
+        ${renderPromptMetricsPanel(taskId)}
+      </div>
+    </details>
+  `;
+}
+
+function renderPromptMetricsDock(taskId) {
+  const metrics = promptMetricsState(taskId);
+  if (!metrics.metricsEvent && !metrics.overflowEvent) return "";
+  return `<div class="conversation-metrics-dock">${renderPromptMetricsPopover(taskId)}</div>`;
 }
 
 function parseTimestamp(value) {
@@ -2178,8 +2367,9 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
       return state;
     }
     const payload = await readJsonResponse(res, "Failed to load conversation");
-    const events = assignConversationKeys(payload.events || [], payload.before_offset || 0);
+    const events = assignConversationKeys([...(payload.events || []), ...(payload.turn_events || [])], payload.before_offset || 0);
     state.events = older ? mergeConversationEvents(state.events, events, true) : mergeConversationEvents(events, state.events, false);
+    if (payload.backend_session) state.backendSession = payload.backend_session;
     state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
     state.hasMore = Boolean(payload.has_more);
     state.initialized = true;
@@ -3035,11 +3225,15 @@ function renderConversation(taskId) {
     return `<div class="empty">Conversation unavailable. Realtime updates will start from the latest event offset.<br><code>${escapeHtml(state.error)}</code></div>`;
   }
   const events = taskConversationEvents(taskId);
-  const metrics = renderPromptMetricsPanel(taskId);
-  if (!events.length && !state.hasMore) return `${metrics}<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
+  if (!events.length && !state.hasMore) {
+    const metricsDock = renderPromptMetricsDock(taskId);
+    const empty = `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
+    return metricsDock ? `<div class="conversation timeline">${empty}${metricsDock}</div>` : empty;
+  }
   const older = state.hasMore ? `<button class="load-older" type="button" data-load-older="true">${state.loading ? "Loading..." : "Load older"}</button>` : "";
   const timer = renderTurnTimer(taskId);
-  return `<div class="conversation timeline">${metrics}${older}${events.map(renderTimelineEvent).join("")}${timer}</div>`;
+  const metricsDock = timer ? "" : renderPromptMetricsDock(taskId);
+  return `<div class="conversation timeline">${older}${events.map(renderTimelineEvent).join("")}${timer}${metricsDock}</div>`;
 }
 
 function renderTimelineEvent(event) {
@@ -3135,6 +3329,7 @@ function renderTurnTimer(taskId) {
       <span class="activity-dot"></span>
       <strong>${escapeHtml(title)}</strong>
       <code>${escapeHtml(details)}</code>
+      ${renderPromptMetricsPopover(taskId)}
     </div>
   `;
 }
@@ -3351,13 +3546,19 @@ function renderPanel(options = {}) {
   if (activeTab === "conversation") {
     const previousTop = options.previousTop ?? panelEl.scrollTop;
     const previousHeight = options.previousHeight ?? panelEl.scrollHeight;
-    const shouldFollow = conversationAutoFollow || isPanelNearBottom();
+    const metricsPopoverState = capturePromptMetricsPopoverState();
+    const metricsPopoverOpen = Boolean(metricsPopoverState);
+    const shouldFollow = !metricsPopoverOpen && (conversationAutoFollow || isPanelNearBottom());
     panelEl.innerHTML = renderConversation(task.id);
     if (options.preserveScroll) {
       panelEl.scrollTop = panelEl.scrollHeight - previousHeight + previousTop;
+    } else if (metricsPopoverOpen) {
+      panelEl.scrollTop = previousTop;
     } else {
       panelEl.scrollTop = shouldFollow ? panelEl.scrollHeight : previousTop;
     }
+    restorePromptMetricsPopoverState(metricsPopoverState);
+    positionPromptMetricsPopover();
     return;
   }
   if (activeTab === "final") {
@@ -3504,7 +3705,9 @@ messageEl.addEventListener("input", () => {
   syncMobileComposerAction();
   renderCommandMenu();
 });
-messageEl.addEventListener("focus", renderCommandMenu);
+messageEl.addEventListener("focus", () => {
+  renderCommandMenu();
+});
 messageEl.addEventListener("keydown", event => {
   const commands = matchingSlashCommands();
   if (!commands.length) return;
@@ -3586,6 +3789,7 @@ tasksEl.addEventListener("pointerdown", event => {
 });
 
 panelEl.addEventListener("scroll", () => {
+  positionPromptMetricsPopover();
   if (activeTab === "conversation") {
     conversationAutoFollow = isPanelNearBottom();
     if (panelEl.scrollTop < 48) loadOlderConversation();
@@ -3624,6 +3828,12 @@ panelEl.addEventListener("click", event => {
 });
 panelEl.addEventListener("toggle", event => {
   const details = event.target instanceof HTMLDetailsElement ? event.target : null;
+  const metricsKey = details?.dataset.turnMetricsKey;
+  if (metricsKey) {
+    openPromptMetricsKey = details.open ? metricsKey : openPromptMetricsKey === metricsKey ? "" : openPromptMetricsKey;
+    if (details.open) window.requestAnimationFrame(positionPromptMetricsPopover);
+    return;
+  }
   const key = details?.dataset.messageKey;
   if (!key) return;
   if (details.open) {
@@ -3632,6 +3842,12 @@ panelEl.addEventListener("toggle", event => {
     expandedMessageKeys.delete(key);
   }
 }, true);
+document.addEventListener("pointerdown", closePromptMetricsPopoverForOutsideEvent, true);
+document.addEventListener("focusin", closePromptMetricsPopoverForOutsideEvent, true);
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") closePromptMetricsPopover();
+});
+window.addEventListener("resize", positionPromptMetricsPopover);
 
 agentsEl.addEventListener("pointerdown", () => markAgentsPanelEditing());
 agentsEl.addEventListener("focusin", () => markAgentsPanelEditing());
