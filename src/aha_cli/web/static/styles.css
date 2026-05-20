@@ -541,9 +541,29 @@ button, input, select { font: inherit; }
   color: #475467;
   font-size: 12px;
 }
-.message-head span {
+.message-title {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.message-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+}
+.message-actions time {
+  color: #475467;
+}
+.message-copy {
+  min-height: 24px;
+  padding: 0 8px;
+  border-color: #d0d5dd;
+  background: #ffffff;
+  color: #344054;
+  font-size: 11px;
+}
+.message-copy:disabled {
+  opacity: 0.7;
 }
 .message-body { white-space: pre-wrap; line-height: 1.5; }
 .collapsed-message {

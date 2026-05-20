@@ -49,6 +49,8 @@ let realtimeCatchupRequested = false;
 let lastRealtimeMessageAt = 0;
 let lastRealtimeFallbackPollAt = 0;
 let realtimeDebugSeq = 0;
+let deferredPanelRender = false;
+let deferredPanelRenderTimer = 0;
 const allEvents = [];
 const seenRealtimeEvents = new Set();
 const pendingMessages = [];
@@ -57,6 +59,7 @@ const conversationPageLimit = 50;
 const logPageLimit = 200;
 const conversationStates = new Map();
 const expandedMessageKeys = new Set();
+const copyTextByKey = new Map();
 const finalDetails = new Map();
 const contextDetails = new Map();
 const logStates = new Map();
@@ -173,6 +176,82 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function nodeInsidePanel(node) {
+  if (!node) return false;
+  const element = node instanceof Element ? node : node.parentElement;
+  return Boolean(element && panelEl.contains(element));
+}
+
+function panelHasTextSelection() {
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || !selection.toString().trim()) return false;
+  return nodeInsidePanel(selection.anchorNode) || nodeInsidePanel(selection.focusNode);
+}
+
+function renderPanelForRealtime(options = {}) {
+  if (panelHasTextSelection()) {
+    deferredPanelRender = true;
+    return false;
+  }
+  if (deferredPanelRenderTimer) {
+    window.clearTimeout(deferredPanelRenderTimer);
+    deferredPanelRenderTimer = 0;
+  }
+  deferredPanelRender = false;
+  renderPanel(options);
+  return true;
+}
+
+function flushDeferredPanelRender() {
+  if (!deferredPanelRender || panelHasTextSelection()) return;
+  if (deferredPanelRenderTimer) return;
+  deferredPanelRenderTimer = window.setTimeout(() => {
+    deferredPanelRenderTimer = 0;
+    if (!deferredPanelRender || panelHasTextSelection()) return;
+    deferredPanelRender = false;
+    renderPanel();
+  }, 80);
+}
+
+function fallbackCopyText(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-9999px";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+}
+
+async function copyTimelineMessage(button) {
+  const key = button.dataset.copyMessageKey || "";
+  const text = copyTextByKey.get(key) || "";
+  if (!text) return;
+  const original = button.textContent || "Copy";
+  button.disabled = true;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else if (!fallbackCopyText(text)) {
+      throw new Error("copy failed");
+    }
+    button.textContent = "Copied";
+  } catch (_err) {
+    button.textContent = fallbackCopyText(text) ? "Copied" : "Copy failed";
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = false;
+      button.textContent = original;
+    }, 1200);
+  }
 }
 
 async function readJsonResponse(res, fallbackMessage = "Request failed") {
@@ -2259,7 +2338,7 @@ function handleEventWebSocketMessage(message) {
   if (payload.type === "status") {
     statusData = payload.data || {};
     applyStatusData();
-    renderPanel();
+    renderPanelForRealtime();
     return;
   }
   if (payload.type === "heartbeat") {
@@ -2268,7 +2347,7 @@ function handleEventWebSocketMessage(message) {
   }
   if (payload.type === "event" && payload.data) {
     const accepted = appendRealtimeEvents([payload.data]);
-    if (accepted.length) renderPanel();
+    if (accepted.length) renderPanelForRealtime();
   }
 }
 
@@ -2399,7 +2478,7 @@ function requestRealtimeCatchup() {
   if (!currentRunId) return;
   realtimeDebug("catchup.schedule");
   catchUpRealtimeEvents().then(accepted => {
-    if (accepted.length) renderPanel();
+    if (accepted.length) renderPanelForRealtime();
   });
 }
 
@@ -2824,6 +2903,7 @@ function renderConversationFilters() {
 }
 
 function renderConversation(taskId) {
+  copyTextByKey.clear();
   const state = conversationState(taskId);
   if (!state.initialized || state.loading && !state.events.length) {
     return `<div class="empty">Loading conversation...</div>`;
@@ -2922,11 +3002,19 @@ function renderTurnTimer(taskId) {
 }
 
 function renderTimelineCard(title, body, ts, cls, key = "") {
+  const copyKey = String(key || "");
+  if (copyKey) copyTextByKey.set(copyKey, String(body || ""));
+  const copyButton = copyKey
+    ? `<button class="message-copy" type="button" data-copy-message-key="${escapeHtml(copyKey)}" title="Copy message">Copy</button>`
+    : "";
   return `
     <div class="message ${cls}">
       <div class="message-head">
-        <span>${escapeHtml(title)}</span>
-        <span>${escapeHtml(ts || "")}</span>
+        <span class="message-title">${escapeHtml(title)}</span>
+        <span class="message-actions">
+          <time>${escapeHtml(ts || "")}</time>
+          ${copyButton}
+        </span>
       </div>
       ${renderMessageBody(body, key)}
     </div>
@@ -3384,6 +3472,13 @@ panelEl.addEventListener("change", event => {
   if (isCustom) custom?.focus();
 });
 panelEl.addEventListener("click", event => {
+  const copyButton = event.target instanceof Element ? event.target.closest("[data-copy-message-key]") : null;
+  if (copyButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    copyTimelineMessage(copyButton);
+    return;
+  }
   const button = event.target instanceof Element ? event.target.closest("[data-load-older]") : null;
   if (button) loadOlderConversation();
   const logButton = event.target instanceof Element ? event.target.closest("[data-load-older-log]") : null;
@@ -3455,6 +3550,7 @@ document.addEventListener("visibilitychange", () => {
   realtimeDebug("document.visibilitychange", { state: document.visibilityState });
   if (document.visibilityState === "visible") requestRealtimeCatchup();
 });
+document.addEventListener("selectionchange", flushDeferredPanelRender);
 window.addEventListener("online", () => {
   realtimeDebug("window.online");
   requestRealtimeCatchup();
@@ -3495,7 +3591,7 @@ async function tick() {
     tickFailureCount = 0;
     tickBackoffUntil = 0;
     renderPendingMessages();
-    renderPanel();
+    renderPanelForRealtime();
   } catch (err) {
     recordTickFailure();
     panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
@@ -3522,6 +3618,6 @@ setInterval(() => {
   if ((task && taskActivityStatus(task) !== "idle") || turn?.running) {
     renderTaskList();
     renderSelectedHeader();
-    renderPanel();
+    renderPanelForRealtime();
   }
 }, 1000);
