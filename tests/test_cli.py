@@ -70,6 +70,7 @@ from aha_cli.web.server import (
     handle_ui_client,
     handle_send_payload,
     handle_slash_command,
+    recover_stale_running_agent,
     web_status_snapshot,
     workspace_options,
 )
@@ -299,6 +300,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual(detail["task"]["status"], "completed")
         self.assertEqual(detail["task"]["exit_code"], 0)
         self.assertEqual(detail["task"]["finished_at"], completed["finished_at"])
+
+    def test_awaiting_user_status_does_not_reopen_terminal_task_without_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "No implicit reopen", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                completed = task_snapshot(root, run_id, "task-001")["task"]
+
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                detail = task_snapshot(root, run_id, "task-001")
+
+                reopened = reopen_task(root, run_id, "task-001")
+
+        self.assertEqual(detail["task"]["status"], "completed")
+        self.assertEqual(detail["task"]["exit_code"], 0)
+        self.assertEqual(detail["task"]["finished_at"], completed["finished_at"])
+        self.assertEqual(reopened["status"], "awaiting_user")
 
     def test_agent_status_started_at_tracks_status_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1906,6 +1928,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "awaiting_user")
         self.assertEqual(persisted["agents"][0]["status"], "interrupted")
         self.assertIn("agent_status_recovered", event_log)
+
+    def test_stale_recovery_does_not_reopen_terminal_task_from_old_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Final race", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+                stale_task = status_snapshot(root, run_id)["tasks"][0]
+                stale_agent = stale_task["agents"][0]
+
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+                recovered = recover_stale_running_agent(
+                    root,
+                    run_id,
+                    stale_task,
+                    stale_agent,
+                    {"status": "stopped", "pid": None},
+                )
+                persisted = task_snapshot(root, run_id, "task-001")["task"]
+                event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+        self.assertFalse(recovered)
+        self.assertEqual(persisted["status"], "completed")
+        self.assertEqual(persisted["agents"][0]["status"], "completed")
+        self.assertNotIn("agent_status_recovered", event_log)
 
     def test_web_status_snapshot_keeps_outcome_during_active_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

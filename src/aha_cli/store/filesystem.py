@@ -1374,7 +1374,7 @@ def _start_reopen_round_if_needed(root: Path, run_id: str, task_id: str, started
 
 def reopen_task(root: Path, run_id: str, task_id: str) -> dict:
     now = utc_now()
-    task = set_task_status(root, run_id, task_id, "awaiting_user")
+    task = set_task_status(root, run_id, task_id, "awaiting_user", allow_terminal_transition=True)
     _start_reopen_round_if_needed(root, run_id, task_id, now)
     task = mark_task_coordination(
         root,
@@ -1431,7 +1431,15 @@ def delete_task(root: Path, run_id: str, task_id: str) -> dict:
     return task
 
 
-def set_task_status(root: Path, run_id: str, task_id: str, status: str, exit_code: int | None = None) -> dict:
+def set_task_status(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    status: str,
+    exit_code: int | None = None,
+    *,
+    allow_terminal_transition: bool = False,
+) -> dict:
     now = utc_now()
     should_append = True
     with locked_plan(root, run_id):
@@ -1439,7 +1447,7 @@ def set_task_status(root: Path, run_id: str, task_id: str, status: str, exit_cod
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
             raise SystemExit(f"Task not found: {task_id}")
-        if task.get("status") in TERMINAL_TASK_STATUSES and status in {"running", *TERMINAL_TASK_STATUSES}:
+        if task.get("status") in TERMINAL_TASK_STATUSES and not allow_terminal_transition:
             should_append = False
         else:
             task["status"] = status

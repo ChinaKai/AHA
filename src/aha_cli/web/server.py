@@ -369,15 +369,27 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     if not task_id or not agent_id or agent_status != "running" or backend_process_status != "stopped":
         return False
 
+    try:
+        persisted_task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return False
+    persisted_agent = next((item for item in persisted_task.get("agents", []) if str(item.get("id") or "") == agent_id), None)
+    if (
+        persisted_agent is None
+        or str(persisted_task.get("status") or "") != "running"
+        or str(persisted_agent.get("status") or "") != "running"
+    ):
+        return False
+
     updated_agent = set_agent_status(root, run_id, task_id, agent_id, "interrupted")
     agent.update(updated_agent)
 
     task_recovered = False
     other_agent_running = any(
         str(item.get("id") or "") != agent_id and str(item.get("status") or "") == "running"
-        for item in task.get("agents", [])
+        for item in persisted_task.get("agents", [])
     )
-    if str(task.get("status") or "") == "running" and not other_agent_running:
+    if not other_agent_running:
         updated_task = set_task_status(root, run_id, task_id, "awaiting_user")
         for field in ("status", "exit_code", "started_at", "finished_at"):
             task[field] = updated_task.get(field)
