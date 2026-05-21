@@ -26,6 +26,7 @@ from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.orchestrator import (
     action_response_text,
@@ -3409,6 +3410,27 @@ class CliTests(unittest.TestCase):
         self.assertIn("session-ok", styles)
         self.assertIn("prompt-metrics", styles)
         self.assertIn("prompt-component-track", styles)
+
+    def test_prompt_templates_are_packaged_and_renderable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+        prompt = render_prompt_template(
+            "backend_chat_delta.md",
+            prefix="prefix",
+            target="main",
+            mode_instruction="reply",
+            run_goal="goal",
+            status="status",
+            sticky_context="context",
+            recent_events="events",
+            sender="browser",
+            ts="2026-01-01T00:00:00+00:00",
+            message="hello",
+        )
+
+        self.assertIn('"aha_cli.prompts" = ["*.md"]', pyproject)
+        self.assertIn("You are the AHA backend agent for `main`.", prompt)
+        self.assertIn("User message from browser", prompt)
 
     def test_websocket_starts_from_tail_for_large_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

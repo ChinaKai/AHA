@@ -20,6 +20,7 @@ from aha_cli.services.backend_runtime import (
 )
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import dispatch_task_to_main
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
@@ -76,7 +77,7 @@ APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
-AHA_BACKEND_PROMPT_MARKER = "You are connected to AHA as the real backend agent."
+AHA_BACKEND_PROMPT_MARKER = render_prompt_template("backend_prompt_prefix.md").strip()
 
 
 def session_jsonl_text(value) -> str:
@@ -747,30 +748,11 @@ def format_task_journal_for_prompt(rounds: list[dict]) -> str:
 
 
 def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None) -> str:
-    journal = textwrap.indent(format_task_journal_for_prompt(rounds or []), "        ")
-    return textwrap.dedent(
-        f"""\
-        AHA finalize request.
-
-        Task:
-        - id: {task_id}
-        - title: {title}
-
-{journal}
-
-        Generate or update the task Final now.
-
-        Requirements:
-        - Return concise Markdown only.
-        - Use the Task journal as the primary source when it has entries.
-        - Preserve meaningful task rounds under `## 任务轮次` as a chronological ordered list (`1.`, `2.`, ...).
-        - For each round, include result plus verification, files, notes, or risks when available.
-        - Summarize the stable outcome of this task, not the whole noisy chat transcript.
-        - Include changed files or concrete decisions when relevant.
-        - Include verification performed when relevant.
-        - Include remaining risks or next steps only if they are actionable.
-        - Do not include internal AHA command chatter unless it directly affects the outcome.
-        """
+    return render_prompt_template(
+        "finalization.md",
+        task_id=task_id,
+        title=title,
+        task_journal=format_task_journal_for_prompt(rounds or []),
     )
 
 

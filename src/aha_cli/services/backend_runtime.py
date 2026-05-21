@@ -12,6 +12,7 @@ import zipfile
 
 from aha_cli.backends.claude import apply_claude_environment
 from aha_cli.domain.models import utc_now
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
 from aha_cli.store.filesystem import (
     append_event,
@@ -328,7 +329,7 @@ def _agent_chat_command(
     from_start: bool = False,
     no_json: bool = False,
     extra_args: list[str] | None = None,
-    prompt_prefix: str = "You are connected to AHA as the real backend agent.",
+    prompt_prefix: str = render_prompt_template("backend_prompt_prefix.md").strip(),
     task_id: str | None = None,
 ) -> list[str]:
     if backend not in PROCESS_AGENT_BACKENDS:
@@ -413,7 +414,7 @@ def start_backend(
     from_start: bool = False,
     no_json: bool = False,
     extra_args: list[str] | None = None,
-    prompt_prefix: str = "You are connected to AHA as the real backend agent.",
+    prompt_prefix: str = render_prompt_template("backend_prompt_prefix.md").strip(),
     task_id: str | None = None,
 ) -> dict:
     task_id = task_id or None

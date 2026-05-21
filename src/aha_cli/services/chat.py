@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import textwrap
 import time
 import uuid
 
@@ -11,6 +10,7 @@ from aha_cli.backends.codex import codex_sandbox, run_codex_exec
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
 from aha_cli.services.commit_policy import commit_message_policy_prompt
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.orchestrator import (
     action_response_text,
     execute_actions,
@@ -437,20 +437,18 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             if is_agent_command:
                 command = str(item.get("message", "") or "")
                 original_command = str(item.get("original_command", "") or "")
-                agent_metadata = textwrap.dedent(
-                    f"""\
-                    - task_id: {task_id}
-                    - task_title: {task.get("title", "")}
-                    - agent_id: {target}
-                    - role: {(agent or {}).get("role") or item.get("role", "")}
-                    - backend: {(agent or {}).get("backend") or task.get("preferred_backend") or "codex"}
-                    - model: {(agent or {}).get("model") or task.get("preferred_model") or "default"}
-                    - workspace: {(agent or {}).get("workspace_path") or task.get("workspace_path") or "-"}
-                    - sandbox: {(agent or {}).get("sandbox") or task.get("preferred_sandbox") or "-"}
-                    - approval: {(agent or {}).get("approval") or task.get("preferred_approval") or "-"}
-                    """
+                agent_metadata = render_prompt_template(
+                    "backend_agent_metadata.md",
+                    task_id=task_id,
+                    task_title=task.get("title", ""),
+                    agent_id=target,
+                    role=(agent or {}).get("role") or item.get("role", ""),
+                    backend=(agent or {}).get("backend") or task.get("preferred_backend") or "codex",
+                    model=(agent or {}).get("model") or task.get("preferred_model") or "default",
+                    workspace=(agent or {}).get("workspace_path") or task.get("workspace_path") or "-",
+                    sandbox=(agent or {}).get("sandbox") or task.get("preferred_sandbox") or "-",
+                    approval=(agent or {}).get("approval") or task.get("preferred_approval") or "-",
                 ).rstrip()
-                agent_metadata_prompt = textwrap.indent(agent_metadata, "                    ")
                 components.update(
                     {
                         "agent_command": command,
@@ -458,28 +456,13 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                         "agent_metadata": agent_metadata,
                     }
                 )
-                prompt = textwrap.dedent(
-                    f"""\
-                    {prefix}
-
-                    You are the AHA backend agent for `{target}`.
-                    The user sent an agent command. Treat it as a command for this agent, not as a task-status question.
-                    Do not summarize previous task work or mention old task completion unless the command explicitly asks for task history.
-
-                    Agent command:
-                    - original: {original_command or command}
-                    - routed: {command}
-
-                    Agent metadata:
-{agent_metadata_prompt}
-
-                    Command semantics:
-                    - /status: report this agent's runtime/session metadata only.
-                    - /help: report supported agent command semantics briefly.
-                    - Other slash commands: answer only if you can handle that command; otherwise say it is not supported in this backend mode.
-
-                    Keep the reply concise and use the user's language.
-                    """
+                prompt = render_prompt_template(
+                    "backend_agent_command.md",
+                    prefix=prefix,
+                    target=target,
+                    original_command=original_command or command,
+                    command=command,
+                    agent_metadata=agent_metadata,
                 )
                 _fill_prompt_metrics(
                     metrics,
@@ -505,8 +488,8 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                     journal_lines.append(
                         f"- {round_item.get('round_id')} [{round_item.get('trigger')}] {round_item.get('summary')}"
                     )
-                journal_context = textwrap.indent("\n".join(journal_lines), "                ")
-            commit_policy = textwrap.indent(commit_message_policy_prompt(task_id, target).rstrip(), "                ")
+                journal_context = "\n".join(journal_lines)
+            commit_policy = commit_message_policy_prompt(task_id, target).rstrip()
             components.update(
                 {
                     "task_agents": detail["task"].get("agents", []),
@@ -515,74 +498,44 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                     "compact_summary": compact_context,
                 }
             )
-            task_context = textwrap.dedent(
-                f"""\
-                Current task context:
-                - task_id: {task_id}
-                - title: {detail["task"].get("title", "")}
-                - status: {detail["task"].get("status", "")}
-                - role selected by user: {item.get("role", "")}
-                - agents: {detail["task"].get("agents", [])}
-                {final_context.rstrip()}
-{journal_context}
-{textwrap.indent(compact_context, "                ") if compact_context else ""}
-
-                Ownership and routing policy:
-                - Each sub-agent owns its assigned scope (`assignment` / `created_reason`).
-                - If a user follow-up is about a scope owned by an existing sub-agent, do not handle that work yourself.
-                - To route work or record a durable task update, return ONLY one JSON object with `actions` and `response`; do not wrap it in Markdown or mix it with prose.
-                - Route format: `{{"type": "route_to_agent", "agent_id": "...", "message": "..."}}`.
-                - Task update format: `{{"type": "record_task_update", "summary": "...", "changed_files": [], "verification": [], "risks": []}}`.
-                - Use `record_task_update` only after concrete completed work, decisions, validation, commits, or meaningful follow-up state; do not record pure discussion or status chatter.
-                - Handle the message yourself only when it is clearly task-main coordination, cross-agent summary, or no sub-agent owns the scope.
-
-                Commit ownership policy:
-                - Commit, revert, and repository-change finalization requests are ownership-sensitive.
-                - When you are `task-main`, route commit work to the sub-agent that owns the changed scope when one exists.
-                - When you are a sub-agent, commit only files covered by your `assignment` / `created_reason`; if the requested commit is outside your scope, report back to `task-main`.
-                - Before any commit, inspect `git status`, avoid unrelated or user changes, and follow the AHA commit message policy below.
-
-{commit_policy}
-                """
+            task_context = render_prompt_template(
+                "backend_task_context.md",
+                task_id=task_id,
+                title=detail["task"].get("title", ""),
+                status=detail["task"].get("status", ""),
+                role=item.get("role", ""),
+                agents=detail["task"].get("agents", []),
+                final_context=final_context.rstrip(),
+                task_journal=journal_context,
+                compact_summary=compact_context.rstrip(),
+                commit_policy=commit_policy,
             )
             components["task_context"] = task_context
         except KeyError:
             task_context = f"Current task context: task_id={task_id} was referenced but not found.\n"
             components["task_context"] = task_context
-    mode_instruction = (
-        "You are generating the task Final. Return concise Markdown only. "
-        "Use the Task journal as the primary source when available. Preserve the task's meaningful rounds under `## 任务轮次` as a chronological ordered list (`1.`, `2.`, ...), then summarize the stable outcome, changed files or decisions, verification, and remaining actionable risks. "
-        "Do not echo noisy command chatter unless it affects the outcome."
-        if is_finalization
-        else "Reply directly to the user. Keep the answer concise and use the user's language."
-    )
+    mode_instruction = render_prompt_template(
+        "mode_instruction_final.md" if is_finalization else "mode_instruction_default.md"
+    ).strip()
     event_limit = 0 if is_finalization else 20
     if sticky_delta:
         event_limit = 8
         events = recent_delta_prompt_events(root, run_id, event_limit, str(task_id) if task_id else None, target, item)
         recent = "\n".join(format_event(event) for event in events) or "(no external AHA events since previous backend turn)"
         status = prompt_delta_status_snapshot(root, run_id, str(task_id) if task_id else None, target)
-        sticky_context = textwrap.dedent(
-            f"""\
-            Current task delta:
-            - task_id: {task_id}
-            - title: {(task or {}).get("title", "")}
-            - status: {(task or {}).get("status", "")}
-            - agent_id: {target}
-            - role selected by user: {item.get("role", "")}
-            - backend: {(agent or {}).get("backend") or (task or {}).get("preferred_backend") or "codex"}
-            - workspace: {(agent or {}).get("workspace_path") or (task or {}).get("workspace_path") or "-"}
-            - sandbox: {(agent or {}).get("sandbox") or (task or {}).get("preferred_sandbox") or "-"}
-            - approval: {(agent or {}).get("approval") or (task or {}).get("preferred_approval") or "-"}
-            - session_policy: {(agent or {}).get("session_policy") or "-"}
-            - backend_session_id: {(agent or {}).get("backend_session_id") or "-"}
-
-            Sticky session note:
-            - This backend session already contains prior AHA runtime contract, previous AHA prompts, tool outputs, and replies.
-            - Treat this prompt as a delta update; do not assume omitted history or policies were deleted.
-            - Respect existing AHA sub-agent ownership and commit rules from the resumed session.
-            - Use the current user message below as the new request.
-            """
+        sticky_context = render_prompt_template(
+            "backend_sticky_context.md",
+            task_id=task_id,
+            title=(task or {}).get("title", ""),
+            status=(task or {}).get("status", ""),
+            agent_id=target,
+            role=item.get("role", ""),
+            backend=(agent or {}).get("backend") or (task or {}).get("preferred_backend") or "codex",
+            workspace=(agent or {}).get("workspace_path") or (task or {}).get("workspace_path") or "-",
+            sandbox=(agent or {}).get("sandbox") or (task or {}).get("preferred_sandbox") or "-",
+            approval=(agent or {}).get("approval") or (task or {}).get("preferred_approval") or "-",
+            session_policy=(agent or {}).get("session_policy") or "-",
+            backend_session_id=(agent or {}).get("backend_session_id") or "-",
         )
         for stale_component in ("task_context", "task_agents", "task_journal", "commit_policy"):
             components.pop(stale_component, None)
@@ -594,28 +547,18 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 "sticky_context": sticky_context,
             }
         )
-        prompt = textwrap.dedent(
-            f"""\
-            {prefix}
-
-            You are the AHA backend agent for `{target}`.
-            {mode_instruction}
-            Do not modify files unless the user explicitly asks for a repository change.
-
-            Run goal:
-            {plan["goal"]}
-
-            Current delta status:
-            {status}
-
-            {sticky_context}
-
-            External AHA events since previous backend turn:
-            {recent}
-
-            User message from {item.get("sender", "browser")} at {item.get("ts", "")}:
-            {item.get("message", "")}
-            """
+        prompt = render_prompt_template(
+            "backend_chat_delta.md",
+            prefix=prefix,
+            target=target,
+            mode_instruction=mode_instruction,
+            run_goal=plan["goal"],
+            status=status,
+            sticky_context=sticky_context.rstrip(),
+            recent_events=recent,
+            sender=item.get("sender", "browser"),
+            ts=item.get("ts", ""),
+            message=item.get("message", ""),
         )
         _fill_prompt_metrics(
             metrics,
@@ -643,28 +586,18 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             "task_context": task_context or "Current task context: none",
         }
     )
-    prompt = textwrap.dedent(
-        f"""\
-        {prefix}
-
-        You are the AHA backend agent for `{target}`.
-        {mode_instruction}
-        Do not modify files unless the user explicitly asks for a repository change.
-
-        Run goal:
-        {plan["goal"]}
-
-        Current status:
-        {status}
-
-        {task_context or "Current task context: none"}
-
-        Recent events:
-        {recent}
-
-        User message from {item.get("sender", "browser")} at {item.get("ts", "")}:
-        {item.get("message", "")}
-        """
+    prompt = render_prompt_template(
+        "backend_chat_full.md",
+        prefix=prefix,
+        target=target,
+        mode_instruction=mode_instruction,
+        run_goal=plan["goal"],
+        status=status,
+        task_context=task_context or "Current task context: none",
+        recent_events=recent,
+        sender=item.get("sender", "browser"),
+        ts=item.get("ts", ""),
+        message=item.get("message", ""),
     )
     _fill_prompt_metrics(
         metrics,

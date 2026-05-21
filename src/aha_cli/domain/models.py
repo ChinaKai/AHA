@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
-import textwrap
 import uuid
+
+from aha_cli.services.prompt_templates import render_prompt_template
 
 
 def utc_now() -> str:
@@ -275,42 +276,13 @@ def task_prompt(goal: str, mode: str, task: dict, write_scopes: list[str]) -> st
         if mode == "implementation"
         else "Read-only research: do not modify files."
     )
-    return textwrap.dedent(
-        f"""\
-        # AHA Subtask
-
-        Goal:
-        {goal}
-
-        Task:
-        {task["title"]}
-
-        Mode:
-        {mode}
-
-        Rules:
-        - {mutability}
-        - Do not revert user changes.
-        - Report facts with file paths when possible.
-        - Keep the result structured and concise.
-
-        Write scope:
-        {scope_text}
-
-        Expected output sections:
-        ## Summary
-        ## Findings
-        ## Files Read
-        ## Files Changed
-        ## Commands Run
-        ## Risks
-        ## Suggested Merge Notes
-
-        Realtime protocol:
-        - Read user/main-agent messages from $AHA_INBOX_FILE when your runner supports it.
-        - Append JSON events to $AHA_EVENTS_FILE when your runner supports it.
-        - Write final Markdown output to $AHA_OUTPUT_FILE.
-        """
+    return render_prompt_template(
+        "subtask.md",
+        goal=goal,
+        task_title=task["title"],
+        mode=mode,
+        mutability=mutability,
+        write_scope=scope_text,
     )
 
 

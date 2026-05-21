@@ -22,3 +22,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "aha_cli.web" = ["static/*"]
+"aha_cli.prompts" = ["*.md"]

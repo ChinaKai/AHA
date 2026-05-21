@@ -7,6 +7,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend, stop_backend
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.messages import format_event
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     append_event,
     ensure_session,
@@ -107,75 +108,43 @@ def build_compact_summary(root: Path, run_id: str, task_id: str, agent_id: str, 
     usage = latest_event_payload(root, run_id, task_id, agent_id, "agent_usage").get("usage") or {}
     metrics = latest_event_payload(root, run_id, task_id, agent_id, "agent_prompt_metrics")
 
-    lines = [
-        "# Backend Session Compact Summary",
-        "",
-        "This summary was generated from AHA durable state for a backend session compact/reset.",
-        "",
-        "## Trigger",
-        f"- reason: `{reason}`",
-        f"- created_at: `{utc_now()}`",
-        "",
-        "## Task",
-        f"- run_id: `{run_id}`",
-        f"- task_id: `{task_id}`",
-        f"- title: {_truncate(task.get('title'), 220)}",
-        f"- status: `{task.get('status') or '-'}`",
-        f"- current_round_id: `{task.get('current_round_id') or '-'}`",
-        f"- round_sequence: `{task.get('round_sequence') or '-'}`",
-        f"- last_final_round_id: `{task.get('last_final_round_id') or '-'}`",
-        f"- workspace: `{task.get('workspace_path') or '-'}`",
-        "",
-        "## Agent",
-        f"- agent_id: `{agent_id}`",
-        f"- role: `{agent.get('role') or '-'}`",
-        f"- backend: `{session.get('backend') or agent.get('backend') or task.get('preferred_backend') or '-'}`",
-        f"- model: `{session.get('model') or agent.get('model') or task.get('preferred_model') or '-'}`",
-        f"- sandbox: `{agent.get('sandbox') or task.get('preferred_sandbox') or '-'}`",
-        f"- approval: `{agent.get('approval') or task.get('preferred_approval') or '-'}`",
-        "",
-        "## Archived Backend Session",
-        f"- backend_session_id: `{session.get('backend_session_id') or '-'}`",
-        f"- jsonl_path: `{jsonl.get('path') or '-'}`",
-        f"- jsonl_exists: `{jsonl.get('exists')}`",
-        f"- size_bytes: `{jsonl.get('size_bytes') if jsonl.get('size_bytes') is not None else '-'}`",
-        f"- latest_usage: `{json.dumps(usage, ensure_ascii=False) if usage else '-'}`",
-        f"- latest_prompt_mode: `{metrics.get('prompt_mode') or '-'}`",
-        "",
-        "## Task Journal",
-    ]
-    if rounds:
-        for item in rounds:
-            lines.append(f"- `{item.get('round_id')}` [{item.get('trigger') or '-'}] {_truncate(item.get('summary'), 280)}")
-    else:
-        lines.append("- none")
-
-    lines.extend(["", "## Recent Messages"])
-    if messages:
-        for item in messages:
-            sender = item.get("sender") or item.get("from_agent") or "-"
-            target = item.get("to_agent") or item.get("target") or "-"
-            lines.append(f"- `{item.get('ts') or '-'}` {sender} -> {target}: {_truncate(item.get('message'), 320)}")
-    else:
-        lines.append("- none")
-
-    lines.extend(["", "## Recent AHA Events"])
-    if events:
-        for event in events:
-            lines.append(f"- {format_event(event)}")
-    else:
-        lines.append("- none")
-
-    lines.extend(
-        [
-            "",
-            "## Resume Guidance",
-            "- Continue from this summary and current AHA task state.",
-            "- Do not assume the archived backend transcript will be automatically resumed.",
-            "- Preserve AHA ownership, routing, and commit rules from the current task context.",
-        ]
+    task_journal = "\n".join(
+        f"- `{item.get('round_id')}` [{item.get('trigger') or '-'}] {_truncate(item.get('summary'), 280)}"
+        for item in rounds
+    ) or "- none"
+    recent_messages = "\n".join(
+        f"- `{item.get('ts') or '-'}` {item.get('sender') or item.get('from_agent') or '-'} -> {item.get('to_agent') or item.get('target') or '-'}: {_truncate(item.get('message'), 320)}"
+        for item in messages
+    ) or "- none"
+    recent_events = "\n".join(f"- {format_event(event)}" for event in events) or "- none"
+    return render_prompt_template(
+        "compact_summary.md",
+        reason=reason,
+        created_at=utc_now(),
+        run_id=run_id,
+        task_id=task_id,
+        title=_truncate(task.get("title"), 220),
+        status=task.get("status") or "-",
+        current_round_id=task.get("current_round_id") or "-",
+        round_sequence=task.get("round_sequence") or "-",
+        last_final_round_id=task.get("last_final_round_id") or "-",
+        workspace=task.get("workspace_path") or "-",
+        agent_id=agent_id,
+        role=agent.get("role") or "-",
+        backend=session.get("backend") or agent.get("backend") or task.get("preferred_backend") or "-",
+        model=session.get("model") or agent.get("model") or task.get("preferred_model") or "-",
+        sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "-",
+        approval=agent.get("approval") or task.get("preferred_approval") or "-",
+        backend_session_id=session.get("backend_session_id") or "-",
+        jsonl_path=jsonl.get("path") or "-",
+        jsonl_exists=jsonl.get("exists"),
+        size_bytes=jsonl.get("size_bytes") if jsonl.get("size_bytes") is not None else "-",
+        latest_usage=json.dumps(usage, ensure_ascii=False) if usage else "-",
+        latest_prompt_mode=metrics.get("prompt_mode") or "-",
+        task_journal=task_journal,
+        recent_messages=recent_messages,
+        recent_events=recent_events,
     )
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def compact_reset_backend_session(

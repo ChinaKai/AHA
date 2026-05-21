@@ -20,6 +20,7 @@ from aha_cli.services.commit_policy import CONVENTIONAL_TYPES, format_commit_mes
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_tasks import run_pending_tasks
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -763,7 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     codex_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     codex_chat_p.add_argument("--extra-arg", action="append", default=[])
     codex_chat_p.add_argument("--no-json", action="store_true")
-    codex_chat_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
+    codex_chat_p.add_argument("--prompt-prefix", default=render_prompt_template("backend_prompt_prefix.md").strip())
     codex_chat_p.set_defaults(func=cmd_codex_chat)
 
     claude_chat_p = sub.add_parser("claude-chat")
@@ -780,7 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     claude_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
     claude_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     claude_chat_p.add_argument("--extra-arg", action="append", default=[])
-    claude_chat_p.add_argument("--prompt-prefix", default="You are connected to AHA as the real backend agent.")
+    claude_chat_p.add_argument("--prompt-prefix", default=render_prompt_template("backend_prompt_prefix.md").strip())
     claude_chat_p.set_defaults(func=cmd_claude_chat)
 
     task_p = sub.add_parser("task")

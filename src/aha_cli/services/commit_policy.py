@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-import textwrap
+
+from aha_cli.services.prompt_templates import render_prompt_template
 
 
 CONVENTIONAL_TYPES = ("feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert")
@@ -63,15 +64,4 @@ def validate_commit_message(message: str) -> list[str]:
 
 
 def commit_message_policy_prompt(task_id: str, agent_id: str) -> str:
-    return textwrap.dedent(
-        f"""\
-        Commit message policy:
-        - Use a Conventional Commit subject: `<type>(<scope>): <summary>`.
-        - Include AHA trailers in the commit body:
-          `AHA-Task: {task_id}`
-          `AHA-Agent: {agent_id}`
-          `AHA-Scope: <short-scope>`
-        - Prefer `aha commit --type <type> --scope <scope> --summary <summary> --task-id {task_id} --agent {agent_id} --aha-scope <short-scope>` over raw `git commit`.
-        - Validate hand-written commit messages with `aha commit-check <message-file>` before committing.
-        """
-    )
+    return render_prompt_template("commit_policy.md", task_id=task_id, agent_id=agent_id)

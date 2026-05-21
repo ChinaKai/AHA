@@ -1,0 +1,9 @@
+- task_id: $task_id
+- task_title: $task_title
+- agent_id: $agent_id
+- role: $role
+- backend: $backend
+- model: $model
+- workspace: $workspace
+- sandbox: $sandbox
+- approval: $approval

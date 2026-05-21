@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-import textwrap
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend
 from aha_cli.services.commit_policy import commit_message_policy_prompt
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
@@ -39,86 +39,16 @@ def task_has_active_followup(task: dict) -> bool:
 
 
 def task_assignment_prompt(task: dict) -> str:
-    commit_policy = textwrap.indent(commit_message_policy_prompt(str(task.get("id") or "<task-id>"), "<agent-id>").rstrip(), "        ")
-    return textwrap.dedent(
-        f"""\
-        You are now running in AHA mode.
-
-        You are the task-main agent for this task.
-
-        Task:
-        {task.get("title", "")}
-
-        Workspace path:
-        {task.get("workspace_path") or "(not set)"}
-
-        Delegation policy:
-        {task.get("delegation_policy", "auto")}
-
-        Max sub-agents:
-        {task.get("max_sub_agents", 0)}
-
-        Preferred sub-agent backend:
-        {task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex"}
-
-        Default agent permission:
-        - sandbox: {task.get("preferred_sandbox") or "process default"}
-        - approval: {task.get("preferred_approval") or "process default"}
-
-        Responsibilities:
-        1. Understand the task.
-        2. Inspect the workspace if needed.
-        3. Judge task complexity.
-        4. Decide whether sub-agents are needed.
-        5. If sub-agents are needed, return structured spawn_sub actions.
-        6. If no sub-agent is needed, solve the task directly.
-        7. Keep this task context isolated from other tasks.
-
-        Commit ownership policy:
-        - Treat commit, revert, and repository-change finalization requests as ownership-sensitive work.
-        - If a commit request belongs to one existing sub-agent's assignment, route it to that sub-agent with `route_to_agent`.
-        - If a commit spans multiple owners, route work per owner or coordinate one aggregate commit only after verifying file ownership.
-        - Never ask a sub-agent to commit files outside its assignment.
-        - Follow the AHA commit message policy below for every commit.
-
-{commit_policy}
-
-        Return plain text when no AHA action is needed. If you need AHA actions,
-        return ONLY one JSON object, with no Markdown fence and no explanatory text
-        outside it. Use this shape:
-
-        {{
-          "complexity": "simple|medium|complex",
-          "actions": [
-            {{
-              "type": "spawn_sub",
-              "title": "sub-agent assignment",
-              "backend": "codex",
-              "model": null,
-              "sandbox": null,
-              "approval": null,
-              "reason": "why this sub-agent is needed"
-            }},
-            {{
-              "type": "route_to_agent",
-              "agent_id": "sub-001",
-              "message": "follow-up for the agent that owns this scope",
-              "reason": "why this existing sub-agent owns the follow-up"
-            }},
-            {{
-              "type": "record_task_update",
-              "summary": "one concise durable note for this completed work round",
-              "changed_files": ["optional/path"],
-              "verification": ["optional check"],
-              "risks": ["optional remaining risk"]
-            }}
-          ],
-          "response": "short user-facing summary"
-        }}
-
-        Do not pretend a sub-agent exists before AHA creates it.
-        Use `record_task_update` only for concrete completed work, decisions, validation, commits, or meaningful follow-up state; do not record pure discussion or status chatter.
-        """
+    return render_prompt_template(
+        "task_assignment.md",
+        task_title=task.get("title", ""),
+        workspace_path=task.get("workspace_path") or "(not set)",
+        delegation_policy=task.get("delegation_policy", "auto"),
+        max_sub_agents=task.get("max_sub_agents", 0),
+        preferred_sub_backend=task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex",
+        sandbox=task.get("preferred_sandbox") or "process default",
+        approval=task.get("preferred_approval") or "process default",
+        commit_policy=commit_message_policy_prompt(str(task.get("id") or "<task-id>"), "<agent-id>").rstrip(),
     )
 
 
@@ -434,19 +364,7 @@ def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
     if task.get("status") in TERMINAL_AGENT_STATUSES:
         return False
     task = mark_task_coordination(root, run_id, task_id, round_summary_requested_at=utc_now())
-    prompt = textwrap.dedent(
-        f"""\
-        All sub-agents for {task_id} have completed this round.
-
-        Produce a concise user-facing round summary now. Include:
-        - what each sub-agent completed,
-        - validation performed,
-        - remaining risks or follow-up work.
-
-        Do not mark the task complete or final. The task remains open for follow-up.
-        Do not send acknowledgements back to sub-agents.
-        """
-    )
+    prompt = render_prompt_template("task_round_summary.md", task_id=task_id)
     append_message(
         root,
         run_id,
