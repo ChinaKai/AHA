@@ -213,8 +213,15 @@ function activePromptMetricsTrigger() {
   return panelEl.querySelector(".turn-metrics[open] .turn-metrics-trigger");
 }
 
+function closePromptMetricsBreakdowns(root = panelEl) {
+  root.querySelectorAll("[data-metrics-breakdown][open]").forEach(details => {
+    if (details instanceof HTMLDetailsElement) details.open = false;
+  });
+}
+
 function closePromptMetricsPopover() {
   openPromptMetricsKey = "";
+  closePromptMetricsBreakdowns();
   panelEl.querySelectorAll(".turn-metrics[open]").forEach(details => {
     if (details instanceof HTMLDetailsElement) details.open = false;
   });
@@ -235,7 +242,12 @@ function capturePromptMetricsPopoverState() {
   const popover = activePromptMetricsPopover();
   if (!popover) return null;
   const trigger = activePromptMetricsTrigger();
+  const breakdownOpen = {};
+  popover.querySelectorAll("[data-metrics-breakdown]").forEach(details => {
+    if (details instanceof HTMLDetailsElement) breakdownOpen[details.dataset.metricsBreakdown || ""] = details.open;
+  });
   return {
+    breakdownOpen,
     popoverScrollTop: popover.scrollTop,
     triggerTop: trigger?.getBoundingClientRect?.().top ?? null
   };
@@ -273,6 +285,15 @@ function restorePromptMetricsPopoverState(state) {
     const trigger = activePromptMetricsTrigger();
     if (trigger && state.triggerTop != null) {
       panelEl.scrollTop += trigger.getBoundingClientRect().top - state.triggerTop;
+    }
+    Object.entries(state.breakdownOpen || {}).forEach(([key, open]) => {
+      const breakdown = Array.from(popover?.querySelectorAll("[data-metrics-breakdown]") || [])
+        .find(item => item instanceof HTMLDetailsElement && item.dataset.metricsBreakdown === key);
+      if (breakdown instanceof HTMLDetailsElement) breakdown.open = Boolean(open);
+    });
+    const sessionBreakdown = popover?.querySelector("[data-metrics-breakdown=\"session\"]");
+    if (sessionBreakdown instanceof HTMLDetailsElement && state.sessionBreakdownOpen != null) {
+      sessionBreakdown.open = Boolean(state.sessionBreakdownOpen);
     }
     if (popover && state.popoverScrollTop != null) popover.scrollTop = state.popoverScrollTop;
     positionPromptMetricsPopover();
@@ -1751,6 +1772,29 @@ function latestAgentUsageEvent(taskId, target = backendTarget()) {
   return latestTurnEvent(taskId, "agent_usage", target) || (events.length ? events[events.length - 1] : null);
 }
 
+function usageMetricsStatus(taskId, usageEvent, target = backendTarget()) {
+  const startOrder = latestTurnStartOrder(taskId, target);
+  if (!usageEvent) {
+    return { label: startOrder == null ? "no usage" : "pending", className: "usage-pending" };
+  }
+  if (startOrder != null && conversationEventOrder(usageEvent) >= startOrder) {
+    return { label: "current turn", className: "usage-current" };
+  }
+  if (startOrder != null) {
+    return { label: "previous turn", className: "usage-previous" };
+  }
+  return { label: "latest", className: "usage-current" };
+}
+
+function ahaInputMetricsStatus(taskId, metricsEvent, target = backendTarget()) {
+  const startOrder = latestTurnStartOrder(taskId, target);
+  if (!metricsEvent) return { label: "none", className: "prompt-none" };
+  if (startOrder != null && conversationEventOrder(metricsEvent) >= startOrder) {
+    return { label: "current", className: "prompt-current" };
+  }
+  return { label: "latest", className: "prompt-latest" };
+}
+
 function latestContextOverflowEvent(taskId, target = backendTarget()) {
   const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_context_overflow");
   const latestTurnOverflow = latestTurnEvent(taskId, "agent_context_overflow", target);
@@ -1787,6 +1831,202 @@ function formatMetricBytes(value) {
   return `${(number / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function formatMetricCountChars(count, chars, noun) {
+  const safeCount = Number(count || 0);
+  const safeChars = Number(chars || 0);
+  return `${formatMetricNumber(safeCount)} ${noun} · ${formatMetricNumber(safeChars)} chars`;
+}
+
+const BACKEND_SESSION_LARGE_BYTES = 5 * 1024 * 1024;
+const BACKEND_SESSION_LARGE_CHARS = 1000 * 1000;
+
+function backendSessionStatus(backendSession, overflow = false) {
+  const analysis = backendSession?.analysis || {};
+  const hasSessionId = Boolean(backendSession?.id);
+  if (!backendSession?.exists) {
+    return hasSessionId
+      ? { label: "missing", className: "session-missing" }
+      : { label: "none", className: "session-none" };
+  }
+  if (analysis.error) return { label: "error", className: "session-error" };
+  if (overflow) return { label: "overflow", className: "session-overflow" };
+  const sessionSize = Number(backendSession.size_bytes || 0);
+  const payloadChars = Number(analysis.total_payload_text_chars || 0);
+  const promptChars = Number(analysis.aha_prompt_total_chars || 0);
+  const toolChars = Number(analysis.tool_output_chars || 0);
+  const assistantChars = Number(analysis.assistant_message_chars || 0);
+  const isLarge = (
+    sessionSize >= BACKEND_SESSION_LARGE_BYTES ||
+    payloadChars >= BACKEND_SESSION_LARGE_CHARS ||
+    promptChars >= BACKEND_SESSION_LARGE_CHARS ||
+    toolChars + assistantChars >= BACKEND_SESSION_LARGE_CHARS
+  );
+  return isLarge
+    ? { label: "large", className: "session-large" }
+    : { label: "active", className: "session-active" };
+}
+
+function metricMapRows(counts, chars = null) {
+  const keys = new Set([...Object.keys(counts || {}), ...Object.keys(chars || {})]);
+  return Array.from(keys).map(name => ({
+    name,
+    count: Number((counts || {})[name] || 0),
+    chars: chars ? Number(chars[name] || 0) : null
+  })).sort((left, right) => {
+    const leftValue = left.chars == null ? left.count : left.chars;
+    const rightValue = right.chars == null ? right.count : right.chars;
+    return rightValue - leftValue || left.name.localeCompare(right.name);
+  });
+}
+
+function renderSessionMapRows(rows, emptyLabel = "none") {
+  if (!rows.length) {
+    return `<div class="session-breakdown-empty">${escapeHtml(emptyLabel)}</div>`;
+  }
+  return rows.map(row => `
+    <div class="session-breakdown-row">
+      <span>${escapeHtml(row.name)}</span>
+      <code>${escapeHtml(formatMetricNumber(row.count))}</code>
+      ${row.chars == null ? "" : `<code>${escapeHtml(formatMetricNumber(row.chars))}</code>`}
+    </div>
+  `).join("");
+}
+
+function renderSessionBreakdown(analysis) {
+  if (!analysis || !Object.keys(analysis).length) return "";
+  if (analysis.error) {
+    return `<div class="session-breakdown-error">${escapeHtml(analysis.error)}</div>`;
+  }
+  const totals = [
+    `payload ${formatMetricNumber(analysis.total_payload_text_chars || 0)} chars`,
+    `assistant ${formatMetricNumber(analysis.assistant_message_chars || 0)} chars`,
+    `mirrors ${formatMetricNumber(analysis.event_msg_prompt_mirror_total_chars || 0)} chars`,
+    `parse errors ${formatMetricNumber(analysis.parse_errors || 0)}`
+  ];
+  const latest = Array.isArray(analysis.latest_aha_prompts) ? analysis.latest_aha_prompts : [];
+  return `
+    <details class="metrics-breakdown session-breakdown" data-metrics-breakdown="session">
+      <summary>Session breakdown</summary>
+      <div class="session-breakdown-kpis">
+        ${totals.map(item => `<code>${escapeHtml(item)}</code>`).join("")}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>AHA prompts</strong>
+        ${renderSessionMapRows(metricMapRows(analysis.aha_prompt_counts, analysis.aha_prompt_chars))}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Event mirrors</strong>
+        ${renderSessionMapRows(metricMapRows(analysis.event_msg_prompt_mirror_counts, analysis.event_msg_prompt_mirror_chars))}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Response items</strong>
+        ${renderSessionMapRows(metricMapRows(analysis.response_item_counts, analysis.response_item_chars))}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Record types</strong>
+        ${renderSessionMapRows(metricMapRows(analysis.type_counts))}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Latest prompts</strong>
+        ${latest.length ? latest.map(item => `
+          <div class="session-breakdown-row">
+            <span>${escapeHtml(`${item.mode || "unknown"} @ line ${item.line || "-"}`)}</span>
+            <code>${escapeHtml(formatMetricNumber(item.chars || 0))}</code>
+          </div>
+        `).join("") : `<div class="session-breakdown-empty">none</div>`}
+      </div>
+    </details>
+  `;
+}
+
+function renderAhaInputBreakdown(data, rows) {
+  const flags = [
+    data.prompt_mode ? `mode ${data.prompt_mode}` : "",
+    data.source ? `source ${data.source}` : "",
+    data.target ? `target ${data.target}` : "",
+    data.sender ? `sender ${data.sender}` : "",
+    data.task_id ? `task ${data.task_id}` : "",
+    data.is_finalization ? "finalization" : "",
+    data.is_agent_command ? "agent command" : ""
+  ].filter(Boolean);
+  return `
+    <details class="metrics-breakdown aha-breakdown" data-metrics-breakdown="aha">
+      <summary>AHA input breakdown</summary>
+      <div class="session-breakdown-kpis">
+        ${(flags.length ? flags : ["no prompt metadata"]).map(item => `<code>${escapeHtml(item)}</code>`).join("")}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Components</strong>
+        ${rows.length ? rows.map(row => `
+          <div class="session-breakdown-row metrics-breakdown-row-wide">
+            <span>${escapeHtml(row.name)}</span>
+            <code>${escapeHtml(formatMetricNumber(row.chars))}</code>
+            <code>${escapeHtml(formatMetricBytes(row.bytes))}</code>
+            <code>${escapeHtml(formatMetricNumber(row.lines))} lines</code>
+          </div>
+        `).join("") : `<div class="session-breakdown-empty">none</div>`}
+      </div>
+    </details>
+  `;
+}
+
+function usageCacheReadTokens(usage) {
+  return Number(usage.cached_input_tokens ?? usage.cache_read_input_tokens ?? 0);
+}
+
+function usageCacheCreationTokens(usage) {
+  return Number(usage.cache_creation_input_tokens ?? 0);
+}
+
+function renderUsageBreakdown(usage, usageStatus, source) {
+  const isClaude = String(source || "").includes("claude");
+  const inputTokens = Number(usage.input_tokens || 0);
+  const cachedTokens = usageCacheReadTokens(usage);
+  const cacheCreationTokens = usageCacheCreationTokens(usage);
+  const outputTokens = Number(usage.output_tokens || 0);
+  const reasoningTokens = Number(usage.reasoning_output_tokens || 0);
+  const effectiveInputTokens = isClaude ? inputTokens + cachedTokens + cacheCreationTokens : inputTokens;
+  const uncachedInputTokens = usage.cached_input_tokens != null ? Math.max(0, inputTokens - cachedTokens) : inputTokens;
+  const cacheRatio = effectiveInputTokens > 0 ? `${(cachedTokens / effectiveInputTokens * 100).toFixed(1)}% cached` : "";
+  const rows = [
+    ["input_tokens", inputTokens],
+    [usage.cached_input_tokens != null ? "cached_input_tokens" : "cache_read_input_tokens", cachedTokens],
+    ["cache_creation_input_tokens", cacheCreationTokens],
+    ["uncached_input_tokens", uncachedInputTokens],
+    ["effective_input_tokens", effectiveInputTokens],
+    ["output_tokens", outputTokens],
+    ["reasoning_output_tokens", reasoningTokens],
+    ["visible_output_tokens", Math.max(0, outputTokens - reasoningTokens)],
+    ["total_reported_tokens", effectiveInputTokens + outputTokens]
+  ];
+  const flags = [
+    `status ${usageStatus.label}`,
+    source ? `source ${source}` : "",
+    cacheRatio,
+    usage.total_cost_usd != null ? `cost $${Number(usage.total_cost_usd || 0).toFixed(6)}` : "",
+    usage.duration_ms != null ? `duration ${formatMetricNumber(usage.duration_ms)}ms` : "",
+    usage.num_turns != null ? `turns ${formatMetricNumber(usage.num_turns)}` : "",
+    usage.subtype ? `subtype ${usage.subtype}` : ""
+  ].filter(Boolean);
+  return `
+    <details class="metrics-breakdown usage-breakdown" data-metrics-breakdown="usage">
+      <summary>Backend usage breakdown</summary>
+      <div class="session-breakdown-kpis">
+        ${flags.map(item => `<code>${escapeHtml(item)}</code>`).join("")}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Tokens</strong>
+        ${rows.map(([name, value]) => `
+          <div class="session-breakdown-row">
+            <span>${escapeHtml(name)}</span>
+            <code>${escapeHtml(formatMetricNumber(value))}</code>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
 function componentMetricRows(components, totalChars) {
   return Object.entries(components || {})
     .map(([name, metric]) => ({
@@ -1803,22 +2043,28 @@ function componentMetricRows(components, totalChars) {
 }
 
 function promptMetricsState(taskId) {
-  const metricsEvent = latestPromptMetricsEvent(taskId);
-  const usageEvent = latestAgentUsageEvent(taskId);
-  const overflowEvent = latestContextOverflowEvent(taskId);
+  const target = backendTarget();
+  const metricsEvent = latestPromptMetricsEvent(taskId, target);
+  const usageEvent = latestAgentUsageEvent(taskId, target);
+  const usageStatus = usageMetricsStatus(taskId, usageEvent, target);
+  const ahaInputStatus = ahaInputMetricsStatus(taskId, metricsEvent, target);
+  const overflowEvent = latestContextOverflowEvent(taskId, target);
   const data = eventData(metricsEvent || {});
   const total = data.total || {};
   const totalChars = Number(total.chars || 0);
   const rows = componentMetricRows(data.components || {}, totalChars);
   const largest = rows[0];
   const overflow = Boolean(overflowEvent && (!metricsEvent || conversationEventOrder(overflowEvent) >= conversationEventOrder(metricsEvent)));
-  return { backendSession: conversationBackendSession(taskId), data, largest, metricsEvent, overflow, overflowEvent, rows, total, totalChars, usageEvent };
+  const backendSession = conversationBackendSession(taskId);
+  const sessionStatus = backendSessionStatus(backendSession, overflow);
+  return { ahaInputStatus, backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus };
 }
 
 function renderPromptMetricsPanel(taskId) {
   const metrics = promptMetricsState(taskId);
-  const { backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, total, totalChars, usageEvent } = metrics;
-  if (!metricsEvent && !overflowEvent) {
+  const { ahaInputStatus, backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus } = metrics;
+  const hasSessionInfo = Boolean(backendSession?.id || backendSession?.exists);
+  if (!metricsEvent && !overflowEvent && !hasSessionInfo) {
     return `
       <section class="prompt-metrics empty-metrics">
         <div>
@@ -1830,8 +2076,6 @@ function renderPromptMetricsPanel(taskId) {
     `;
   }
 
-  const statusLabel = overflow ? "overflow" : "latest";
-  const statusClass = overflow ? "prompt-overflow" : "prompt-ok";
   const source = data.source || eventData(overflowEvent || {}).source || "backend";
   const usage = eventData(usageEvent || {}).usage || {};
   const sessionSize = Number(backendSession?.size_bytes);
@@ -1840,43 +2084,112 @@ function renderPromptMetricsPanel(taskId) {
     : backendSession?.id
       ? `${backendSession.backend || "backend"} jsonl · missing`
       : "";
-  const parts = [
+  const sessionAnalysis = backendSession?.analysis || {};
+  const sessionAhaCounts = sessionAnalysis.aha_prompt_counts || {};
+  const sessionAhaChars = sessionAnalysis.aha_prompt_chars || {};
+  const sessionFullCount = Number(sessionAhaCounts.full || 0);
+  const sessionFullChars = Number(sessionAhaChars.full || 0);
+  const sessionDeltaCount = Number(sessionAhaCounts.sticky_delta || 0);
+  const sessionDeltaChars = Number(sessionAhaChars.sticky_delta || 0);
+  const sessionPromptCount = Number(sessionAnalysis.aha_prompt_total_count || 0);
+  const sessionPromptChars = Number(sessionAnalysis.aha_prompt_total_chars || 0);
+  const sessionMirrorChars = Number(sessionAnalysis.event_msg_prompt_mirror_total_chars || 0);
+  const sessionToolChars = Number(sessionAnalysis.tool_output_chars || 0);
+  const sessionLineCount = Number(sessionAnalysis.line_count || 0);
+  const sessionPromptMode = sessionAnalysis.latest_prompt_mode || data.prompt_mode || "";
+  const sessionSummary = backendSession?.exists
+    ? sessionPromptCount
+      ? `${formatMetricCompact(sessionPromptChars)} AHA prompt`
+      : "no AHA prompt"
+    : backendSession?.id
+      ? "session missing"
+      : "no session";
+  const sessionParts = backendSession?.exists
+    ? [
+        Number.isFinite(sessionSize) ? `file ${formatMetricBytes(sessionSize)}` : "",
+        sessionLineCount ? `${formatMetricNumber(sessionLineCount)} lines` : "",
+        formatMetricCountChars(sessionFullCount, sessionFullChars, "full"),
+        formatMetricCountChars(sessionDeltaCount, sessionDeltaChars, "delta"),
+        `mirrors ${formatMetricNumber(sessionMirrorChars)} chars`,
+        `tools ${formatMetricNumber(sessionToolChars)} chars`,
+        sessionPromptMode ? `latest ${sessionPromptMode}` : "",
+        sessionAnalysis.parse_errors ? `${formatMetricNumber(sessionAnalysis.parse_errors)} parse errors` : ""
+      ].filter(Boolean)
+    : [backendSession?.id ? "jsonl not found" : "waiting for backend session"];
+  const ahaParts = [
     `${formatMetricNumber(totalChars)} chars`,
     `${formatMetricBytes(total.bytes)} bytes`,
     `${formatMetricNumber(total.lines)} lines`,
-    data.event_limit ? `${formatMetricNumber(data.event_limit)} events` : "",
-    Number.isFinite(sessionSize) ? `session ${formatMetricBytes(sessionSize)}` : ""
+    data.event_limit ? `${formatMetricNumber(data.event_limit)} events` : ""
   ].filter(Boolean);
   const usageParts = [
     usage.input_tokens != null ? `input ${formatMetricNumber(usage.input_tokens)}` : "",
-    usage.cached_input_tokens != null ? `cached ${formatMetricNumber(usage.cached_input_tokens)}` : "",
+    (usage.cached_input_tokens != null || usage.cache_read_input_tokens != null) ? `cached ${formatMetricNumber(usageCacheReadTokens(usage))}` : "",
+    usage.cache_creation_input_tokens != null ? `created ${formatMetricNumber(usageCacheCreationTokens(usage))}` : "",
     usage.output_tokens != null ? `output ${formatMetricNumber(usage.output_tokens)}` : "",
-    usage.reasoning_output_tokens != null ? `reasoning ${formatMetricNumber(usage.reasoning_output_tokens)}` : ""
+    usage.reasoning_output_tokens != null ? `reasoning ${formatMetricNumber(usage.reasoning_output_tokens)}` : "",
+    usage.total_cost_usd != null ? `$${Number(usage.total_cost_usd || 0).toFixed(4)}` : "",
+    usage.num_turns != null ? `${formatMetricNumber(usage.num_turns)} turns` : ""
   ].filter(Boolean);
+  const backendParts = [
+    ...usageParts,
+  ].filter(Boolean);
+  const backendSummary = usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `
     <section class="prompt-metrics ${overflow ? "has-overflow" : ""}">
-      <div class="prompt-metrics-head">
-        <div>
-          <span>Prompt Input</span>
-          <strong>${escapeHtml(parts[0] || "0 chars")}</strong>
-          <code>${escapeHtml([source, topLabel, sessionLabel].filter(Boolean).join(" · "))}</code>
-        </div>
-        <span class="status ${statusClass}">${escapeHtml(statusLabel)}</span>
-      </div>
-      <div class="prompt-metric-kpis">
-        ${[...parts, ...usageParts].map(part => `<code>${escapeHtml(part)}</code>`).join("")}
-      </div>
-      <div class="prompt-component-bars">
-        ${rows.map(row => `
-          <div class="prompt-component-row">
-            <span>${escapeHtml(row.name)}</span>
-            <div class="prompt-component-track" aria-hidden="true">
-              <i style="width: ${row.percent.toFixed(2)}%"></i>
-            </div>
-            <code>${escapeHtml(formatMetricNumber(row.chars))}</code>
+      <div class="prompt-metrics-section aha-metrics-section">
+        <div class="prompt-metrics-head">
+          <div>
+            <span>AHA Input</span>
+            <strong>${escapeHtml(ahaParts[0] || "0 chars")}</strong>
+            <code>${escapeHtml(topLabel)}</code>
           </div>
-        `).join("")}
+          <span class="status ${ahaInputStatus.className}">${escapeHtml(ahaInputStatus.label)}</span>
+        </div>
+        <div class="prompt-metric-kpis">
+          ${ahaParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+        </div>
+        <div class="prompt-component-bars">
+          ${rows.map(row => `
+            <div class="prompt-component-row">
+              <span>${escapeHtml(row.name)}</span>
+              <div class="prompt-component-track" aria-hidden="true">
+                <i style="width: ${row.percent.toFixed(2)}%"></i>
+              </div>
+              <code>${escapeHtml(formatMetricNumber(row.chars))}</code>
+            </div>
+          `).join("")}
+        </div>
+        ${renderAhaInputBreakdown(data, rows)}
+      </div>
+      <div class="prompt-metrics-section backend-metrics-section">
+        <div class="prompt-metrics-head">
+          <div>
+            <span>Backend Usage</span>
+            <strong>${escapeHtml(backendSummary)}</strong>
+            <code>${escapeHtml(source || "waiting for backend usage")}</code>
+          </div>
+          <span class="status ${usageStatus.className}">${escapeHtml(usageStatus.label)}</span>
+        </div>
+        <div class="prompt-metric-kpis">
+          ${(backendParts.length ? backendParts : [`usage ${usageStatus.label}`]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+        </div>
+        ${renderUsageBreakdown(usage, usageStatus, source)}
+      </div>
+      <div class="prompt-metrics-section session-metrics-section">
+        <div class="prompt-metrics-head">
+          <div>
+            <span>Backend Session</span>
+            <strong>${escapeHtml(sessionSummary)}</strong>
+            <code>${escapeHtml(sessionLabel || "waiting for backend session")}</code>
+          </div>
+          <span class="status ${sessionStatus.className}">${escapeHtml(sessionStatus.label)}</span>
+        </div>
+        <div class="prompt-metric-kpis">
+          ${sessionParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+        </div>
+        ${backendSession?.exists ? renderSessionBreakdown(sessionAnalysis) : ""}
       </div>
     </section>
   `;
@@ -1884,13 +2197,16 @@ function renderPromptMetricsPanel(taskId) {
 
 function renderPromptMetricsPopover(taskId) {
   const metrics = promptMetricsState(taskId);
-  const hasMetrics = Boolean(metrics.metricsEvent || metrics.overflowEvent);
+  const hasMetrics = Boolean(metrics.metricsEvent || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists);
   const summary = metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
   const top = metrics.largest?.name || "no components";
   const key = promptMetricsKey(taskId);
   const open = openPromptMetricsKey === key ? " open" : "";
-  const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
-  const label = hasMetrics ? `Prompt metrics: ${formatMetricNumber(metrics.totalChars)} chars, top ${top}` : "Prompt metrics unavailable";
+  const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", metrics.sessionStatus?.className || "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
+  const sessionLabel = metrics.sessionStatus?.label || "none";
+  const label = hasMetrics
+    ? `AHA input: ${formatMetricNumber(metrics.totalChars)} chars, top ${top}; session ${sessionLabel}`
+    : "Prompt metrics unavailable";
   return `
     <details class="${classes}" data-turn-metrics-key="${escapeHtml(key)}"${open}>
       <summary class="turn-metrics-trigger" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
@@ -1906,7 +2222,7 @@ function renderPromptMetricsPopover(taskId) {
 
 function renderPromptMetricsDock(taskId) {
   const metrics = promptMetricsState(taskId);
-  if (!metrics.metricsEvent && !metrics.overflowEvent) return "";
+  if (!metrics.metricsEvent && !metrics.overflowEvent && !metrics.backendSession?.id && !metrics.backendSession?.exists) return "";
   return `<div class="conversation-metrics-dock">${renderPromptMetricsPopover(taskId)}</div>`;
 }
 
@@ -3831,6 +4147,7 @@ panelEl.addEventListener("toggle", event => {
   const metricsKey = details?.dataset.turnMetricsKey;
   if (metricsKey) {
     openPromptMetricsKey = details.open ? metricsKey : openPromptMetricsKey === metricsKey ? "" : openPromptMetricsKey;
+    if (!details.open) closePromptMetricsBreakdowns(details);
     if (details.open) window.requestAnimationFrame(positionPromptMetricsPopover);
     return;
   }

@@ -64,6 +64,7 @@ from aha_cli.store.filesystem import (
     write_task_result,
 )
 from aha_cli.web.server import (
+    backend_session_jsonl_info,
     finalization_prompt,
     format_agent_command,
     format_aha_command,
@@ -2419,6 +2420,110 @@ class CliTests(unittest.TestCase):
         metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
         self.assertEqual(metrics["data"]["total"]["chars"], 1234)
 
+    def test_backend_session_jsonl_info_analyzes_aha_prompt_duplication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            session_id = "session-analysis-1"
+            session_file = home / ".codex" / "sessions" / "2026" / "05" / "21" / f"rollout-{session_id}.jsonl"
+            full_prompt = textwrap.dedent(
+                """\
+                You are connected to AHA as the real backend agent.
+
+                Current status:
+                {'task': 'task-001'}
+
+                User message from browser at 2026-05-21T00:00:00+00:00:
+                first request
+                """
+            )
+            delta_prompt = textwrap.dedent(
+                """\
+                You are connected to AHA as the real backend agent.
+
+                Current delta status:
+                {'task': 'task-001'}
+
+                User message from browser at 2026-05-21T00:01:00+00:00:
+                second request
+                """
+            )
+            append_jsonl(session_file, {"type": "session_meta", "payload": {"id": session_id}})
+            append_jsonl(
+                session_file,
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": full_prompt}]}},
+            )
+            append_jsonl(session_file, {"type": "event_msg", "payload": {"type": "user_message", "message": full_prompt}})
+            append_jsonl(
+                session_file,
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": delta_prompt}]}},
+            )
+            append_jsonl(session_file, {"type": "response_item", "payload": {"type": "function_call_output", "output": "tool-output-text"}})
+            append_jsonl(
+                session_file,
+                {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "reply"}]}},
+            )
+
+            with mock.patch("aha_cli.web.server.Path.home", return_value=home):
+                info = backend_session_jsonl_info({"backend": "codex", "backend_session_id": session_id})
+
+        analysis = info["analysis"]
+        self.assertTrue(info["exists"])
+        self.assertGreater(info["size_bytes"], 0)
+        self.assertEqual(analysis["line_count"], 6)
+        self.assertEqual(analysis["aha_prompt_counts"]["full"], 1)
+        self.assertEqual(analysis["aha_prompt_counts"]["sticky_delta"], 1)
+        self.assertEqual(analysis["event_msg_prompt_mirror_counts"]["full"], 1)
+        self.assertEqual(analysis["aha_prompt_total_count"], 2)
+        self.assertEqual(analysis["latest_prompt_mode"], "sticky_delta")
+        self.assertGreater(analysis["tool_output_chars"], 0)
+        self.assertGreater(analysis["assistant_message_chars"], 0)
+
+    def test_backend_session_jsonl_info_analyzes_claude_session_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            session_id = "claude-session-analysis-1"
+            session_file = home / ".claude" / "projects" / "project-a" / f"{session_id}.jsonl"
+            full_prompt = textwrap.dedent(
+                """\
+                You are connected to AHA as the real backend agent.
+
+                Current status:
+                {'task': 'task-001'}
+
+                User message from browser at 2026-05-21T00:00:00+00:00:
+                first request
+                """
+            )
+            append_jsonl(session_file, {"type": "queue-operation", "operation": "enqueue", "sessionId": session_id, "content": full_prompt})
+            append_jsonl(session_file, {"type": "user", "sessionId": session_id, "message": {"role": "user", "content": full_prompt}})
+            append_jsonl(
+                session_file,
+                {"type": "assistant", "sessionId": session_id, "message": {"role": "assistant", "content": [{"type": "text", "text": "reply"}]}},
+            )
+            append_jsonl(
+                session_file,
+                {
+                    "type": "user",
+                    "sessionId": session_id,
+                    "message": {"role": "user", "content": [{"type": "tool_result", "content": "tool-output"}]},
+                },
+            )
+
+            with mock.patch("aha_cli.web.server.Path.home", return_value=home):
+                info = backend_session_jsonl_info({"backend": "claude", "backend_session_id": session_id})
+
+        analysis = info["analysis"]
+        self.assertTrue(info["exists"])
+        self.assertEqual(analysis["backend"], "claude")
+        self.assertEqual(analysis["type_counts"]["user"], 2)
+        self.assertEqual(analysis["aha_prompt_counts"]["full"], 1)
+        self.assertEqual(analysis["event_msg_prompt_mirror_counts"]["full"], 1)
+        self.assertEqual(analysis["response_item_counts"]["message:user"], 1)
+        self.assertEqual(analysis["response_item_counts"]["message:assistant"], 1)
+        self.assertEqual(analysis["response_item_counts"]["tool_result:user"], 1)
+        self.assertGreater(analysis["tool_output_chars"], 0)
+        self.assertGreater(analysis["assistant_message_chars"], 0)
+
     def test_events_api_replays_from_saved_offset_after_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2983,6 +3088,81 @@ class CliTests(unittest.TestCase):
         self.assertIn("prompt-event-29", prompt)
         self.assertNotIn("prompt-event-0", prompt)
 
+    def test_chat_prompt_scopes_status_and_events_to_current_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Prompt scoping", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                code, _ = self.run_cli("task", "add", run_id, "Foreign verbose task title that should stay out", "--no-dispatch")
+                self.assertEqual(code, 0)
+                code, _ = self.run_cli("task", "add", run_id, "Current compact prompt title", "--no-dispatch")
+                self.assertEqual(code, 0)
+                append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "foreign-event"})
+                append_event(root, run_id, "agent_message", {"task_id": "task-003", "target": "main", "text": "current-event"})
+
+                prompt = chat_prompt(
+                    root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "status", "task_id": "task-003", "role": "main"},
+                    "",
+                )
+
+        self.assertIn("Current compact prompt title", prompt)
+        self.assertIn("current-event", prompt)
+        self.assertIn("task_counts", prompt)
+        self.assertNotIn("Foreign verbose task title that should stay out", prompt)
+        self.assertNotIn("foreign-event", prompt)
+
+    def test_chat_prompt_uses_delta_for_existing_sticky_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sticky prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                append_event(
+                    root,
+                    run_id,
+                    "agent_message",
+                    {"task_id": "task-001", "target": "main", "text": "already-in-backend-session"},
+                )
+                append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+                append_event(root, run_id, "task_hidden", {"task_id": "task-001"})
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "next request",
+                        "task_id": "task-001",
+                        "role": "main",
+                        "ts": "2026-01-01T00:00:00+00:00",
+                    },
+                    "prefix",
+                )
+
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("Current task delta:", prompt)
+        self.assertIn("backend-session-1", prompt)
+        self.assertIn("next request", prompt)
+        self.assertIn("task_hidden", prompt)
+        self.assertNotIn("Ownership and routing policy", prompt)
+        self.assertNotIn("already-in-backend-session", prompt)
+        self.assertIn("sticky_context", metrics["components"])
+        self.assertIn("delta_status", metrics["components"])
+        self.assertNotIn("task_context", metrics["components"])
+
     def test_watch_tail_starts_at_current_event_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3047,7 +3227,35 @@ class CliTests(unittest.TestCase):
         self.assertIn("agent_prompt_metrics", script)
         self.assertIn("agent_context_overflow", script)
         self.assertIn("renderPromptMetricsPanel", script)
+        self.assertIn("AHA Input", script)
+        self.assertIn("Backend Usage", script)
+        self.assertIn("Backend Session", script)
+        self.assertIn("ahaInputMetricsStatus", script)
+        self.assertIn("backendSessionStatus", script)
+        self.assertIn("BACKEND_SESSION_LARGE_BYTES", script)
+        self.assertIn("sessionAhaCounts", script)
+        self.assertIn("Session breakdown", script)
+        self.assertIn("renderSessionBreakdown", script)
+        self.assertIn("AHA input breakdown", script)
+        self.assertIn("Backend usage breakdown", script)
+        self.assertIn("closePromptMetricsBreakdowns", script)
+        self.assertIn("sessionBreakdownOpen", script)
+        self.assertIn("breakdownOpen", script)
+        self.assertIn("cache_read_input_tokens", script)
+        self.assertIn("cache_creation_input_tokens", script)
+        self.assertIn("total_cost_usd", script)
+        self.assertIn("usageMetricsStatus", script)
         self.assertIn("prompt-component-bars", script)
+        self.assertIn("backend-metrics-section", styles)
+        self.assertIn("session-metrics-section", styles)
+        self.assertIn("prompt-current", styles)
+        self.assertIn("prompt-latest", styles)
+        self.assertIn("session-large", styles)
+        self.assertIn("session-overflow", styles)
+        self.assertIn("session-breakdown-row", styles)
+        self.assertIn("metrics-breakdown-row-wide", styles)
+        self.assertIn("usage-previous", styles)
+        self.assertIn("session-ok", styles)
         self.assertIn("prompt-metrics", styles)
         self.assertIn("prompt-component-track", styles)
 
