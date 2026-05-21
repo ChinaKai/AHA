@@ -299,6 +299,35 @@ button, input, select, textarea { font: inherit; }
   color: #667085;
   font-size: 11px;
 }
+.task-create-form {
+  gap: 12px;
+  margin-top: 0;
+}
+.task-create-form input:not([type="checkbox"]),
+.task-create-form select,
+.task-create-form textarea {
+  width: 100%;
+}
+.task-primary-fields {
+  display: grid;
+  gap: 10px;
+}
+.task-title-field input {
+  min-height: 44px;
+  font-size: 14px;
+}
+.task-description-field textarea {
+  min-height: 92px;
+}
+.task-defaults-grid {
+  grid-template-columns: minmax(220px, 2fr) minmax(130px, 1fr) minmax(130px, 1fr);
+}
+.task-workspace-field {
+  align-content: start;
+}
+.task-workspace-field input {
+  margin-top: 6px;
+}
 .checkbox-field {
   align-content: start;
 }
@@ -1497,9 +1526,6 @@ button {
   color: #475467;
   font-size: 18px;
   line-height: 1;
-}
-.task-create-form {
-  margin-top: 0;
 }
 .task-dialog-actions {
   display: flex;

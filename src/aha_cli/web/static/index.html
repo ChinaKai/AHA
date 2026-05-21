@@ -163,14 +163,25 @@
         <div id="task-run-context" class="task-run-context meta">当前 Run 加载中...</div>
         <fieldset class="form-section">
           <legend>Task</legend>
-          <input id="new-task-title" placeholder="New task title">
-          <textarea id="new-task-description" rows="5" placeholder="Additional context, requirements, constraints, or links"></textarea>
-          <select id="workspace-select" aria-label="Workspace"></select>
-          <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
+          <div class="task-primary-fields">
+            <label class="field-label task-title-field">
+              <span>Title</span>
+              <input id="new-task-title" placeholder="New task title">
+            </label>
+            <label class="field-label task-description-field">
+              <span>Description</span>
+              <textarea id="new-task-description" rows="4" placeholder="Additional context, requirements, constraints, or links"></textarea>
+            </label>
+          </div>
         </fieldset>
         <fieldset class="form-section">
           <legend>Defaults</legend>
-          <div class="field-row">
+          <div class="field-row task-defaults-grid">
+            <label class="field-label task-workspace-field">
+              <span>Workspace</span>
+              <select id="workspace-select" aria-label="Workspace"></select>
+              <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
+            </label>
             <label class="field-label">
               <span>Default backend</span>
               <select id="task-backend"></select>
