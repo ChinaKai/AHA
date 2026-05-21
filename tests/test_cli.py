@@ -3359,6 +3359,21 @@ class CliTests(unittest.TestCase):
         self.assertIn("bootstrap-panel", styles)
         self.assertIn("bootstrap-proxy", styles)
 
+    def test_frontend_uses_modal_for_task_create(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("open-task-create", html)
+        self.assertIn("task-create-dialog", html)
+        self.assertIn('form id="task-form"', html)
+        self.assertIn("openTaskCreateDialog", script)
+        self.assertIn("closeTaskCreateDialog", script)
+        self.assertIn('action === "add-task"', script)
+        self.assertIn("task-dialog", styles)
+        self.assertIn("task-create-trigger", styles)
+
     def test_frontend_renders_prompt_metrics_visualization(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")

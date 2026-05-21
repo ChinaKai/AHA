@@ -109,7 +109,10 @@ const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
 const mobileTaskTitleEl = document.getElementById("mobile-task-title");
 const mobileTaskStatusEl = document.getElementById("mobile-task-status");
 const summaryEl = document.getElementById("summary");
-const taskCreateEl = document.getElementById("task-create");
+const openTaskCreateEl = document.getElementById("open-task-create");
+const taskCreateDialogEl = document.getElementById("task-create-dialog");
+const closeTaskCreateEl = document.getElementById("close-task-create");
+const cancelTaskCreateEl = document.getElementById("cancel-task-create");
 const collapseOverviewEl = document.getElementById("collapse-overview");
 const collapseAgentsEl = document.getElementById("collapse-agents");
 const overviewRailToggleEl = document.getElementById("overview-rail-toggle");
@@ -130,6 +133,8 @@ const selectedTaskMetaEl = document.getElementById("selected-task-meta");
 const panelEl = document.getElementById("panel");
 const sendFormEl = document.getElementById("send-form");
 const messageEl = document.getElementById("message");
+const taskFormEl = document.getElementById("task-form");
+const newTaskTitleEl = document.getElementById("new-task-title");
 const agentTargetEl = document.getElementById("agent-target");
 const agentsEl = document.getElementById("agents");
 const taskBackendEl = document.getElementById("task-backend");
@@ -882,27 +887,42 @@ async function importRunArchive(file) {
   }
 }
 
-function initTaskCreateDisclosure() {
-  if (!taskCreateEl) return;
-  const mobileQuery = window.matchMedia("(max-width: 640px)");
-  let applyingDefault = false;
-  const applyDefault = () => {
-    if (taskCreateEl.dataset.userToggled === "true") return;
-    applyingDefault = true;
-    taskCreateEl.open = !mobileQuery.matches;
-    setTimeout(() => {
-      applyingDefault = false;
-    }, 50);
-  };
-  taskCreateEl.addEventListener("toggle", () => {
-    if (!applyingDefault) taskCreateEl.dataset.userToggled = "true";
-  });
-  if (mobileQuery.addEventListener) {
-    mobileQuery.addEventListener("change", applyDefault);
+function closeTaskCreateDialog() {
+  if (!taskCreateDialogEl) return;
+  if (typeof taskCreateDialogEl.close === "function" && taskCreateDialogEl.open) {
+    taskCreateDialogEl.close();
   } else {
-    mobileQuery.addListener(applyDefault);
+    taskCreateDialogEl.removeAttribute("open");
   }
-  applyDefault();
+}
+
+function openTaskCreateDialog() {
+  if (!currentRunId) {
+    alert("请先创建 Run，再添加任务。");
+    return;
+  }
+  if (!taskCreateDialogEl) return;
+  closeMobileSheets();
+  closeMobileActionPanel();
+  try {
+    if (typeof taskCreateDialogEl.showModal === "function") {
+      if (!taskCreateDialogEl.open) taskCreateDialogEl.showModal();
+    } else {
+      taskCreateDialogEl.setAttribute("open", "");
+    }
+  } catch (_err) {
+    taskCreateDialogEl.setAttribute("open", "");
+  }
+  setTimeout(() => newTaskTitleEl?.focus(), 0);
+}
+
+function initTaskCreateDialog() {
+  openTaskCreateEl?.addEventListener("click", openTaskCreateDialog);
+  closeTaskCreateEl?.addEventListener("click", closeTaskCreateDialog);
+  cancelTaskCreateEl?.addEventListener("click", closeTaskCreateDialog);
+  taskCreateDialogEl?.addEventListener("click", event => {
+    if (event.target === taskCreateDialogEl) closeTaskCreateDialog();
+  });
 }
 
 function syncDelegationFields() {
@@ -1009,9 +1029,7 @@ async function handleMobileAction(action) {
     return;
   }
   if (action === "add-task") {
-    taskCreateEl.open = true;
-    setMobileSheet("tasks");
-    setTimeout(() => document.getElementById("new-task-title")?.focus(), 0);
+    openTaskCreateDialog();
     return;
   }
   if (["conversation", "final", "logs", "context"].includes(action)) {
@@ -4092,13 +4110,13 @@ document.querySelectorAll(".tab").forEach(button => {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
 });
 
-document.getElementById("task-form").addEventListener("submit", async event => {
+taskFormEl?.addEventListener("submit", async event => {
   event.preventDefault();
   if (!currentRunId) {
     alert("请先创建 Run，再添加任务。");
     return;
   }
-  const title = document.getElementById("new-task-title").value.trim();
+  const title = newTaskTitleEl?.value.trim() || "";
   if (!title) return;
   const delegationPolicy = delegationPolicyEl?.value || "disabled";
   setCreateProxyDefaultsFromInputs();
@@ -4122,18 +4140,25 @@ document.getElementById("task-form").addEventListener("submit", async event => {
     preferred_sub_backend: taskBackendEl.value,
     dispatch: true
   };
+  const reopenCreateDialog = Boolean(taskCreateDialogEl?.open);
+  if (reopenCreateDialog) closeTaskCreateDialog();
   const confirmed = await confirmAddTask(payload);
-  if (!confirmed) return;
+  if (!confirmed) {
+    if (reopenCreateDialog) openTaskCreateDialog();
+    return;
+  }
   try {
     await fetchJson(apiUrl("/api/tasks"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(runScopedPayload(payload))
     }, "Failed to create task");
-    document.getElementById("new-task-title").value = "";
+    if (newTaskTitleEl) newTaskTitleEl.value = "";
     await loadStatus();
     closeMobileSheets();
+    closeTaskCreateDialog();
   } catch (err) {
+    if (reopenCreateDialog) openTaskCreateDialog();
     alert(err.message || String(err));
   }
 });
@@ -4393,7 +4418,7 @@ window.addEventListener("online", () => {
   requestRealtimeCatchup();
 });
 
-initTaskCreateDisclosure();
+initTaskCreateDialog();
 if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
 syncDelegationFields();
 initDesktopSidebars();

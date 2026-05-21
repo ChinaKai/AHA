@@ -62,90 +62,7 @@
           <button id="close-tasks-sheet" class="mobile-sheet-close" type="button" aria-controls="overview-sidebar">Close</button>
         </div>
         <div id="summary" class="meta">Loading...</div>
-        <details id="task-create" class="task-create">
-          <summary>Add Task</summary>
-          <form id="task-form" class="stack-form">
-            <div id="task-run-context" class="task-run-context meta">当前 Run 加载中...</div>
-            <fieldset class="form-section">
-              <legend>Task</legend>
-              <input id="new-task-title" placeholder="New task title">
-              <select id="workspace-select" aria-label="Workspace"></select>
-              <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>Defaults</legend>
-              <div class="field-row">
-                <label class="field-label">
-                  <span>Default backend</span>
-                  <select id="task-backend"></select>
-                </label>
-                <label class="field-label">
-                  <span>Default model</span>
-                  <select id="task-model"></select>
-                </label>
-              </div>
-            </fieldset>
-            <details class="form-section advanced-task-options">
-              <summary>Advanced</summary>
-              <div class="field-row">
-                <label class="field-label">
-                  <span>Default sandbox</span>
-                  <select id="task-sandbox">
-                    <option value="workspace-write">workspace-write</option>
-                    <option value="read-only">read-only</option>
-                    <option value="danger-full-access">danger-full-access</option>
-                  </select>
-                </label>
-                <label class="field-label">
-                  <span>Default approval</span>
-                  <select id="task-approval">
-                    <option value="never">never</option>
-                    <option value="on-failure">on-failure</option>
-                    <option value="on-request">on-request</option>
-                    <option value="untrusted">untrusted</option>
-                  </select>
-                </label>
-              </div>
-              <div class="field-row">
-                <label class="field-label">
-                  <span>Delegation</span>
-                  <select id="delegation-policy">
-                    <option value="auto">auto</option>
-                    <option value="disabled">off</option>
-                  </select>
-                </label>
-                <label id="max-sub-agents-field" class="field-label">
-                  <span>Max auto sub-agents</span>
-                  <input id="max-sub-agents" type="number" min="1" max="16" value="3">
-                </label>
-              </div>
-              <div class="field-row">
-                <label class="field-label">
-                  <span>HTTP proxy</span>
-                  <input id="task-http-proxy" placeholder="http://127.0.0.1:7890">
-                </label>
-                <label class="field-label">
-                  <span>HTTPS proxy</span>
-                  <input id="task-https-proxy" placeholder="http://127.0.0.1:7890">
-                </label>
-              </div>
-              <div class="field-row">
-                <label class="field-label">
-                  <span>NO_PROXY</span>
-                  <input id="task-no-proxy" placeholder="localhost,127.0.0.1,::1">
-                </label>
-                <label class="field-label checkbox-field">
-                  <span>Proxy default</span>
-                  <span class="checkbox-line">
-                    <input id="task-proxy-enabled" type="checkbox">
-                    <span>Enable for new agents</span>
-                  </span>
-                </label>
-              </div>
-            </details>
-            <button type="submit">Add Task</button>
-          </form>
-        </details>
+        <button id="open-task-create" class="task-create-trigger" type="button">New Task</button>
       </div>
       <div class="task-list-tools">
         <label>
@@ -233,6 +150,101 @@
       </div>
     </aside>
   </main>
+  <dialog id="task-create-dialog" class="task-dialog" aria-labelledby="task-create-title">
+    <div class="task-dialog-panel">
+      <div class="task-dialog-head">
+        <div>
+          <h2 id="task-create-title">New Task</h2>
+          <p>Create a task and dispatch its backend agent.</p>
+        </div>
+        <button id="close-task-create" class="task-dialog-close" type="button" aria-label="Close task form">×</button>
+      </div>
+      <form id="task-form" class="stack-form task-create-form">
+        <div id="task-run-context" class="task-run-context meta">当前 Run 加载中...</div>
+        <fieldset class="form-section">
+          <legend>Task</legend>
+          <input id="new-task-title" placeholder="New task title">
+          <select id="workspace-select" aria-label="Workspace"></select>
+          <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
+        </fieldset>
+        <fieldset class="form-section">
+          <legend>Defaults</legend>
+          <div class="field-row">
+            <label class="field-label">
+              <span>Default backend</span>
+              <select id="task-backend"></select>
+            </label>
+            <label class="field-label">
+              <span>Default model</span>
+              <select id="task-model"></select>
+            </label>
+          </div>
+        </fieldset>
+        <details class="form-section advanced-task-options">
+          <summary>Advanced</summary>
+          <div class="field-row">
+            <label class="field-label">
+              <span>Default sandbox</span>
+              <select id="task-sandbox">
+                <option value="workspace-write">workspace-write</option>
+                <option value="read-only">read-only</option>
+                <option value="danger-full-access">danger-full-access</option>
+              </select>
+            </label>
+            <label class="field-label">
+              <span>Default approval</span>
+              <select id="task-approval">
+                <option value="never">never</option>
+                <option value="on-failure">on-failure</option>
+                <option value="on-request">on-request</option>
+                <option value="untrusted">untrusted</option>
+              </select>
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field-label">
+              <span>Delegation</span>
+              <select id="delegation-policy">
+                <option value="auto">auto</option>
+                <option value="disabled">off</option>
+              </select>
+            </label>
+            <label id="max-sub-agents-field" class="field-label">
+              <span>Max auto sub-agents</span>
+              <input id="max-sub-agents" type="number" min="1" max="16" value="3">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field-label">
+              <span>HTTP proxy</span>
+              <input id="task-http-proxy" placeholder="http://127.0.0.1:7890">
+            </label>
+            <label class="field-label">
+              <span>HTTPS proxy</span>
+              <input id="task-https-proxy" placeholder="http://127.0.0.1:7890">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field-label">
+              <span>NO_PROXY</span>
+              <input id="task-no-proxy" placeholder="localhost,127.0.0.1,::1">
+            </label>
+            <label class="field-label checkbox-field">
+              <span>Proxy default</span>
+              <span class="checkbox-line">
+                <input id="task-proxy-enabled" type="checkbox">
+                <span>Enable for new agents</span>
+              </span>
+            </label>
+          </div>
+        </details>
+        <div class="task-dialog-actions">
+          <button id="cancel-task-create" type="button">Cancel</button>
+          <button class="primary" type="submit">Create Task</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
   <dialog id="task-create-confirm" class="confirm-dialog" aria-labelledby="task-create-confirm-title">
     <form method="dialog" class="confirm-dialog-panel">
       <div class="confirm-dialog-head">

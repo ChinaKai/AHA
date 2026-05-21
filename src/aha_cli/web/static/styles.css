@@ -223,10 +223,9 @@ button, input, select { font: inherit; }
   gap: 8px;
   margin-top: 12px;
 }
-.task-create {
+.task-create-trigger {
+  width: 100%;
   margin-top: 12px;
-}
-.task-create > summary {
   min-height: 38px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
@@ -240,22 +239,10 @@ button, input, select { font: inherit; }
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 650;
-  list-style: none;
 }
-.task-create > summary::-webkit-details-marker {
-  display: none;
-}
-.task-create > summary::after {
+.task-create-trigger::after {
   content: "+";
   color: #667085;
-  font-size: 12px;
-  font-weight: 600;
-}
-.task-create[open] > summary::after {
-  content: "-";
-}
-.task-create > .stack-form {
-  margin-top: 10px;
 }
 .task-run-context {
   min-height: 24px;
@@ -1457,6 +1444,75 @@ button {
   background: #1f6feb;
   color: white;
 }
+.task-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(90vh, 760px);
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #17202a;
+}
+.task-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.44);
+}
+.task-dialog-panel {
+  display: grid;
+  gap: 14px;
+  max-height: inherit;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #d8dde4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.22);
+}
+.task-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.task-dialog-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.task-dialog-head p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.task-dialog-close {
+  flex: 0 0 auto;
+  width: 34px;
+  min-height: 34px;
+  border-color: #d8dde4;
+  color: #475467;
+  font-size: 18px;
+  line-height: 1;
+}
+.task-create-form {
+  margin-top: 0;
+}
+.task-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+.task-dialog-actions button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #17202a;
+}
+.task-dialog-actions .primary {
+  border-color: #1f6feb;
+  background: #1f6feb;
+  color: #ffffff;
+}
 .confirm-dialog {
   width: min(460px, calc(100vw - 32px));
   max-height: min(82vh, 680px);
@@ -2024,6 +2080,28 @@ body.empty-run .panel {
   }
   .stack-form {
     gap: 7px;
+  }
+  .task-dialog {
+    width: 100vw;
+    max-width: none;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+  }
+  .task-dialog-panel {
+    min-height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border-width: 0;
+    padding: 14px;
+  }
+  .task-dialog-actions {
+    position: sticky;
+    bottom: 0;
+    margin: 0 -14px -14px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid #e4e7ec;
+    background: #ffffff;
   }
   .field-row,
   .agent-permissions {
