@@ -881,6 +881,10 @@ def ensure_session(
             if value is not None and session.get(key) != value:
                 session[key] = value
                 changed = True
+        for key, value in {"history_backend_sessions": [], "compact_summary": None}.items():
+            if key not in session:
+                session[key] = value
+                changed = True
         if changed:
             session["updated_at"] = utc_now()
             write_json(path, session)

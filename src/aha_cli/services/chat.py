@@ -387,6 +387,22 @@ def chat_prompt_with_metrics(root: Path, run_id: str, target: str, item: dict, p
     return prompt, metrics
 
 
+def compact_summary_context(root: Path, run_id: str, session: dict | None) -> str:
+    summary_meta = session.get("compact_summary") if isinstance(session, dict) else None
+    if not isinstance(summary_meta, dict):
+        return ""
+    relpath = str(summary_meta.get("path") or "").strip()
+    if not relpath:
+        return ""
+    path = run_dir(root, run_id) / relpath
+    if not path.exists():
+        return f"Backend compact summary: `{relpath}` was referenced but not found.\n"
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return ""
+    return f"Backend compact summary from previous session:\n{text}\n"
+
+
 def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *, metrics: dict | None = None) -> str:
     plan = require_plan(root, run_id)
     task_id = item.get("task_id")
@@ -479,6 +495,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             final_context = ""
             if is_finalization and existing_final:
                 final_context = f"- existing Final chars: {len(existing_final)}\n"
+            compact_context = compact_summary_context(root, run_id, session)
             rounds = detail.get("rounds", [])
             journal_context = ""
             if rounds:
@@ -495,6 +512,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                     "task_agents": detail["task"].get("agents", []),
                     "task_journal": journal_context,
                     "commit_policy": commit_policy,
+                    "compact_summary": compact_context,
                 }
             )
             task_context = textwrap.dedent(
@@ -507,6 +525,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 - agents: {detail["task"].get("agents", [])}
                 {final_context.rstrip()}
 {journal_context}
+{textwrap.indent(compact_context, "                ") if compact_context else ""}
 
                 Ownership and routing policy:
                 - Each sub-agent owns its assigned scope (`assignment` / `created_reason`).
@@ -537,7 +556,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         if is_finalization
         else "Reply directly to the user. Keep the answer concise and use the user's language."
     )
-    event_limit = 80 if is_finalization else 20
+    event_limit = 0 if is_finalization else 20
     if sticky_delta:
         event_limit = 8
         events = recent_delta_prompt_events(root, run_id, event_limit, str(task_id) if task_id else None, target, item)
@@ -610,8 +629,11 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             prompt_mode="sticky_delta",
         )
         return prompt
-    events = recent_prompt_events(root, run_id, event_limit, str(task_id) if task_id else None)
-    recent = "\n".join(format_event(event) for event in events) or "(no events)"
+    if is_finalization:
+        recent = "(omitted for finalization; use the Task journal, compact summary, and current finalization request)"
+    else:
+        events = recent_prompt_events(root, run_id, event_limit, str(task_id) if task_id else None)
+        recent = "\n".join(format_event(event) for event in events) or "(no events)"
     status = prompt_status_snapshot(root, run_id, str(task_id) if task_id else None, target)
     components.update(
         {

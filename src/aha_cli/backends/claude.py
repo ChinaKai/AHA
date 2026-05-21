@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from aha_cli.backends.codex import is_context_overflow_message, tail_text
+from aha_cli.domain.models import utc_now
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
@@ -120,8 +121,12 @@ def handle_claude_event(
     if raw_type == "system" and event.get("subtype") == "init":
         session_id = event.get("session_id")
         data["thread_id"] = session_id
-        if session is not None and session_id and not session.get("backend_session_id"):
-            session["backend_session_id"] = session_id
+        if session is not None and session_id:
+            if not session.get("backend_session_id"):
+                session["backend_session_id"] = session_id
+            if session.get("backend_session_id") == session_id and session.get("status") == "reset":
+                session["status"] = "active"
+                session["updated_at"] = utc_now()
         append_event_to_file(events_file, run_id, "agent_thread", data)
     elif raw_type == "error":
         data["message"] = event.get("message") or event.get("error") or ""
@@ -175,8 +180,12 @@ def handle_claude_event(
             )
     elif raw_type == "result":
         session_id = event.get("session_id")
-        if session is not None and session_id and not session.get("backend_session_id"):
-            session["backend_session_id"] = session_id
+        if session is not None and session_id:
+            if not session.get("backend_session_id"):
+                session["backend_session_id"] = session_id
+            if session.get("backend_session_id") == session_id and session.get("status") == "reset":
+                session["status"] = "active"
+                session["updated_at"] = utc_now()
         usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
         for key in ("duration_ms", "duration_api_ms", "total_cost_usd", "num_turns", "subtype"):
             if key in event:

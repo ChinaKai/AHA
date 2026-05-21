@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 
+from aha_cli.domain.models import utc_now
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
@@ -61,8 +62,12 @@ def handle_codex_event(
     if raw_type == "thread.started":
         thread_id = event.get("thread_id")
         data["thread_id"] = thread_id
-        if session is not None and thread_id and not session.get("backend_session_id"):
-            session["backend_session_id"] = thread_id
+        if session is not None and thread_id:
+            if not session.get("backend_session_id"):
+                session["backend_session_id"] = thread_id
+            if session.get("backend_session_id") == thread_id and session.get("status") == "reset":
+                session["status"] = "active"
+                session["updated_at"] = utc_now()
         append_event_to_file(events_file, run_id, "agent_thread", data)
     elif raw_type == "error":
         data["message"] = event.get("message", "")

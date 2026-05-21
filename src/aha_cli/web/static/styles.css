@@ -572,7 +572,7 @@ button, input, select { font: inherit; }
   background: #fffafa;
 }
 .prompt-metrics.empty-metrics span,
-.prompt-metrics-head span {
+.prompt-metrics-head > div:first-child > span {
   display: block;
   color: #667085;
   font-size: 11px;
@@ -580,7 +580,7 @@ button, input, select { font: inherit; }
   text-transform: uppercase;
 }
 .prompt-metrics.empty-metrics strong,
-.prompt-metrics-head strong {
+.prompt-metrics-head > div:first-child > strong {
   display: block;
   margin-top: 2px;
   color: #344054;
@@ -588,7 +588,7 @@ button, input, select { font: inherit; }
   line-height: 1.2;
 }
 .prompt-metrics.empty-metrics code,
-.prompt-metrics-head code,
+.prompt-metrics-head > div:first-child > code,
 .prompt-metric-kpis code,
 .prompt-component-row code {
   color: #667085;
@@ -603,7 +603,31 @@ button, input, select { font: inherit; }
 .prompt-metrics-head > div {
   min-width: 0;
 }
-.prompt-metrics-head code {
+.prompt-metrics-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: fit-content;
+  max-width: 180px;
+  flex-wrap: wrap;
+}
+.session-metrics-section .prompt-metrics-head-actions {
+  max-width: none;
+  flex-wrap: nowrap;
+}
+.session-metrics-section .prompt-metrics-head-actions .status,
+.session-metrics-section .prompt-metrics-head-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 1;
+}
+.prompt-metrics-head > div:first-child > code {
   display: block;
   margin-top: 4px;
   overflow: hidden;
@@ -622,6 +646,33 @@ button, input, select { font: inherit; }
   border-radius: 6px;
   background: #f9fafb;
   white-space: nowrap;
+}
+.prompt-metrics-head-actions button {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  height: 22px;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #344054;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.prompt-metrics-head-actions button:hover,
+.prompt-metrics-head-actions button:focus-visible {
+  border-color: #98a2b3;
+  background: #ffffff;
+}
+.prompt-metrics-head-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 .status.usage-current {
   border: 1px solid #bbf7d0;
@@ -649,6 +700,16 @@ button, input, select { font: inherit; }
   border: 1px solid #d0d5dd;
   background: #f9fafb;
   color: #667085;
+}
+.status.session-pending {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.status.session-done {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
 }
 .status.session-large {
   border: 1px solid #fde68a;
@@ -2119,14 +2180,31 @@ body.empty-run .panel {
     gap: 4px;
   }
   .prompt-metrics.empty-metrics,
-  .prompt-metrics-head,
   .prompt-component-row {
     grid-template-columns: 1fr;
   }
   .prompt-metrics-section {
     padding: 9px;
   }
-  .prompt-metrics-head code,
+  .prompt-metrics-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .prompt-metrics-head-actions {
+    max-width: 112px;
+  }
+  .session-metrics-section .prompt-metrics-head-actions {
+    max-width: 190px;
+  }
+  .prompt-metrics-head-actions .status {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .prompt-metrics-head-actions button {
+    padding: 0 8px;
+  }
+  .prompt-metrics-head > div:first-child > code,
   .prompt-component-row span {
     white-space: normal;
     overflow-wrap: anywhere;

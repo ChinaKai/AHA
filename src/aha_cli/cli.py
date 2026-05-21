@@ -22,6 +22,7 @@ from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_tasks import run_pending_tasks
+from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
@@ -479,6 +480,19 @@ def cmd_session(args: argparse.Namespace) -> int:
                 print(json.dumps(session, indent=2, ensure_ascii=False))
                 return 0
         raise SystemExit(f"Session not found: {args.agent_id}")
+    elif args.session_cmd == "compact-reset":
+        if not args.task_id:
+            raise SystemExit("--task-id is required for compact-reset")
+        payload = compact_reset_backend_session(
+            root,
+            run_id,
+            args.task_id,
+            args.agent_id,
+            reason=args.reason,
+            restart=args.restart,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -860,6 +874,14 @@ def build_parser() -> argparse.ArgumentParser:
     session_reset.add_argument("agent_id")
     session_reset.add_argument("--task-id", default=None)
     session_reset.set_defaults(func=cmd_session)
+    session_compact_reset = session_sub.add_parser("compact-reset")
+    session_compact_reset.add_argument("run_id")
+    session_compact_reset.add_argument("agent_id")
+    session_compact_reset.add_argument("--task-id", required=True)
+    session_compact_reset.add_argument("--reason", default="manual", choices=["manual", "large", "overflow", "final-reopen", "recovery"])
+    session_compact_reset.add_argument("--restart", action="store_true")
+    session_compact_reset.add_argument("--dry-run", action="store_true")
+    session_compact_reset.set_defaults(func=cmd_session)
 
     serve_p = sub.add_parser("serve")
     serve_p.add_argument("run_id", nargs="?")

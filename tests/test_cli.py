@@ -26,6 +26,7 @@ from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
+from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.orchestrator import (
     action_response_text,
     execute_actions,
@@ -633,6 +634,23 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rows[1]["data"]["target"], "sub-001")
             self.assertEqual(len(rows[1]["data"]["output_tail"]), 1200)
 
+    def test_codex_thread_started_reactivates_reset_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            session = {"status": "reset", "backend_session_id": None}
+            handle_codex_event(
+                json.dumps({"type": "thread.started", "thread_id": "new-codex-session"}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="codex-chat",
+                target="main",
+                session=session,
+            )
+
+        self.assertEqual(session["backend_session_id"], "new-codex-session")
+        self.assertEqual(session["status"], "active")
+
     def test_codex_context_overflow_event_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             events = Path(tmp) / "events.jsonl"
@@ -676,7 +694,7 @@ class CliTests(unittest.TestCase):
     def test_claude_stream_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             events = Path(tmp) / "events.jsonl"
-            session: dict = {}
+            session: dict = {"status": "reset"}
             handle_claude_event(
                 json.dumps({"type": "system", "subtype": "init", "session_id": "claude-session"}),
                 events_file=events,
@@ -725,6 +743,7 @@ class CliTests(unittest.TestCase):
             rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(session["backend_session_id"], "claude-session")
+        self.assertEqual(session["status"], "active")
         self.assertEqual([row["type"] for row in rows], ["agent_thread", "agent_message", "agent_command_started", "agent_command_finished", "agent_usage"])
         self.assertEqual(rows[1]["data"]["text"], "hello")
         self.assertEqual(rows[2]["data"]["command"], "pwd")
@@ -2524,6 +2543,85 @@ class CliTests(unittest.TestCase):
         self.assertGreater(analysis["tool_output_chars"], 0)
         self.assertGreater(analysis["assistant_message_chars"], 0)
 
+    def test_compact_reset_archives_backend_session_and_injects_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:
+            root = Path(tmp)
+            home = Path(home_tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Compact reset", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_id = "compact-reset-session-1"
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = session_id
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                append_jsonl(
+                    home / ".codex" / "sessions" / "2026" / "05" / "21" / f"rollout-{session_id}.jsonl",
+                    {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "old prompt"}]}},
+                )
+                append_message(root, run_id, "main", "previous request", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.session_compact.Path.home", return_value=home):
+                    payload = compact_reset_backend_session(root, run_id, "task-001", "main", reason="manual")
+
+                updated = read_json(session_file)
+                summary_exists = (run_dir(root, run_id) / payload["summary_path"]).exists()
+                prompt = chat_prompt(
+                    root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "next request", "task_id": "task-001", "role": "main"},
+                    "prefix",
+                )
+
+        self.assertEqual(payload["old_backend_session_id"], session_id)
+        self.assertIsNone(updated["backend_session_id"])
+        self.assertEqual(updated["history_backend_sessions"][0]["backend_session_id"], session_id)
+        self.assertEqual(updated["compact_summary"]["archived_backend_session_id"], session_id)
+        self.assertTrue(summary_exists)
+        self.assertIn("Backend compact summary from previous session", prompt)
+        self.assertIn("previous request", prompt)
+
+    def test_compact_reset_api_uses_selected_agent_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:
+            root = Path(tmp)
+            home = Path(home_tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Compact reset API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_id = "compact-reset-api-session-1"
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = session_id
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                append_jsonl(
+                    home / ".codex" / "sessions" / "2026" / "05" / "21" / f"rollout-{session_id}.jsonl",
+                    {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "old prompt"}]}},
+                )
+
+                with mock.patch("aha_cli.services.session_compact.Path.home", return_value=home):
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/task/task-001/session/compact-reset",
+                            method="POST",
+                            payload={"target": "main", "reason": "manual", "restart": False},
+                        )
+                    )
+                body = json_response_body(response)
+                updated = read_json(session_file)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["compact_reset"]["old_backend_session_id"], session_id)
+        self.assertIsNone(updated["backend_session_id"])
+        self.assertEqual(updated["history_backend_sessions"][0]["backend_session_id"], session_id)
+
     def test_events_api_replays_from_saved_offset_after_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3163,6 +3261,47 @@ class CliTests(unittest.TestCase):
         self.assertIn("delta_status", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
 
+    def test_finalization_prompt_omits_recent_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Final prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(
+                    root,
+                    run_id,
+                    "message",
+                    {
+                        "task_id": "task-001",
+                        "sender": "browser",
+                        "target": "main",
+                        "message": "NOISY_RECENT_EVENT" * 1000,
+                    },
+                )
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "aha",
+                        "message": finalization_prompt("task-001", "Final prompt", []),
+                        "task_id": "task-001",
+                        "role": "main",
+                        "result_policy": "finalize",
+                        "ts": "2026-01-01T00:00:00+00:00",
+                    },
+                    "prefix",
+                )
+
+        self.assertTrue(metrics["is_finalization"])
+        self.assertEqual(metrics["event_limit"], 0)
+        self.assertIn("omitted for finalization", prompt)
+        self.assertNotIn("NOISY_RECENT_EVENT", prompt)
+        self.assertLess(metrics["components"]["recent_events"]["chars"], 120)
+
     def test_watch_tail_starts_at_current_event_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3230,6 +3369,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("AHA Input", script)
         self.assertIn("Backend Usage", script)
         self.assertIn("Backend Session", script)
+        self.assertIn("/aha session compact-reset", script)
+        self.assertIn("compactResetStates", script)
+        self.assertIn("Compacting", script)
+        self.assertIn("Restarting", script)
+        self.assertIn("COMPACT_RESET_TIMEOUT_MS", script)
+        self.assertIn("Checking", script)
+        self.assertIn("verifyCompactResetAfterTimeout", script)
+        self.assertIn("isRequestTimeoutError", script)
+        self.assertIn("compactResetSelectedSession", script)
         self.assertIn("ahaInputMetricsStatus", script)
         self.assertIn("backendSessionStatus", script)
         self.assertIn("BACKEND_SESSION_LARGE_BYTES", script)
@@ -3252,6 +3400,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("prompt-latest", styles)
         self.assertIn("session-large", styles)
         self.assertIn("session-overflow", styles)
+        self.assertIn("session-pending", styles)
+        self.assertIn("session-done", styles)
+        self.assertIn("prompt-metrics-head-actions", styles)
         self.assertIn("session-breakdown-row", styles)
         self.assertIn("metrics-breakdown-row-wide", styles)
         self.assertIn("usage-previous", styles)

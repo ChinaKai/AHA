@@ -21,6 +21,7 @@ from aha_cli.services.backend_runtime import (
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
+from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
     add_agent,
@@ -215,8 +216,10 @@ def analyze_backend_session_jsonl(path: Path, backend: str = "") -> dict:
 def backend_session_jsonl_info(session: dict) -> dict:
     session_id = str(session.get("backend_session_id") or "").strip()
     backend = str(session.get("backend") or "").strip()
+    history = session.get("history_backend_sessions") if isinstance(session.get("history_backend_sessions"), list) else []
+    compact_summary = session.get("compact_summary") if isinstance(session.get("compact_summary"), dict) else None
     if not session_id:
-        return {"id": "", "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}}
+        return {"id": "", "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
 
     candidates: list[Path] = []
     home = Path.home()
@@ -227,11 +230,11 @@ def backend_session_jsonl_info(session: dict) -> dict:
 
     path = candidates[0] if candidates else None
     if not path or not path.exists():
-        return {"id": session_id, "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}}
+        return {"id": session_id, "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
     try:
         stat = path.stat()
     except OSError:
-        return {"id": session_id, "backend": backend, "path": str(path), "size_bytes": None, "exists": False, "analysis": {}}
+        return {"id": session_id, "backend": backend, "path": str(path), "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
     try:
         analysis = analyze_backend_session_jsonl(path, backend)
     except OSError as exc:
@@ -244,6 +247,8 @@ def backend_session_jsonl_info(session: dict) -> dict:
         "modified_at": stat.st_mtime,
         "exists": True,
         "analysis": analysis,
+        "history": history,
+        "compact_summary": compact_summary,
     }
 
 
@@ -659,6 +664,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha complete: alias for /aha final",
                 "- /aha reopen: cancel completion and allow follow-up messages",
                 "- /aha interrupt: interrupt the selected agent's current turn",
+                "- /aha session compact-reset: compact and reset selected agent backend session",
                 "",
                 "Agent command:",
                 "- /agent <command>: route /<command> to the selected agent",
@@ -699,7 +705,25 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
         return "Use `/aha complete` as an alias for `/aha final`."
     if name in {"reopen", "resume"}:
         return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
+    if name == "session" and len(parts) > 2 and parts[2] == "compact-reset":
+        return "Use `/aha session compact-reset` from the selected task conversation to archive the current backend session and start a fresh one."
     return f"Unknown AHA command: /aha {name}. Try /aha help."
+
+
+def compact_reset_selected_agent(root: Path, run_id: str, task_id: str | None, target: str, *, restart: bool = True) -> tuple[str, dict]:
+    if not task_id:
+        return "No task is selected.", {"ok": False, "reason": "no_task"}
+    try:
+        payload = compact_reset_backend_session(root, run_id, task_id, target or "main", reason="manual", restart=restart)
+    except KeyError as exc:
+        return f"Task or agent not found: {exc}", {"ok": False, "reason": "not_found"}
+    except ValueError as exc:
+        return str(exc), {"ok": False, "reason": "invalid"}
+    return (
+        f"Compact-reset completed for {task_id}/{target or 'main'}. "
+        f"Archived `{payload.get('old_backend_session_id')}` and wrote `{payload.get('summary_path')}`.",
+        payload,
+    )
 
 
 def format_task_journal_for_prompt(rounds: list[dict]) -> str:
@@ -937,6 +961,8 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
             reply = reopen_selected_task(root, run_id, task_id)
         elif name in {"interrupt", "stop"}:
             reply, interrupt_payload = interrupt_selected_agent(root, run_id, task_id, target)
+        elif name == "session" and len(parts) > 2 and parts[2] == "compact-reset":
+            reply, compact_reset_payload = compact_reset_selected_agent(root, run_id, task_id, target, restart=True)
         else:
             reply = format_aha_command(root, run_id, task_id, stripped, target)
     else:
@@ -960,6 +986,8 @@ def handle_slash_command(root: Path, run_id: str, payload: dict, message: str, t
         command_response["backend_autostart"] = backend_autostart
     if "interrupt_payload" in locals():
         command_response["interrupt"] = interrupt_payload
+    if "compact_reset_payload" in locals():
+        command_response["compact_reset"] = compact_reset_payload
     return True, None, command_response
 
 
@@ -1518,12 +1546,29 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     elif action == "proxy":
                         payload = parse_json_body(body)
                         task = update_task_proxy_config(root, selected_run_id, task_id, **parse_task_proxy_fields(payload))
+                    elif action == "session/compact-reset":
+                        payload = parse_json_body(body)
+                        agent_id = str(payload.get("agent_id") or payload.get("target") or "main")
+                        reason = str(payload.get("reason") or "manual")
+                        restart = bool(payload.get("restart", True))
+                        compact_payload = compact_reset_backend_session(
+                            root,
+                            selected_run_id,
+                            task_id,
+                            agent_id,
+                            reason=reason,
+                            restart=restart,
+                        )
+                        task = task_snapshot(root, selected_run_id, task_id)["task"]
+                        writer.write(json_response({"ok": True, "task": task, "compact_reset": compact_payload}))
+                        await writer.drain()
+                        return
                     else:
                         writer.write(json_response({"error": f"unknown task action: {action}"}, "400 Bad Request"))
                         await writer.drain()
                         return
                     writer.write(json_response({"ok": True, "task": task}))
-                except (KeyError, SystemExit) as exc:
+                except (KeyError, SystemExit, ValueError) as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
         elif method == "POST" and path == "/api/tasks":
             payload = parse_json_body(body)

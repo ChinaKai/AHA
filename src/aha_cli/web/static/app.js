@@ -4,6 +4,8 @@ const rawRequestTimeoutMs = Number(queryParams.get("timeout") || "12000");
 const rawWsStaleMs = Number(queryParams.get("ws_stale_ms") || queryParams.get("ws_watchdog_ms") || "15000");
 const pollInterval = Number.isFinite(rawPollInterval) ? Math.max(250, rawPollInterval) : 1000;
 const requestTimeoutMs = Number.isFinite(rawRequestTimeoutMs) ? Math.max(1000, rawRequestTimeoutMs) : 12000;
+const COMPACT_RESET_TIMEOUT_MS = Math.max(requestTimeoutMs, 60000);
+const COMPACT_RESET_VERIFY_TIMEOUT_MS = 30000;
 const eventSocketStaleMs = Number.isFinite(rawWsStaleMs) ? Math.max(5000, rawWsStaleMs) : 15000;
 const eventTransport = String(queryParams.get("transport") || queryParams.get("events") || "").toLowerCase();
 const wsConfig = String(queryParams.get("ws") || "").trim();
@@ -64,6 +66,7 @@ const copyTextByKey = new Map();
 const finalDetails = new Map();
 const contextDetails = new Map();
 const logStates = new Map();
+const compactResetStates = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interrupted"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
@@ -167,7 +170,8 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
-  { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." }
+  { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." },
+  { scope: "aha", name: "/aha session compact-reset", insert: "/aha session compact-reset", desc: "Compact and reset the selected backend session." }
 ];
 
 function escapeHtml(value) {
@@ -385,6 +389,10 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = requestTimeoutMs)
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function isRequestTimeoutError(err) {
+  return String(err?.message || err || "").includes("Request timed out after");
 }
 
 async function fetchJson(url, options = {}, fallbackMessage = "Request failed") {
@@ -1806,6 +1814,10 @@ function promptMetricsKey(taskId, target = backendTarget()) {
   return `${taskId || ""}:${target || ""}`;
 }
 
+function compactResetState(taskId, target = backendTarget()) {
+  return compactResetStates.get(promptMetricsKey(taskId, target)) || null;
+}
+
 function formatMetricNumber(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0";
@@ -2063,7 +2075,12 @@ function promptMetricsState(taskId) {
 function renderPromptMetricsPanel(taskId) {
   const metrics = promptMetricsState(taskId);
   const { ahaInputStatus, backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus } = metrics;
-  const hasSessionInfo = Boolean(backendSession?.id || backendSession?.exists);
+  const compactState = compactResetState(taskId);
+  const displayedSessionStatus = compactState
+    ? { label: compactState.label, className: compactState.className }
+    : sessionStatus;
+  const hasSessionHistory = Array.isArray(backendSession?.history) && backendSession.history.length > 0;
+  const hasSessionInfo = Boolean(backendSession?.id || backendSession?.exists || hasSessionHistory || backendSession?.compact_summary);
   if (!metricsEvent && !overflowEvent && !hasSessionInfo) {
     return `
       <section class="prompt-metrics empty-metrics">
@@ -2097,13 +2114,17 @@ function renderPromptMetricsPanel(taskId) {
   const sessionToolChars = Number(sessionAnalysis.tool_output_chars || 0);
   const sessionLineCount = Number(sessionAnalysis.line_count || 0);
   const sessionPromptMode = sessionAnalysis.latest_prompt_mode || data.prompt_mode || "";
+  const sessionHistory = Array.isArray(backendSession?.history) ? backendSession.history : [];
+  const compactSummary = backendSession?.compact_summary || null;
   const sessionSummary = backendSession?.exists
     ? sessionPromptCount
       ? `${formatMetricCompact(sessionPromptChars)} AHA prompt`
       : "no AHA prompt"
     : backendSession?.id
       ? "session missing"
-      : "no session";
+      : sessionHistory.length
+        ? `${formatMetricNumber(sessionHistory.length)} archived`
+        : "no session";
   const sessionParts = backendSession?.exists
     ? [
         Number.isFinite(sessionSize) ? `file ${formatMetricBytes(sessionSize)}` : "",
@@ -2115,7 +2136,14 @@ function renderPromptMetricsPanel(taskId) {
         sessionPromptMode ? `latest ${sessionPromptMode}` : "",
         sessionAnalysis.parse_errors ? `${formatMetricNumber(sessionAnalysis.parse_errors)} parse errors` : ""
       ].filter(Boolean)
-    : [backendSession?.id ? "jsonl not found" : "waiting for backend session"];
+    : [
+        backendSession?.id ? "jsonl not found" : "no current session",
+        sessionHistory.length ? `${formatMetricNumber(sessionHistory.length)} archived sessions` : "",
+        compactSummary?.id ? `summary ${compactSummary.id}` : ""
+      ].filter(Boolean);
+  const sessionActionButton = backendSession?.id
+    ? `<button type="button" data-session-action="compact-reset"${compactState ? " disabled" : ""}>${escapeHtml(compactState?.buttonLabel || "Compact")}</button>`
+    : "";
   const ahaParts = [
     `${formatMetricNumber(totalChars)} chars`,
     `${formatMetricBytes(total.bytes)} bytes`,
@@ -2145,7 +2173,9 @@ function renderPromptMetricsPanel(taskId) {
             <strong>${escapeHtml(ahaParts[0] || "0 chars")}</strong>
             <code>${escapeHtml(topLabel)}</code>
           </div>
-          <span class="status ${ahaInputStatus.className}">${escapeHtml(ahaInputStatus.label)}</span>
+          <div class="prompt-metrics-head-actions">
+            <span class="status ${ahaInputStatus.className}">${escapeHtml(ahaInputStatus.label)}</span>
+          </div>
         </div>
         <div class="prompt-metric-kpis">
           ${ahaParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
@@ -2170,7 +2200,9 @@ function renderPromptMetricsPanel(taskId) {
             <strong>${escapeHtml(backendSummary)}</strong>
             <code>${escapeHtml(source || "waiting for backend usage")}</code>
           </div>
-          <span class="status ${usageStatus.className}">${escapeHtml(usageStatus.label)}</span>
+          <div class="prompt-metrics-head-actions">
+            <span class="status ${usageStatus.className}">${escapeHtml(usageStatus.label)}</span>
+          </div>
         </div>
         <div class="prompt-metric-kpis">
           ${(backendParts.length ? backendParts : [`usage ${usageStatus.label}`]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
@@ -2184,7 +2216,10 @@ function renderPromptMetricsPanel(taskId) {
             <strong>${escapeHtml(sessionSummary)}</strong>
             <code>${escapeHtml(sessionLabel || "waiting for backend session")}</code>
           </div>
-          <span class="status ${sessionStatus.className}">${escapeHtml(sessionStatus.label)}</span>
+          <div class="prompt-metrics-head-actions">
+            <span class="status ${displayedSessionStatus.className}">${escapeHtml(displayedSessionStatus.label)}</span>
+            ${sessionActionButton}
+          </div>
         </div>
         <div class="prompt-metric-kpis">
           ${sessionParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
@@ -2197,7 +2232,8 @@ function renderPromptMetricsPanel(taskId) {
 
 function renderPromptMetricsPopover(taskId) {
   const metrics = promptMetricsState(taskId);
-  const hasMetrics = Boolean(metrics.metricsEvent || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists);
+  const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
+  const hasMetrics = Boolean(metrics.metricsEvent || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
   const summary = metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
   const top = metrics.largest?.name || "no components";
   const key = promptMetricsKey(taskId);
@@ -2222,8 +2258,131 @@ function renderPromptMetricsPopover(taskId) {
 
 function renderPromptMetricsDock(taskId) {
   const metrics = promptMetricsState(taskId);
-  if (!metrics.metricsEvent && !metrics.overflowEvent && !metrics.backendSession?.id && !metrics.backendSession?.exists) return "";
+  const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
+  if (!metrics.metricsEvent && !metrics.overflowEvent && !metrics.backendSession?.id && !metrics.backendSession?.exists && !hasHistory && !metrics.backendSession?.compact_summary) return "";
   return `<div class="conversation-metrics-dock">${renderPromptMetricsPopover(taskId)}</div>`;
+}
+
+function latestKnownEventOrder() {
+  const orders = allEvents.map(event => conversationEventOrder(event)).filter(Number.isFinite);
+  return orders.length ? Math.max(...orders) : -1;
+}
+
+function latestScopedTaskEvent(taskId, target, type, afterOrder = null) {
+  const events = taskEvents(taskId)
+    .filter(event => event.type === type && eventMatchesAgent(event, target))
+    .filter(event => afterOrder == null || conversationEventOrder(event) > afterOrder)
+    .sort((left, right) => conversationEventOrder(left) - conversationEventOrder(right));
+  return events.length ? events[events.length - 1] : null;
+}
+
+function agentStatusSession(taskId, agentId) {
+  const task = (statusData?.tasks || []).find(item => item.id === taskId);
+  return (task?.agents || []).find(item => item.id === agentId) || null;
+}
+
+function compactResetLooksComplete(taskId, agentId, previousSessionId, afterOrder) {
+  const compactEvent = latestScopedTaskEvent(taskId, agentId, "backend_session_compact_reset", afterOrder);
+  const startedEvent = latestScopedTaskEvent(taskId, agentId, "backend_started", afterOrder);
+  const backendSession = conversationBackendSession(taskId, agentId);
+  const history = Array.isArray(backendSession?.history) ? backendSession.history : [];
+  const archived = Boolean(previousSessionId && history.some(item => item.backend_session_id === previousSessionId));
+  const currentSessionId = String(backendSession?.id || "");
+  const hasNewConversationSession = Boolean(currentSessionId && currentSessionId !== previousSessionId);
+  const agent = agentStatusSession(taskId, agentId);
+  const statusSessionId = String(agent?.backend_session_id || "");
+  const hasNewStatusSession = Boolean(statusSessionId && statusSessionId !== previousSessionId && String(agent?.session_status || "").toLowerCase() === "active");
+  return Boolean(compactEvent && (startedEvent || archived || hasNewConversationSession || hasNewStatusSession || backendSession?.compact_summary));
+}
+
+function sleep(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+async function refreshCompactResetStatus(taskId, agentId) {
+  await catchUpRealtimeEvents();
+  await loadStatus({ forceAgents: true });
+  await loadBackendStatus();
+  await loadConversationPage(taskId, agentId, false, true);
+}
+
+async function verifyCompactResetAfterTimeout(taskId, agentId, previousSessionId, afterOrder) {
+  const deadline = Date.now() + COMPACT_RESET_VERIFY_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    await refreshCompactResetStatus(taskId, agentId);
+    if (compactResetLooksComplete(taskId, agentId, previousSessionId, afterOrder)) return true;
+    await sleep(1000);
+  }
+  return false;
+}
+
+async function compactResetSelectedSession(button) {
+  const task = selectedTask();
+  if (!task) return;
+  const agentId = backendTarget();
+  const stateKey = promptMetricsKey(task.id, agentId);
+  const previousSessionId = String(conversationBackendSession(task.id, agentId)?.id || agentStatusSession(task.id, agentId)?.backend_session_id || "");
+  const actionStartOrder = latestKnownEventOrder();
+  const confirmed = window.confirm(
+    `Compact and reset backend session for ${task.id}/${agentId}?\n\n` +
+    "AHA will archive the current backend session, write a compact summary, and restart a fresh backend session."
+  );
+  if (!confirmed) return;
+  compactResetStates.set(stateKey, { label: "compacting", className: "session-pending", buttonLabel: "Compacting" });
+  renderPanel();
+  try {
+    const res = await fetchWithTimeout(apiUrl(`/api/task/${encodeURIComponent(task.id)}/session/compact-reset`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: agentId, reason: "manual", restart: true })
+    }, COMPACT_RESET_TIMEOUT_MS);
+    await readJsonResponse(res, "Failed to compact-reset backend session");
+    compactResetStates.set(stateKey, { label: "restarting", className: "session-pending", buttonLabel: "Restarting" });
+    renderPanel();
+    await refreshCompactResetStatus(task.id, agentId);
+    compactResetStates.set(stateKey, { label: "done", className: "session-done", buttonLabel: "Done" });
+    renderPanel();
+    window.setTimeout(() => {
+      const state = compactResetStates.get(stateKey);
+      if (state?.label === "done") {
+        compactResetStates.delete(stateKey);
+        renderPanel();
+      }
+    }, 2200);
+  } catch (err) {
+    if (isRequestTimeoutError(err)) {
+      compactResetStates.set(stateKey, { label: "checking", className: "session-pending", buttonLabel: "Checking" });
+      renderPanel();
+      let completed = false;
+      try {
+        completed = await verifyCompactResetAfterTimeout(task.id, agentId, previousSessionId, actionStartOrder);
+      } catch (verifyErr) {
+        console.warn("Compact-reset verification failed", verifyErr);
+      }
+      if (completed) {
+        compactResetStates.set(stateKey, { label: "done", className: "session-done", buttonLabel: "Done" });
+        renderPanel();
+        window.setTimeout(() => {
+          const state = compactResetStates.get(stateKey);
+          if (state?.label === "done") {
+            compactResetStates.delete(stateKey);
+            renderPanel();
+          }
+        }, 2200);
+        return;
+      }
+    }
+    compactResetStates.set(stateKey, { label: "failed", className: "session-error", buttonLabel: "Retry" });
+    renderPanel();
+    alert(err.message || String(err));
+    window.setTimeout(() => {
+      const state = compactResetStates.get(stateKey);
+      if (state?.label === "failed") {
+        compactResetStates.delete(stateKey);
+        renderPanel();
+      }
+    }, 4000);
+  }
 }
 
 function parseTimestamp(value) {
@@ -2658,10 +2817,10 @@ function assignConversationKeys(events, start = 0) {
   return events;
 }
 
-async function loadConversationPage(taskId = selectedTaskId, target = backendTarget(), older = false) {
+async function loadConversationPage(taskId = selectedTaskId, target = backendTarget(), older = false, force = false) {
   if (!taskId) return null;
   const state = conversationState(taskId, target);
-  if (state.loading || (!older && state.initialized) || (older && !state.hasMore)) return state;
+  if (state.loading || (!force && !older && state.initialized) || (older && !state.hasMore)) return state;
   state.loading = true;
   try {
     const params = new URLSearchParams({
@@ -4135,6 +4294,13 @@ panelEl.addEventListener("click", event => {
     event.preventDefault();
     event.stopPropagation();
     copyTimelineMessage(copyButton);
+    return;
+  }
+  const sessionButton = event.target instanceof Element ? event.target.closest("[data-session-action='compact-reset']") : null;
+  if (sessionButton instanceof HTMLButtonElement) {
+    event.preventDefault();
+    event.stopPropagation();
+    compactResetSelectedSession(sessionButton);
     return;
   }
   const button = event.target instanceof Element ? event.target.closest("[data-load-older]") : null;
