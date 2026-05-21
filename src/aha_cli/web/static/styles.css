@@ -651,9 +651,9 @@ button, input, select { font: inherit; }
   color: #667085;
 }
 .status.session-large {
-  border: 1px solid #fed7aa;
-  background: #fff7ed;
-  color: #c2410c;
+  border: 1px solid #fde68a;
+  background: #fefce8;
+  color: #854d0e;
 }
 .status.session-overflow {
   border: 1px solid #fecaca;
@@ -1035,8 +1035,8 @@ button, input, select { font: inherit; }
   content: "";
 }
 .turn-metrics-dot {
-  width: 5px;
-  height: 5px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: currentColor;
 }
@@ -1057,7 +1057,7 @@ button, input, select { font: inherit; }
   opacity: 0.82;
 }
 .turn-metrics.session-large .turn-metrics-trigger {
-  color: #c2410c;
+  color: #a16207;
   opacity: 0.92;
 }
 .turn-metrics.session-none .turn-metrics-trigger,
@@ -1080,9 +1080,9 @@ button, input, select { font: inherit; }
 .turn-metrics.session-large[open] .turn-metrics-trigger,
 .turn-metrics.session-large .turn-metrics-trigger:hover,
 .turn-metrics.session-large .turn-metrics-trigger:focus-visible {
-  border-color: #fed7aa;
-  background: #fff7ed;
-  color: #c2410c;
+  border-color: #fde68a;
+  background: #fefce8;
+  color: #854d0e;
 }
 .turn-metrics.session-none[open] .turn-metrics-trigger,
 .turn-metrics.session-none .turn-metrics-trigger:hover,
