@@ -502,6 +502,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 "backend_task_context.md",
                 task_id=task_id,
                 title=detail["task"].get("title", ""),
+                description=detail["task"].get("description", ""),
                 status=detail["task"].get("status", ""),
                 role=item.get("role", ""),
                 agents=detail["task"].get("agents", []),

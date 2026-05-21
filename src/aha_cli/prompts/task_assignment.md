@@ -5,6 +5,9 @@ You are the task-main agent for this task.
 Task:
 $task_title
 
+Details:
+$task_description
+
 Workspace path:
 $workspace_path
 

@@ -3106,6 +3106,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(first_manual, [])
         self.assertEqual(second_manual[-1]["message"], "sent to second")
 
+    def test_api_task_create_accepts_description(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task details", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Detailed task",
+                            "description": "Use the attached notes and preserve existing behavior.",
+                            "dispatch": False,
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                status = status_snapshot(root, run_id)
+                context = task_context_snapshot(root, run_id, body["task"]["id"])
+
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["description"], "Use the attached notes and preserve existing behavior.")
+        self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
+        self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
+
     def test_api_routes_fallback_to_latest_run_without_server_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3367,6 +3397,7 @@ class CliTests(unittest.TestCase):
 
         self.assertIn("open-task-create", html)
         self.assertIn("task-create-dialog", html)
+        self.assertIn("new-task-description", html)
         self.assertIn('form id="task-form"', html)
         self.assertIn("openTaskCreateDialog", script)
         self.assertIn("closeTaskCreateDialog", script)

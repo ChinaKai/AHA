@@ -399,6 +399,7 @@ def cmd_task(args: argparse.Namespace) -> int:
             max_sub_agents=args.max_sub_agents,
             preferred_sub_backend=args.preferred_sub_backend,
             preferred_sub_model=args.preferred_sub_model,
+            description=args.description,
             dispatch=not args.no_dispatch,
         )
         print(json.dumps(task, indent=2, ensure_ascii=False))
@@ -789,6 +790,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_add = task_sub.add_parser("add")
     task_add.add_argument("run_id")
     task_add.add_argument("title")
+    task_add.add_argument("--description", default=None)
     task_add.add_argument("--backend", choices=agent_backend_names(), default="codex")
     task_add.add_argument("--model", default=None)
     task_add.add_argument("--workspace", default=None, help="Registered workspace id, such as ws-001")

@@ -42,6 +42,7 @@ def task_assignment_prompt(task: dict) -> str:
     return render_prompt_template(
         "task_assignment.md",
         task_title=task.get("title", ""),
+        task_description=task.get("description", ""),
         workspace_path=task.get("workspace_path") or "(not set)",
         delegation_policy=task.get("delegation_policy", "auto"),
         max_sub_agents=task.get("max_sub_agents", 0),

@@ -1556,6 +1556,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             payload = parse_json_body(body)
             selected_run_id = require_api_run_id(root, run_id, query, payload)
             title = str(payload.get("title", "")).strip()
+            description = str(payload.get("description", "") or "").strip()
             if not title:
                 writer.write(json_response({"error": "title cannot be empty"}, "400 Bad Request"))
             else:
@@ -1609,6 +1610,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     max_sub_agents=int(payload.get("max_sub_agents", 3) or 0),
                     preferred_sub_backend=preferred_sub_backend,
                     preferred_sub_model=str(payload.get("preferred_sub_model", "") or "") or None,
+                    description=description,
                     dispatch=dispatch,
                 )
                 backend_state = start_dispatched_task_backend(root, selected_run_id, task, dispatch)

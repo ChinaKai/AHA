@@ -135,6 +135,7 @@ const sendFormEl = document.getElementById("send-form");
 const messageEl = document.getElementById("message");
 const taskFormEl = document.getElementById("task-form");
 const newTaskTitleEl = document.getElementById("new-task-title");
+const newTaskDescriptionEl = document.getElementById("new-task-description");
 const agentTargetEl = document.getElementById("agent-target");
 const agentsEl = document.getElementById("agents");
 const taskBackendEl = document.getElementById("task-backend");
@@ -3315,7 +3316,7 @@ function renderTaskList() {
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
     `;
-    item.title = `${task.title}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nworkspace=${task.workspace_path || "-"}`;
+    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nworkspace=${task.workspace_path || "-"}`;
     item.addEventListener("click", async event => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("button")) return;
@@ -3650,6 +3651,7 @@ function addTaskConfirmRows(payload) {
   return [
     ["Run", currentRunId || "-"],
     ["Title", payload.title],
+    ["Description", payload.description || "-"],
     ["Workspace", selectedWorkspaceLabel() || payload.workspace_path || payload.workspace_id || "-"],
     ["Backend", `${payload.backend || "default"} / ${payload.model || "default"}`],
     ["Sandbox", payload.sandbox || "-"],
@@ -3662,9 +3664,10 @@ function addTaskConfirmRows(payload) {
 function confirmAddTask(payload) {
   const fallbackText = [
     `Create task "${payload.title}"?`,
+    payload.description ? `Description: ${payload.description}` : "",
     `Run: ${currentRunId || "-"}`,
     `Workspace: ${selectedWorkspaceLabel() || payload.workspace_path || payload.workspace_id || "-"}`
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   if (!taskCreateConfirmDialogEl || typeof taskCreateConfirmDialogEl.showModal !== "function") {
     return Promise.resolve(window.confirm(fallbackText));
   }
@@ -4118,6 +4121,7 @@ taskFormEl?.addEventListener("submit", async event => {
   }
   const title = newTaskTitleEl?.value.trim() || "";
   if (!title) return;
+  const description = newTaskDescriptionEl?.value.trim() || "";
   const delegationPolicy = delegationPolicyEl?.value || "disabled";
   setCreateProxyDefaultsFromInputs();
   const createHttpProxy = taskHttpProxyEl?.value.trim() || "";
@@ -4125,6 +4129,7 @@ taskFormEl?.addEventListener("submit", async event => {
   const createProxyEnabled = Boolean(taskProxyEnabledEl?.checked);
   const payload = {
     title,
+    description,
     backend: taskBackendEl.value,
     model: taskModelEl.value || null,
     sandbox: taskSandboxEl.value,
@@ -4154,6 +4159,7 @@ taskFormEl?.addEventListener("submit", async event => {
       body: JSON.stringify(runScopedPayload(payload))
     }, "Failed to create task");
     if (newTaskTitleEl) newTaskTitleEl.value = "";
+    if (newTaskDescriptionEl) newTaskDescriptionEl.value = "";
     await loadStatus();
     closeMobileSheets();
     closeTaskCreateDialog();

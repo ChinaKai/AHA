@@ -24,6 +24,7 @@ def create_task_and_dispatch(
     max_sub_agents: int = 3,
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
+    description: str | None = None,
     dispatch: bool = True,
 ) -> dict:
     task = add_task(
@@ -44,6 +45,7 @@ def create_task_and_dispatch(
         max_sub_agents=max_sub_agents,
         preferred_sub_backend=preferred_sub_backend,
         preferred_sub_model=preferred_sub_model,
+        description=description,
     )
     if dispatch:
         dispatch_task_to_main(root, run_id, task)

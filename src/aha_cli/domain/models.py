@@ -112,10 +112,12 @@ def make_task(
     max_sub_agents: int = 3,
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
+    description: str | None = None,
 ) -> dict:
     return {
         "id": task_id,
         "title": title,
+        "description": description or "",
         "workspace_id": workspace_id,
         "workspace_path": workspace_path,
         "preferred_backend": backend,
@@ -280,6 +282,7 @@ def task_prompt(goal: str, mode: str, task: dict, write_scopes: list[str]) -> st
         "subtask.md",
         goal=goal,
         task_title=task["title"],
+        task_description=task.get("description", ""),
         mode=mode,
         mutability=mutability,
         write_scope=scope_text,

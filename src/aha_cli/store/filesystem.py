@@ -1004,6 +1004,7 @@ def add_task(
     max_sub_agents: int = 3,
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
+    description: str | None = None,
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -1029,6 +1030,7 @@ def add_task(
             max_sub_agents=max_sub_agents,
             preferred_sub_backend=preferred_sub_backend,
             preferred_sub_model=preferred_sub_model,
+            description=description,
         )
         for _ in range(max(0, sub_agents)):
             add_agent_to_task_dict(
@@ -1910,6 +1912,7 @@ def status_snapshot(root: Path, run_id: str) -> dict:
             {
                 "id": task["id"],
                 "title": task["title"],
+                "description": task.get("description", ""),
                 "workspace_path": task.get("workspace_path"),
                 "preferred_backend": task.get("preferred_backend"),
                 "preferred_model": task.get("preferred_model"),

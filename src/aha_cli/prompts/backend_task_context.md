@@ -1,6 +1,7 @@
 Current task context:
 - task_id: $task_id
 - title: $title
+- description: $description
 - status: $status
 - role selected by user: $role
 - agents: $agents

@@ -6,6 +6,9 @@ $goal
 Task:
 $task_title
 
+Details:
+$task_description
+
 Mode:
 $mode
 
