@@ -96,12 +96,12 @@ class SupervisionFlowTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
                     code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)) as host_run,
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
                 ):
                     host_code, _host_output = self.run_cli(
                         "claude-chat",
@@ -216,12 +216,12 @@ class SupervisionFlowTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, host_reply, None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
                 ):
                     host_code, _host_output = self.run_cli("codex-chat", run_id, "host", "--sender", "host", "--sandbox", "read-only", "--task-id", "task-001", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
@@ -260,7 +260,7 @@ class SupervisionFlowTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", sub["id"], "running")
                 set_task_status(root, run_id, "task-001", "running")
 
-                with mock.patch("aha_cli.services.chat.start_backend") as start_main:
+                with mock.patch("aha_cli.services.chat_supervision.start_backend") as start_main:
                     result = apply_supervision_host_decision(
                         root,
                         run_id,
@@ -343,12 +343,12 @@ class SupervisionFlowTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
                 ):
                     host_code, _host_output = self.run_cli(
                         "claude-chat",
@@ -438,12 +438,12 @@ class SupervisionFlowTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "main 本轮回复", None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}),
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}),
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
                 ):
                     host_code, _host_output = self.run_cli(
                         "claude-chat",
@@ -488,12 +488,12 @@ class SupervisionFlowTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
-                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
                 ):
                     host_code, _host_output = self.run_cli(
                         "claude-chat",

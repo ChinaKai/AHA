@@ -53,6 +53,8 @@ Rules for store edits:
 - `services/chat.py` owns backend chat turns and finalization handling.
 - `services/chat_offsets.py` owns chat inbox offset path/load/save helpers and
   task-scoped worker exit checks.
+- `services/chat_supervision.py` owns assisted supervision host prompts,
+  visibility filtering, host routing, and host decision application.
 - `services/orchestrator.py` owns AHA action execution and sub-agent
   coordination.
 - `services/proxy.py` owns task proxy normalization and backend environment
