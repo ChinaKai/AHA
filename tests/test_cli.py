@@ -2120,6 +2120,68 @@ class CliTests(unittest.TestCase):
                 mark_stopped.assert_called_once()
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "completed")
 
+    def test_task_scoped_main_backend_stops_after_round_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Round cleanup", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_task_status(root, run_id, "task-001", "running")
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    render_prompt_template("task_round_summary.md", task_id="task-001"),
+                    sender="aha",
+                    task_id="task-001",
+                    role="main",
+                    reply_target="browser",
+                    coordination="subagents_complete",
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "round summary", None)),
+                    mock.patch("aha_cli.services.chat.mark_backend_stopped") as mark_stopped,
+                ):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                mark_stopped.assert_called_once()
+                self.assertEqual(mark_stopped.call_args.args[:3], (root / ".aha", run_id, "main"))
+                self.assertEqual(mark_stopped.call_args.kwargs["task_id"], "task-001")
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["status"], "awaiting_user")
+                self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")["status"], "completed")
+
+    def test_task_scoped_main_backend_keeps_running_while_waiting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Waiting backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+                set_task_status(root, run_id, "task-001", "running")
+                append_message(root, run_id, "main", "继续", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "", None)),
+                    mock.patch("aha_cli.services.chat.mark_backend_stopped") as mark_stopped,
+                ):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                self.assertEqual(code, 0)
+                mark_stopped.assert_not_called()
+                detail = task_snapshot(root, run_id, "task-001")
+                self.assertEqual(detail["task"]["status"], "running")
+                self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")["status"], "waiting")
+
     def test_codex_chat_executes_spawn_sub_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4728,6 +4790,11 @@ class CliTests(unittest.TestCase):
         self.assertIn("syncCreateTaskSupervisionModeFields", script)
         self.assertIn('policy.mode === "manual"', script)
         self.assertIn('"host / user proxy"', script)
+        self.assertIn("isSupervisionAgent", script)
+        self.assertIn("Main & sub agents", script)
+        self.assertIn("Supervision", script)
+        self.assertIn("agent-section", script)
+        self.assertIn("data-agent-id", script)
         self.assertIn("host-agent", script)
         self.assertIn("display_sender", script)
         self.assertIn("from-supervision", script)
@@ -4741,6 +4808,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("task-dialog", styles)
         self.assertIn("task-create-trigger", styles)
         self.assertIn("task-supervision-editor", styles)
+        self.assertIn("agent-section", styles)
+        self.assertIn("supervision-agents", styles)
         self.assertIn("agent-card.host-agent", styles)
         self.assertIn("timeline-card.from-supervision", styles)
 

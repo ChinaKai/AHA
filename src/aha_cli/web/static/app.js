@@ -1240,6 +1240,11 @@ function backendTarget() {
   return agentTargetEl.value || "main";
 }
 
+function isSupervisionAgent(agent) {
+  const role = agent?.role || "";
+  return role === "host" || role === "supervision-host";
+}
+
 function messageContextKey(taskId = selectedTaskId, target = backendTarget()) {
   return `${currentRunId || ""}::${taskId || ""}::${target || "main"}`;
 }
@@ -3742,8 +3747,29 @@ function renderAgents() {
     selectedAgentInfoEl.hidden = true;
     return;
   }
-  for (const agent of task.agents || []) {
-    const isHostAgent = agent.role === "host" || agent.role === "supervision-host";
+
+  const allAgents = task.agents || [];
+  const executionAgents = allAgents.filter(agent => !isSupervisionAgent(agent));
+  const supervisionAgents = allAgents.filter(agent => isSupervisionAgent(agent));
+  const optionGroups = [
+    ["Main & sub agents", executionAgents],
+    ["Supervision", supervisionAgents]
+  ];
+  for (const [label, agents] of optionGroups) {
+    if (!agents.length) continue;
+    const optGroup = document.createElement("optgroup");
+    optGroup.label = label;
+    for (const agent of agents) {
+      const opt = document.createElement("option");
+      opt.value = agent.id;
+      opt.textContent = isSupervisionAgent(agent) ? `${agent.id} (host/${agent.backend})` : `${agent.id} (${agent.backend})`;
+      optGroup.appendChild(opt);
+    }
+    agentTargetEl.appendChild(optGroup);
+  }
+
+  const renderAgentCard = agent => {
+    const isHostAgent = isSupervisionAgent(agent);
     const roleLabel = isHostAgent ? "host / user proxy" : agent.role;
     const sandbox = agent.sandbox || task.preferred_sandbox || "workspace-write";
     const approval = agent.approval || task.preferred_approval || "never";
@@ -3759,12 +3785,9 @@ function renderAgents() {
       agent.backend_process_pid ? `pid=${agent.backend_process_pid}` : "pid=-",
       agent.backend_process_last_reply_at ? `last_reply=${lastReply}` : ""
     ].filter(Boolean).join(" | ");
-    const opt = document.createElement("option");
-    opt.value = agent.id;
-    opt.textContent = isHostAgent ? `${agent.id} (host/${agent.backend})` : `${agent.id} (${agent.backend})`;
-    agentTargetEl.appendChild(opt);
     const card = document.createElement("div");
     card.className = `agent-card ${isHostAgent ? "host-agent" : ""} ${agent.id === previous ? "active" : ""}`;
+    card.dataset.agentId = agent.id;
     card.title = [
       `${agent.id} ${roleLabel}`,
       `backend=${agent.backend}`,
@@ -3810,21 +3833,36 @@ function renderAgents() {
       const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
       updateAgentConfig(agent.id, target.dataset.agentField, value);
     });
-    agentsEl.appendChild(card);
-  }
+    return card;
+  };
+
+  const appendAgentSection = (title, agents, className) => {
+    if (!agents.length) return;
+    const section = document.createElement("section");
+    section.className = `agent-section ${className}`;
+    section.innerHTML = `
+      <div class="agent-section-head">
+        <h3>${escapeHtml(title)}</h3>
+        <span>${agents.length}</span>
+      </div>
+    `;
+    for (const agent of agents) section.appendChild(renderAgentCard(agent));
+    agentsEl.appendChild(section);
+  };
+
+  appendAgentSection("Main & sub agents", executionAgents, "execution-agents");
+  appendAgentSection("Supervision", supervisionAgents, "supervision-agents");
+
   if ([...agentTargetEl.options].some(item => item.value === previous)) agentTargetEl.value = previous;
-  [...agentsEl.querySelectorAll(".agent-card")].forEach((card, index) => {
-    const agent = (task.agents || [])[index];
-    card.classList.toggle("active", agent?.id === agentTargetEl.value);
+  [...agentsEl.querySelectorAll(".agent-card")].forEach(card => {
+    card.classList.toggle("active", card.dataset.agentId === agentTargetEl.value);
   });
   renderSelectedAgentInfo();
 }
 
 function syncAgentCards() {
-  const task = selectedTask();
-  [...agentsEl.querySelectorAll(".agent-card")].forEach((card, index) => {
-    const agent = (task?.agents || [])[index];
-    card.classList.toggle("active", agent?.id === agentTargetEl.value);
+  [...agentsEl.querySelectorAll(".agent-card")].forEach(card => {
+    card.classList.toggle("active", card.dataset.agentId === agentTargetEl.value);
   });
 }
 

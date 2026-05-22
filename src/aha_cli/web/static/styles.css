@@ -1649,6 +1649,41 @@ button {
   background: #1f6feb;
   color: #ffffff;
 }
+.agent-section {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 14px;
+  min-width: 0;
+}
+.agent-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.agent-section-head h3 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.agent-section-head span {
+  border: 1px solid #d8dde4;
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: #f9fafb;
+  color: #667085;
+  line-height: 1.4;
+}
+.agent-section .agent-card {
+  margin: 0;
+}
 .agent-card {
   border: 1px solid #e4e7ec;
   border-radius: 6px;
@@ -1664,6 +1699,10 @@ button {
 
 .agent-card.host-agent {
   border-color: #0891b2;
+}
+
+.supervision-agents .agent-section-head {
+  color: #0e7490;
 }
 
 .agent-card.host-agent.active {
@@ -2286,6 +2325,7 @@ body.empty-run .panel {
   }
   .agent-panel,
   #agents,
+  .agent-section,
   .agent-card {
     min-width: 0;
     max-width: 100%;

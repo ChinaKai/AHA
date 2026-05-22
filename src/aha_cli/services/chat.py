@@ -278,6 +278,33 @@ def status_from_agent_result(exit_code: int, reply: str) -> str:
     return "completed"
 
 
+def worker_backend_should_exit_after_turn(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    worker_task_id: str | None,
+    inbox: Path,
+    processed_offset: int,
+) -> bool:
+    if not task_id or not worker_task_id:
+        return False
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return True
+    status = str(task.get("status") or "")
+    if status != "awaiting_user" and status not in TERMINAL_TASK_STATUSES:
+        return False
+    if task_has_incomplete_sub_agents(task):
+        return False
+    try:
+        if inbox.exists() and inbox.stat().st_size > processed_offset:
+            return False
+    except OSError:
+        return False
+    return True
+
+
 def supervision_host_context(task: dict, host_notes: list[str] | None = None) -> str:
     task_context = {
         "id": task.get("id"),
@@ -1506,6 +1533,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 exit_after_message = bool(worker_task_id)
                     if not empty_reply_waiting_for_subagents:
                         append_event(root, run_id, "agent_error", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset):
+                    exit_after_message = True
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if exit_after_message and worker_task_id:
                     save_chat_offset(offset_file, item_offset)
