@@ -17,6 +17,7 @@ This repository implements AHA: a local multi-agent orchestration prototype wher
 - Browser assets must live in `src/aha_cli/web/static/`; do not embed large HTML, CSS, or JS strings in Python.
 - Events and inbox messages are append-only JSONL. Preserve old run compatibility unless a migration is implemented.
 - Documentation should describe the current code behavior, not intended architecture. Update README and `docs/` in the same change when user-facing CLI, Web API, storage layout, run archive, packaging, proxy, or session behavior changes.
+- Repository split, ownership, verification, and commit rules are documented in `docs/repository-management.md`.
 
 ## Agent And Session Model
 
