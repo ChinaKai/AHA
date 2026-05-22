@@ -8,7 +8,6 @@ from aha_cli.domain.models import (
     make_agent,
     make_task,
     make_task_round,
-    next_sub_id,
     next_task_id,
     normalize_task_supervision,
     task_prompt,
@@ -16,6 +15,14 @@ from aha_cli.domain.models import (
     new_run_id,
 )
 from aha_cli.services.proxy import DEFAULT_NO_PROXY, normalize_proxy_value, task_has_proxy_config
+from aha_cli.store.agents import (
+    add_agent as _add_agent,
+    add_agent_to_task_dict,
+    ensure_task_supervision_host_agent as _ensure_task_supervision_host_agent,
+    set_agent_status as _set_agent_status,
+    update_agent_config as _update_agent_config,
+    update_agent_runtime as _update_agent_runtime,
+)
 from aha_cli.store.config import load_config
 from aha_cli.store.io import (
     append_jsonl,
@@ -639,52 +646,6 @@ def add_task(
     return task
 
 
-def add_agent_to_task_dict(
-    task: dict,
-    backend: str = "codex",
-    role: str = "sub",
-    model: str | None = None,
-    workspace_path: str | None = None,
-    sandbox: str | None = None,
-    approval: str | None = None,
-    proxy_enabled: bool | None = None,
-    created_by: str = "system",
-    created_reason: str = "",
-) -> dict:
-    normalized_role = str(role or "sub").strip().lower()
-    if normalized_role in {"main", "task-main"}:
-        agent_id = "main"
-        agent_role = "task-main"
-    elif normalized_role in {"host", "supervision-host"}:
-        existing = next(
-            (agent for agent in task.get("agents", []) if agent.get("id") == "host" or agent.get("role") == "host"),
-            None,
-        )
-        if existing:
-            return existing
-        agent_id = "host"
-        agent_role = "host"
-    else:
-        agent_id = next_sub_id(task)
-        agent_role = "sub"
-    default_sandbox = "read-only" if agent_role == "host" else task.get("preferred_sandbox")
-    default_approval = "never" if agent_role == "host" else task.get("preferred_approval")
-    agent = make_agent(
-        agent_id,
-        agent_role,
-        backend,
-        model=model,
-        workspace_path=workspace_path or task.get("workspace_path"),
-        sandbox=sandbox if sandbox is not None else default_sandbox,
-        approval=approval if approval is not None else default_approval,
-        proxy_enabled=bool(task.get("preferred_proxy_enabled")) if proxy_enabled is None else bool(proxy_enabled),
-        created_by=created_by,
-        created_reason=created_reason,
-    )
-    task.setdefault("agents", []).append(agent)
-    return agent
-
-
 def ensure_task_supervision_host_agent(
     root: Path,
     run_id: str,
@@ -692,99 +653,15 @@ def ensure_task_supervision_host_agent(
     *,
     backend: str | None = None,
 ) -> dict:
-    created = False
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        supervision = normalize_task_supervision(task.get("supervision"))
-        host_backend = str(backend or supervision.get("host_backend") or task.get("preferred_backend") or "codex")
-        if host_backend == "stub":
-            host_backend = str(task.get("preferred_backend") or "codex")
-        host_agent_id = str(supervision.get("host_agent_id") or "host")
-        agent = next(
-            (
-                item
-                for item in task.get("agents", [])
-                if item.get("id") == host_agent_id or item.get("id") == "host" or item.get("role") == "host"
-            ),
-            None,
-        )
-        if agent is None:
-            agent = make_agent(
-                "host",
-                "host",
-                host_backend,
-                status="pending",
-                model=task.get("preferred_model"),
-                workspace_path=task.get("workspace_path"),
-                sandbox="read-only",
-                approval="never",
-                proxy_enabled=bool(task.get("preferred_proxy_enabled")),
-                created_by="supervision",
-                created_reason="task supervision host agent",
-            )
-            task.setdefault("agents", []).append(agent)
-            created = True
-        else:
-            agent["role"] = "host"
-            agent["backend"] = agent.get("backend") or host_backend
-            agent["sandbox"] = agent.get("sandbox") or "read-only"
-            agent["approval"] = agent.get("approval") or "never"
-            agent.setdefault("created_by", "supervision")
-            agent.setdefault("created_reason", "task supervision host agent")
-        supervision.update(
-            {
-                "mode": "assisted",
-                "host_backend": agent.get("backend") or host_backend,
-                "host_agent_id": agent.get("id") or "host",
-                "real_agent_enabled": True,
-            }
-        )
-        task["supervision"] = normalize_task_supervision(supervision)
-        plan["updated_at"] = utc_now()
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    ensure_session(
+    return _ensure_task_supervision_host_agent(
         root,
         run_id,
         task_id,
-        agent["id"],
-        agent.get("backend", host_backend),
-        model=agent.get("model"),
-        workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
+        backend=backend,
+        now_func=utc_now,
+        append_event_func=append_event,
+        ensure_session_func=ensure_session,
     )
-    if created:
-        append_event(
-            root,
-            run_id,
-            "agent_created",
-            {
-                "task_id": task_id,
-                "agent_id": agent["id"],
-                "role": agent.get("role"),
-                "backend": agent.get("backend"),
-                "model": agent.get("model"),
-                "sandbox": agent.get("sandbox"),
-                "approval": agent.get("approval"),
-                "proxy_enabled": agent.get("proxy_enabled"),
-                "created_by": agent.get("created_by"),
-                "created_reason": agent.get("created_reason"),
-            },
-        )
-    append_event(
-        root,
-        run_id,
-        "task_supervision_host_ready",
-        {
-            "task_id": task_id,
-            "host_agent_id": agent.get("id"),
-            "host_backend": agent.get("backend"),
-            "created": created,
-        },
-    )
-    return {"task": task, "agent": agent, "created": created}
 
 
 def add_agent(
@@ -800,44 +677,22 @@ def add_agent(
     created_by: str = "system",
     created_reason: str = "",
 ) -> dict:
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None:
-            raise SystemExit(f"Task not found: {task_id}")
-        agent = add_agent_to_task_dict(
-            task,
-            backend,
-            role,
-            model=model,
-            workspace_path=task.get("workspace_path"),
-            sandbox=sandbox,
-            approval=approval,
-            proxy_enabled=proxy_enabled,
-            created_by=created_by,
-            created_reason=created_reason,
-        )
-        plan["updated_at"] = utc_now()
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-        ensure_session(root, run_id, task_id, agent["id"], backend, model=model, workspace_path=task.get("workspace_path"))
-    append_event(
+    return _add_agent(
         root,
         run_id,
-        "agent_created",
-        {
-            "task_id": task_id,
-            "agent_id": agent["id"],
-            "backend": backend,
-            "model": model,
-            "sandbox": agent.get("sandbox"),
-            "approval": agent.get("approval"),
-            "proxy_enabled": agent.get("proxy_enabled"),
-            "created_by": created_by,
-            "created_reason": created_reason,
-        },
+        task_id,
+        backend=backend,
+        role=role,
+        model=model,
+        sandbox=sandbox,
+        approval=approval,
+        proxy_enabled=proxy_enabled,
+        created_by=created_by,
+        created_reason=created_reason,
+        now_func=utc_now,
+        append_event_func=append_event,
+        ensure_session_func=ensure_session,
     )
-    return agent
 
 
 def update_agent_config(
@@ -849,41 +704,17 @@ def update_agent_config(
     approval: str | None = None,
     proxy_enabled: bool | None = None,
 ) -> dict:
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), None)
-        if agent is None:
-            raise SystemExit(f"Agent not found: {agent_id}")
-        if sandbox is not None:
-            agent["sandbox"] = sandbox
-            if agent_id == "main":
-                task["preferred_sandbox"] = sandbox
-        if approval is not None:
-            agent["approval"] = approval
-            if agent_id == "main":
-                task["preferred_approval"] = approval
-        if proxy_enabled is not None:
-            agent["proxy_enabled"] = bool(proxy_enabled)
-        agent["last_active_at"] = utc_now()
-        plan["updated_at"] = utc_now()
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(
+    return _update_agent_config(
         root,
         run_id,
-        "agent_config_updated",
-        {
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "sandbox": agent.get("sandbox"),
-            "approval": agent.get("approval"),
-            "proxy_enabled": agent.get("proxy_enabled"),
-        },
+        task_id,
+        agent_id,
+        sandbox=sandbox,
+        approval=approval,
+        proxy_enabled=proxy_enabled,
+        now_func=utc_now,
+        append_event_func=append_event,
     )
-    return agent
 
 
 def update_task_proxy_config(
@@ -1005,57 +836,28 @@ def set_agent_status(
     status: str,
     exit_code: int | None = None,
 ) -> dict:
-    now = utc_now()
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), None)
-        if agent is None:
-            raise SystemExit(f"Agent not found: {agent_id}")
-        previous_status = agent.get("status")
-        agent["status"] = status
-        agent["last_active_at"] = now
-        if previous_status != status or not agent.get("status_started_at"):
-            agent["status_started_at"] = now
-        if status == "running":
-            agent["started_at"] = now
-            agent["finished_at"] = None
-            agent["exit_code"] = None
-        elif status in {"completed", "failed", "blocked", "interrupted"}:
-            agent["finished_at"] = now
-            agent["exit_code"] = exit_code
-        plan["updated_at"] = now
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(
+    return _set_agent_status(
         root,
         run_id,
-        "agent_status_changed",
-        {"task_id": task_id, "agent_id": agent_id, "status": status, "exit_code": exit_code, "status_started_at": agent.get("status_started_at")},
+        task_id,
+        agent_id,
+        status,
+        exit_code,
+        now_func=utc_now,
+        append_event_func=append_event,
     )
-    return agent
 
 
 def update_agent_runtime(root: Path, run_id: str, task_id: str, agent_id: str, **fields: object) -> dict:
-    now = utc_now()
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), None)
-        if agent is None:
-            raise SystemExit(f"Agent not found: {agent_id}")
-        for key, value in fields.items():
-            agent[key] = value
-        agent["last_active_at"] = now
-        plan["updated_at"] = now
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(root, run_id, "agent_runtime_updated", {"task_id": task_id, "agent_id": agent_id, **fields})
-    return agent
+    return _update_agent_runtime(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        now_func=utc_now,
+        append_event_func=append_event,
+        **fields,
+    )
 
 
 def mark_task_coordination(root: Path, run_id: str, task_id: str, **fields: object) -> dict:
