@@ -303,7 +303,7 @@ def set_agent_status(
             agent["started_at"] = now
             agent["finished_at"] = None
             agent["exit_code"] = None
-        elif status in {"completed", "failed", "blocked", "interrupted"}:
+        elif status in {"completed", "failed", "blocked", "interrupted", "stopped"}:
             agent["finished_at"] = now
             agent["exit_code"] = exit_code
         plan["updated_at"] = now

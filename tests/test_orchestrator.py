@@ -25,8 +25,10 @@ from aha_cli.store.filesystem import (
     iter_jsonl_from,
     list_task_rounds,
     mark_task_coordination,
+    require_plan,
     reopen_task,
     run_dir,
+    save_plan,
     set_agent_status,
     set_task_status,
     status_snapshot,
@@ -128,7 +130,16 @@ class OrchestratorTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", sub["id"], "interrupted")
                 set_agent_status(root, run_id, "task-001", sub_two["id"], "completed", 0)
                 set_agent_status(root, run_id, "task-001", sub_three["id"], "completed", 0)
-                update_agent_runtime(root, run_id, "task-001", sub["id"], recovery_context="old failure")
+                update_agent_runtime(
+                    root,
+                    run_id,
+                    "task-001",
+                    sub["id"],
+                    recovery_context="old failure",
+                    session_id="old-session",
+                    backend_session_id="old-backend-session",
+                    last_usage={"input_tokens": 1},
+                )
                 reply = json.dumps(
                     {
                         "actions": [
@@ -163,7 +174,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(executed[0]["agent"]["id"], sub["id"])
         self.assertEqual(agent["status"], "pending")
         self.assertEqual(agent["assignment"], "Recover and inspect issue 02")
+        self.assertEqual(agent["assignment_id"], f"{sub['id']}:gen-001")
+        self.assertEqual(agent["scope_id"], f"{sub['id']}:gen-001")
+        self.assertEqual(agent["generation"], 1)
         self.assertEqual(agent["recovery_context"], "")
+        self.assertIsNone(agent["session_id"])
+        self.assertIsNone(agent["backend_session_id"])
+        self.assertIsNone(agent["last_usage"])
         self.assertEqual(len([item for item in detail["agents"] if item.get("role") == "sub"]), 3)
         self.assertEqual(messages[-1]["message"], "Recover and inspect issue 02")
         self.assertEqual([item["message"] for item in new_messages], ["Recover and inspect issue 02"])
@@ -176,7 +193,7 @@ class OrchestratorTests(unittest.TestCase):
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Recover several sub slots", "--agents", "1")
+                code, plan_output = self.run_cli("plan", "Recover several sub slots", "--agents", "3")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
@@ -184,7 +201,7 @@ class OrchestratorTests(unittest.TestCase):
                 sub_three = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
                 set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
                 set_agent_status(root, run_id, "task-001", sub_two["id"], "interrupted")
-                set_agent_status(root, run_id, "task-001", sub_three["id"], "interrupted")
+                set_agent_status(root, run_id, "task-001", sub_three["id"], "stopped")
                 reply = json.dumps(
                     {
                         "actions": [
@@ -201,18 +218,21 @@ class OrchestratorTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), 0)
                 sub_two_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_two["id"]), 0)
                 sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"]), 0)
 
-        self.assertEqual([item["agent"]["id"] for item in executed], [sub_two["id"], sub_three["id"]])
-        self.assertEqual([item["agent"]["assignment"] for item in executed], ["Inspect issue 02", "Inspect issue 04"])
+        self.assertEqual([item["agent"]["id"] for item in executed], [sub_two["id"], sub["id"], sub_three["id"]])
+        self.assertEqual([item["agent"]["assignment"] for item in executed], ["Inspect issue 02", "Inspect issue 04", "Inspect issue 03"])
         self.assertEqual(next(item for item in detail["agents"] if item["id"] == sub_two["id"])["assignment"], "Inspect issue 02")
-        self.assertEqual(next(item for item in detail["agents"] if item["id"] == sub_three["id"])["assignment"], "Inspect issue 04")
+        self.assertEqual(next(item for item in detail["agents"] if item["id"] == sub["id"])["assignment"], "Inspect issue 04")
+        self.assertEqual(next(item for item in detail["agents"] if item["id"] == sub_three["id"])["assignment"], "Inspect issue 03")
         self.assertEqual(sub_two_messages[-1]["message"], "Inspect issue 02")
-        self.assertEqual(sub_three_messages[-1]["message"], "Inspect issue 04")
-        self.assertEqual(start_backend_mock.call_count, 2)
-        self.assertEqual(len([row for row in rows if row["type"] == "sub_agent_reused"]), 2)
-        self.assertTrue(any(row["type"] == "action_skipped" and row["data"].get("reason") == "max_sub_agents reached" for row in rows))
+        self.assertEqual(sub_messages[-1]["message"], "Inspect issue 04")
+        self.assertEqual(sub_three_messages[-1]["message"], "Inspect issue 03")
+        self.assertEqual(start_backend_mock.call_count, 3)
+        self.assertEqual(len([row for row in rows if row["type"] == "sub_agent_reused"]), 3)
+        self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
 
     def test_execute_actions_spawn_sub_can_target_specific_existing_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,6 +275,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(executed[0]["requested_agent_id"], sub_three["id"])
         self.assertEqual(agent["status"], "pending")
         self.assertEqual(agent["assignment"], "Reassign issue 04")
+        self.assertEqual(agent["assignment_id"], f"{sub_three['id']}:gen-001")
+        self.assertEqual(agent["scope_id"], f"{sub_three['id']}:gen-001")
         self.assertEqual(sub_three_messages[-1]["message"], "Reassign issue 04")
         start_backend_mock.assert_called_once()
         self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
@@ -267,7 +289,73 @@ class OrchestratorTests(unittest.TestCase):
             )
         )
 
-    def test_execute_actions_reports_spawn_sub_skipped_without_reusable_slot(self) -> None:
+    def test_execute_actions_preserves_recovery_context_for_same_scope_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Resume scoped sub slot", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                update_agent_runtime(
+                    root,
+                    run_id,
+                    "task-001",
+                    sub["id"],
+                    assignment="Old scoped work",
+                    assignment_id=f"{sub['id']}:gen-001",
+                    scope_id="chat-prompt-context",
+                    scope_explicit=True,
+                    generation=1,
+                    recovery_context="resume from failing focused test",
+                    recovery_context_reason="context_overflow",
+                    recovery_context_at="2026-05-22T00:00:00+00:00",
+                    recovery_context_consumed_at="",
+                    session_id="sticky-session",
+                    backend_session_id="backend-session",
+                )
+                set_agent_status(root, run_id, "task-001", sub["id"], "interrupted")
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "agent_id": sub["id"],
+                                "scope_id": "chat-prompt-context",
+                                "title": "Continue scoped work",
+                                "backend": "codex",
+                            }
+                        ],
+                        "response": "继续同一 scope",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend"):
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        agent = next(item for item in detail["agents"] if item["id"] == sub["id"])
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(agent["assignment"], "Continue scoped work")
+        self.assertEqual(agent["assignment_id"], f"{sub['id']}:gen-002")
+        self.assertEqual(agent["scope_id"], "chat-prompt-context")
+        self.assertEqual(agent["generation"], 2)
+        self.assertEqual(agent["recovery_context"], "resume from failing focused test")
+        self.assertEqual(agent["backend_session_id"], "backend-session")
+        self.assertTrue(
+            any(
+                row["type"] == "sub_agent_reused"
+                and row["data"].get("agent_id") == sub["id"]
+                and row["data"].get("same_scope") is True
+                and row["data"].get("scope_id") == "chat-prompt-context"
+                for row in rows
+            )
+        )
+
+    def test_execute_actions_reports_spawn_sub_skipped_when_active_limit_reached(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -275,10 +363,13 @@ class OrchestratorTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "No sub slot", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                plan = require_plan(root, run_id)
+                plan["tasks"][0]["max_sub_agents"] = 1
+                save_plan(root, plan)
                 sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
                 sub_two = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
                 sub_three = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
-                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
                 set_agent_status(root, run_id, "task-001", sub_two["id"], "completed", 0)
                 set_agent_status(root, run_id, "task-001", sub_three["id"], "completed", 0)
                 reply = json.dumps(
@@ -301,6 +392,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(any(row["type"] == "action_skipped" and row["data"].get("reason") == "max_sub_agents reached" for row in rows))
         self.assertEqual(browser_messages[-1]["sender"], "aha")
         self.assertIn("没有创建新的 sub-agent", browser_messages[-1]["message"])
+        self.assertIn("当前活跃 sub-agent 已达到", browser_messages[-1]["message"])
 
     def test_codex_chat_flags_subagent_claim_without_spawn_sub(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -644,4 +736,3 @@ class OrchestratorTests(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 run_agent.assert_not_called()
-

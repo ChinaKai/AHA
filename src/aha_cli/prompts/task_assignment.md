@@ -38,7 +38,9 @@ AHA sub-agent policy:
 - Do not use backend-native subagent tools such as Claude Task/Agent/TaskCreate.
 - Do not claim a sub-agent exists, has started, or has been restored unless AHA created or reused it through a `spawn_sub` action and it appears in the task agents list.
 - If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
-- If an existing `sub-*` is `interrupted` or `failed` and the same work is still needed, return a new `spawn_sub` action with the desired assignment; AHA may reuse that abnormal sub-agent slot instead of allocating a new id.
+- `max_sub_agents` limits active sub-agents. Completed, stopped, failed, interrupted, or blocked `sub-*` slots may be reused instead of allocating a new id.
+- AHA does not infer whether two assignments are the same scope from natural language. Include a stable `scope_id` in `spawn_sub` only when intentionally continuing the same scope; omit it or change it for a fresh scope.
+- Reusing a terminal `sub-*` for a fresh scope resets its backend/session context. Reusing with the same explicit `scope_id` may preserve recovery context for continuation.
 - If you need to assign a specific new task to a specific existing `sub-*`, include `agent_id` in that `spawn_sub` action. Do not rely on wording in `title` alone to choose a target.
 - Only route work to `sub-*` agents that already appear in this task's agents list.
 
@@ -61,6 +63,7 @@ outside it. Use this shape:
     {
       "type": "spawn_sub",
       "agent_id": "optional existing sub-* when reassigning a specific sub-agent",
+      "scope_id": "optional stable scope id when continuing the same scope",
       "title": "sub-agent assignment",
       "backend": "codex",
       "model": null,

@@ -24,8 +24,8 @@ from aha_cli.store.filesystem import (
     write_json,
 )
 
-TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted"}
-REUSABLE_SUB_AGENT_STATUSES = {"failed", "interrupted"}
+TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted", "stopped"}
+REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_STUB_DECISION = "ask_user"
@@ -160,13 +160,39 @@ def find_sub_agent(task: dict, agent_id: str) -> dict | None:
     return next((agent for agent in sub_agents(task) if agent.get("id") == agent_id), None)
 
 
+def active_sub_agent_count(task: dict) -> int:
+    return sum(1 for agent in sub_agents(task) if agent.get("status") not in TERMINAL_AGENT_STATUSES)
+
+
 def reusable_sub_agent(task: dict, exclude_ids: set[str] | None = None) -> dict | None:
     excluded = exclude_ids or set()
-    for status in ("interrupted", "failed"):
+    for status in REUSABLE_SUB_AGENT_STATUSES:
         for agent in sub_agents(task):
             if agent.get("id") not in excluded and agent.get("status") == status:
                 return agent
     return None
+
+
+def explicit_scope_id(action: dict) -> str:
+    return str(action.get("scope_id") or action.get("scope") or "").strip()
+
+
+def next_generation(agent: dict | None) -> int:
+    if not agent:
+        return 1
+    try:
+        return max(1, int(agent.get("generation") or 0) + 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def assignment_id_for(agent_id: str, generation: int) -> str:
+    return f"{agent_id}:gen-{generation:03d}"
+
+
+def scope_id_for(action: dict, assignment_id: str) -> tuple[str, bool]:
+    scope_id = explicit_scope_id(action)
+    return (scope_id, True) if scope_id else (assignment_id, False)
 
 
 def spawn_sub_skipped_message(reason: str, max_sub_agents: int, target_agent_id: str = "") -> str:
@@ -180,8 +206,8 @@ def spawn_sub_skipped_message(reason: str, max_sub_agents: int, target_agent_id:
         return f"AHA 没有分配 sub-agent：指定的 agent `{target_agent_id}` 在本轮已经接收过一个新任务。"
     return (
         "AHA 没有创建新的 sub-agent："
-        f"已达到 max_sub_agents={max_sub_agents}，且没有 interrupted/failed 的 sub-agent 可复用。"
-        "请先提高 max_sub_agents，或恢复/清理已有 sub-agent。"
+        f"当前活跃 sub-agent 已达到 max_sub_agents={max_sub_agents}。"
+        "请先等待已有 sub-agent 完成，或提高 max_sub_agents。"
     )
 
 
@@ -233,28 +259,50 @@ def dispatch_spawn_to_existing_sub_agent(
 ) -> dict:
     previous_status = str(agent.get("status") or "")
     agent_id = str(agent.get("id") or "")
+    previous_scope_id = str(agent.get("scope_id") or "")
+    generation = next_generation(agent)
+    assignment_id = assignment_id_for(agent_id, generation)
+    scope_id, scope_explicit = scope_id_for(action, assignment_id)
+    same_scope = scope_explicit and scope_id == previous_scope_id
     set_agent_status(root, run_id, task_id, agent_id, "pending")
     backend = str(action.get("backend") or agent.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex")
+    runtime_fields = {
+        "assignment": assignment,
+        "assignment_id": assignment_id,
+        "scope_id": scope_id,
+        "scope_explicit": scope_explicit,
+        "generation": generation,
+        "backend": backend,
+        "model": action.get("model") if action.get("model") is not None else agent.get("model"),
+        "sandbox": action.get("sandbox") if action.get("sandbox") is not None else agent.get("sandbox") or task.get("preferred_sandbox"),
+        "approval": action.get("approval") if action.get("approval") is not None else agent.get("approval") or task.get("preferred_approval"),
+        "created_by": "main",
+        "created_reason": str(action.get("reason") or action.get("title") or "main requested sub-agent recovery"),
+        "recovery_attempts": 0,
+        "last_recovery_at": "",
+        "reused_at": utc_now(),
+        "reused_from_status": previous_status,
+        "previous_assignment_id": agent.get("assignment_id") or "",
+        "previous_scope_id": previous_scope_id,
+    }
+    if not same_scope:
+        runtime_fields.update(
+            {
+                "session_id": None,
+                "backend_session_id": None,
+                "last_usage": None,
+                "recovery_context": "",
+                "recovery_context_reason": "",
+                "recovery_context_at": "",
+                "recovery_context_consumed_at": "",
+            }
+        )
     updated_agent = update_agent_runtime(
         root,
         run_id,
         task_id,
         agent_id,
-        assignment=assignment,
-        backend=backend,
-        model=action.get("model") if action.get("model") is not None else agent.get("model"),
-        sandbox=action.get("sandbox") if action.get("sandbox") is not None else agent.get("sandbox") or task.get("preferred_sandbox"),
-        approval=action.get("approval") if action.get("approval") is not None else agent.get("approval") or task.get("preferred_approval"),
-        created_by="main",
-        created_reason=str(action.get("reason") or action.get("title") or "main requested sub-agent recovery"),
-        recovery_context="",
-        recovery_context_reason="",
-        recovery_context_at="",
-        recovery_context_consumed_at="",
-        recovery_attempts=0,
-        last_recovery_at="",
-        reused_at=utc_now(),
-        reused_from_status=previous_status,
+        **runtime_fields,
     )
     save_chat_offset(root, run_id, agent_id, task_id)
     append_message(
@@ -276,6 +324,11 @@ def dispatch_spawn_to_existing_sub_agent(
             "task_id": task_id,
             "agent_id": agent_id,
             "previous_status": previous_status,
+            "previous_scope_id": previous_scope_id,
+            "assignment_id": assignment_id,
+            "scope_id": scope_id,
+            "generation": generation,
+            "same_scope": same_scope,
             "reason": reason,
         },
     )
@@ -357,8 +410,6 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         task = task_snapshot(root, run_id, task_id)["task"]
     except KeyError:
         return []
-    max_sub_agents = int(task.get("max_sub_agents", 0) or 0)
-    current_sub_agents = sum(1 for agent in task.get("agents", []) if agent.get("role") == "sub")
     payload = extract_action_payload(text)
     if not payload:
         return []
@@ -376,7 +427,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         except KeyError:
             return executed
         max_sub_agents = int(task.get("max_sub_agents", 0) or 0)
-        current_sub_agents = sum(1 for agent in task.get("agents", []) if agent.get("role") == "sub")
+        current_active_sub_agents = active_sub_agent_count(task)
         action_type = action.get("type")
         if action_type == "record_task_update":
             summary = str(action.get("summary") or "").strip()
@@ -520,6 +571,9 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                     target_agent_id=requested_agent_id,
                 )
                 continue
+            if current_active_sub_agents >= max_sub_agents:
+                append_spawn_sub_skipped(root, run_id, task_id, reason="max_sub_agents reached", max_sub_agents=max_sub_agents)
+                continue
             agent = dispatch_spawn_to_existing_sub_agent(
                 root,
                 run_id,
@@ -533,10 +587,10 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             used_sub_agent_ids.add(requested_agent_id)
             executed.append({"type": "spawn_sub", "agent": agent, "reused": True, "requested_agent_id": requested_agent_id})
             continue
-        reusable_agent = reusable_sub_agent(task, used_sub_agent_ids) if max_sub_agents > 0 and current_sub_agents >= max_sub_agents else None
-        if current_sub_agents >= max_sub_agents and reusable_agent is None:
+        if current_active_sub_agents >= max_sub_agents:
             append_spawn_sub_skipped(root, run_id, task_id, reason="max_sub_agents reached", max_sub_agents=max_sub_agents)
             continue
+        reusable_agent = reusable_sub_agent(task, used_sub_agent_ids) if max_sub_agents > 0 else None
         if reusable_agent is not None:
             agent_id = str(reusable_agent.get("id") or "")
             agent = dispatch_spawn_to_existing_sub_agent(
@@ -547,7 +601,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 action,
                 reusable_agent,
                 assignment,
-                reason="spawn_sub reused abnormal sub-agent slot at max_sub_agents",
+                reason="spawn_sub reused idle sub-agent slot",
             )
             used_sub_agent_ids.add(agent_id)
             executed.append({"type": "spawn_sub", "agent": agent, "reused": True})
@@ -564,8 +618,20 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             created_by="main",
             created_reason=str(action.get("reason") or action.get("title") or "main requested sub-agent"),
         )
-        current_sub_agents += 1
-        agent = update_agent_runtime(root, run_id, task_id, agent["id"], assignment=assignment)
+        generation = 1
+        assignment_id = assignment_id_for(agent["id"], generation)
+        scope_id, scope_explicit = scope_id_for(action, assignment_id)
+        agent = update_agent_runtime(
+            root,
+            run_id,
+            task_id,
+            agent["id"],
+            assignment=assignment,
+            assignment_id=assignment_id,
+            scope_id=scope_id,
+            scope_explicit=scope_explicit,
+            generation=generation,
+        )
         append_message(
             root,
             run_id,

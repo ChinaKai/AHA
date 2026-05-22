@@ -276,7 +276,8 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("AHA-Task: task-001", assignment_prompt)
         self.assertIn("return ONLY one JSON object", assignment_prompt)
         self.assertIn('"actions"', assignment_prompt)
-        self.assertIn("AHA may reuse that abnormal sub-agent slot", assignment_prompt)
+        self.assertIn("Completed, stopped, failed, interrupted, or blocked", assignment_prompt)
+        self.assertIn("Include a stable `scope_id`", assignment_prompt)
         self.assertIn("include `agent_id` in that `spawn_sub` action", assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -302,7 +303,8 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("AHA-Agent: main", main_prompt)
                 self.assertIn("aha commit --type <type>", main_prompt)
                 self.assertIn("UI routing changes", main_prompt)
-                self.assertIn("AHA may reuse that abnormal sub-agent slot", main_prompt)
+                self.assertIn("Completed, stopped, failed, interrupted, or blocked", main_prompt)
+                self.assertIn("Include a stable `scope_id`", main_prompt)
                 self.assertIn("Spawn/reassign format:", main_prompt)
 
                 sub_message = append_message(root, run_id, "sub-001", "提交你负责的部分", sender="main", task_id="task-001", role="sub")
