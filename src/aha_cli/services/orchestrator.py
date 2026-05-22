@@ -13,8 +13,10 @@ from aha_cli.store.filesystem import (
     append_event,
     append_message,
     append_task_round,
+    ensure_session,
     inbox_path,
     mark_task_coordination,
+    save_session,
     set_agent_status,
     set_task_status,
     status_snapshot,
@@ -195,6 +197,71 @@ def scope_id_for(action: dict, assignment_id: str) -> tuple[str, bool]:
     return (scope_id, True) if scope_id else (assignment_id, False)
 
 
+def reset_backend_session_for_fresh_scope(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    task: dict,
+    agent: dict,
+    *,
+    assignment_id: str,
+    backend: str,
+    scope_id: str,
+    reason: str,
+) -> dict:
+    agent_id = str(agent.get("id") or "")
+    session = ensure_session(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        backend,
+        model=agent.get("model") or task.get("preferred_model"),
+        workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
+    )
+    old_backend_session_id = session.get("backend_session_id")
+    reset_at = utc_now()
+    history = session.get("history_backend_sessions")
+    if not isinstance(history, list):
+        history = []
+    archive = None
+    if old_backend_session_id:
+        archive = {
+            "backend_session_id": old_backend_session_id,
+            "backend": session.get("backend"),
+            "model": session.get("model"),
+            "started_at": session.get("created_at"),
+            "ended_at": reset_at,
+            "reason": "fresh_scope_reuse",
+            "assignment_id": assignment_id,
+            "scope_id": scope_id,
+            "detail": reason,
+        }
+        history.append(archive)
+    session["backend"] = backend
+    session["history_backend_sessions"] = history
+    session["backend_session_id"] = None
+    session["status"] = "reset"
+    session["updated_at"] = reset_at
+    session["compact_summary"] = None
+    save_session(root, session)
+    append_event(
+        root,
+        run_id,
+        "backend_session_reset",
+        {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "old_backend_session_id": old_backend_session_id,
+            "assignment_id": assignment_id,
+            "scope_id": scope_id,
+            "reason": "fresh_scope_reuse",
+            "archived": bool(archive),
+        },
+    )
+    return session
+
+
 def spawn_sub_skipped_message(reason: str, max_sub_agents: int, target_agent_id: str = "") -> str:
     if reason == "delegation disabled":
         return "AHA 没有创建新的 sub-agent：当前任务已禁用 delegation。"
@@ -286,6 +353,17 @@ def dispatch_spawn_to_existing_sub_agent(
         "previous_scope_id": previous_scope_id,
     }
     if not same_scope:
+        reset_backend_session_for_fresh_scope(
+            root,
+            run_id,
+            task_id,
+            task,
+            agent,
+            assignment_id=assignment_id,
+            backend=backend,
+            scope_id=scope_id,
+            reason=reason,
+        )
         runtime_fields.update(
             {
                 "session_id": None,

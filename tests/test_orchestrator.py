@@ -20,15 +20,18 @@ from aha_cli.services.orchestrator import (
 from aha_cli.store.filesystem import (
     add_agent,
     complete_task,
+    ensure_session,
     event_path,
     inbox_path,
     iter_jsonl_from,
+    list_sessions,
     list_task_rounds,
     mark_task_coordination,
     require_plan,
     reopen_task,
     run_dir,
     save_plan,
+    save_session,
     set_agent_status,
     set_task_status,
     status_snapshot,
@@ -140,6 +143,10 @@ class OrchestratorTests(unittest.TestCase):
                     backend_session_id="old-backend-session",
                     last_usage={"input_tokens": 1},
                 )
+                session = ensure_session(root, run_id, "task-001", sub["id"], "codex", workspace_path=str(root))
+                session["backend_session_id"] = "old-thread"
+                session["status"] = "active"
+                save_session(root, session)
                 reply = json.dumps(
                     {
                         "actions": [
@@ -167,6 +174,7 @@ class OrchestratorTests(unittest.TestCase):
                 )
                 new_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), offset)
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                sessions = list_sessions(root, run_id, "task-001")
 
         self.assertEqual(len(executed), 1)
         self.assertEqual(executed[0]["type"], "spawn_sub")
@@ -181,12 +189,27 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIsNone(agent["session_id"])
         self.assertIsNone(agent["backend_session_id"])
         self.assertIsNone(agent["last_usage"])
+        sub_session = next(item for item in sessions if item["agent_id"] == sub["id"])
+        self.assertIsNone(sub_session["backend_session_id"])
+        self.assertEqual(sub_session["status"], "reset")
+        self.assertEqual(sub_session["history_backend_sessions"][-1]["backend_session_id"], "old-thread")
+        self.assertEqual(sub_session["history_backend_sessions"][-1]["assignment_id"], f"{sub['id']}:gen-001")
+        self.assertEqual(sub_session["history_backend_sessions"][-1]["scope_id"], f"{sub['id']}:gen-001")
         self.assertEqual(len([item for item in detail["agents"] if item.get("role") == "sub"]), 3)
         self.assertEqual(messages[-1]["message"], "Recover and inspect issue 02")
         self.assertEqual([item["message"] for item in new_messages], ["Recover and inspect issue 02"])
         start_backend_mock.assert_called_once()
         self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
         self.assertTrue(any(row["type"] == "sub_agent_reused" for row in rows))
+        self.assertTrue(
+            any(
+                row["type"] == "backend_session_reset"
+                and row["data"].get("agent_id") == sub["id"]
+                and row["data"].get("old_backend_session_id") == "old-thread"
+                and row["data"].get("archived") is True
+                for row in rows
+            )
+        )
 
     def test_execute_actions_reuses_distinct_sub_agents_in_spawn_batch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -315,6 +338,10 @@ class OrchestratorTests(unittest.TestCase):
                     session_id="sticky-session",
                     backend_session_id="backend-session",
                 )
+                session = ensure_session(root, run_id, "task-001", sub["id"], "codex", workspace_path=str(root))
+                session["backend_session_id"] = "same-scope-thread"
+                session["status"] = "active"
+                save_session(root, session)
                 set_agent_status(root, run_id, "task-001", sub["id"], "interrupted")
                 reply = json.dumps(
                     {
@@ -336,8 +363,10 @@ class OrchestratorTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                sessions = list_sessions(root, run_id, "task-001")
 
         agent = next(item for item in detail["agents"] if item["id"] == sub["id"])
+        sub_session = next(item for item in sessions if item["agent_id"] == sub["id"])
         self.assertEqual(len(executed), 1)
         self.assertEqual(agent["assignment"], "Continue scoped work")
         self.assertEqual(agent["assignment_id"], f"{sub['id']}:gen-002")
@@ -345,6 +374,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(agent["generation"], 2)
         self.assertEqual(agent["recovery_context"], "resume from failing focused test")
         self.assertEqual(agent["backend_session_id"], "backend-session")
+        self.assertEqual(sub_session["backend_session_id"], "same-scope-thread")
+        self.assertEqual(sub_session["status"], "active")
+        self.assertFalse(any(row["type"] == "backend_session_reset" for row in rows))
         self.assertTrue(
             any(
                 row["type"] == "sub_agent_reused"
