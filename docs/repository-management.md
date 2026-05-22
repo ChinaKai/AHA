@@ -68,7 +68,9 @@ focused module that owns the behavior.
 tests/test_store_state.py       persistence helpers, compatibility, snapshots
 tests/test_cli_core.py          init, plan, status, commit policy, packaging
 tests/test_backend_*.py         backend registry, runners, sessions, runtime
-tests/test_chat_*.py            chat turns, prompt context, finalization flow
+tests/test_chat_prompt.py       chat offsets, prompt context, sticky deltas
+tests/test_supervision_flow.py  supervision routing and agent command flow
+tests/test_finalization_flow.py final result, round journal, checkpoints
 tests/test_web_run_api.py       bootstrap, workspace, run creation, archives
 tests/test_web_task_api.py      task create/resume, settings, proxy APIs
 tests/test_web_events_api.py    UI core, conversation events, logs, event replay
@@ -85,8 +87,8 @@ Only broaden or rewrite tests after the move is green.
 
 Current follow-up candidates:
 
-- `tests/test_chat_flow.py` is large and can split into prompt context,
-  supervision, and finalization modules if those areas change again.
+- `tests/test_supervision_flow.py` can split further if host supervision and
+  agent-command behavior start changing independently.
 - `tests/test_web_task_api.py` can split further if task creation/settings and
   proxy behavior start changing independently.
 
