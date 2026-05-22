@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from aha_cli.services.prompt_templates import render_prompt_template
+from aha_cli.store.filesystem import task_snapshot
+
+
+def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
+    parts = command.split()
+    name = parts[1] if len(parts) > 1 else "help"
+    if name == "help":
+        return "\n".join(
+            [
+                "AHA commands:",
+                "- /aha help: show AHA commands",
+                "- /aha status: show selected task status",
+                "- /aha agents: list selected task agents",
+                "- /aha checkpoint <summary>: record a task journal checkpoint",
+                "- /aha final: ask task-main to generate the Final and complete the task",
+                "- /aha finalize: alias for /aha final",
+                "- /aha complete: alias for /aha final",
+                "- /aha reopen: cancel completion and allow follow-up messages",
+                "- /aha interrupt: interrupt the selected agent's current turn",
+                "- /aha session compact-reset: compact and reset selected agent backend session",
+                "",
+                "Agent command:",
+                "- /agent <command>: route /<command> to the selected agent",
+            ]
+        )
+    if not task_id:
+        return "No task is selected."
+    try:
+        detail = task_snapshot(root, run_id, task_id)
+    except KeyError:
+        return f"Task not found: {task_id}"
+    task = detail["task"]
+    if name == "status":
+        return "\n".join(
+            [
+                f"Task: {task['id']} {task['title']}",
+                f"Status: {task.get('status')} exit={task.get('exit_code')}",
+                f"Backend: {task.get('preferred_backend')} model={task.get('preferred_model') or 'default'}",
+                f"Workspace: {task.get('workspace_path') or '-'}",
+            ]
+        )
+    if name == "agents":
+        lines = ["Agents:"]
+        for agent in task.get("agents", []):
+            lines.append(
+                f"- {agent.get('id')} role={agent.get('role')} backend={agent.get('backend')} "
+                f"sandbox={agent.get('sandbox') or task.get('preferred_sandbox') or '-'} "
+                f"approval={agent.get('approval') or task.get('preferred_approval') or '-'} "
+                f"proxy={'on' if agent.get('proxy_enabled') else 'off'} "
+                f"assignment={agent.get('assignment') or agent.get('created_reason') or '-'}"
+            )
+        return "\n".join(lines)
+    if name == "checkpoint":
+        return "Use `/aha checkpoint <summary>` from the selected task conversation to record a journal checkpoint."
+    if name in {"final", "finalize"}:
+        return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
+    if name in {"complete", "done"}:
+        return "Use `/aha complete` as an alias for `/aha final`."
+    if name in {"reopen", "resume"}:
+        return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
+    if name == "session" and len(parts) > 2 and parts[2] == "compact-reset":
+        return "Use `/aha session compact-reset` from the selected task conversation to archive the current backend session and start a fresh one."
+    return f"Unknown AHA command: /aha {name}. Try /aha help."
+
+
+def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id: str | None, command: str) -> tuple[bool, str | None, str | None]:
+    del root, run_id, task_id, agent_id
+    suffix = command.removeprefix("/agent").strip()
+    if not suffix:
+        return True, None, "Usage: /agent <command> routes /<command> to the selected agent. Example: /agent status -> /status"
+    return False, suffix if suffix.startswith("/") else f"/{suffix}", None
+
+
+def format_task_journal_for_prompt(rounds: list[dict]) -> str:
+    if not rounds:
+        return "Task journal (chronological ordered list):\n1. (empty)"
+    lines = ["Task journal (chronological ordered list):"]
+    for index, item in enumerate(rounds[-50:], start=1):
+        lines.append(f"{index}. {item.get('summary')}")
+        lines.append(f"   - round_id: {item.get('round_id')}")
+        lines.append(f"   - trigger: {item.get('trigger')}")
+        changed_files = item.get("changed_files") or []
+        verification = item.get("verification") or []
+        risks = item.get("risks") or []
+        if changed_files:
+            lines.append(f"   - files: {', '.join(str(path) for path in changed_files)}")
+        if verification:
+            lines.append(f"   - verification: {'; '.join(str(check) for check in verification)}")
+        if risks:
+            lines.append(f"   - risks: {'; '.join(str(risk) for risk in risks)}")
+    return "\n".join(lines)
+
+
+def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None) -> str:
+    return render_prompt_template(
+        "finalization.md",
+        task_id=task_id,
+        title=title,
+        task_journal=format_task_journal_for_prompt(rounds or []),
+    )
+
+
+__all__ = [
+    "finalization_prompt",
+    "format_agent_command",
+    "format_aha_command",
+    "format_task_journal_for_prompt",
+]

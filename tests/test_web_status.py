@@ -424,8 +424,8 @@ class WebStatusTests(unittest.TestCase):
                 save_chat_offset(offset_file, 0)
 
                 with (
-                    mock.patch("aha_cli.web.task_commands.backend_status", return_value={"status": "busy", "pid": 1234}),
-                    mock.patch("aha_cli.web.task_commands.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
+                    mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "busy", "pid": 1234}),
+                    mock.patch("aha_cli.web.task_command_actions.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -462,8 +462,8 @@ class WebStatusTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", "main", "completed", 0)
 
                 with (
-                    mock.patch("aha_cli.web.task_commands.backend_status", return_value={"status": "running", "pid": 1234}),
-                    mock.patch("aha_cli.web.task_commands.stop_backend") as stop_backend,
+                    mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "running", "pid": 1234}),
+                    mock.patch("aha_cli.web.task_command_actions.stop_backend") as stop_backend,
                 ):
                     result = handle_send_payload(
                         root,

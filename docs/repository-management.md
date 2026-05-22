@@ -71,7 +71,10 @@ web/run_routes.py       run, archive, bootstrap, and workspace HTTP routes
 web/status.py           web status snapshots and backend-loss recovery
 web/system_routes.py    status, backend, events, debug, and restart routes
 web/task_actions.py     compatibility facade for task web helpers
-web/task_commands.py    /aha and /agent command handling
+web/task_command_actions.py compact reset, checkpoint, final, reopen, interrupt actions
+web/task_command_format.py  /aha and /agent command text formatting
+web/task_command_router.py  slash command routing and command response payloads
+web/task_commands.py    compatibility facade for task command helpers
 web/task_messaging.py   send payload, chat offsets, and task message locks
 web/task_runtime.py     backend autostart and finalization runtime helpers
 web/task_routes.py      task, agent, config, final, and send HTTP routes

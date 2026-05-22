@@ -113,7 +113,7 @@ class TaskCommandTests(unittest.TestCase):
                     "task-001",
                 )
                 with mock.patch(
-                    "aha_cli.web.task_commands.compact_reset_backend_session",
+                    "aha_cli.web.task_command_actions.compact_reset_backend_session",
                     return_value={"old_backend_session_id": "session-1", "summary_path": "summaries/main.md"},
                 ) as compact_reset:
                     reset_handled, _, reset_payload = handle_slash_command(
@@ -145,8 +145,8 @@ class TaskCommandTests(unittest.TestCase):
                 append_message(root, run_id, "main", "in-flight", sender="browser", task_id="task-001", role="main")
 
                 with (
-                    mock.patch("aha_cli.web.task_commands.backend_status", return_value={"status": "busy", "pid": 1234}),
-                    mock.patch("aha_cli.web.task_commands.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
+                    mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "busy", "pid": 1234}),
+                    mock.patch("aha_cli.web.task_command_actions.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
                 ):
                     handled, forwarded, payload = handle_slash_command(
                         root,

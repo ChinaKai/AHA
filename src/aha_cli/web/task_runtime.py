@@ -5,7 +5,6 @@ from pathlib import Path
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
-from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -17,35 +16,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
 )
 from aha_cli.web.status import TERMINAL_TASK_STATUSES
-
-
-def format_task_journal_for_prompt(rounds: list[dict]) -> str:
-    if not rounds:
-        return "Task journal (chronological ordered list):\n1. (empty)"
-    lines = ["Task journal (chronological ordered list):"]
-    for index, item in enumerate(rounds[-50:], start=1):
-        lines.append(f"{index}. {item.get('summary')}")
-        lines.append(f"   - round_id: {item.get('round_id')}")
-        lines.append(f"   - trigger: {item.get('trigger')}")
-        changed_files = item.get("changed_files") or []
-        verification = item.get("verification") or []
-        risks = item.get("risks") or []
-        if changed_files:
-            lines.append(f"   - files: {', '.join(str(path) for path in changed_files)}")
-        if verification:
-            lines.append(f"   - verification: {'; '.join(str(check) for check in verification)}")
-        if risks:
-            lines.append(f"   - risks: {'; '.join(str(risk) for risk in risks)}")
-    return "\n".join(lines)
-
-
-def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None) -> str:
-    return render_prompt_template(
-        "finalization.md",
-        task_id=task_id,
-        title=title,
-        task_journal=format_task_journal_for_prompt(rounds or []),
-    )
+from aha_cli.web.task_command_format import finalization_prompt, format_task_journal_for_prompt
 
 
 def is_task_supervision_host_target(task: dict, target_id: str | None) -> bool:
