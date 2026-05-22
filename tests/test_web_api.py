@@ -16,6 +16,7 @@ from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
+    complete_task,
     conversation_events_page,
     event_path,
     inbox_path,
@@ -606,6 +607,23 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
         self.assertEqual(start_backend.call_args.kwargs["task_id"], body["task"]["id"])
         self.assertTrue(start_backend.call_args.kwargs["from_start"])
+
+    def test_task_action_resume_alias_reopens_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Resume alias", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                complete_task(root, run_id, "task-001", 0)
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/resume", method="POST"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["status"], "awaiting_user")
 
     def test_conversation_events_page_filters_and_pages_by_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

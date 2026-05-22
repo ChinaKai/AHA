@@ -60,14 +60,13 @@ Rules for store edits:
 
 ## Test Layout Target
 
-Keep tests grouped by behavior, not by historical entry point. `tests/test_cli.py`
-is now only a small CLI compatibility bucket; new tests should land in the
+Keep tests grouped by behavior, not by historical entry point. The legacy
+`tests/test_cli.py` bucket has been retired; new tests should land in the
 focused module that owns the behavior.
 
 ```text
 tests/test_store_state.py       persistence helpers, compatibility, snapshots
 tests/test_cli_core.py          init, plan, status, commit policy, packaging
-tests/test_cli.py               remaining CLI compatibility coverage only
 tests/test_backend_*.py         backend registry, runners, sessions, runtime
 tests/test_chat_*.py            chat turns, prompt context, finalization flow
 tests/test_web_api.py           HTTP API, task views, run APIs, log/event pages
@@ -88,8 +87,6 @@ Current follow-up candidates:
   supervision, and finalization modules if those areas change again.
 - `tests/test_web_api.py` is large and can split into run APIs, conversation
   events, and task/settings APIs.
-- `tests/test_cli.py` should either stay small or disappear once the last
-  compatibility-only cases have a clearer home.
 
 ## Parallel Split Workflow
 
