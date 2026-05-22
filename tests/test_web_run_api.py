@@ -11,6 +11,7 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main
 from aha_cli.store.filesystem import append_event, inbox_path, iter_jsonl_from, read_json, run_dir, status_snapshot
+from aha_cli.web.run_routes import handle_run_workspace_route
 from tests.helpers import fetch_ui_response, json_response_body
 
 
@@ -308,3 +309,93 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(runs_body["default_run_id"], run_id)
         self.assertEqual(status_body["run_id"], run_id)
         self.assertEqual(status_body["goal"], "Default fallback")
+
+    def test_run_routes_module_handles_workspace_and_run_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            workspace = Path(tmp) / "repo"
+            root.mkdir()
+            workspace.mkdir()
+
+            workspace_response = handle_run_workspace_route(
+                root,
+                "",
+                "POST",
+                "/api/workspaces",
+                {},
+                {},
+                json.dumps({"path": str(workspace), "name": "demo"}).encode("utf-8"),
+            )
+            workspace_body = json_response_body(workspace_response or b"")
+            run_response = handle_run_workspace_route(
+                root,
+                "",
+                "POST",
+                "/api/runs",
+                {},
+                {},
+                json.dumps({"goal": "Routed run", "mode": "research", "workspace_id": workspace_body["workspace"]["id"]}).encode("utf-8"),
+            )
+            run_body = json_response_body(run_response or b"")
+            run_id = run_body["run"]["id"]
+            bootstrap_response = handle_run_workspace_route(root, run_id, "GET", "/api/bootstrap", {}, {}, b"")
+            runs_response = handle_run_workspace_route(root, run_id, "GET", "/api/runs", {}, {}, b"")
+            plan = read_json(root / "runs" / run_id / "plan.json")
+
+        self.assertTrue((workspace_response or b"").startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue((run_response or b"").startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(plan["tasks"][0]["workspace_id"], "ws-001")
+        self.assertEqual(plan["tasks"][0]["workspace_path"], str(workspace))
+        self.assertEqual(json_response_body(bootstrap_response or b"")["default_run_id"], run_id)
+        self.assertIn(run_id, {item["id"] for item in json_response_body(runs_response or b"")["runs"]})
+
+    def test_run_routes_module_exports_and_imports_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Route archive", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                export_response = handle_run_workspace_route(
+                    root,
+                    run_id,
+                    "GET",
+                    "/api/run/export",
+                    {"run_id": [run_id], "no_logs": ["1"]},
+                    {},
+                    b"",
+                )
+                export_headers, archive_bytes = (export_response or b"").split(b"\r\n\r\n", 1)
+                with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as exported:
+                    names = set(exported.getnames())
+
+                boundary = "----aha-route-test-boundary"
+                multipart_body = (
+                    (
+                        f"--{boundary}\r\n"
+                        'Content-Disposition: form-data; name="archive"; filename="run.tar.gz"\r\n'
+                        "Content-Type: application/gzip\r\n"
+                        "\r\n"
+                    ).encode("ascii")
+                    + archive_bytes
+                    + f"\r\n--{boundary}--\r\n".encode("ascii")
+                )
+                import_response = handle_run_workspace_route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/run/import",
+                    {},
+                    {"content-type": f"multipart/form-data; boundary={boundary}"},
+                    multipart_body,
+                )
+                import_body = json_response_body(import_response or b"")
+
+        self.assertTrue((export_response or b"").startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b'Content-Disposition: attachment; filename="aha-run-', export_headers)
+        self.assertIn("aha-run-manifest.json", names)
+        self.assertTrue((import_response or b"").startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(import_body["source_run_id"], run_id)
+        self.assertNotEqual(import_body["imported_run_id"], run_id)

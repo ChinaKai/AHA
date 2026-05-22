@@ -67,8 +67,11 @@ in focused modules so route handlers stay thin.
 ```text
 web/http_utils.py       HTTP parsing and response helpers
 web/run_api.py          workspace, bootstrap, run create/list/archive helpers
+web/run_routes.py       run, archive, bootstrap, and workspace HTTP routes
 web/status.py           web status snapshots and backend-loss recovery
+web/system_routes.py    status, backend, events, debug, and restart routes
 web/task_actions.py     task create/send/command/autostart helpers
+web/task_routes.py      task, agent, config, final, and send HTTP routes
 web/conversation.py     conversation, event stream, and task log projections
 web/session_debug.py    backend session jsonl discovery and analysis
 web/server.py           route dispatch, WebSocket upgrade, static assets

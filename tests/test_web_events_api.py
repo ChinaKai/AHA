@@ -243,7 +243,7 @@ class WebEventsApiTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="scheduled\n", stderr="")
-                with mock.patch("aha_cli.web.server.subprocess.run", return_value=completed) as run_command:
+                with mock.patch("aha_cli.web.system_routes.subprocess.run", return_value=completed) as run_command:
                     response = asyncio.run(
                         fetch_ui_response(
                             root,
