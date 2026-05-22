@@ -1773,6 +1773,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("return ONLY one JSON object", assignment_prompt)
         self.assertIn('"actions"', assignment_prompt)
         self.assertIn("AHA may reuse that abnormal sub-agent slot", assignment_prompt)
+        self.assertIn("include `agent_id` in that `spawn_sub` action", assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1798,6 +1799,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn("aha commit --type <type>", main_prompt)
                 self.assertIn("UI routing changes", main_prompt)
                 self.assertIn("AHA may reuse that abnormal sub-agent slot", main_prompt)
+                self.assertIn("Spawn/reassign format:", main_prompt)
 
                 sub_message = append_message(root, run_id, "sub-001", "提交你负责的部分", sender="main", task_id="task-001", role="sub")
                 sub_prompt = chat_prompt(root, run_id, "sub-001", sub_message, "")
@@ -2197,6 +2199,102 @@ class CliTests(unittest.TestCase):
         start_backend_mock.assert_called_once()
         self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
         self.assertTrue(any(row["type"] == "sub_agent_reused" for row in rows))
+
+    def test_execute_actions_reuses_distinct_sub_agents_in_spawn_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover several sub slots", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_two = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_three = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub_two["id"], "interrupted")
+                set_agent_status(root, run_id, "task-001", sub_three["id"], "interrupted")
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {"type": "spawn_sub", "title": "Inspect issue 02", "backend": "codex"},
+                            {"type": "spawn_sub", "title": "Inspect issue 04", "backend": "codex"},
+                            {"type": "spawn_sub", "title": "Inspect issue 03", "backend": "codex"},
+                        ],
+                        "response": "请求 AHA 分配三个 sub",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend") as start_backend_mock:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                sub_two_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_two["id"]), 0)
+                sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"]), 0)
+
+        self.assertEqual([item["agent"]["id"] for item in executed], [sub_two["id"], sub_three["id"]])
+        self.assertEqual([item["agent"]["assignment"] for item in executed], ["Inspect issue 02", "Inspect issue 04"])
+        self.assertEqual(next(item for item in detail["agents"] if item["id"] == sub_two["id"])["assignment"], "Inspect issue 02")
+        self.assertEqual(next(item for item in detail["agents"] if item["id"] == sub_three["id"])["assignment"], "Inspect issue 04")
+        self.assertEqual(sub_two_messages[-1]["message"], "Inspect issue 02")
+        self.assertEqual(sub_three_messages[-1]["message"], "Inspect issue 04")
+        self.assertEqual(start_backend_mock.call_count, 2)
+        self.assertEqual(len([row for row in rows if row["type"] == "sub_agent_reused"]), 2)
+        self.assertTrue(any(row["type"] == "action_skipped" and row["data"].get("reason") == "max_sub_agents reached" for row in rows))
+
+    def test_execute_actions_spawn_sub_can_target_specific_existing_sub_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Retarget one sub slot", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_two = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_three = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub_two["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub_three["id"], "completed", 0)
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "agent_id": sub_three["id"],
+                                "title": "Reassign issue 04",
+                                "backend": "codex",
+                            }
+                        ],
+                        "response": "指定 sub-003 重新分析",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend") as start_backend_mock:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"]), 0)
+
+        agent = next(item for item in detail["agents"] if item["id"] == sub_three["id"])
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0]["agent"]["id"], sub_three["id"])
+        self.assertEqual(executed[0]["requested_agent_id"], sub_three["id"])
+        self.assertEqual(agent["status"], "pending")
+        self.assertEqual(agent["assignment"], "Reassign issue 04")
+        self.assertEqual(sub_three_messages[-1]["message"], "Reassign issue 04")
+        start_backend_mock.assert_called_once()
+        self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
+        self.assertTrue(
+            any(
+                row["type"] == "sub_agent_reused"
+                and row["data"].get("agent_id") == sub_three["id"]
+                and row["data"].get("reason") == "spawn_sub assigned to requested sub-agent"
+                for row in rows
+            )
+        )
 
     def test_execute_actions_reports_spawn_sub_skipped_without_reusable_slot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
