@@ -65,6 +65,13 @@ Rules for store edits:
 - `services/run_archive.py` owns import/export archive behavior.
 - `services/onebin.py` and `scripts/build_onebin.py` own zipapp packaging.
 
+## CLI Ownership
+
+- `cli.py` owns command implementations and legacy CLI-level compatibility
+  exports used by tests and callers.
+- `cli_parser.py` owns argparse command registration, command alias
+  normalization, and default-command selection.
+
 ## Web Ownership
 
 `src/aha_cli/web/server.py` owns HTTP routing, WebSocket handoff, and static UI
