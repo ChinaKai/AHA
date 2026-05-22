@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-import fcntl
 import json
-import os
 from pathlib import Path
-import threading
-import uuid
 
-from aha_cli.constants import CONFIG_DIR, CONFIG_FILE, EVENTS_FILE, PLAN_FILE, RUNS_DIR, WORKSPACES_DIR
 from aha_cli.domain.models import (
-    default_config,
     default_tasks,
-    enrich_plan,
     make_agent,
-    make_session,
     make_task,
     make_task_round,
     next_sub_id,
@@ -25,245 +16,89 @@ from aha_cli.domain.models import (
     new_run_id,
 )
 from aha_cli.services.proxy import DEFAULT_NO_PROXY, normalize_proxy_value, task_has_proxy_config
+from aha_cli.store.config import load_config
+from aha_cli.store.io import (
+    append_jsonl,
+    iter_jsonl_from,
+    iter_jsonl_records_from,
+    iter_jsonl_reverse,
+    iter_text_lines_reverse,
+    read_json,
+    text_tail_page,
+    write_json,
+)
+from aha_cli.store.events import (
+    append_event as _append_event,
+    append_event_to_file as _append_event_to_file,
+    event_stream_page,
+    event_stream_position,
+    normalize_event_id,
+    with_event_id,
+)
+from aha_cli.store.paths import (
+    AHA_HOME_ENV,
+    _normalized_path,
+    aha_home_path,
+    config_path,
+    default_aha_home,
+    event_path,
+    find_aha_home,
+    find_project_root,
+    inbox_path,
+    mark_aha_home,
+    plan_path,
+    run_dir,
+    session_path,
+    workspaces_dir,
+)
+from aha_cli.store.runs import (
+    latest_run_id,
+    list_run_summaries,
+    locked_plan,
+    require_plan,
+    resolve_run_id,
+    run_exists,
+    run_summary,
+    run_summary_from_plan,
+    save_plan,
+)
+from aha_cli.store.sessions import (
+    ensure_session as _ensure_session,
+    list_sessions as _list_sessions,
+    save_session as _save_session,
+)
+from aha_cli.store.workspaces import add_workspace, get_workspace, list_workspaces, resolve_workspace_path
 
-PLAN_LOCK = threading.RLock()
-EVENT_LOCK = threading.Lock()
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
-AHA_HOME_ENV = "AHA_HOME"
-_EXPLICIT_AHA_HOMES: set[str] = set()
 UNSET = object()
 
 
-def read_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
+    return _append_event(root, run_id, event_type, data, ts=utc_now())
 
 
-def write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
-    try:
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+def append_event_to_file(events_file: Path | None, run_id: str, event_type: str, data: dict) -> dict:
+    return _append_event_to_file(events_file, run_id, event_type, data, ts=utc_now())
 
 
-def append_jsonl(path: Path, data: dict) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(data, ensure_ascii=False) + "\n"
-    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
-    try:
-        with os.fdopen(fd, "ab", closefd=False) as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                payload = line.encode("utf-8")
-                written = 0
-                while written < len(payload):
-                    count = os.write(f.fileno(), payload[written:])
-                    if count == 0:
-                        raise OSError(f"Unable to append JSONL record to {path}")
-                    written += count
-                return os.lseek(f.fileno(), 0, os.SEEK_CUR)
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-
-def iter_jsonl_records_from(
-    path: Path,
-    start: int = 0,
-    before: int | None = None,
-    limit: int | None = None,
-) -> tuple[list[tuple[dict, int]], int]:
-    if not path.exists():
-        return [], start
-    file_size = path.stat().st_size
-    end = file_size if before is None else max(0, min(before, file_size))
-    records: list[tuple[dict, int]] = []
-    offset = max(0, min(start, end))
-    with path.open("rb") as f:
-        f.seek(offset)
-        while f.tell() < end and (limit is None or len(records) < limit):
-            line_start = f.tell()
-            line = f.readline(end - line_start if before is not None else -1)
-            if not line:
-                break
-            line_end = f.tell()
-            if before is not None and line_end >= end and not line.endswith(b"\n"):
-                return records, line_start
-            line = line.strip()
-            if not line:
-                offset = line_end
-                continue
-            try:
-                records.append((json.loads(line.decode("utf-8")), line_end))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                records.append(({"ts": utc_now(), "type": "malformed_event", "data": {"line": line.decode("utf-8", errors="replace")}}, line_end))
-            offset = line_end
-        return records, offset
-
-
-def _normalized_path(path: Path) -> Path:
-    return path.expanduser().resolve()
-
-
-def default_aha_home() -> Path:
-    return _normalized_path(Path.home() / CONFIG_DIR)
-
-
-def mark_aha_home(path: Path) -> Path:
-    home = _normalized_path(path)
-    _EXPLICIT_AHA_HOMES.add(str(home))
-    return home
-
-
-def aha_home_path(root: Path) -> Path:
-    root = _normalized_path(root)
-    env_home = os.environ.get(AHA_HOME_ENV)
-    if env_home and _normalized_path(Path(env_home)) == root:
-        return root
-    if str(root) in _EXPLICIT_AHA_HOMES:
-        return root
-    if root.name == CONFIG_DIR:
-        return root
-    if (root / CONFIG_FILE).exists() or (root / RUNS_DIR).is_dir():
-        return root
-    return root / CONFIG_DIR
-
-
-def find_aha_home(start: Path | None = None, explicit: str | Path | None = None) -> Path:
-    if explicit:
-        return mark_aha_home(Path(explicit))
-    env_home = os.environ.get(AHA_HOME_ENV)
-    if env_home:
-        return mark_aha_home(Path(env_home))
-    current = (start or Path.cwd()).resolve()
-    for path in [current, *current.parents]:
-        if (path / CONFIG_DIR).is_dir():
-            return path / CONFIG_DIR
-    return mark_aha_home(default_aha_home())
-
-
-def find_project_root(start: Path | None = None) -> Path:
-    current = (start or Path.cwd()).resolve()
-    for path in [current, *current.parents]:
-        if (path / CONFIG_DIR).is_dir():
-            return path
-    return current
-
-
-def config_path(root: Path) -> Path:
-    return aha_home_path(root) / CONFIG_FILE
-
-
-def load_config(root: Path) -> dict:
-    defaults = default_config()
-    path = config_path(root)
-    if not path.exists():
-        return defaults
-    loaded = read_json(path)
-    cfg = defaults | {key: value for key, value in loaded.items() if key not in {"codex", "claude"}}
-    cfg["codex"] = defaults["codex"] | loaded.get("codex", {})
-    cfg["claude"] = defaults["claude"] | loaded.get("claude", {})
-    if cfg.get("runner_command") and cfg.get("backend") == "stub":
-        cfg["backend"] = "command"
-    return cfg
-
-
-def run_dir(root: Path, run_id: str) -> Path:
-    return aha_home_path(root) / RUNS_DIR / run_id
-
-
-def workspaces_dir(root: Path) -> Path:
-    return aha_home_path(root) / WORKSPACES_DIR
-
-
-def list_workspaces(root: Path) -> list[dict]:
-    base = workspaces_dir(root)
-    if not base.is_dir():
-        return []
-    workspaces: list[dict] = []
-    for path in sorted(base.glob("*.json")):
-        try:
-            workspace = read_json(path)
-        except (OSError, ValueError):
-            continue
-        if workspace.get("id") and workspace.get("path"):
-            workspaces.append(workspace)
-    return sorted(workspaces, key=lambda item: (str(item.get("name") or ""), str(item.get("id") or "")))
-
-
-def get_workspace(root: Path, workspace_id: str) -> dict | None:
-    if not workspace_id:
-        return None
-    path = workspaces_dir(root) / f"{workspace_id}.json"
-    if path.exists():
-        return read_json(path)
-    return next((workspace for workspace in list_workspaces(root) if workspace.get("id") == workspace_id), None)
-
-
-def _next_workspace_id(root: Path) -> str:
-    used: set[int] = set()
-    for workspace in list_workspaces(root):
-        workspace_id = str(workspace.get("id") or "")
-        if workspace_id.startswith("ws-") and workspace_id[3:].isdigit():
-            used.add(int(workspace_id[3:]))
-    index = 1
-    while index in used:
-        index += 1
-    return f"ws-{index:03d}"
-
-
-def add_workspace(root: Path, workspace_path: str | Path, name: str | None = None) -> dict:
-    path = _normalized_path(Path(workspace_path))
-    if not path.is_dir():
-        raise ValueError(f"workspace path is not a directory: {path}")
-    now = utc_now()
-    for workspace in list_workspaces(root):
-        if _normalized_path(Path(str(workspace.get("path")))) == path:
-            if name and workspace.get("name") != name:
-                workspace["name"] = name
-            workspace["last_used_at"] = now
-            write_json(workspaces_dir(root) / f"{workspace['id']}.json", workspace)
-            return workspace
-    workspace = {
-        "id": _next_workspace_id(root),
-        "name": name or path.name,
-        "path": str(path),
-        "created_at": now,
-        "last_used_at": now,
-    }
-    write_json(workspaces_dir(root) / f"{workspace['id']}.json", workspace)
-    return workspace
-
-
-def resolve_workspace_path(
+def ensure_session(
     root: Path,
-    workspace_id: str | None = None,
-    workspace_path: str | Path | None = None,
-    default: str | Path | None = None,
-) -> tuple[str, str | None]:
-    if workspace_path:
-        resolved = _normalized_path(Path(workspace_path))
-        if workspace_id:
-            workspace = get_workspace(root, workspace_id)
-            if workspace is None:
-                raise ValueError(f"workspace not found: {workspace_id}")
-            if _normalized_path(Path(str(workspace["path"]))) != resolved:
-                raise ValueError(f"workspace path does not match registered workspace: {workspace_id}")
-        return str(resolved), workspace_id
-    if workspace_id:
-        workspace = get_workspace(root, workspace_id)
-        if workspace is None:
-            raise ValueError(f"workspace not found: {workspace_id}")
-        return str(workspace["path"]), str(workspace["id"])
-    fallback = _normalized_path(Path(default)) if default is not None else _normalized_path(Path.cwd())
-    return str(fallback), None
+    run_id: str,
+    task_id: str | None,
+    agent_id: str,
+    backend: str,
+    model: str | None = None,
+    workspace_path: str | None = None,
+) -> dict:
+    return _ensure_session(root, run_id, task_id, agent_id, backend, model=model, workspace_path=workspace_path, now_func=utc_now)
+
+
+def save_session(root: Path, session: dict) -> None:
+    _save_session(root, session)
+
+
+def list_sessions(root: Path, run_id: str, task_id: str | None = None) -> list[dict]:
+    return _list_sessions(root, run_id, task_id)
 
 
 def _round_sequence_from_id(round_id: object) -> int | None:
@@ -371,192 +206,6 @@ def list_task_lifecycle_rounds(root: Path, run_id: str, task_id: str) -> list[di
     return sorted(rounds, key=lambda item: int(item.get("sequence") or _round_sequence_from_id(item.get("round_id")) or 0))
 
 
-@contextmanager
-def locked_plan(root: Path, run_id: str):
-    lock_path = run_dir(root, run_id) / "runtime" / "plan.lock"
-    with PLAN_LOCK:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
-def plan_path(root: Path, run_id: str) -> Path:
-    return run_dir(root, run_id) / PLAN_FILE
-
-
-def event_path(root: Path, run_id: str) -> Path:
-    return run_dir(root, run_id) / EVENTS_FILE
-
-
-def event_stream_position(root: Path, run_id: str) -> int:
-    path = event_path(root, run_id)
-    return path.stat().st_size if path.exists() else 0
-
-
-def normalize_event_id(event_id: object, default: int = 0) -> int:
-    if event_id is None or event_id == "":
-        return default
-    try:
-        return max(0, int(event_id))
-    except (TypeError, ValueError):
-        return default
-
-
-def with_event_id(event: dict, event_id: int) -> dict:
-    item = dict(event)
-    item.setdefault("event_id", event_id)
-    return item
-
-
-def inbox_path(root: Path, run_id: str, target: str) -> Path:
-    safe_target = target.replace("/", "_")
-    return run_dir(root, run_id) / "inbox" / f"{safe_target}.jsonl"
-
-
-def session_path(root: Path, run_id: str, task_id: str | None, agent_id: str) -> Path:
-    if task_id:
-        return run_dir(root, run_id) / "tasks" / task_id / "sessions" / f"{agent_id}.json"
-    return run_dir(root, run_id) / "sessions" / f"{agent_id}.json"
-
-
-def require_plan(root: Path, run_id: str) -> dict:
-    path = plan_path(root, run_id)
-    if not path.exists():
-        raise SystemExit(f"Run not found: {run_id}")
-    return enrich_plan(read_json(path), load_config(root).get("backend", "codex"))
-
-
-def save_plan(root: Path, plan: dict) -> None:
-    write_json(plan_path(root, plan["id"]), plan)
-
-
-def latest_run_id(root: Path) -> str | None:
-    runs = aha_home_path(root) / RUNS_DIR
-    if not runs.is_dir():
-        return None
-    candidates = sorted(p.name for p in runs.iterdir() if (p / PLAN_FILE).exists())
-    return candidates[-1] if candidates else None
-
-
-def run_exists(root: Path, run_id: str) -> bool:
-    return bool(run_id) and plan_path(root, run_id).exists()
-
-
-def run_summary_from_plan(root: Path, plan: dict) -> dict:
-    tasks = [task for task in plan.get("tasks", []) if not task.get("deleted_at")]
-    completed = sum(1 for task in tasks if task.get("status") == "completed")
-    failed = any(task.get("status") == "failed" for task in tasks)
-    blocked = any(task.get("status") == "blocked" for task in tasks)
-    running = any(task.get("status") in {"running", "awaiting_user"} for task in tasks)
-    if failed:
-        status = "failed"
-    elif blocked:
-        status = "blocked"
-    elif tasks and completed == len(tasks):
-        status = "completed"
-    elif running:
-        status = "running"
-    else:
-        status = "pending"
-    return {
-        "id": plan["id"],
-        "goal": plan.get("goal", ""),
-        "mode": plan.get("mode", ""),
-        "status": status,
-        "created_at": plan.get("created_at"),
-        "updated_at": plan.get("updated_at"),
-        "task_count": len(tasks),
-        "completed_count": completed,
-        "hidden_count": sum(1 for task in tasks if task.get("hidden")),
-        "path": str(plan_path(root, plan["id"])),
-    }
-
-
-def run_summary(root: Path, run_id: str) -> dict:
-    plan = enrich_plan(read_json(plan_path(root, run_id)), load_config(root).get("backend", "codex"))
-    return run_summary_from_plan(root, plan)
-
-
-def list_run_summaries(root: Path) -> list[dict]:
-    runs = aha_home_path(root) / RUNS_DIR
-    if not runs.is_dir():
-        return []
-    summaries: list[dict] = []
-    for path in sorted(runs.glob(f"*/{PLAN_FILE}"), reverse=True):
-        try:
-            plan = enrich_plan(read_json(path), load_config(root).get("backend", "codex"))
-            summaries.append(run_summary_from_plan(root, plan))
-        except (OSError, ValueError, KeyError):
-            continue
-    return summaries
-
-
-def resolve_run_id(root: Path, run_id: str | None) -> str:
-    if run_id:
-        return run_id
-    latest = latest_run_id(root)
-    if not latest:
-        raise SystemExit("No runs found")
-    return latest
-
-
-def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
-    event = {
-        "ts": utc_now(),
-        "run_id": run_id,
-        "type": event_type,
-        "data": data,
-    }
-    with EVENT_LOCK:
-        event_id = append_jsonl(event_path(root, run_id), event)
-    return with_event_id(event, event_id)
-
-
-def append_event_to_file(events_file: Path | None, run_id: str, event_type: str, data: dict) -> dict:
-    event = {
-        "ts": utc_now(),
-        "run_id": run_id,
-        "type": event_type,
-        "data": data,
-    }
-    if events_file is not None:
-        event_id = append_jsonl(events_file, event)
-        return with_event_id(event, event_id)
-    return event
-
-
-def event_stream_page(
-    root: Path,
-    run_id: str,
-    last_event_id: object = 0,
-    limit: int | None = None,
-    snapshot_event_id: object | None = None,
-) -> dict:
-    path = event_path(root, run_id)
-    snapshot_id = normalize_event_id(snapshot_event_id, event_stream_position(root, run_id))
-    start_id = normalize_event_id(last_event_id)
-    if not path.exists():
-        return {
-            "events": [],
-            "last_event_id": snapshot_id,
-            "snapshot_event_id": snapshot_id,
-            "has_more": False,
-            "limit": limit,
-        }
-    records, next_id = iter_jsonl_records_from(path, start_id, before=snapshot_id, limit=limit)
-    return {
-        "events": [with_event_id(event, line_end) for event, line_end in records],
-        "last_event_id": next_id,
-        "snapshot_event_id": snapshot_id,
-        "has_more": next_id < snapshot_id,
-        "limit": limit,
-    }
-
-
 def append_message(
     root: Path,
     run_id: str,
@@ -612,112 +261,6 @@ def append_message(
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)
     append_event(root, run_id, "message", payload)
     return payload
-
-
-def iter_jsonl_from(path: Path, start: int = 0, before: int | None = None, limit: int | None = None) -> tuple[list[dict], int]:
-    records, offset = iter_jsonl_records_from(path, start, before=before, limit=limit)
-    return [item for item, _line_end in records], offset
-
-
-def iter_jsonl_reverse(path: Path, before: int | None = None, chunk_size: int = 65536):
-    if not path.exists():
-        return
-    file_size = path.stat().st_size
-    end = file_size if before is None else max(0, min(before, file_size))
-    if end <= 0:
-        return
-    with path.open("rb") as f:
-        carry = b""
-        position = end
-        while position > 0:
-            read_size = min(chunk_size, position)
-            position -= read_size
-            f.seek(position)
-            data = f.read(read_size) + carry
-            parts = data.split(b"\n")
-            if position > 0:
-                carry = parts[0]
-                line_parts = parts[1:]
-                line_start = position + len(parts[0]) + 1
-            else:
-                carry = b""
-                line_parts = parts
-                line_start = 0
-
-            records: list[tuple[int, bytes]] = []
-            cursor = line_start
-            for part in line_parts:
-                start = cursor
-                cursor += len(part) + 1
-                if part.strip():
-                    records.append((start, part))
-
-            for start, line in reversed(records):
-                try:
-                    yield start, json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
-                    yield start, {"ts": utc_now(), "type": "malformed_event", "data": {"line": line.decode("utf-8", errors="replace")}}
-
-
-def iter_text_lines_reverse(path: Path, before: int | None = None, chunk_size: int = 65536):
-    if not path.exists():
-        return
-    file_size = path.stat().st_size
-    end = file_size if before is None else max(0, min(before, file_size))
-    if end <= 0:
-        return
-    with path.open("rb") as f:
-        carry = b""
-        position = end
-        while position > 0:
-            read_size = min(chunk_size, position)
-            position -= read_size
-            f.seek(position)
-            data = f.read(read_size) + carry
-            parts = data.split(b"\n")
-            if position > 0:
-                carry = parts[0]
-                line_parts = parts[1:]
-                line_start = position + len(parts[0]) + 1
-            else:
-                carry = b""
-                line_parts = parts
-                line_start = 0
-
-            records: list[tuple[int, bytes]] = []
-            cursor = line_start
-            for part in line_parts:
-                start = cursor
-                cursor += len(part) + 1
-                if part:
-                    records.append((start, part))
-
-            for start, line in reversed(records):
-                yield start, line.decode("utf-8", errors="replace")
-
-
-def text_tail_page(path: Path, limit: int = 200, before: int | None = None) -> dict:
-    file_size = path.stat().st_size if path.exists() else 0
-    end_offset = file_size if before is None else max(0, min(before, file_size))
-    safe_limit = max(1, min(limit, 1000))
-    matches: list[dict] = []
-    for offset, line in iter_text_lines_reverse(path, before=end_offset) or ():
-        matches.append({"_cursor": offset, "text": line})
-        if len(matches) > safe_limit:
-            break
-
-    has_more = len(matches) > safe_limit
-    page = list(reversed(matches[:safe_limit]))
-    next_before_offset = page[0].get("_cursor") if has_more and page else None
-    return {
-        "text": "\n".join(item["text"] for item in page),
-        "lines": page,
-        "before_offset": end_offset,
-        "after_offset": file_size,
-        "next_before_offset": next_before_offset,
-        "has_more": has_more,
-        "count": len(page),
-    }
 
 
 def format_event_log_line(event: dict) -> str:
@@ -908,40 +451,6 @@ def conversation_events_page(
         "has_more": has_more,
         "count": len(page),
     }
-
-
-def ensure_session(
-    root: Path,
-    run_id: str,
-    task_id: str | None,
-    agent_id: str,
-    backend: str,
-    model: str | None = None,
-    workspace_path: str | None = None,
-) -> dict:
-    path = session_path(root, run_id, task_id, agent_id)
-    if path.exists():
-        session = read_json(path)
-        changed = False
-        for key, value in {"model": model, "workspace_path": workspace_path}.items():
-            if value is not None and session.get(key) != value:
-                session[key] = value
-                changed = True
-        for key, value in {"history_backend_sessions": [], "compact_summary": None}.items():
-            if key not in session:
-                session[key] = value
-                changed = True
-        if changed:
-            session["updated_at"] = utc_now()
-            write_json(path, session)
-        return session
-    session = make_session(run_id, task_id, agent_id, backend, model=model, workspace_path=workspace_path)
-    write_json(path, session)
-    return session
-
-
-def save_session(root: Path, session: dict) -> None:
-    write_json(session_path(root, session["run_id"], session.get("task_id"), session["agent_id"]), session)
 
 
 def create_plan(
@@ -2097,13 +1606,6 @@ def append_task_round(root: Path, run_id: str, task_id: str, entry: dict) -> dic
         },
     )
     return payload
-
-
-def list_sessions(root: Path, run_id: str, task_id: str | None = None) -> list[dict]:
-    base = run_dir(root, run_id) / ("sessions" if task_id is None else f"tasks/{task_id}/sessions")
-    if not base.is_dir():
-        return []
-    return [read_json(path) for path in sorted(base.glob("*.json"))]
 
 
 def status_snapshot(root: Path, run_id: str) -> dict:
