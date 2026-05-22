@@ -60,21 +60,51 @@ Rules for store edits:
 
 ## Test Layout Target
 
-`tests/test_cli.py` is legacy coverage and should be split by behavior as code
-is touched:
+Keep tests grouped by behavior, not by historical entry point. `tests/test_cli.py`
+is now only a small CLI compatibility bucket; new tests should land in the
+focused module that owns the behavior.
 
 ```text
-tests/test_store_*.py       persistence helpers, compatibility, snapshots
-tests/test_cli_*.py         command parsing and CLI output
-tests/test_web_*.py         HTTP API behavior
-tests/test_realtime_*.py    WebSocket and realtime stream behavior
-tests/test_runtime_*.py     backend runtime and process lifecycle
-tests/test_orchestrator.py  AHA action routing and coordination
-tests/helpers.py            shared fixtures only
+tests/test_store_state.py       persistence helpers, compatibility, snapshots
+tests/test_cli_core.py          init, plan, status, commit policy, packaging
+tests/test_cli.py               remaining CLI compatibility coverage only
+tests/test_backend_*.py         backend registry, runners, sessions, runtime
+tests/test_chat_*.py            chat turns, prompt context, finalization flow
+tests/test_web_api.py           HTTP API, task views, run APIs, log/event pages
+tests/test_web_status.py        status snapshots, recovery, send/interrupt APIs
+tests/test_websocket.py         WebSocket replay and realtime stream behavior
+tests/test_frontend_static.py   static UI behavior that does not need a browser
+tests/test_orchestrator.py      AHA action routing and sub-agent coordination
+tests/test_run_archive.py       run archive import/export
+tests/helpers.py                shared fixtures only
 ```
 
 When splitting tests, move related tests without rewriting assertions first.
 Only broaden or rewrite tests after the move is green.
+
+Current follow-up candidates:
+
+- `tests/test_chat_flow.py` is large and can split into prompt context,
+  supervision, and finalization modules if those areas change again.
+- `tests/test_web_api.py` is large and can split into run APIs, conversation
+  events, and task/settings APIs.
+- `tests/test_cli.py` should either stay small or disappear once the last
+  compatibility-only cases have a clearer home.
+
+## Parallel Split Workflow
+
+Use sub-agents for independent read/copy preparation, then let `main` do the
+single conflicting edit:
+
+1. Assign each sub-agent one target module and a disjoint behavior scope.
+2. Sub-agents may create or update their owned target test file, but should not
+   edit the shared source file that every split depends on.
+3. `main` removes the duplicated tests from the shared file, resolves overlap,
+   and runs the full verification set.
+4. Commit only after `main` confirms no duplicated test names and the working
+   tree contains only the intended split files.
+
+This avoids parallel conflicts in large legacy files such as `tests/test_cli.py`.
 
 ## Verification
 
@@ -83,6 +113,14 @@ For refactors that touch shared behavior, run:
 ```bash
 python3 -m compileall -q src tests
 python3 -m unittest tests.test_cli
+python3 -m unittest discover
+git diff --check
+```
+
+For test-file splits, also run the focused modules that were moved:
+
+```bash
+python3 -m unittest tests.test_backend_runners tests.test_cli_core tests.test_web_api
 python3 -m unittest discover
 git diff --check
 ```
