@@ -42,6 +42,7 @@ from aha_cli.store.events import (
     normalize_event_id,
     with_event_id,
 )
+from aha_cli.store.finals import write_task_result as _write_task_result
 from aha_cli.store.paths import (
     AHA_HOME_ENV,
     _normalized_path,
@@ -893,50 +894,16 @@ def set_task_status(
 
 
 def write_task_result(root: Path, run_id: str, task_id: str, content: str, policy: str = "finalize") -> Path:
-    now = utc_now()
-    body = content.rstrip() + "\n"
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        path = run_dir(root, run_id) / task["output_file"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
-        meta = {"task_id": task_id, "policy": policy, "updated_at": now}
-        if policy == "finalize":
-            round_record = _ensure_task_round_record(root, run_id, task)
-            round_id = str(round_record["round_id"])
-            final_path = task_round_final_path(root, run_id, task_id, round_id)
-            final_path.parent.mkdir(parents=True, exist_ok=True)
-            final_path.write_text(body, encoding="utf-8")
-            final_meta_path = task_round_final_meta_path(root, run_id, task_id, round_id)
-            meta |= {
-                "round_id": round_id,
-                "round_sequence": round_record.get("sequence"),
-                "final_path": _run_relative_path(root, run_id, final_path),
-            }
-            write_json(final_meta_path, meta)
-            round_record["status"] = "finalized"
-            round_record["finalized_at"] = now
-            round_record["final_path"] = _run_relative_path(root, run_id, final_path)
-            round_record["final_meta_path"] = _run_relative_path(root, run_id, final_meta_path)
-            write_json(task_lifecycle_round_path(root, run_id, task_id, round_id), round_record)
-            task["last_final_round_id"] = round_id
-            task["last_final_at"] = now
-        write_json(path.with_suffix(".meta.json"), meta)
-        plan["updated_at"] = now
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(
+    return _write_task_result(
         root,
         run_id,
-        "task_result_written",
-        {"task_id": task_id, "path": str(path), "chars": len(content), "policy": policy, "round_id": meta.get("round_id")},
+        task_id,
+        content,
+        policy,
+        now_func=utc_now,
+        append_event_func=append_event,
+        render_overview_func=render_task_overview_result_if_needed,
     )
-    if policy == "finalize":
-        render_task_overview_result_if_needed(root, run_id, task_id, policy=policy)
-    return path
 
 
 def _string_list(value) -> list[str]:
