@@ -9,6 +9,11 @@ import sys
 
 from aha_cli.backends.codex import is_context_overflow_message, tail_text
 from aha_cli.domain.models import utc_now
+from aha_cli.services.native_subagents import (
+    CLAUDE_NATIVE_SUBAGENT_TOOLS,
+    claude_disallowed_subagent_tools_arg,
+    text_claims_subagent_created,
+)
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
@@ -140,8 +145,33 @@ def handle_claude_event(
             if item_type == "text" and item.get("text"):
                 text = str(item.get("text") or "")
                 append_event_to_file(events_file, run_id, "agent_message", data | {"item_type": "agent_message", "text": text})
+                if target == "main" and text_claims_subagent_created(text):
+                    append_event_to_file(
+                        events_file,
+                        run_id,
+                        "claimed_sub_without_aha_agent",
+                        data
+                        | {
+                            "text": text,
+                            "reason": "assistant_text_claim_without_aha_spawn_sub",
+                        },
+                    )
                 result.setdefault("assistant_texts", []).append(text)
             elif item_type == "tool_use":
+                if str(item.get("name") or "") in CLAUDE_NATIVE_SUBAGENT_TOOLS:
+                    append_event_to_file(
+                        events_file,
+                        run_id,
+                        "native_subagent_tool_used",
+                        data
+                        | {
+                            "item_type": "tool_use",
+                            "tool_use_id": item.get("id"),
+                            "tool_name": item.get("name"),
+                            "command": _tool_command(item),
+                            "reason": "native_subagent_tool_disabled_in_aha",
+                        },
+                    )
                 append_event_to_file(
                     events_file,
                     run_id,
@@ -304,6 +334,7 @@ def build_claude_exec_command(
         cmd.extend(["--model", model])
     if permission_mode:
         cmd.extend(["--permission-mode", permission_mode])
+    cmd.extend(["--disallowedTools", claude_disallowed_subagent_tools_arg()])
     if session_id:
         cmd.extend(["--resume", session_id])
     return cmd

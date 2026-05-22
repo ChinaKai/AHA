@@ -788,6 +788,8 @@ TIMELINE_EVENT_TYPES = {
     "agent_context_overflow",
     "agent_delegated",
     "agent_message_routed",
+    "claimed_sub_without_aha_agent",
+    "native_subagent_tool_used",
     "sub_agent_reported",
     "sub_agent_report_ignored",
     "sub_agent_backend_recovered",
@@ -1032,6 +1034,7 @@ def add_task(
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
     description: str | None = None,
+    supervision: dict | None = None,
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -1058,6 +1061,7 @@ def add_task(
             preferred_sub_backend=preferred_sub_backend,
             preferred_sub_model=preferred_sub_model,
             description=description,
+            supervision=supervision,
         )
         for _ in range(max(0, sub_agents)):
             add_agent_to_task_dict(

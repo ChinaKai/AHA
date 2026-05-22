@@ -51,6 +51,7 @@ from aha_cli.store.filesystem import (
     write_task_result,
 )
 from aha_cli.services.messages import format_event
+from aha_cli.services.native_subagents import text_claims_subagent_created
 
 
 BLOCKED_REPLY_MARKERS = (
@@ -71,6 +72,16 @@ SUPERVISION_EVENT_TYPES = {
     "host_decision",
     "main_applied_decision",
 }
+SUPERVISION_HOST_IDENTITY_MARKERS = (
+    "host agent",
+    "host role=host",
+    "task supervision host",
+    "supervision host",
+    "托管 host",
+    "托管host",
+    "托管 agent",
+    "托管agent",
+)
 PROMPT_REDACTED_PROXY_FIELDS = {"preferred_http_proxy", "preferred_https_proxy", "preferred_no_proxy"}
 DELTA_PROMPT_SKIP_EVENT_TYPES = {
     "agent_command_finished",
@@ -105,16 +116,29 @@ def _event_task_id(event: dict) -> str | None:
     return None
 
 
+def _prompt_visibility_task(root: Path, run_id: str, task_id: str | None, target: str | None) -> dict | None:
+    if not task_id or not target:
+        return None
+    try:
+        tasks = status_snapshot(root, run_id).get("tasks", [])
+    except (OSError, ValueError):
+        return None
+    if not isinstance(tasks, list):
+        return None
+    return next((task for task in tasks if task.get("id") == task_id), None)
+
+
 def recent_prompt_events(root: Path, run_id: str, limit: int, task_id: str | None, target: str | None = None) -> list[dict]:
     if not task_id:
         return recent_run_events(root, run_id, limit)
     events: list[dict] = []
+    visibility_task = _prompt_visibility_task(root, run_id, task_id, target)
     for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
         if _event_task_id(event) != task_id:
             continue
         if target and target not in event_agent_refs(event):
             continue
-        if target and not prompt_event_visible_to_target(event, target):
+        if target and not prompt_event_visible_to_target(event, target, visibility_task):
             continue
         events.append(event)
         if len(events) >= limit:
@@ -136,6 +160,7 @@ def _is_current_message_event(event: dict, item: dict, target: str) -> bool:
 
 def recent_delta_prompt_events(root: Path, run_id: str, limit: int, task_id: str | None, target: str, item: dict) -> list[dict]:
     events: list[dict] = []
+    visibility_task = _prompt_visibility_task(root, run_id, task_id, target)
     for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
         if task_id and _event_task_id(event) != task_id:
             continue
@@ -144,7 +169,7 @@ def recent_delta_prompt_events(root: Path, run_id: str, limit: int, task_id: str
             break
         if target not in event_agent_refs(event):
             continue
-        if not prompt_event_visible_to_target(event, target):
+        if not prompt_event_visible_to_target(event, target, visibility_task):
             continue
         if event.get("type") in DELTA_PROMPT_SKIP_EVENT_TYPES:
             continue
@@ -156,14 +181,31 @@ def recent_delta_prompt_events(root: Path, run_id: str, limit: int, task_id: str
     return list(reversed(events))
 
 
-def prompt_event_visible_to_target(event: dict, target: str) -> bool:
-    if target != "main":
+def _mentions_supervision_host_identity(text: object) -> bool:
+    lower = str(text or "").lower()
+    return any(marker in lower for marker in SUPERVISION_HOST_IDENTITY_MARKERS)
+
+
+def _target_should_not_see_supervision_host(task: dict | None, target: str) -> bool:
+    return bool(task and task_supervision_host_id(task) and not is_task_supervision_host_agent(task, target))
+
+
+def prompt_event_visible_to_target(event: dict, target: str, task: dict | None = None) -> bool:
+    if target != "main" and not target.startswith("sub-"):
         return True
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if _target_should_not_see_supervision_host(task, target):
+        if event.get("type") == "agent_message" and _mentions_supervision_host_identity(data.get("text")):
+            return False
+        if event.get("type") == "message" and _mentions_supervision_host_identity(data.get("message")):
+            return False
     if event.get("type") in SUPERVISION_EVENT_TYPES:
         return False
-    if event.get("type") == "message" and str(data.get("target") or "") not in {"main", "browser", "system"}:
-        return False
+    if event.get("type") == "message":
+        if str(data.get("sender") or "").lower() == "aha" or str(data.get("from_agent") or "").lower() == "aha":
+            return False
+        if str(data.get("target") or "") not in {"main", "browser", "system"}:
+            return False
     return True
 
 
@@ -181,6 +223,19 @@ def task_supervision_host_id(task: dict) -> str | None:
 def is_task_supervision_host_agent(task: dict, agent_id: str | None) -> bool:
     host_agent_id = task_supervision_host_id(task)
     return bool(host_agent_id and agent_id == host_agent_id)
+
+
+def _is_task_supervision_host_agent_record(task: dict, agent: dict) -> bool:
+    if is_task_supervision_host_agent(task, str(agent.get("id") or "")):
+        return True
+    return str(agent.get("role") or "") == "host" and str(agent.get("created_by") or "") == "supervision"
+
+
+def _agents_visible_to_prompt(task: dict, target: str) -> list[dict]:
+    agents = task.get("agents") if isinstance(task.get("agents"), list) else []
+    if is_task_supervision_host_agent(task, target):
+        return agents
+    return [agent for agent in agents if not _is_task_supervision_host_agent_record(task, agent)]
 
 
 def safe_target_name(target: str) -> str:
@@ -595,6 +650,7 @@ def _agent_summary_for_prompt(agent: dict) -> dict:
 
 def _task_summary_for_prompt(task: dict, target: str) -> dict:
     agents = task.get("agents") if isinstance(task.get("agents"), list) else []
+    visible_agents = _agents_visible_to_prompt(task, target)
     current_agent = next((agent for agent in agents if agent.get("id") == target), None)
     return {
         "id": task.get("id"),
@@ -621,7 +677,7 @@ def _task_summary_for_prompt(task: dict, target: str) -> dict:
         "coordination": task.get("coordination"),
         "hidden": bool(task.get("hidden")),
         "current_agent": _agent_summary_for_prompt(current_agent) if current_agent else None,
-        "agents_summary": [_agent_summary_for_prompt(agent) for agent in agents],
+        "agents_summary": [_agent_summary_for_prompt(agent) for agent in visible_agents],
     }
 
 
@@ -872,9 +928,10 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                     )
                 journal_context = "\n".join(journal_lines)
             commit_policy = commit_message_policy_prompt(task_id, target).rstrip()
+            visible_agents = _agents_visible_to_prompt(detail["task"], target)
             components.update(
                 {
-                    "task_agents": detail["task"].get("agents", []),
+                    "task_agents": visible_agents,
                     "task_journal": journal_context,
                     "commit_policy": commit_policy,
                     "compact_summary": compact_context,
@@ -887,7 +944,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 description=detail["task"].get("description", ""),
                 status=detail["task"].get("status", ""),
                 role=item.get("role", ""),
-                agents=detail["task"].get("agents", []),
+                agents=visible_agents,
                 final_context=final_context.rstrip(),
                 task_journal=journal_context,
                 compact_summary=compact_context.rstrip(),
@@ -1258,6 +1315,23 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             supervision_routed_to_main = bool(host_result.get("routed_to_main"))
                             supervision_waiting_for_host = bool(host_result.get("routed_to_host"))
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
+                    if (
+                        agent_id == "main"
+                        and item_task_id
+                        and not any(action.get("type") == "spawn_sub" for action in executed)
+                        and text_claims_subagent_created(reply)
+                    ):
+                        append_event(
+                            root,
+                            run_id,
+                            "claimed_sub_without_aha_agent",
+                            {
+                                "task_id": item_task_id,
+                                "target": agent_id,
+                                "reason": "reply_claim_without_spawn_sub_action",
+                                "text": display_reply,
+                            },
+                        )
                     if delegating_actions:
                         append_event(root, run_id, "agent_delegated", {"task_id": item_task_id, "count": len(delegating_actions)})
                         detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None

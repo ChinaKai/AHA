@@ -10,6 +10,11 @@ $task_journal
 $compact_summary
 
 Ownership and routing policy:
+- AHA is the only source of truth for sub-agents.
+- Do not use backend-native subagent tools such as Claude Task/Agent/TaskCreate.
+- Do not claim a sub-agent exists or has started unless AHA created it through a `spawn_sub` action.
+- If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
+- Only route work to `sub-*` agents that already appear in this task's agents list.
 - Each sub-agent owns its assigned scope (`assignment` / `created_reason`).
 - If a user follow-up is about a scope owned by an existing sub-agent, do not handle that work yourself.
 - To route work or record a durable task update, return ONLY one JSON object with `actions` and `response`; do not wrap it in Markdown or mix it with prose.

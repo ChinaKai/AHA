@@ -157,6 +157,7 @@ def make_task(
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
     description: str | None = None,
+    supervision: dict | None = None,
 ) -> dict:
     return {
         "id": task_id,
@@ -176,7 +177,7 @@ def make_task(
         "preferred_sub_model": preferred_sub_model if preferred_sub_model is not None else model,
         "delegation_policy": delegation_policy,
         "max_sub_agents": max(0, max_sub_agents),
-        "supervision": default_task_supervision(),
+        "supervision": normalize_task_supervision(supervision),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
         "output_file": f"results/{task_id}.md",

@@ -639,6 +639,69 @@ class CliTests(unittest.TestCase):
         self.assertIn("请直接回复数字1", prompt)
         self.assertNotIn("让 main 下一轮只回复数字2", prompt)
 
+    def test_chat_prompt_hides_supervision_host_from_main_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host prompt isolation", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                )
+                task = status_snapshot(root, run_id)["tasks"][0]
+                append_message(
+                    root,
+                    run_id,
+                    "browser",
+                    "Agents:\n- host role=host backend=claude assignment=task supervision host agent",
+                    sender="AHA",
+                    task_id="task-001",
+                    role="aha",
+                    from_agent="aha",
+                    to_agent="browser",
+                    agent_id="main",
+                )
+                append_event(
+                    root,
+                    run_id,
+                    "agent_message",
+                    {
+                        "source": "claude-chat",
+                        "task_id": "task-001",
+                        "target": "main",
+                        "item_type": "agent_message",
+                        "text": "我处理 03 号，让host agent处理02号重启问题。",
+                    },
+                )
+                main_message = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "你可以和 sub agent 一人一个问题",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                )
+
+                prompt = chat_prompt(root, run_id, "main", main_message, "")
+
+        self.assertTrue(any(agent["role"] == "host" for agent in task["agents"]))
+        self.assertIn("你可以和 sub agent 一人一个问题", prompt)
+        self.assertNotIn("host role=host", prompt)
+        self.assertNotIn("'id': 'host'", prompt)
+        self.assertNotIn("'role': 'host'", prompt)
+        self.assertNotIn("让host agent处理02号", prompt)
+        self.assertNotIn("task supervision host agent", prompt)
+
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
             codex_bin="codex",
@@ -758,6 +821,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("sonnet", cmd)
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)
+        self.assertIn("--disallowedTools", cmd)
+        self.assertIn("Agent,Task,TaskCreate", cmd)
         self.assertIn("--resume", cmd)
         self.assertIn("session-123", cmd)
 
@@ -819,6 +884,41 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rows[2]["data"]["command"], "pwd")
         self.assertEqual(rows[3]["data"]["output_tail"], "ok")
         self.assertEqual(rows[4]["data"]["usage"]["input_tokens"], 1)
+
+    def test_claude_native_subagent_claims_are_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            handle_claude_event(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "3个sub agent已并行启动。"},
+                                {
+                                    "type": "tool_use",
+                                    "id": "tool-1",
+                                    "name": "TaskCreate",
+                                    "input": {"subject": "分析问题单01"},
+                                },
+                            ]
+                        },
+                    }
+                ),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(
+            [row["type"] for row in rows],
+            ["agent_message", "claimed_sub_without_aha_agent", "native_subagent_tool_used", "agent_command_started"],
+        )
+        self.assertEqual(rows[1]["data"]["reason"], "assistant_text_claim_without_aha_spawn_sub")
+        self.assertEqual(rows[2]["data"]["tool_name"], "TaskCreate")
 
     def test_claude_context_overflow_event_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1955,6 +2055,28 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "running")
                 browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
                 self.assertIn("等待子 agent 完成", browser_messages[-1]["message"])
+
+    def test_codex_chat_flags_subagent_claim_without_spawn_sub(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub claim mismatch", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "delegate this", sender="browser", task_id="task-001", role="main")
+                reply = "3个sub agent已并行启动。我现在继续分析。"
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                detail = task_snapshot(root, run_id, "task-001")
+
+        self.assertEqual(code, 0)
+        self.assertFalse(any(agent["id"].startswith("sub-") for agent in detail["task"]["agents"]))
+        mismatch_events = [event for event in events if event["type"] == "claimed_sub_without_aha_agent"]
+        self.assertEqual(len(mismatch_events), 1)
+        self.assertEqual(mismatch_events[0]["data"]["reason"], "reply_claim_without_spawn_sub_action")
 
     def test_action_parser_ignores_embedded_json_examples(self) -> None:
         reply = textwrap.dedent(
@@ -3698,6 +3820,45 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
+    def test_api_task_create_accepts_supervision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Create supervised task", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Supervised task",
+                            "dispatch": False,
+                            "supervision": {
+                                "mode": "assisted",
+                                "host_backend": "claude",
+                                "real_agent_enabled": True,
+                                "max_rounds": 9,
+                            },
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                task = status_snapshot(root, run_id)["tasks"][-1]
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["supervision"]["mode"], "assisted")
+        self.assertEqual(body["task"]["supervision"]["host_backend"], "claude")
+        self.assertEqual(body["task"]["supervision"]["host_agent_id"], "host")
+        self.assertTrue(body["task"]["supervision"]["real_agent_enabled"])
+        self.assertEqual(body["task"]["supervision"]["max_rounds"], 9)
+        self.assertEqual(task["supervision"], body["task"]["supervision"])
+        self.assertTrue(any(agent["id"] == "host" and agent["role"] == "host" for agent in task["agents"]))
+
     def test_api_task_supervision_config_updates_existing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4066,13 +4227,18 @@ class CliTests(unittest.TestCase):
         self.assertIn('form id="task-form"', html)
         self.assertIn("task-supervision-editor", html)
         self.assertIn("selected-task-supervision-mode", html)
+        self.assertIn("task-supervision-mode", html)
+        self.assertIn("task-supervision-max-rounds", html)
         self.assertIn("assisted Claude host", html)
         self.assertNotIn("selected-task-supervision-actions", html)
         create_form = html.split('<form id="task-form"', 1)[1].split("</form>", 1)[0]
+        self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn("openTaskCreateDialog", script)
         self.assertIn("closeTaskCreateDialog", script)
         self.assertIn("saveTaskSupervisionConfig", script)
+        self.assertIn("taskSupervisionPayloadFromMode", script)
+        self.assertIn("syncCreateTaskSupervisionModeFields", script)
         self.assertIn('policy.mode === "manual"', script)
         self.assertIn('"host / user proxy"', script)
         self.assertIn("host-agent", script)

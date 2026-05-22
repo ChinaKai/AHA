@@ -33,6 +33,13 @@ Responsibilities:
 6. If no sub-agent is needed, solve the task directly.
 7. Keep this task context isolated from other tasks.
 
+AHA sub-agent policy:
+- AHA is the only source of truth for sub-agents.
+- Do not use backend-native subagent tools such as Claude Task/Agent/TaskCreate.
+- Do not claim a sub-agent exists or has started unless AHA created it through a `spawn_sub` action.
+- If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
+- Only route work to `sub-*` agents that already appear in this task's agents list.
+
 Commit ownership policy:
 - Treat commit, revert, and repository-change finalization requests as ownership-sensitive work.
 - If a commit request belongs to one existing sub-agent's assignment, route it to that sub-agent with `route_to_agent`.

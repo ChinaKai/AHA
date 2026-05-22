@@ -159,6 +159,9 @@ const taskRunContextEl = document.getElementById("task-run-context");
 const delegationPolicyEl = document.getElementById("delegation-policy");
 const maxSubAgentsEl = document.getElementById("max-sub-agents");
 const maxSubAgentsFieldEl = document.getElementById("max-sub-agents-field");
+const taskSupervisionModeEl = document.getElementById("task-supervision-mode");
+const taskSupervisionMaxRoundsFieldEl = document.getElementById("task-supervision-max-rounds-field");
+const taskSupervisionMaxRoundsEl = document.getElementById("task-supervision-max-rounds");
 const workspaceSelectEl = document.getElementById("workspace-select");
 const workspaceCustomEl = document.getElementById("workspace-custom");
 const taskProxyEditorEl = document.getElementById("task-proxy-editor");
@@ -1519,6 +1522,17 @@ function taskSupervisionSummary(task) {
   return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds}`;
 }
 
+function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue) {
+  const assisted = selectedMode !== "manual";
+  const claudeHost = selectedMode === "assisted_claude";
+  return {
+    mode: assisted ? "assisted" : "manual",
+    host_backend: claudeHost ? "claude" : "stub",
+    real_agent_enabled: claudeHost,
+    max_rounds: Number(maxRoundsValue || "5")
+  };
+}
+
 function setCreateProxyDefaultsFromInputs() {
   const configured = Boolean(taskHttpProxyEl?.value.trim() || taskHttpsProxyEl?.value.trim());
   if (configured && taskProxyEnabledEl && !taskProxyEnabledEl.checked) taskProxyEnabledEl.checked = true;
@@ -1568,10 +1582,17 @@ function renderTaskSupervisionEditor() {
 }
 
 function syncTaskSupervisionModeFields() {
-  if (!taskSupervisionFormEl) return;
-  const manual = selectedTaskSupervisionModeEl?.value === "manual";
-  selectedTaskSupervisionMaxRoundsFieldEl?.classList.toggle("hidden", manual);
-  if (selectedTaskSupervisionMaxRoundsFieldEl) selectedTaskSupervisionMaxRoundsFieldEl.hidden = manual;
+  syncSupervisionModeFields(selectedTaskSupervisionModeEl, selectedTaskSupervisionMaxRoundsFieldEl);
+}
+
+function syncCreateTaskSupervisionModeFields() {
+  syncSupervisionModeFields(taskSupervisionModeEl, taskSupervisionMaxRoundsFieldEl);
+}
+
+function syncSupervisionModeFields(modeEl, maxRoundsFieldEl) {
+  const manual = modeEl?.value === "manual";
+  maxRoundsFieldEl?.classList.toggle("hidden", manual);
+  if (maxRoundsFieldEl) maxRoundsFieldEl.hidden = manual;
 }
 
 function visibleTasks() {
@@ -3547,17 +3568,11 @@ async function saveTaskSupervisionConfig() {
   const task = selectedTask();
   if (!task) return;
   const selectedMode = selectedTaskSupervisionModeEl?.value || "manual";
-  const assisted = selectedMode !== "manual";
-  const claudeHost = selectedMode === "assisted_claude";
+  const supervision = taskSupervisionPayloadFromMode(selectedMode, selectedTaskSupervisionMaxRoundsEl?.value || "5");
   await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/supervision`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(runScopedPayload({
-      mode: assisted ? "assisted" : "manual",
-      host_backend: claudeHost ? "claude" : "stub",
-      real_agent_enabled: claudeHost,
-      max_rounds: Number(selectedTaskSupervisionMaxRoundsEl?.value || "5")
-    }))
+    body: JSON.stringify(runScopedPayload(supervision))
   }, "Failed to update task supervision");
   taskSupervisionEditingUntil = 0;
   await loadStatus({ forceTaskSupervision: true });
@@ -3834,6 +3849,7 @@ function addTaskConfirmRows(payload) {
     ["Sandbox", payload.sandbox || "-"],
     ["Approval", payload.approval || "-"],
     ["Delegation", payload.delegation_policy === "auto" ? `auto (${payload.max_sub_agents || 0})` : "off"],
+    ["Supervision", taskSupervisionSummary({ supervision: payload.supervision || {} })],
     ["Proxy", proxyLabel]
   ];
 }
@@ -3981,6 +3997,8 @@ function renderTimelineEvent(event) {
   if (event.type === "agent_created") return renderTimelineStatus("sub-agent created", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", ts);
   if (event.type === "agent_delegated") return renderTimelineStatus("delegated", `${data.count || 0} action(s)`, "session", ts);
   if (event.type === "agent_message_routed") return renderTimelineStatus("routed to agent", `${data.target || "-"} ${data.reason || ""}`, "running", ts);
+  if (event.type === "claimed_sub_without_aha_agent") return renderTimelineStatus("sub-agent claim mismatch", data.reason || "claimed without AHA spawn_sub", "failed", ts);
+  if (event.type === "native_subagent_tool_used") return renderTimelineStatus("native subagent blocked", `${data.tool_name || "-"} ${data.reason || ""}`, "failed", ts);
   if (event.type === "sub_agent_reported") return renderTimelineStatus("sub-agent reported", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
   if (event.type === "sub_agent_report_ignored") return renderTimelineStatus("sub-agent report ignored", `${data.agent_id || "-"} ${data.reason || ""}`, "session", ts);
   if (event.type === "sub_agent_backend_recovered") return renderTimelineStatus("sub-agent backend recovered", `${data.agent_id || "-"} attempt=${data.attempt || "-"}`, "running", ts);
@@ -4306,6 +4324,7 @@ taskFormEl?.addEventListener("submit", async event => {
   if (!title) return;
   const description = newTaskDescriptionEl?.value.trim() || "";
   const delegationPolicy = delegationPolicyEl?.value || "disabled";
+  const supervision = taskSupervisionPayloadFromMode(taskSupervisionModeEl?.value || "manual", taskSupervisionMaxRoundsEl?.value || "5");
   setCreateProxyDefaultsFromInputs();
   const createHttpProxy = taskHttpProxyEl?.value.trim() || "";
   const createHttpsProxy = taskHttpsProxyEl?.value.trim() || "";
@@ -4326,6 +4345,7 @@ taskFormEl?.addEventListener("submit", async event => {
     delegation_policy: delegationPolicy,
     max_sub_agents: delegationPolicy === "auto" ? Number(maxSubAgentsEl?.value || "0") : 0,
     preferred_sub_backend: taskBackendEl.value,
+    supervision,
     dispatch: true
   };
   const reopenCreateDialog = Boolean(taskCreateDialogEl?.open);
@@ -4595,6 +4615,7 @@ agentTargetEl.addEventListener("change", async () => {
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
 delegationPolicyEl?.addEventListener("change", syncDelegationFields);
+taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeFields);
 [taskHttpProxyEl, taskHttpsProxyEl].forEach(input => input?.addEventListener("input", setCreateProxyDefaultsFromInputs));
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
@@ -4626,6 +4647,7 @@ window.addEventListener("online", () => {
 initTaskCreateDialog();
 if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
 syncDelegationFields();
+syncCreateTaskSupervisionModeFields();
 initDesktopSidebars();
 initMobileSheets();
 initMobileActionPanel();

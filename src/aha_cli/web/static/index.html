@@ -252,6 +252,20 @@
           </div>
           <div class="field-row">
             <label class="field-label">
+              <span>Supervision</span>
+              <select id="task-supervision-mode">
+                <option value="manual">manual</option>
+                <option value="assisted_stub">assisted stub</option>
+                <option value="assisted_claude">assisted Claude host</option>
+              </select>
+            </label>
+            <label id="task-supervision-max-rounds-field" class="field-label">
+              <span>Supervision max rounds</span>
+              <input id="task-supervision-max-rounds" type="number" min="1" max="100" value="5">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field-label">
               <span>HTTP proxy</span>
               <input id="task-http-proxy" placeholder="http://127.0.0.1:7890">
             </label>

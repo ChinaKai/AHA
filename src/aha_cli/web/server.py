@@ -1723,6 +1723,18 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     await writer.drain()
                     return
                 dispatch = bool(payload.get("dispatch", True))
+                supervision = None
+                if "supervision" in payload:
+                    if not isinstance(payload.get("supervision"), dict):
+                        writer.write(json_response({"error": "supervision must be an object"}, "400 Bad Request"))
+                        await writer.drain()
+                        return
+                    try:
+                        supervision = parse_task_supervision_fields(payload["supervision"])
+                    except ValueError as exc:
+                        writer.write(json_response({"error": str(exc)}, "400 Bad Request"))
+                        await writer.drain()
+                        return
                 task = create_task_and_dispatch(
                     root,
                     selected_run_id,
@@ -1742,6 +1754,7 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     preferred_sub_backend=preferred_sub_backend,
                     preferred_sub_model=str(payload.get("preferred_sub_model", "") or "") or None,
                     description=description,
+                    supervision=supervision,
                     dispatch=dispatch,
                 )
                 backend_state = start_dispatched_task_backend(root, selected_run_id, task, dispatch)

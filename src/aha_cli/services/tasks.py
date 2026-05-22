@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.services.orchestrator import dispatch_task_to_main
-from aha_cli.store.filesystem import add_task
+from aha_cli.store.filesystem import add_task, ensure_task_supervision_host_agent
 
 
 def create_task_and_dispatch(
@@ -25,6 +25,7 @@ def create_task_and_dispatch(
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
     description: str | None = None,
+    supervision: dict[str, object] | None = None,
     dispatch: bool = True,
 ) -> dict:
     task = add_task(
@@ -46,7 +47,16 @@ def create_task_and_dispatch(
         preferred_sub_backend=preferred_sub_backend,
         preferred_sub_model=preferred_sub_model,
         description=description,
+        supervision=supervision,
     )
+    policy = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    if policy.get("mode") == "assisted" and policy.get("real_agent_enabled") and policy.get("host_backend") != "stub":
+        task = ensure_task_supervision_host_agent(
+            root,
+            run_id,
+            task["id"],
+            backend=str(policy.get("host_backend") or "codex"),
+        )["task"]
     if dispatch:
         dispatch_task_to_main(root, run_id, task)
     return task
