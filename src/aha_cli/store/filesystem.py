@@ -74,9 +74,15 @@ from aha_cli.store.sessions import (
     list_sessions as _list_sessions,
     save_session as _save_session,
 )
+from aha_cli.store.tasks import (
+    TERMINAL_TASK_STATUSES,
+    delete_task as _delete_task,
+    mark_task_coordination as _mark_task_coordination,
+    set_task_hidden as _set_task_hidden,
+    set_task_status as _set_task_status,
+)
 from aha_cli.store.workspaces import add_workspace, get_workspace, list_workspaces, resolve_workspace_path
 
-TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 UNSET = object()
 
 
@@ -861,22 +867,7 @@ def update_agent_runtime(root: Path, run_id: str, task_id: str, agent_id: str, *
 
 
 def mark_task_coordination(root: Path, run_id: str, task_id: str, **fields: object) -> dict:
-    now = utc_now()
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        coordination = task.setdefault("coordination", {})
-        for key, value in fields.items():
-            if value is not None:
-                coordination[key] = value
-        coordination["updated_at"] = now
-        plan["updated_at"] = now
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(root, run_id, "task_coordination_updated", {"task_id": task_id, **fields})
-    return task
+    return _mark_task_coordination(root, run_id, task_id, now_func=utc_now, append_event_func=append_event, **fields)
 
 
 def _start_reopen_round_if_needed(root: Path, run_id: str, task_id: str, started_at: str) -> dict | None:
@@ -948,34 +939,11 @@ def complete_task(root: Path, run_id: str, task_id: str, exit_code: int | None =
 
 
 def set_task_hidden(root: Path, run_id: str, task_id: str, hidden: bool) -> dict:
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        task["hidden"] = hidden
-        task["hidden_at"] = utc_now() if hidden else None
-        plan["updated_at"] = utc_now()
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(root, run_id, "task_hidden" if hidden else "task_restored", {"task_id": task_id})
-    return task
+    return _set_task_hidden(root, run_id, task_id, hidden, now_func=utc_now, append_event_func=append_event)
 
 
 def delete_task(root: Path, run_id: str, task_id: str) -> dict:
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None:
-            raise SystemExit(f"Task not found: {task_id}")
-        task["hidden"] = True
-        task["hidden_at"] = task.get("hidden_at") or utc_now()
-        task["deleted_at"] = task.get("deleted_at") or utc_now()
-        plan["updated_at"] = utc_now()
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    append_event(root, run_id, "task_deleted", {"task_id": task_id})
-    return task
+    return _delete_task(root, run_id, task_id, now_func=utc_now, append_event_func=append_event)
 
 
 def set_task_status(
@@ -987,41 +955,17 @@ def set_task_status(
     *,
     allow_terminal_transition: bool = False,
 ) -> dict:
-    now = utc_now()
-    should_append = True
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        if task.get("status") in TERMINAL_TASK_STATUSES and not allow_terminal_transition:
-            should_append = False
-        else:
-            task["status"] = status
-        if status == "running":
-            if should_append:
-                task["started_at"] = task.get("started_at") or now
-                task["finished_at"] = None
-                task["exit_code"] = None
-        elif status == "awaiting_user":
-            if should_append:
-                task["started_at"] = task.get("started_at") or now
-                task["finished_at"] = None
-                task["exit_code"] = None
-        elif status in TERMINAL_TASK_STATUSES:
-            if should_append:
-                if not task.get("started_at"):
-                    task["started_at"] = now
-                task["finished_at"] = now
-                task["exit_code"] = exit_code
-        plan["updated_at"] = now
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    if should_append:
-        append_event(root, run_id, "task_status_changed", {"task_id": task_id, "status": status, "exit_code": exit_code})
-        if status in {"awaiting_user", *TERMINAL_TASK_STATUSES}:
-            render_task_overview_result_if_needed(root, run_id, task_id, policy="journal")
-    return task
+    return _set_task_status(
+        root,
+        run_id,
+        task_id,
+        status,
+        exit_code,
+        allow_terminal_transition=allow_terminal_transition,
+        now_func=utc_now,
+        append_event_func=append_event,
+        render_overview_func=render_task_overview_result_if_needed,
+    )
 
 
 def write_task_result(root: Path, run_id: str, task_id: str, content: str, policy: str = "finalize") -> Path:
