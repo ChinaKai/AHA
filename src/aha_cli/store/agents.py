@@ -120,7 +120,7 @@ def ensure_task_supervision_host_agent(
             created = True
         else:
             agent["role"] = "host"
-            agent["backend"] = agent.get("backend") or host_backend
+            agent["backend"] = host_backend
             agent["sandbox"] = agent.get("sandbox") or "read-only"
             agent["approval"] = agent.get("approval") or "never"
             agent.setdefault("created_by", "supervision")

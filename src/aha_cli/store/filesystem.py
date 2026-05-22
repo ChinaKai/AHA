@@ -729,7 +729,6 @@ def update_task_supervision_config(
             task["supervision"].get("mode") == "assisted"
             and task["supervision"].get("real_agent_enabled")
             and task["supervision"].get("host_backend") != "stub"
-            and not task["supervision"].get("host_agent_id")
         )
         plan["updated_at"] = utc_now()
         save_plan(root, plan)

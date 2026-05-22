@@ -390,7 +390,7 @@ def supervision_host_notes(root: Path, run_id: str, task_id: str, host_agent_id:
     return list(reversed(notes))
 
 
-def apply_supervision_claude_host(
+def apply_supervision_real_host(
     root: Path,
     run_id: str,
     task_id: str | None,
@@ -408,27 +408,30 @@ def apply_supervision_claude_host(
     except KeyError:
         return None
     supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    host_backend = str(supervision.get("host_backend") or "stub")
     if (
         supervision.get("mode") != "assisted"
-        or supervision.get("host_backend") != "claude"
+        or host_backend == "stub"
+        or host_backend not in PROCESS_AGENT_BACKENDS
         or not supervision.get("real_agent_enabled")
     ):
         return None
     host_agent_id = str(supervision.get("host_agent_id") or "host")
     host_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == host_agent_id), None)
-    if host_agent is None:
-        ensured = ensure_task_supervision_host_agent(root, run_id, task_id, backend="claude")
+    if host_agent is None or str(host_agent.get("backend") or "") != host_backend:
+        ensured = ensure_task_supervision_host_agent(root, run_id, task_id, backend=host_backend)
         task = ensured["task"]
         host_agent = ensured["agent"]
         supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else supervision
         host_agent_id = str(host_agent.get("id") or "host")
+        host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or host_backend)
     append_event(
         root,
         run_id,
         "main_reported_to_host",
         {
             "task_id": task_id,
-            "host_backend": "claude",
+            "host_backend": host_backend,
             "host_agent_id": host_agent_id,
             "channel": supervision.get("channel") or "main_only",
             "reply_chars": len(reply_text),
@@ -454,7 +457,7 @@ def apply_supervision_claude_host(
     )
     set_task_status(root, run_id, task_id, "running")
     set_agent_status(root, run_id, task_id, host_agent_id, "pending")
-    host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or "claude")
+    host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or host_backend)
     if host_backend in PROCESS_AGENT_BACKENDS:
         start_backend(
             root,
@@ -464,6 +467,7 @@ def apply_supervision_claude_host(
             model=host_agent.get("model") or (cfg.get(host_backend, {}) or {}).get("model"),
             sandbox=host_agent.get("sandbox") or "read-only",
             approval=host_agent.get("approval") or "never",
+            codex_bin=(cfg.get("codex", {}) or {}).get("bin") or "codex",
             claude_bin=(cfg.get("claude", {}) or {}).get("bin") or "claude",
             from_start=False,
             task_id=task_id,
@@ -495,6 +499,8 @@ def apply_supervision_host_decision(
     task = task_snapshot(root, run_id, task_id)["task"]
     supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     main_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == "main"), {})
+    host_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == host_agent_id), {})
+    host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or "stub")
     if exit_code != 0:
         decision = {
             "decision": "ask_user",
@@ -596,7 +602,7 @@ def apply_supervision_host_decision(
         routed_to_browser = True
     event_payload = {
         "task_id": task_id,
-        "host_backend": "claude",
+        "host_backend": host_backend,
         "host_agent_id": host_agent_id,
         "decision": decision["decision"],
         "reason": decision["reason"],
@@ -1340,7 +1346,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             source_agent=agent_id,
                             reply_text=display_reply,
                         )
-                        host_result = apply_supervision_claude_host(
+                        host_result = apply_supervision_real_host(
                             root,
                             run_id,
                             item_task_id,

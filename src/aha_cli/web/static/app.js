@@ -1524,13 +1524,14 @@ function taskSupervisionPolicy(task) {
 
 function taskSupervisionModeValue(policy) {
   if (policy.mode !== "assisted") return "manual";
+  if (policy.host_backend === "codex" && policy.real_agent_enabled) return "assisted_codex";
   if (policy.host_backend === "claude" && policy.real_agent_enabled) return "assisted_claude";
   return "assisted_stub";
 }
 
 function taskSupervisionBadge(task) {
   const policy = taskSupervisionPolicy(task);
-  const label = policy.mode === "assisted" && policy.host_backend === "claude" ? "claude host" : (policy.mode === "assisted" ? "assisted stub" : "manual");
+  const label = policy.mode === "assisted" && policy.real_agent_enabled ? `${policy.host_backend} host` : (policy.mode === "assisted" ? "assisted stub" : "manual");
   return `<span class="status supervision-${escapeHtml(policy.mode)}">${escapeHtml(label)}</span>`;
 }
 
@@ -1548,11 +1549,12 @@ function taskAgentCount(task) {
 
 function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue) {
   const assisted = selectedMode !== "manual";
+  const codexHost = selectedMode === "assisted_codex";
   const claudeHost = selectedMode === "assisted_claude";
   return {
     mode: assisted ? "assisted" : "manual",
-    host_backend: claudeHost ? "claude" : "stub",
-    real_agent_enabled: claudeHost,
+    host_backend: codexHost ? "codex" : (claudeHost ? "claude" : "stub"),
+    real_agent_enabled: codexHost || claudeHost,
     max_rounds: Number(maxRoundsValue || "5")
   };
 }

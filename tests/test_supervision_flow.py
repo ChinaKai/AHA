@@ -194,6 +194,51 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertTrue(applied[-1]["data"]["routed_to_main"])
         self.assertEqual(task["status"], "running")
 
+    def test_codex_chat_records_codex_supervision_host_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Codex supervision host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
+                host_reply = '{"decision":"continue","reason":"needs priority","response":"先按阻塞项排优先级。","actions":[]}'
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, host_reply, None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    host_code, _host_output = self.run_cli("codex-chat", run_id, "host", "--sender", "host", "--sandbox", "read-only", "--task-id", "task-001", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(host_code, 0)
+        start_host.assert_called_once()
+        self.assertEqual(start_host.call_args.kwargs["backend"], "codex")
+        start_main.assert_called_once()
+        host = next(agent for agent in task["agents"] if agent["role"] == "host")
+        self.assertEqual(host["backend"], "codex")
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["host_backend"], "codex")
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "continue")
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_main"])
+
     def test_claude_supervision_wait_does_not_route_main_while_sub_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -84,7 +84,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "dispatch": False,
                             "supervision": {
                                 "mode": "assisted",
-                                "host_backend": "claude",
+                                "host_backend": "codex",
                                 "real_agent_enabled": True,
                                 "max_rounds": 9,
                             },
@@ -97,12 +97,12 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertEqual(body["task"]["supervision"]["mode"], "assisted")
-        self.assertEqual(body["task"]["supervision"]["host_backend"], "claude")
+        self.assertEqual(body["task"]["supervision"]["host_backend"], "codex")
         self.assertEqual(body["task"]["supervision"]["host_agent_id"], "host")
         self.assertTrue(body["task"]["supervision"]["real_agent_enabled"])
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 9)
         self.assertEqual(task["supervision"], body["task"]["supervision"])
-        self.assertTrue(any(agent["id"] == "host" and agent["role"] == "host" for agent in task["agents"]))
+        self.assertTrue(any(agent["id"] == "host" and agent["role"] == "host" and agent["backend"] == "codex" for agent in task["agents"]))
 
     def test_api_task_supervision_config_updates_existing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -59,6 +59,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("selected-task-supervision-mode", html)
         self.assertIn("task-supervision-mode", html)
         self.assertIn("task-supervision-max-rounds", html)
+        self.assertIn("assisted Codex host", html)
         self.assertIn("assisted Claude host", html)
         self.assertNotIn("selected-task-supervision-actions", html)
         create_form = html.split('<form id="task-form"', 1)[1].split("</form>", 1)[0]
@@ -69,6 +70,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("saveTaskSupervisionConfig", script)
         self.assertIn("taskSupervisionPayloadFromMode", script)
         self.assertIn("syncCreateTaskSupervisionModeFields", script)
+        self.assertIn("assisted_codex", script)
         self.assertIn('policy.mode === "manual"', script)
         self.assertIn('"host / user proxy"', script)
         self.assertIn("isSupervisionAgent", script)
