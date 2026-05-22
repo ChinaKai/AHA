@@ -58,6 +58,31 @@ Rules for store edits:
 - `services/run_archive.py` owns import/export archive behavior.
 - `services/onebin.py` and `scripts/build_onebin.py` own zipapp packaging.
 
+## Web Ownership
+
+`src/aha_cli/web/server.py` owns HTTP routing, WebSocket handoff, and static UI
+serving. Keep request parsing, API payload assembly, and task lifecycle helpers
+in focused modules so route handlers stay thin.
+
+```text
+web/http_utils.py       HTTP parsing and response helpers
+web/run_api.py          workspace, bootstrap, run create/list/archive helpers
+web/status.py           web status snapshots and backend-loss recovery
+web/task_actions.py     task create/send/command/autostart helpers
+web/conversation.py     conversation, event stream, and task log projections
+web/session_debug.py    backend session jsonl discovery and analysis
+web/server.py           route dispatch, WebSocket upgrade, static assets
+```
+
+Rules for web edits:
+
+- Keep `server.py` route handlers thin; move reusable logic into the owning
+  web module before adding new route-specific branches.
+- Patch dependencies where they are used. After a helper moves out of
+  `server.py`, tests should patch the helper module, not the server import.
+- Avoid importing service runtime code into UI projection modules unless the
+  projection directly needs process state.
+
 ## Test Layout Target
 
 Keep tests grouped by behavior, not by historical entry point. The legacy
@@ -113,7 +138,7 @@ For refactors that touch shared behavior, run:
 
 ```bash
 python3 -m compileall -q src tests
-python3 -m unittest tests.test_cli
+python3 -m unittest tests.test_cli_core tests.test_backend_runners tests.test_web_status
 python3 -m unittest discover
 git diff --check
 ```

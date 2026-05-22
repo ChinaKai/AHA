@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from aha_cli.backends.registry import agent_backends
+from aha_cli.store.filesystem import (
+    config_path,
+    list_run_summaries,
+    list_workspaces,
+    run_exists,
+    run_summary,
+)
+
+HL_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/hl_project")
+MY_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/my_project")
+WORKSPACE_ROOTS = [HL_PROJECT_ROOT, MY_PROJECT_ROOT]
+
+
+class ApiRunNotFound(Exception):
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(run_id)
+
+
+def safe_download_name(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value)
+
+
+def archive_upload_suffix(filename: str) -> str:
+    name = filename.lower()
+    for suffix in (".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"):
+        if name.endswith(suffix):
+            return suffix
+    return ".tar.gz"
+
+
+def request_run_id(default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
+    payload_run_id = str((payload or {}).get("run_id", "") or "").strip()
+    query_run_id = str(query.get("run_id", [""])[0] or "").strip()
+    return payload_run_id or query_run_id or default_run_id
+
+
+def default_api_run_id(root: Path, default_run_id: str) -> str:
+    if default_run_id and run_exists(root, default_run_id):
+        return default_run_id
+    runs = list_run_summaries(root)
+    return str(runs[0]["id"]) if runs else ""
+
+
+def require_api_run_id(root: Path, default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
+    selected_run_id = request_run_id(default_run_id, query, payload)
+    if not selected_run_id:
+        selected_run_id = default_api_run_id(root, default_run_id)
+    if not run_exists(root, selected_run_id):
+        raise ApiRunNotFound(selected_run_id)
+    return selected_run_id
+
+
+def workspace_options(roots: list[Path] | None = None, aha_home: Path | None = None) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if aha_home is not None:
+        for workspace in list_workspaces(aha_home):
+            workspace_path = str(workspace["path"])
+            seen.add(workspace_path)
+            options.append(
+                {
+                    "id": str(workspace["id"]),
+                    "name": str(workspace.get("name") or workspace["id"]),
+                    "label": str(workspace.get("name") or workspace["path"]),
+                    "path": workspace_path,
+                    "root": str(Path(workspace_path).parent),
+                    "source": "registry",
+                }
+            )
+    workspace_roots = WORKSPACE_ROOTS if roots is None else roots
+    for root in workspace_roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(item for item in root.iterdir() if item.is_dir()):
+            if str(path) in seen:
+                continue
+            seen.add(str(path))
+            options.append(
+                {
+                    "name": path.name,
+                    "label": f"{root.name}/{path.name}",
+                    "path": str(path),
+                    "root": str(root),
+                }
+            )
+    return options
+
+
+def runs_payload(root: Path, default_run_id: str) -> dict:
+    return {"default_run_id": default_api_run_id(root, default_run_id), "runs": list_run_summaries(root)}
+
+
+def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
+    return {
+        "aha_home": str(root),
+        "initialized": config_path(root).exists(),
+        "default_workspace_path": str(cwd or Path.cwd()),
+        "default_run_id": default_api_run_id(root, default_run_id),
+        "runs": list_run_summaries(root),
+        "workspaces": workspace_options(aha_home=root),
+        "backends": agent_backends(),
+    }
+
+
+def workspaces_payload(root: Path, cwd: Path | None = None, roots: list[Path] | None = None) -> dict:
+    workspace_roots = WORKSPACE_ROOTS if roots is None else roots
+    return {
+        "aha_home": str(root),
+        "default_workspace_path": str(cwd or Path.cwd()),
+        "root": str(HL_PROJECT_ROOT),
+        "roots": [str(root) for root in workspace_roots if root.is_dir()],
+        "workspaces": workspace_options(roots=roots, aha_home=root),
+    }
+
+
+def run_export_headers(run_id: str) -> dict[str, str]:
+    safe_run_id = safe_download_name(run_id)
+    return {"Content-Disposition": f'attachment; filename="aha-run-{safe_run_id}.tar.gz"'}
+
+
+def run_import_success_payload(root: Path, source_run_id: str, imported_run_id: str) -> dict:
+    return {
+        "ok": True,
+        "source_run_id": source_run_id,
+        "imported_run_id": imported_run_id,
+        "run": run_summary(root, imported_run_id),
+        "runs": list_run_summaries(root),
+    }

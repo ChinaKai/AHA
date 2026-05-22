@@ -52,7 +52,7 @@ class WebStatusTests(unittest.TestCase):
                         "last_reply_at": "2026-05-15T00:00:00+00:00" if target == "main" else None,
                     }
 
-                with mock.patch("aha_cli.web.server.backend_status", side_effect=fake_backend_status):
+                with mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status):
                     snapshot = web_status_snapshot(root, run_id)
 
         self.assertEqual(snapshot["tasks"][0]["coordination"]["followup_started_at"], "2026-05-15T00:00:00+00:00")
@@ -74,7 +74,7 @@ class WebStatusTests(unittest.TestCase):
                 sub = add_agent(root, run_id, "task-001", backend="codex", role="sub")
                 set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
 
-                with mock.patch("aha_cli.web.server.backend_status") as backend_status_mock:
+                with mock.patch("aha_cli.web.status.backend_status") as backend_status_mock:
                     snapshot = web_status_snapshot(root, run_id, lite=True, selected_task_id="task-other")
                     snapshot_without_selection = web_status_snapshot(root, run_id, lite=True)
 
@@ -96,7 +96,7 @@ class WebStatusTests(unittest.TestCase):
                 set_task_status(root, run_id, "task-001", "running")
                 set_agent_status(root, run_id, "task-001", "main", "running")
 
-                with mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}):
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
                     snapshot = web_status_snapshot(root, run_id)
                 persisted = task_snapshot(root, run_id, "task-001")["task"]
                 event_log = event_path(root, run_id).read_text(encoding="utf-8")
@@ -155,14 +155,14 @@ class WebStatusTests(unittest.TestCase):
                 set_task_status(root, run_id, "task-001", "running")
                 set_agent_status(root, run_id, "task-001", "main", "running")
 
-                with mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}):
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
                     web_status_snapshot(root, run_id)
                 recovered = task_snapshot(root, run_id, "task-001")["task"]
                 self.assertIn("工作异常中断", recovered["agents"][0]["recovery_context"])
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}),
-                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}) as start_backend,
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "stopped", "pid": None}),
+                    mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running"}) as start_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -252,8 +252,8 @@ class WebStatusTests(unittest.TestCase):
                 self.assertIn(sub["id"], main_agent["recovery_context"])
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}),
-                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}),
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "stopped", "pid": None}),
+                    mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running"}),
                 ):
                     handle_send_payload(
                         root,
@@ -288,7 +288,7 @@ class WebStatusTests(unittest.TestCase):
                 set_task_status(root, run_id, "task-001", "running")
                 set_agent_status(root, run_id, "task-001", "main", "running")
 
-                with mock.patch("aha_cli.web.server.backend_status", return_value={"status": "busy", "pid": 1234}):
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "busy", "pid": 1234}):
                     snapshot = web_status_snapshot(root, run_id)
 
         task = snapshot["tasks"][0]
@@ -314,8 +314,8 @@ class WebStatusTests(unittest.TestCase):
                 self.assertFalse(offset_file.exists())
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped"}),
-                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running", "started": True}) as start_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -353,8 +353,8 @@ class WebStatusTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", "main", "completed", 0)
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped"}),
-                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running", "started": True}) as start_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -401,8 +401,8 @@ class WebStatusTests(unittest.TestCase):
                 self.assertEqual(detail["coordination"]["final_summary_requested_at"], "")
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped"}),
-                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}) as start_backend,
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running"}) as start_backend,
                 ):
                     sent = handle_send_payload(root, run_id, {**payload, "message": "follow-up"})
 
@@ -424,8 +424,8 @@ class WebStatusTests(unittest.TestCase):
                 save_chat_offset(offset_file, 0)
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "busy", "pid": 1234}),
-                    mock.patch("aha_cli.web.server.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "busy", "pid": 1234}),
+                    mock.patch("aha_cli.web.task_actions.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -462,8 +462,8 @@ class WebStatusTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", "main", "completed", 0)
 
                 with (
-                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "running", "pid": 1234}),
-                    mock.patch("aha_cli.web.server.stop_backend") as stop_backend,
+                    mock.patch("aha_cli.web.task_actions.backend_status", return_value={"status": "running", "pid": 1234}),
+                    mock.patch("aha_cli.web.task_actions.stop_backend") as stop_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -486,4 +486,3 @@ class WebStatusTests(unittest.TestCase):
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 self.assertEqual(detail["status"], "awaiting_user")
                 self.assertEqual(detail["agents"][0]["status"], "completed")
-

@@ -350,7 +350,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "reply"}]}},
             )
 
-            with mock.patch("aha_cli.web.server.Path.home", return_value=home):
+            with mock.patch("aha_cli.web.session_debug.Path.home", return_value=home):
                 info = backend_session_jsonl_info({"backend": "codex", "backend_session_id": session_id})
 
         analysis = info["analysis"]
@@ -396,7 +396,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 },
             )
 
-            with mock.patch("aha_cli.web.server.Path.home", return_value=home):
+            with mock.patch("aha_cli.web.session_debug.Path.home", return_value=home):
                 info = backend_session_jsonl_info({"backend": "claude", "backend_session_id": session_id})
 
         analysis = info["analysis"]

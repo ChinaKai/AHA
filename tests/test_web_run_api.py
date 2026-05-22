@@ -98,7 +98,7 @@ class WebRunApiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
             root.mkdir()
-            with mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend:
+            with mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running", "started": True}) as start_backend:
                 response = asyncio.run(
                     fetch_ui_response(
                         root,
