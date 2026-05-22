@@ -72,6 +72,21 @@ def cached_backend_status(root: Path, run_id: str, target: str, task_id: str | N
     return state
 
 
+def invalidate_backend_status_cache(root: Path, run_id: str, target: str | None = None, task_id: str | None = None) -> None:
+    root_key = str(root)
+    target_key = target or None
+    task_key = task_id or None
+    for key in list(_BACKEND_STATUS_CACHE):
+        key_root, key_run_id, key_task_id, key_target = key
+        if key_root != root_key or key_run_id != run_id:
+            continue
+        if target_key is not None and key_target != target_key:
+            continue
+        if task_key is not None and key_task_id != task_key:
+            continue
+        _BACKEND_STATUS_CACHE.pop(key, None)
+
+
 def agent_recovery_context(agent_id: str, reason: str) -> str:
     return "\n".join(
         [
@@ -187,6 +202,14 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     if not task_id or not agent_id or agent_status != "running" or backend_process_status != "stopped":
         return False
 
+    fresh_backend_state = backend_status(root, run_id, agent_id, task_id=task_id)
+    fresh_backend_status = str(fresh_backend_state.get("status") or "stopped").lower()
+    if fresh_backend_status != "stopped":
+        invalidate_backend_status_cache(root, run_id, agent_id, task_id)
+        backend_state.clear()
+        backend_state.update(fresh_backend_state)
+        return False
+
     try:
         persisted_task = task_snapshot(root, run_id, task_id)["task"]
     except KeyError:
@@ -290,6 +313,7 @@ __all__ = [
     "task_outcome_snapshots",
     "task_activity_status",
     "cached_backend_status",
+    "invalidate_backend_status_cache",
     "agent_recovery_context",
     "sub_agent_recovery_notice",
     "append_recovery_context",

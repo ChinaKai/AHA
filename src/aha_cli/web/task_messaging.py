@@ -16,6 +16,7 @@ from aha_cli.store.filesystem import (
 from aha_cli.web.status import (
     TERMINAL_TASK_STATUSES,
     consume_agent_recovery_context,
+    invalidate_backend_status_cache,
     merge_recovery_context_message,
 )
 
@@ -166,6 +167,13 @@ def handle_send_payload(
         start_prepared = prepared_backend_starter or _default_start_prepared_backend
         backend = start_prepared(root, run_id, backend_autostart)
         if backend:
+            if backend_autostart:
+                invalidate_backend_status_cache(
+                    root,
+                    run_id,
+                    str(backend_autostart.get("target") or target_id),
+                    str(backend_autostart.get("task_id") or task_id or "") or None,
+                )
             command_payload["backend"] = backend
         debug_logger(
             "api.send",
@@ -221,6 +229,7 @@ def handle_send_payload(
             from_start=False,
             task_id=autostart["task_id"],
         )
+        invalidate_backend_status_cache(root, run_id, autostart["target"], autostart["task_id"])
     debug_logger(
         "api.send",
         _root=root,

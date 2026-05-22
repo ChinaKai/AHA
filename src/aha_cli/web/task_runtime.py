@@ -15,7 +15,7 @@ from aha_cli.store.filesystem import (
     set_task_status,
     task_snapshot,
 )
-from aha_cli.web.status import TERMINAL_TASK_STATUSES
+from aha_cli.web.status import TERMINAL_TASK_STATUSES, invalidate_backend_status_cache
 from aha_cli.web.task_command_format import finalization_prompt, format_task_journal_for_prompt
 
 
@@ -86,7 +86,7 @@ def prepare_task_main_autostart(root: Path, run_id: str, task_id: str | None) ->
 def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> dict | None:
     if not autostart:
         return None
-    return start_backend(
+    backend = start_backend(
         root,
         run_id,
         autostart["target"],
@@ -97,6 +97,8 @@ def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> d
         from_start=False,
         task_id=autostart["task_id"],
     )
+    invalidate_backend_status_cache(root, run_id, autostart["target"], autostart["task_id"])
+    return backend
 
 
 def request_task_finalization(root: Path, run_id: str, task_id: str | None, command: str) -> str:
@@ -153,7 +155,7 @@ def start_dispatched_task_backend(root: Path, run_id: str, task: dict, dispatch:
     autostart = message_backend_autostart_config(root, run_id, task_id, "main")
     if not autostart:
         return None
-    return start_backend(
+    backend = start_backend(
         root,
         run_id,
         "main",
@@ -164,3 +166,5 @@ def start_dispatched_task_backend(root: Path, run_id: str, task: dict, dispatch:
         from_start=True,
         task_id=task_id,
     )
+    invalidate_backend_status_cache(root, run_id, "main", task_id)
+    return backend

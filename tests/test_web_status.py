@@ -23,6 +23,7 @@ from aha_cli.store.filesystem import (
     update_agent_runtime,
 )
 from aha_cli.web.server import handle_send_payload, recover_stale_running_agent, web_status_snapshot
+from aha_cli.web.status import cached_backend_status
 
 
 class WebStatusTests(unittest.TestCase):
@@ -113,6 +114,34 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "awaiting_user")
         self.assertEqual(persisted["agents"][0]["status"], "interrupted")
         self.assertIn("agent_status_recovered", event_log)
+
+    def test_web_status_snapshot_rechecks_stopped_cache_before_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Fresh backend race", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                    cached_backend_status(root, run_id, "main", "task-001")
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "running", "pid": 4321}):
+                    snapshot = web_status_snapshot(root, run_id)
+                persisted = task_snapshot(root, run_id, "task-001")["task"]
+                event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+        task = snapshot["tasks"][0]
+        agent = task["agents"][0]
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(agent["status"], "running")
+        self.assertEqual(agent["backend_process_status"], "running")
+        self.assertEqual(agent["backend_process_pid"], 4321)
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["agents"][0]["status"], "running")
+        self.assertNotIn("agent_status_recovered", event_log)
 
     def test_stale_recovery_does_not_reopen_terminal_task_from_old_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
