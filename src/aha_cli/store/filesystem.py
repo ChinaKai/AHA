@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from aha_cli.domain.models import (
@@ -41,6 +40,14 @@ from aha_cli.store.events import (
     event_stream_position,
     normalize_event_id,
     with_event_id,
+)
+from aha_cli.store.event_views import (
+    conversation_event_category as _conversation_event_category,
+    conversation_events_page as _conversation_events_page,
+    event_agent_refs as _event_agent_refs,
+    event_task_id as _event_task_id,
+    format_event_log_line as _format_event_log_line,
+    task_event_log_page as _task_event_log_page,
 )
 from aha_cli.store.finals import write_task_result as _write_task_result
 from aha_cli.store.journal import (
@@ -200,149 +207,23 @@ def append_message(
 
 
 def format_event_log_line(event: dict) -> str:
-    data = event.get("data") or {}
-    ts = event.get("ts") or ""
-    event_type = str(event.get("type") or "event")
-    if event_type == "log":
-        return f"[{ts}] {data.get('task_id') or '-'}: {data.get('line') or ''}"
-    if event_type == "message":
-        task = f" task={data['task_id']}" if data.get("task_id") else ""
-        return f"[{ts}] message{task} {data.get('sender') or 'main'} -> {data.get('target') or '-'}: {data.get('message') or ''}"
-    return f"[{ts}] {event_type}: {json.dumps(data, ensure_ascii=False)}"
+    return _format_event_log_line(event)
 
 
 def task_event_log_page(root: Path, run_id: str, task_id: str, limit: int = 200, before: int | None = None) -> dict:
-    path = event_path(root, run_id)
-    after_offset = path.stat().st_size if path.exists() else 0
-    end_offset = after_offset if before is None else max(0, min(before, after_offset))
-    safe_limit = max(1, min(limit, 1000))
-    matches: list[dict] = []
-    for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
-        if event_task_id(event) == task_id:
-            matches.append({"_cursor": offset, "text": format_event_log_line(event)})
-            if len(matches) > safe_limit:
-                break
-
-    has_more = len(matches) > safe_limit
-    page = list(reversed(matches[:safe_limit]))
-    next_before_offset = page[0].get("_cursor") if has_more and page else None
-    return {
-        "source": "events",
-        "path": "events.jsonl",
-        "text": "\n".join(item["text"] for item in page),
-        "lines": page,
-        "before_offset": end_offset,
-        "after_offset": after_offset,
-        "next_before_offset": next_before_offset,
-        "has_more": has_more,
-        "count": len(page),
-    }
-
-
-TIMELINE_EVENT_TYPES = {
-    "message",
-    "task_dispatched",
-    "task_started",
-    "task_finished",
-    "task_round_started",
-    "task_round_recorded",
-    "task_journal_rendered",
-    "task_result_written",
-    "task_final_requested",
-    "task_round_summary_requested",
-    "task_proxy_config_updated",
-    "task_reopened",
-    "task_completed",
-    "task_waiting_for_subagents",
-    "task_status_changed",
-    "agent_started",
-    "agent_status_changed",
-    "agent_thread",
-    "agent_command_started",
-    "agent_command_finished",
-    "agent_message",
-    "agent_prompt_metrics",
-    "agent_usage",
-    "agent_error",
-    "agent_context_overflow",
-    "agent_delegated",
-    "agent_message_routed",
-    "claimed_sub_without_aha_agent",
-    "native_subagent_tool_used",
-    "sub_agent_reported",
-    "sub_agent_report_ignored",
-    "sub_agent_backend_recovered",
-    "sub_agent_backend_failed",
-    "agent_created",
-    "agent_config_updated",
-    "agent_finished",
-    "main_reported_to_host",
-    "host_decision",
-    "main_applied_decision",
-    "workspace_missing",
-}
-
-SUPERVISION_EVENT_TYPES = {
-    "main_reported_to_host",
-    "host_decision",
-    "main_applied_decision",
-}
+    return _task_event_log_page(root, run_id, task_id, limit=limit, before=before)
 
 
 def conversation_event_category(event_type: str) -> str:
-    if event_type == "agent_message":
-        return "chat"
-    if event_type in {"agent_usage", "agent_prompt_metrics"}:
-        return "usage"
-    if event_type in {"agent_command_started", "agent_command_finished"}:
-        return "commands"
-    if event_type == "message":
-        return "chat"
-    return "runtime"
+    return _conversation_event_category(event_type)
 
 
 def event_task_id(event: dict) -> str | None:
-    data = event.get("data") or {}
-    if data.get("task_id"):
-        return str(data["task_id"])
-    target = str(data.get("target") or "")
-    if event.get("type") == "message" and target.startswith("task-") and target[5:].isdigit():
-        return target
-    return None
+    return _event_task_id(event)
 
 
 def event_agent_refs(event: dict) -> set[str]:
-    data = event.get("data") or {}
-    refs: set[str] = set()
-    event_type = str(event.get("type") or "")
-    if event_type == "message":
-        target = str(data.get("target") or "").strip()
-        sender = str(data.get("sender") or "").strip()
-        private_target = bool(target and target.lower() not in {"browser", "system", "aha", "main"})
-        if sender == "AHA" and private_target:
-            return set()
-
-    def add(value: object) -> None:
-        text = str(value or "").strip()
-        if text and text.lower() not in {"browser", "system", "aha"}:
-            refs.add(text)
-
-    add(data.get("target"))
-    add(data.get("to_agent"))
-    add(data.get("from_agent"))
-    add(data.get("agent_id"))
-    if event.get("type") == "message":
-        add(data.get("sender"))
-        if any(str(data.get(key) or "").lower() == "aha" for key in ("role", "from_agent", "to_agent", "sender", "target")):
-            refs.add("main")
-    if not refs and (
-        event_type.startswith("agent_")
-        or event_type.startswith("task_")
-        or event_type in SUPERVISION_EVENT_TYPES
-        or event_type == "workspace_missing"
-    ):
-        refs.add("main")
-    return refs
+    return _event_agent_refs(event)
 
 
 def conversation_events_page(
@@ -354,39 +235,7 @@ def conversation_events_page(
     before: int | None = None,
     categories: set[str] | None = None,
 ) -> dict:
-    path = event_path(root, run_id)
-    after_offset = path.stat().st_size if path.exists() else 0
-    end_offset = after_offset if before is None else max(0, min(before, after_offset))
-    safe_limit = max(1, min(limit, 200))
-    allowed_categories = categories
-    matches: list[dict] = []
-    for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
-        event_type = str(event.get("type") or "")
-        if allowed_categories is not None and conversation_event_category(event_type) not in allowed_categories:
-            continue
-        if (
-            event_type in TIMELINE_EVENT_TYPES
-            and event_task_id(event) == task_id
-            and (target or "main") in event_agent_refs(event)
-        ):
-            item = dict(event)
-            item["_cursor"] = offset
-            matches.append(item)
-            if len(matches) > safe_limit:
-                break
-
-    has_more = len(matches) > safe_limit
-    page = list(reversed(matches[:safe_limit]))
-    next_before_offset = page[0].get("_cursor") if has_more and page else None
-    return {
-        "events": page,
-        "before_offset": end_offset,
-        "after_offset": after_offset,
-        "next_before_offset": next_before_offset,
-        "before": next_before_offset,
-        "has_more": has_more,
-        "count": len(page),
-    }
+    return _conversation_events_page(root, run_id, task_id, target, limit=limit, before=before, categories=categories)
 
 
 def create_plan(

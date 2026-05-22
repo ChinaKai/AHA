@@ -12,8 +12,8 @@ from aha_cli.services.chat_supervision import (
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.messages import format_event
 from aha_cli.services.prompt_templates import render_prompt_template
+from aha_cli.store.event_views import event_agent_refs
 from aha_cli.store.filesystem import (
-    event_agent_refs,
     event_path,
     iter_jsonl_reverse,
     require_plan,

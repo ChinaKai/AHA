@@ -25,6 +25,7 @@ store/io.py          JSON, JSONL, and text file helpers
 store/paths.py       AHA home, run path, and task path helpers
 store/config.py      local config and preferred run persistence
 store/events.py      run event append and pagination
+store/event_views.py read-side task log and conversation event projections
 store/runs.py        run plan creation and run lifecycle helpers
 store/sessions.py    backend session metadata persistence
 store/workspaces.py  workspace registry persistence

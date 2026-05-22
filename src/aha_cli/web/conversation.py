@@ -3,13 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from aha_cli.store.event_views import conversation_events_page, event_agent_refs, event_task_id
 from aha_cli.store.filesystem import (
-    conversation_events_page,
-    event_agent_refs,
     event_path,
     event_stream_page,
     event_stream_position,
-    event_task_id,
     iter_jsonl_reverse,
     read_json,
     session_path,
