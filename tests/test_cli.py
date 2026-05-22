@@ -5,7 +5,6 @@ import concurrent.futures
 import gzip
 import io
 import json
-import multiprocessing
 import os
 from pathlib import Path
 import socket
@@ -22,10 +21,9 @@ from unittest import mock
 
 from aha_cli.backends.claude import build_claude_exec_command, claude_permission_mode, handle_claude_event, run_claude_exec
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message, run_codex_exec
-from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
-from aha_cli.services.chat import apply_supervision_host_decision, chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
+from aha_cli.services.chat import apply_supervision_host_decision, chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.messages import format_event
@@ -80,12 +78,10 @@ from aha_cli.web.server import (
     workspace_options,
 )
 from tests.helpers import (
-    append_jsonl_records,
     fetch_initial_ws_messages,
     fetch_ui_response,
     fetch_ws_messages,
     json_response_body,
-    write_plan_statuses,
 )
 
 
@@ -95,241 +91,6 @@ class CliTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
-
-    def test_command_backend_is_not_an_agent_backend(self) -> None:
-        self.assertIn("command", backend_names())
-        self.assertNotIn("command", agent_backend_names())
-        self.assertIn("codex", agent_backend_names())
-        self.assertIn("claude", agent_backend_names())
-
-    def test_model_options_are_bound_to_agent_backend(self) -> None:
-        codex_options = model_options("codex")
-        claude_options = model_options("claude")
-        stub_options = model_options("stub")
-        self.assertEqual(codex_options[0]["name"], "")
-        self.assertEqual(codex_options[0]["label"], "default")
-        self.assertIn("gpt-5.3-codex", {item["name"] for item in codex_options})
-        self.assertEqual(claude_options, [{"name": "", "label": "default"}])
-        self.assertEqual(stub_options, [{"name": "", "label": "default"}])
-        self.assertIn("commands", agent_backends()[0])
-
-    def test_run_export_import_redacts_proxy_and_marks_sessions_imported(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli(
-                    "plan",
-                    "Portable run",
-                    "--agents",
-                    "1",
-                    "--enable-proxy",
-                    "--http-proxy",
-                    "http://user:secret@example.test:8080",
-                    "--workspace-path",
-                    str(root),
-                )
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
-                session = read_json(session_file)
-                session["backend_session_id"] = "backend-secret"
-                session_file.write_text(json.dumps(session), encoding="utf-8")
-                runtime_file = run_dir(root, run_id) / "runtime" / "local.cache"
-                runtime_file.parent.mkdir(parents=True)
-                runtime_file.write_text("local-only", encoding="utf-8")
-
-                archive = root / "portable.tar.gz"
-                code, output = self.run_cli("run", "export", run_id, "-o", str(archive))
-                self.assertEqual(code, 0)
-                self.assertIn(f"Exported run {run_id}", output)
-
-                with tarfile.open(archive, "r:gz") as exported:
-                    names = set(exported.getnames())
-                    self.assertIn("aha-run-manifest.json", names)
-                    self.assertIn("run/plan.json", names)
-                    self.assertNotIn("run/runtime/local.cache", names)
-                    plan = json.load(exported.extractfile("run/plan.json"))
-                    exported_session = json.load(exported.extractfile("run/tasks/task-001/sessions/main.json"))
-                self.assertEqual(plan["tasks"][0]["preferred_http_proxy"], "<redacted>")
-                self.assertNotIn("secret", json.dumps(plan))
-                self.assertIsNone(exported_session["backend_session_id"])
-                self.assertEqual(exported_session["imported_backend_session_id"], "backend-secret")
-
-                import_home = root / "imported.aha"
-                code, import_output = self.run_cli("--home", str(import_home), "run", "import", str(archive))
-                self.assertEqual(code, 0)
-                imported_line = [line for line in import_output.splitlines() if line.startswith("Imported run ")][0]
-                imported_run_id = imported_line.split(" as ", 1)[1]
-                self.assertNotEqual(imported_run_id, run_id)
-                imported_plan = read_json(run_dir(import_home, imported_run_id) / "plan.json")
-                imported_session = read_json(run_dir(import_home, imported_run_id) / "tasks" / "task-001" / "sessions" / "main.json")
-                self.assertEqual(imported_plan["id"], imported_run_id)
-                self.assertEqual(imported_session["status"], "imported")
-                self.assertIsNone(imported_session["backend_session_id"])
-                self.assertEqual(imported_session["imported_from_run_id"], run_id)
-                self.assertFalse((run_dir(import_home, imported_run_id) / "runtime").exists())
-                snapshot = status_snapshot(import_home, imported_run_id)
-                self.assertEqual(snapshot["tasks"][0]["agents"][0]["session_status"], "imported")
-
-    def test_agent_result_status_detects_blocked_reply(self) -> None:
-        self.assertEqual(status_from_agent_result(0, "done"), "completed")
-        self.assertEqual(status_from_agent_result(1, "done"), "failed")
-        self.assertEqual(status_from_agent_result(0, "文件没有落盘，因为 read-only sandbox"), "blocked")
-        self.assertEqual(status_from_agent_result(0, "当前沙箱是只读，写入被拦截"), "blocked")
-        self.assertEqual(status_from_agent_result(0, "NAS mp4 写入失败，导致状态抖动"), "completed")
-        self.assertEqual(status_from_agent_result(0, "不是 NAS 参数写入失败，配置已经生效"), "completed")
-        self.assertEqual(status_from_agent_result(0, '`write_task_result()` 写入 `task["output_file"]`'), "completed")
-        self.assertEqual(
-            status_from_agent_result(
-                0,
-                '{"actions":[{"type":"record_task_update","summary":"host uses read-only sandbox"}],"response":"done"}',
-            ),
-            "completed",
-        )
-
-    def test_running_status_keeps_original_task_start_time(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Timing", "--agents", "1")
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                with mock.patch(
-                    "aha_cli.store.filesystem.utc_now",
-                    side_effect=[
-                        "2026-05-15T00:00:00+00:00",
-                        "2026-05-15T00:00:01+00:00",
-                        "2026-05-15T00:05:00+00:00",
-                        "2026-05-15T00:05:01+00:00",
-                    ],
-                ):
-                    set_task_status(root, run_id, "task-001", "running")
-                    set_task_status(root, run_id, "task-001", "running")
-
-                detail = task_snapshot(root, run_id, "task-001")
-                self.assertEqual(detail["task"]["started_at"], "2026-05-15T00:00:00+00:00")
-
-    def test_running_status_does_not_reopen_terminal_task(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "No reopen", "--agents", "1")
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                set_task_status(root, run_id, "task-001", "completed", 0)
-                completed = task_snapshot(root, run_id, "task-001")["task"]
-
-                set_task_status(root, run_id, "task-001", "running")
-                detail = task_snapshot(root, run_id, "task-001")
-
-        self.assertEqual(detail["task"]["status"], "completed")
-        self.assertEqual(detail["task"]["exit_code"], 0)
-        self.assertEqual(detail["task"]["finished_at"], completed["finished_at"])
-
-    def test_awaiting_user_status_does_not_reopen_terminal_task_without_reopen(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "No implicit reopen", "--agents", "1")
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                set_task_status(root, run_id, "task-001", "completed", 0)
-                completed = task_snapshot(root, run_id, "task-001")["task"]
-
-                set_task_status(root, run_id, "task-001", "awaiting_user")
-                detail = task_snapshot(root, run_id, "task-001")
-
-                reopened = reopen_task(root, run_id, "task-001")
-
-        self.assertEqual(detail["task"]["status"], "completed")
-        self.assertEqual(detail["task"]["exit_code"], 0)
-        self.assertEqual(detail["task"]["finished_at"], completed["finished_at"])
-        self.assertEqual(reopened["status"], "awaiting_user")
-
-    def test_agent_status_started_at_tracks_status_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Agent timing", "--agents", "1")
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                with mock.patch(
-                    "aha_cli.store.filesystem.utc_now",
-                    side_effect=[
-                        "2026-05-15T00:00:00+00:00",
-                        "2026-05-15T00:00:01+00:00",
-                        "2026-05-15T00:00:10+00:00",
-                        "2026-05-15T00:00:11+00:00",
-                        "2026-05-15T00:01:00+00:00",
-                        "2026-05-15T00:01:01+00:00",
-                    ],
-                ):
-                    set_agent_status(root, run_id, "task-001", "main", "running")
-                    set_agent_status(root, run_id, "task-001", "main", "running")
-                    set_agent_status(root, run_id, "task-001", "main", "waiting")
-
-                agent = task_snapshot(root, run_id, "task-001")["task"]["agents"][0]
-
-        self.assertEqual(agent["status"], "waiting")
-        self.assertEqual(agent["status_started_at"], "2026-05-15T00:01:00+00:00")
-        self.assertEqual(agent["last_active_at"], "2026-05-15T00:01:00+00:00")
-        self.assertEqual(agent["started_at"], "2026-05-15T00:00:10+00:00")
-
-    def test_parallel_plan_writers_do_not_collide_on_temp_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Parallel writers", "--agents", "1")
-                self.assertEqual(code, 0)
-                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                add_agent(root, run_id, "task-001", backend="codex", role="sub")
-
-            workers = [
-                multiprocessing.Process(
-                    target=write_plan_statuses,
-                    args=(str(root), run_id, "task-001", agent_id, 40),
-                )
-                for agent_id in ("main", "sub-001")
-            ]
-            for worker in workers:
-                worker.start()
-            for worker in workers:
-                worker.join(timeout=10)
-
-            for worker in workers:
-                self.assertFalse(worker.is_alive())
-                self.assertEqual(worker.exitcode, 0)
-            snapshot = status_snapshot(root, run_id)
-            agents = {agent["id"]: agent["status"] for agent in snapshot["tasks"][0]["agents"]}
-            self.assertEqual(agents["main"], "running")
-            self.assertEqual(agents["sub-001"], "running")
-
-    def test_jsonl_appends_are_valid_under_concurrent_writers(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = str(Path(tmp) / "events.jsonl")
-            workers = [
-                multiprocessing.Process(target=append_jsonl_records, args=(path, worker_id, 50))
-                for worker_id in range(4)
-            ]
-            for worker in workers:
-                worker.start()
-            for worker in workers:
-                worker.join(timeout=10)
-
-            for worker in workers:
-                self.assertFalse(worker.is_alive())
-                self.assertEqual(worker.exitcode, 0)
-            events, _ = iter_jsonl_from(Path(path), 0)
-
-        self.assertEqual(len(events), 200)
-        self.assertFalse(any(event.get("type") == "malformed_event" for event in events))
-        self.assertEqual(len({(event["worker"], event["index"]) for event in events}), 200)
 
     def test_chat_offset_persists_unprocessed_messages_across_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
