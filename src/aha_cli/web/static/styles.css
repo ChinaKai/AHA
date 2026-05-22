@@ -152,6 +152,24 @@ header > div:first-child h1 {
 .run-archive-logs input {
   margin: 0;
 }
+.web-service-actions {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.web-service-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+.web-service-actions code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+  font-size: 12px;
+}
 #session-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -363,12 +381,14 @@ button, input, select, textarea { font: inherit; }
   min-height: auto;
   margin: 0;
 }
-.task-proxy-editor {
+.task-proxy-editor,
+.task-supervision-editor {
   border: 1px solid #e4e7ec;
   border-radius: 6px;
   background: #ffffff;
 }
-.task-proxy-editor > summary {
+.task-proxy-editor > summary,
+.task-supervision-editor > summary {
   padding: 7px 9px;
   cursor: pointer;
   color: #475467;
@@ -376,31 +396,40 @@ button, input, select, textarea { font: inherit; }
   font-weight: 700;
   list-style: none;
 }
-.task-proxy-editor > summary::-webkit-details-marker {
+.task-proxy-editor > summary::-webkit-details-marker,
+.task-supervision-editor > summary::-webkit-details-marker {
   display: none;
 }
-.task-proxy-editor > summary::after {
+.task-proxy-editor > summary::after,
+.task-supervision-editor > summary::after {
   content: "+";
   float: right;
   color: #667085;
 }
-.task-proxy-editor[open] > summary::after {
+.task-proxy-editor[open] > summary::after,
+.task-supervision-editor[open] > summary::after {
   content: "-";
 }
-.proxy-form {
+.proxy-form,
+.supervision-form {
   display: grid;
   gap: 7px;
   padding: 0 9px 9px;
 }
-.proxy-form input {
+.proxy-form input,
+.supervision-form input,
+.supervision-form select {
   min-height: 32px;
   padding: 0 8px;
   font-size: 12px;
 }
-.proxy-form button {
+.proxy-form button,
+.supervision-form button {
   min-height: 32px;
   font-size: 12px;
 }
+.status.supervision-assisted { background: #e0f2fe; color: #075985; }
+.status.supervision-manual { background: #f2f4f7; color: #475467; }
 .task {
   width: 100%;
   border: 1px solid transparent;
@@ -1632,6 +1661,19 @@ button {
   border-color: #1f6feb;
   background: #eef5ff;
 }
+
+.agent-card.host-agent {
+  border-color: #0891b2;
+}
+
+.agent-card.host-agent.active {
+  background: #ecfeff;
+}
+
+.timeline-card.from-supervision {
+  border-color: #0891b2;
+}
+
 .agent-card-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -135,16 +135,29 @@ def run_codex_exec(
             insert_at += 1
 
     print(f"Running Codex backend: {' '.join(shlex.quote(part) for part in cmd[:-1])} -", flush=True)
-    process = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=apply_proxy_environment(os.environ.copy(), proxy_env),
-        text=True,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-    )
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=apply_proxy_environment(os.environ.copy(), proxy_env),
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
+    except OSError as exc:
+        exit_code = 127 if isinstance(exc, FileNotFoundError) else 1
+        binary = exc.filename or cmd[0]
+        message = f"Failed to start Codex backend command `{binary}`: {exc.strerror or exc}"
+        append_event_to_file(
+            events_file,
+            run_id,
+            "agent_error",
+            {"source": source, "task_id": task_id, "target": target, "message": message, "reason": "backend_start_failed"},
+        )
+        output_file.write_text(message, encoding="utf-8")
+        return exit_code, message, session
     assert process.stdin is not None
     assert process.stdout is not None
     try:

@@ -5,9 +5,14 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 from importlib import resources
 import json
+import os
 from pathlib import Path
+import shlex
+import subprocess
+import sys
 import tempfile
 import textwrap
+import time
 from urllib.parse import parse_qs, unquote, urlparse
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, agent_backends, model_options
@@ -64,6 +69,7 @@ from aha_cli.store.filesystem import (
     task_log_page,
     task_snapshot,
     update_agent_config,
+    update_task_supervision_config,
     update_task_proxy_config,
 )
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
@@ -78,6 +84,10 @@ TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 DEFAULT_EVENTS_LIMIT = 500
 MAX_EVENTS_LIMIT = 2000
 AHA_BACKEND_PROMPT_MARKER = render_prompt_template("backend_prompt_prefix.md").strip()
+WEB_RESTART_HOST = "0.0.0.0"
+WEB_RESTART_PORT = 8766
+WEB_RESTART_SOURCE_UNIT = "aha-ui-source-8766"
+WEB_RESTART_LEGACY_UNIT = "aha-ui-8766.service"
 
 
 def session_jsonl_text(value) -> str:
@@ -305,6 +315,62 @@ def realtime_debug_log(source: str, **fields: object) -> None:
                 handle.write(line + "\n")
         except OSError:
             pass
+
+
+def schedule_source_web_restart(root: Path, run_id: str, *, host: str = WEB_RESTART_HOST, port: int = WEB_RESTART_PORT) -> dict:
+    safe_host = str(host or WEB_RESTART_HOST).strip() or WEB_RESTART_HOST
+    safe_port = int(port or WEB_RESTART_PORT)
+    if safe_port < 1 or safe_port > 65535:
+        raise ValueError("port must be between 1 and 65535")
+    source_root = Path.cwd()
+    service_unit = WEB_RESTART_SOURCE_UNIT if safe_port == WEB_RESTART_PORT else f"aha-ui-source-{safe_port}"
+    restart_unit = f"aha-ui-source-restart-{safe_port}-{int(time.time())}-{os.getpid()}"
+    source_service = f"{service_unit}.service"
+    script = textwrap.dedent(
+        f"""
+        set -e
+        if systemctl --user show -p LoadState --value {shlex.quote(source_service)} 2>/dev/null | grep -qv '^not-found$'; then
+          systemctl --user restart {shlex.quote(source_service)}
+          exit 0
+        fi
+        systemctl --user stop {shlex.quote(WEB_RESTART_LEGACY_UNIT)} >/dev/null 2>&1 || true
+        if command -v fuser >/dev/null 2>&1; then
+          fuser -k {safe_port}/tcp >/dev/null 2>&1 || true
+        fi
+        systemd-run --user \\
+          --collect \\
+          --unit={shlex.quote(service_unit)} \\
+          --working-directory={shlex.quote(str(source_root))} \\
+          --setenv=PYTHONPATH=src \\
+          --property=Restart=always \\
+          --property=RestartSec=2 \\
+          {shlex.quote(sys.executable)} -m aha_cli ui {shlex.quote(run_id)} --host {shlex.quote(safe_host)} --port {safe_port}
+        """
+    ).strip()
+    command = [
+        "systemd-run",
+        "--user",
+        "--on-active=1s",
+        f"--unit={restart_unit}",
+        "/usr/bin/env",
+        "bash",
+        "-lc",
+        script,
+    ]
+    result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=5)
+    payload = {
+        "run_id": run_id,
+        "host": safe_host,
+        "port": safe_port,
+        "source_root": str(source_root),
+        "scheduler": "systemd-run",
+        "restart_unit": restart_unit,
+        "service_unit": source_service,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+    }
+    append_event(root, run_id, "web_restart_requested", payload)
+    return payload
 
 
 def task_final_view_snapshot(root: Path, run_id: str, task_id: str) -> dict:
@@ -841,6 +907,22 @@ def parse_task_proxy_fields(payload: dict) -> dict[str, object]:
     return fields
 
 
+def parse_task_supervision_fields(payload: dict) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    if "mode" in payload:
+        fields["mode"] = str(payload.get("mode", "") or "")
+    if "host_backend" in payload:
+        fields["host_backend"] = str(payload.get("host_backend", "") or "")
+    if "real_agent_enabled" in payload:
+        fields["real_agent_enabled"] = parse_optional_bool(payload["real_agent_enabled"], "real_agent_enabled")
+    if "max_rounds" in payload:
+        try:
+            fields["max_rounds"] = int(payload.get("max_rounds") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("max_rounds must be an integer") from exc
+    return fields
+
+
 def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command: str) -> str:
     if not task_id:
         return "No task is selected."
@@ -981,6 +1063,8 @@ def message_backend_autostart_config(root: Path, run_id: str, task_id: str | Non
     except KeyError:
         return None
     task = detail["task"]
+    if is_task_supervision_host_target(task, target_id):
+        return None
     agent = next((item for item in task.get("agents", []) if item.get("id") == target_id), None)
     if not agent:
         return None
@@ -998,6 +1082,33 @@ def message_backend_autostart_config(root: Path, run_id: str, task_id: str | Non
         "sandbox": agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
         "approval": agent.get("approval") or task.get("preferred_approval") or "never",
     }
+
+
+def is_task_supervision_host_target(task: dict, target_id: str | None) -> bool:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    host_agent_id = str(supervision.get("host_agent_id") or "host")
+    return bool(
+        target_id
+        and target_id == host_agent_id
+        and supervision.get("mode") == "assisted"
+        and supervision.get("real_agent_enabled")
+        and supervision.get("host_backend") != "stub"
+    )
+
+
+def is_supervision_host_message(root: Path, run_id: str, task_id: str | None, target_id: str) -> bool:
+    if not task_id:
+        return False
+    try:
+        return is_task_supervision_host_target(task_snapshot(root, run_id, task_id)["task"], target_id)
+    except KeyError:
+        return False
+
+
+def save_chat_offset_after_message(root: Path, run_id: str, task_id: str, target_id: str) -> None:
+    inbox = inbox_path(root, run_id, target_id)
+    offset_file = chat_offset_path(run_dir(root, run_id), target_id, task_id)
+    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
 
 
 def ensure_chat_offset_before_message(root: Path, run_id: str, task_id: str, target_id: str) -> None:
@@ -1065,6 +1176,7 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
     if locked_status:
         raise ValueError(f"task {task_id} is {locked_status}; use /aha reopen before sending follow-up messages")
 
+    supervision_host_message = is_supervision_host_message(root, run_id, task_id, target_id)
     autostart = message_backend_autostart_config(root, run_id, task_id, target_id)
     if autostart and task_id:
         ensure_chat_offset_before_message(root, run_id, task_id, target_id)
@@ -1085,6 +1197,8 @@ def handle_send_payload(root: Path, run_id: str, payload: dict) -> dict:
         result_policy=str(command_payload.get("result_policy", "") or "") or None,
     )
     response = {"ok": True, "message": sent}
+    if supervision_host_message and task_id:
+        save_chat_offset_after_message(root, run_id, task_id, target_id)
     if autostart:
         response["backend"] = start_backend(
             root,
@@ -1472,6 +1586,20 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             else:
                 response = json_response(conversation_view_page(root, selected_run_id, task_id, target, limit=limit, before=before))
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
+        elif method == "POST" and path == "/api/web/restart":
+            selected_run_id = require_api_run_id(root, run_id, query)
+            payload = parse_json_body(body) if body.strip() else {}
+            try:
+                port = int(payload.get("port") or WEB_RESTART_PORT)
+                restart = schedule_source_web_restart(
+                    root,
+                    selected_run_id,
+                    host=str(payload.get("host") or WEB_RESTART_HOST),
+                    port=port,
+                )
+                writer.write(json_response({"ok": True, **restart}))
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as exc:
+                writer.write(json_response({"error": f"failed to schedule web restart: {exc}"}, "500 Internal Server Error"))
         elif method in {"GET", "HEAD"} and path.startswith("/api/task/"):
             selected_run_id = require_api_run_id(root, run_id, query)
             parts = unquote(path.removeprefix("/api/task/")).split("/", 1)
@@ -1528,6 +1656,9 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     elif action == "proxy":
                         payload = parse_json_body(body)
                         task = update_task_proxy_config(root, selected_run_id, task_id, **parse_task_proxy_fields(payload))
+                    elif action == "supervision":
+                        payload = parse_json_body(body)
+                        task = update_task_supervision_config(root, selected_run_id, task_id, **parse_task_supervision_fields(payload))
                     elif action == "session/compact-reset":
                         payload = parse_json_body(body)
                         agent_id = str(payload.get("agent_id") or payload.get("target") or "main")
@@ -1688,9 +1819,17 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(json_response({"error": "task_id is required"}, "400 Bad Request"))
             else:
                 try:
-                    task = update_task_proxy_config(root, selected_run_id, task_id, **parse_task_proxy_fields(payload))
+                    if "supervision" in payload and isinstance(payload.get("supervision"), dict):
+                        task = update_task_supervision_config(
+                            root,
+                            selected_run_id,
+                            task_id,
+                            **parse_task_supervision_fields(payload["supervision"]),
+                        )
+                    else:
+                        task = update_task_proxy_config(root, selected_run_id, task_id, **parse_task_proxy_fields(payload))
                     writer.write(json_response({"ok": True, "task": task}))
-                except SystemExit as exc:
+                except (SystemExit, ValueError) as exc:
                     writer.write(json_response({"error": str(exc)}, "404 Not Found"))
         elif method == "POST" and path == "/api/send":
             payload = parse_json_body(body)

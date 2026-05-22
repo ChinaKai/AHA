@@ -25,6 +25,7 @@ from aha_cli.store.filesystem import (
 TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted"}
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
+SUPERVISION_STUB_DECISION = "ask_user"
 
 
 def task_has_active_followup(task: dict) -> bool:
@@ -64,6 +65,7 @@ def dispatch_task_to_main(root: Path, run_id: str, task: dict) -> dict:
         role="main",
         from_agent="system",
         to_agent="main",
+        reply_target="browser",
     )
     append_event(root, run_id, "task_dispatched", {"task_id": task["id"], "target": "main"})
     return payload
@@ -132,6 +134,62 @@ def chat_offset_exists(root: Path, run_id: str, target: str, task_id: str | None
         safe_task = task_id.replace("/", "_")
         return (run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_task}-{safe_target}.json").exists()
     return (run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_target}.json").exists()
+
+
+def apply_supervision_stub(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    *,
+    source_agent: str,
+    reply_text: str,
+) -> dict | None:
+    if not task_id or source_agent != "main":
+        return None
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return None
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    if (
+        supervision.get("mode") != "assisted"
+        or supervision.get("host_backend") != "stub"
+        or supervision.get("real_agent_enabled")
+    ):
+        return None
+    append_event(
+        root,
+        run_id,
+        "main_reported_to_host",
+        {
+            "task_id": task_id,
+            "host_backend": "stub",
+            "host_agent_id": supervision.get("host_agent_id"),
+            "channel": supervision.get("channel") or "main_only",
+            "reply_chars": len(reply_text),
+        },
+    )
+    decision = SUPERVISION_STUB_DECISION
+    result = {
+        "task_id": task_id,
+        "host_backend": "stub",
+        "decision": decision,
+        "reason": "stub supervision only records the main->host->main decision path; no real host agent is attached",
+    }
+    append_event(root, run_id, "host_decision", result)
+    append_event(
+        root,
+        run_id,
+        "main_applied_decision",
+        {
+            "task_id": task_id,
+            "decision": decision,
+            "applied": decision == "ask_user",
+            "effect": "await_user" if decision == "ask_user" else "noop",
+            "reason": "real host agent disabled; main keeps user-facing control",
+        },
+    )
+    return result
 
 
 def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> list[dict]:

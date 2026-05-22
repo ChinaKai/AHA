@@ -40,6 +40,50 @@ def default_config() -> dict:
     }
 
 
+TASK_SUPERVISION_MODES = {"manual", "assisted"}
+TASK_SUPERVISION_HOST_BACKENDS = {"stub", "codex", "claude"}
+
+
+def default_task_supervision() -> dict:
+    return {
+        "mode": "manual",
+        "scope": "task",
+        "host_backend": "stub",
+        "host_agent_id": None,
+        "real_agent_enabled": False,
+        "channel": "main_only",
+        "max_rounds": 5,
+    }
+
+
+def normalize_task_supervision(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    supervision = default_task_supervision()
+    mode = str(raw.get("mode") or supervision["mode"]).strip().lower()
+    supervision["mode"] = mode if mode in TASK_SUPERVISION_MODES else "manual"
+    host_backend = str(raw.get("host_backend") or supervision["host_backend"]).strip().lower()
+    supervision["host_backend"] = host_backend if host_backend in TASK_SUPERVISION_HOST_BACKENDS else "stub"
+    host_agent_id = raw.get("host_agent_id")
+    supervision["host_agent_id"] = str(host_agent_id).strip() if host_agent_id else None
+    if "real_agent_enabled" in raw:
+        supervision["real_agent_enabled"] = bool(raw.get("real_agent_enabled"))
+    try:
+        supervision["max_rounds"] = max(1, min(100, int(raw.get("max_rounds") or supervision["max_rounds"])))
+    except (TypeError, ValueError):
+        pass
+
+    if supervision["mode"] == "manual":
+        supervision["host_backend"] = "stub"
+        supervision["host_agent_id"] = None
+        supervision["real_agent_enabled"] = False
+    elif supervision["host_backend"] == "stub":
+        supervision["host_agent_id"] = None
+        supervision["real_agent_enabled"] = False
+    else:
+        supervision["real_agent_enabled"] = True
+    return supervision
+
+
 def default_tasks(goal: str, agents: int, mode: str) -> list[str]:
     research = [
         "Map the relevant files, concepts, and terminology for the goal.",
@@ -132,6 +176,7 @@ def make_task(
         "preferred_sub_model": preferred_sub_model if preferred_sub_model is not None else model,
         "delegation_policy": delegation_policy,
         "max_sub_agents": max(0, max_sub_agents),
+        "supervision": default_task_supervision(),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
         "output_file": f"results/{task_id}.md",
@@ -304,6 +349,7 @@ def enrich_plan(plan: dict, backend: str = "codex") -> dict:
         task.setdefault("preferred_http_proxy", None)
         task.setdefault("preferred_https_proxy", None)
         task.setdefault("preferred_no_proxy", None)
+        task["supervision"] = normalize_task_supervision(task.get("supervision"))
         ensure_task_agents(task, backend)
     plan.setdefault("main_agent", make_agent("main", "run-main", backend, status="active"))
     return plan

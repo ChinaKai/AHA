@@ -43,6 +43,11 @@
           <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
           <div id="run-archive-state" class="meta"></div>
         </div>
+        <div class="web-service-actions">
+          <button id="web-restart" type="button">重启 Web</button>
+          <code>0.0.0.0:8766</code>
+        </div>
+        <div id="web-restart-state" class="meta"></div>
         <div id="session-detail" class="meta"><span id="session-detail-text">Run 详情</span><code id="run-id"></code></div>
       </div>
     </div>
@@ -90,6 +95,25 @@
             </label>
             <button type="submit">Save Proxy</button>
             <div id="task-proxy-state" class="meta"></div>
+          </form>
+        </details>
+        <details id="task-supervision-editor" class="task-supervision-editor">
+          <summary>Task supervision</summary>
+          <form id="task-supervision-form" class="supervision-form">
+            <label class="field-label">
+              <span>Mode</span>
+              <select id="selected-task-supervision-mode">
+                <option value="manual">manual</option>
+                <option value="assisted_stub">assisted stub</option>
+                <option value="assisted_claude">assisted Claude host</option>
+              </select>
+            </label>
+            <label id="selected-task-supervision-max-rounds-field" class="field-label">
+              <span>Max rounds</span>
+              <input id="selected-task-supervision-max-rounds" type="number" min="1" max="100" value="5">
+            </label>
+            <button type="submit">Save Supervision</button>
+            <div id="task-supervision-state" class="meta"></div>
           </form>
         </details>
       </div>

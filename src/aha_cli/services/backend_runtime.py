@@ -394,9 +394,32 @@ def _backend_process_env(proxy_env: dict[str, str] | None = None, claude_config:
             str((cwd / item).resolve()) if item and not Path(item).is_absolute() else item
             for item in pythonpath.split(os.pathsep)
         )
+    _add_user_backend_paths(env)
     apply_claude_environment(env, claude_config)
     apply_proxy_environment(env, proxy_env)
     return env
+
+
+def _add_user_backend_paths(env: dict[str, str]) -> None:
+    home = Path.home()
+    candidates = [
+        home / ".local" / "bin",
+        home / ".npm-global" / "bin",
+    ]
+    nvm_root = home / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        candidates.extend(sorted(nvm_root.glob("*/bin"), reverse=True))
+
+    existing = [item for item in env.get("PATH", "").split(os.pathsep) if item]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for path in [str(candidate) for candidate in candidates if candidate.is_dir()] + existing:
+        if path in seen:
+            continue
+        seen.add(path)
+        merged.append(path)
+    if merged:
+        env["PATH"] = os.pathsep.join(merged)
 
 
 def start_backend(

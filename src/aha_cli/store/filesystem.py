@@ -19,6 +19,7 @@ from aha_cli.domain.models import (
     make_task_round,
     next_sub_id,
     next_task_id,
+    normalize_task_supervision,
     task_prompt,
     utc_now,
     new_run_id,
@@ -572,6 +573,8 @@ def append_message(
     reply_target: str | None = None,
     coordination: str | None = None,
     agent_id: str | None = None,
+    display_sender: str | None = None,
+    display_target: str | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -600,6 +603,10 @@ def append_message(
         payload["coordination"] = coordination
     if agent_id:
         payload["agent_id"] = agent_id
+    if display_sender:
+        payload["display_sender"] = display_sender
+    if display_target:
+        payload["display_target"] = display_target
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)
@@ -788,7 +795,16 @@ TIMELINE_EVENT_TYPES = {
     "agent_created",
     "agent_config_updated",
     "agent_finished",
+    "main_reported_to_host",
+    "host_decision",
+    "main_applied_decision",
     "workspace_missing",
+}
+
+SUPERVISION_EVENT_TYPES = {
+    "main_reported_to_host",
+    "host_decision",
+    "main_applied_decision",
 }
 
 
@@ -805,6 +821,13 @@ def event_task_id(event: dict) -> str | None:
 def event_agent_refs(event: dict) -> set[str]:
     data = event.get("data") or {}
     refs: set[str] = set()
+    event_type = str(event.get("type") or "")
+    if event_type == "message":
+        target = str(data.get("target") or "").strip()
+        sender = str(data.get("sender") or "").strip()
+        private_target = bool(target and target.lower() not in {"browser", "system", "aha", "main"})
+        if sender == "AHA" and private_target:
+            return set()
 
     def add(value: object) -> None:
         text = str(value or "").strip()
@@ -819,8 +842,12 @@ def event_agent_refs(event: dict) -> set[str]:
         add(data.get("sender"))
         if any(str(data.get(key) or "").lower() == "aha" for key in ("role", "from_agent", "to_agent", "sender", "target")):
             refs.add("main")
-    event_type = str(event.get("type") or "")
-    if not refs and (event_type.startswith("agent_") or event_type.startswith("task_") or event_type == "workspace_missing"):
+    if not refs and (
+        event_type.startswith("agent_")
+        or event_type.startswith("task_")
+        or event_type in SUPERVISION_EVENT_TYPES
+        or event_type == "workspace_missing"
+    ):
         refs.add("main")
     return refs
 
@@ -1076,6 +1103,7 @@ def add_task(
             "workspace_path": task.get("workspace_path"),
             "delegation_policy": delegation_policy,
             "max_sub_agents": max_sub_agents,
+            "supervision": task.get("supervision"),
         },
     )
     return task
@@ -1093,21 +1121,140 @@ def add_agent_to_task_dict(
     created_by: str = "system",
     created_reason: str = "",
 ) -> dict:
-    agent_id = "main" if role in {"main", "task-main"} else next_sub_id(task)
+    normalized_role = str(role or "sub").strip().lower()
+    if normalized_role in {"main", "task-main"}:
+        agent_id = "main"
+        agent_role = "task-main"
+    elif normalized_role in {"host", "supervision-host"}:
+        existing = next(
+            (agent for agent in task.get("agents", []) if agent.get("id") == "host" or agent.get("role") == "host"),
+            None,
+        )
+        if existing:
+            return existing
+        agent_id = "host"
+        agent_role = "host"
+    else:
+        agent_id = next_sub_id(task)
+        agent_role = "sub"
+    default_sandbox = "read-only" if agent_role == "host" else task.get("preferred_sandbox")
+    default_approval = "never" if agent_role == "host" else task.get("preferred_approval")
     agent = make_agent(
         agent_id,
-        "task-main" if agent_id == "main" else "sub",
+        agent_role,
         backend,
         model=model,
         workspace_path=workspace_path or task.get("workspace_path"),
-        sandbox=sandbox if sandbox is not None else task.get("preferred_sandbox"),
-        approval=approval if approval is not None else task.get("preferred_approval"),
+        sandbox=sandbox if sandbox is not None else default_sandbox,
+        approval=approval if approval is not None else default_approval,
         proxy_enabled=bool(task.get("preferred_proxy_enabled")) if proxy_enabled is None else bool(proxy_enabled),
         created_by=created_by,
         created_reason=created_reason,
     )
     task.setdefault("agents", []).append(agent)
     return agent
+
+
+def ensure_task_supervision_host_agent(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    backend: str | None = None,
+) -> dict:
+    created = False
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        supervision = normalize_task_supervision(task.get("supervision"))
+        host_backend = str(backend or supervision.get("host_backend") or task.get("preferred_backend") or "codex")
+        if host_backend == "stub":
+            host_backend = str(task.get("preferred_backend") or "codex")
+        host_agent_id = str(supervision.get("host_agent_id") or "host")
+        agent = next(
+            (
+                item
+                for item in task.get("agents", [])
+                if item.get("id") == host_agent_id or item.get("id") == "host" or item.get("role") == "host"
+            ),
+            None,
+        )
+        if agent is None:
+            agent = make_agent(
+                "host",
+                "host",
+                host_backend,
+                status="pending",
+                model=task.get("preferred_model"),
+                workspace_path=task.get("workspace_path"),
+                sandbox="read-only",
+                approval="never",
+                proxy_enabled=bool(task.get("preferred_proxy_enabled")),
+                created_by="supervision",
+                created_reason="task supervision host agent",
+            )
+            task.setdefault("agents", []).append(agent)
+            created = True
+        else:
+            agent["role"] = "host"
+            agent["backend"] = agent.get("backend") or host_backend
+            agent["sandbox"] = agent.get("sandbox") or "read-only"
+            agent["approval"] = agent.get("approval") or "never"
+            agent.setdefault("created_by", "supervision")
+            agent.setdefault("created_reason", "task supervision host agent")
+        supervision.update(
+            {
+                "mode": "assisted",
+                "host_backend": agent.get("backend") or host_backend,
+                "host_agent_id": agent.get("id") or "host",
+                "real_agent_enabled": True,
+            }
+        )
+        task["supervision"] = normalize_task_supervision(supervision)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    ensure_session(
+        root,
+        run_id,
+        task_id,
+        agent["id"],
+        agent.get("backend", host_backend),
+        model=agent.get("model"),
+        workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
+    )
+    if created:
+        append_event(
+            root,
+            run_id,
+            "agent_created",
+            {
+                "task_id": task_id,
+                "agent_id": agent["id"],
+                "role": agent.get("role"),
+                "backend": agent.get("backend"),
+                "model": agent.get("model"),
+                "sandbox": agent.get("sandbox"),
+                "approval": agent.get("approval"),
+                "proxy_enabled": agent.get("proxy_enabled"),
+                "created_by": agent.get("created_by"),
+                "created_reason": agent.get("created_reason"),
+            },
+        )
+    append_event(
+        root,
+        run_id,
+        "task_supervision_host_ready",
+        {
+            "task_id": task_id,
+            "host_agent_id": agent.get("id"),
+            "host_backend": agent.get("backend"),
+            "created": created,
+        },
+    )
+    return {"task": task, "agent": agent, "created": created}
 
 
 def add_agent(
@@ -1255,6 +1402,66 @@ def update_task_proxy_config(
             "http_proxy_configured": bool(task.get("preferred_http_proxy")),
             "https_proxy_configured": bool(task.get("preferred_https_proxy")),
             "no_proxy_configured": bool(task.get("preferred_no_proxy")),
+        },
+    )
+    return task
+
+
+def update_task_supervision_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    mode: object = UNSET,
+    host_backend: object = UNSET,
+    real_agent_enabled: object = UNSET,
+    max_rounds: object = UNSET,
+) -> dict:
+    should_ensure_host = False
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        supervision = normalize_task_supervision(task.get("supervision"))
+        if mode is not UNSET:
+            supervision["mode"] = str(mode or "").strip().lower()
+        if host_backend is not UNSET:
+            supervision["host_backend"] = str(host_backend or "").strip().lower()
+        if real_agent_enabled is not UNSET:
+            supervision["real_agent_enabled"] = bool(real_agent_enabled)
+        elif supervision.get("mode") == "assisted" and supervision.get("host_backend") != "stub":
+            supervision["real_agent_enabled"] = True
+        if max_rounds is not UNSET:
+            supervision["max_rounds"] = max_rounds
+        task["supervision"] = normalize_task_supervision(supervision)
+        should_ensure_host = bool(
+            task["supervision"].get("mode") == "assisted"
+            and task["supervision"].get("real_agent_enabled")
+            and task["supervision"].get("host_backend") != "stub"
+            and not task["supervision"].get("host_agent_id")
+        )
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    if should_ensure_host:
+        task = ensure_task_supervision_host_agent(
+            root,
+            run_id,
+            task_id,
+            backend=str(task["supervision"].get("host_backend") or "codex"),
+        )["task"]
+    append_event(
+        root,
+        run_id,
+        "task_supervision_config_updated",
+        {
+            "task_id": task_id,
+            "mode": task["supervision"].get("mode"),
+            "host_backend": task["supervision"].get("host_backend"),
+            "host_agent_id": task["supervision"].get("host_agent_id"),
+            "real_agent_enabled": task["supervision"].get("real_agent_enabled"),
+            "max_rounds": task["supervision"].get("max_rounds"),
         },
     )
     return task
@@ -1924,6 +2131,7 @@ def status_snapshot(root: Path, run_id: str) -> dict:
                 "preferred_no_proxy": task.get("preferred_no_proxy"),
                 "delegation_policy": task.get("delegation_policy", "auto"),
                 "max_sub_agents": task.get("max_sub_agents", 3),
+                "supervision": normalize_task_supervision(task.get("supervision")),
                 "status": task["status"],
                 "exit_code": task["exit_code"],
                 "started_at": task["started_at"],

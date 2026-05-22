@@ -22,6 +22,7 @@ let runsError = "";
 let workspaceData = [];
 let sessionMenuOpen = false;
 let runActionInFlight = false;
+let webRestartInFlight = false;
 let runArchiveMessage = "";
 let runArchiveError = false;
 let offset = -1;
@@ -39,6 +40,7 @@ let backendStatusData = null;
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
 let taskProxyEditingUntil = 0;
+let taskSupervisionEditingUntil = 0;
 let eventTailInitialized = false;
 let pendingMessageId = 0;
 let pendingSendInFlight = false;
@@ -86,6 +88,11 @@ const conversationFilterOptions = [
   { key: "commands", label: "Commands" },
   { key: "usage", label: "Usage" }
 ];
+const supervisionEventTypes = new Set([
+  "main_reported_to_host",
+  "host_decision",
+  "main_applied_decision"
+]);
 
 const runIdEl = document.getElementById("run-id");
 const runStateEl = document.getElementById("run-state");
@@ -103,6 +110,8 @@ const runImportEl = document.getElementById("run-import");
 const runExportLogsEl = document.getElementById("run-export-logs");
 const runImportFileEl = document.getElementById("run-import-file");
 const runArchiveStateEl = document.getElementById("run-archive-state");
+const webRestartEl = document.getElementById("web-restart");
+const webRestartStateEl = document.getElementById("web-restart-state");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
 const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
@@ -159,6 +168,12 @@ const selectedTaskHttpProxyEl = document.getElementById("selected-task-http-prox
 const selectedTaskHttpsProxyEl = document.getElementById("selected-task-https-proxy");
 const selectedTaskNoProxyEl = document.getElementById("selected-task-no-proxy");
 const taskProxyStateEl = document.getElementById("task-proxy-state");
+const taskSupervisionEditorEl = document.getElementById("task-supervision-editor");
+const taskSupervisionFormEl = document.getElementById("task-supervision-form");
+const selectedTaskSupervisionModeEl = document.getElementById("selected-task-supervision-mode");
+const selectedTaskSupervisionMaxRoundsFieldEl = document.getElementById("selected-task-supervision-max-rounds-field");
+const selectedTaskSupervisionMaxRoundsEl = document.getElementById("selected-task-supervision-max-rounds");
+const taskSupervisionStateEl = document.getElementById("task-supervision-state");
 const taskCreateConfirmDialogEl = document.getElementById("task-create-confirm");
 const taskCreateConfirmDetailsEl = document.getElementById("task-create-confirm-details");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
@@ -716,6 +731,7 @@ function renderSessionMenu() {
   if (runImportEl) runImportEl.disabled = runActionInFlight;
   if (runExportLogsEl) runExportLogsEl.disabled = runActionInFlight || !hasRun;
   if (runImportFileEl) runImportFileEl.disabled = runActionInFlight;
+  if (webRestartEl) webRestartEl.disabled = webRestartInFlight || !hasRun;
   renderRunArchiveState();
   renderSessionSummary();
 }
@@ -886,6 +902,58 @@ async function importRunArchive(file) {
     runActionInFlight = false;
     renderSessionMenu();
   }
+}
+
+function setWebRestartState(message, isError = false) {
+  if (!webRestartStateEl) return;
+  const text = String(message || "");
+  webRestartStateEl.textContent = text;
+  webRestartStateEl.title = text;
+  webRestartStateEl.classList.toggle("error", Boolean(isError));
+}
+
+async function restartWebService() {
+  if (webRestartInFlight) return;
+  if (!currentRunId) {
+    alert("请先选择 Run");
+    return;
+  }
+  webRestartInFlight = true;
+  setWebRestartState("正在安排重启...");
+  renderSessionMenu();
+  try {
+    const payload = await fetchJson(apiUrl("/api/web/restart"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host: "0.0.0.0", port: 8766 })
+    }, "重启 Web 失败");
+    setWebRestartState(`已安排 ${payload.host || "0.0.0.0"}:${payload.port || 8766}，等待恢复...`);
+    waitForWebRestartAndReload();
+  } catch (err) {
+    webRestartInFlight = false;
+    setWebRestartState(err?.message || String(err || "重启 Web 失败"), true);
+    renderSessionMenu();
+  }
+}
+
+async function waitForWebRestartAndReload() {
+  await sleep(2500);
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetchWithTimeout(apiUrl("/api/status"), { cache: "no-store" }, 2000);
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (_err) {
+      // The socket is expected to drop while the web service restarts.
+    }
+    await sleep(1000);
+  }
+  webRestartInFlight = false;
+  setWebRestartState("重启已安排；如果页面未更新，请手动刷新。");
+  renderSessionMenu();
 }
 
 function closeTaskCreateDialog() {
@@ -1116,6 +1184,7 @@ function initSessionControl() {
   sessionRefreshEl?.addEventListener("click", async () => loadRuns(true));
   runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
   runExportEl?.addEventListener("click", exportCurrentRun);
+  webRestartEl?.addEventListener("click", restartWebService);
   runImportEl?.addEventListener("click", () => {
     if (runActionInFlight) return;
     runImportFileEl?.click();
@@ -1422,6 +1491,34 @@ function taskProxySummary(task) {
   return parts.length ? `${task.preferred_proxy_enabled ? "default on" : "default off"} · ${parts.join(" · ")}` : "not configured";
 }
 
+function taskSupervisionPolicy(task) {
+  const policy = task?.supervision && typeof task.supervision === "object" ? task.supervision : {};
+  return {
+    mode: policy.mode === "assisted" ? "assisted" : "manual",
+    host_backend: policy.host_backend || "stub",
+    real_agent_enabled: Boolean(policy.real_agent_enabled),
+    max_rounds: Number(policy.max_rounds || 5)
+  };
+}
+
+function taskSupervisionModeValue(policy) {
+  if (policy.mode !== "assisted") return "manual";
+  if (policy.host_backend === "claude" && policy.real_agent_enabled) return "assisted_claude";
+  return "assisted_stub";
+}
+
+function taskSupervisionBadge(task) {
+  const policy = taskSupervisionPolicy(task);
+  const label = policy.mode === "assisted" && policy.host_backend === "claude" ? "claude host" : (policy.mode === "assisted" ? "assisted stub" : "manual");
+  return `<span class="status supervision-${escapeHtml(policy.mode)}">${escapeHtml(label)}</span>`;
+}
+
+function taskSupervisionSummary(task) {
+  const policy = taskSupervisionPolicy(task);
+  if (policy.mode === "manual") return "manual";
+  return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds}`;
+}
+
 function setCreateProxyDefaultsFromInputs() {
   const configured = Boolean(taskHttpProxyEl?.value.trim() || taskHttpsProxyEl?.value.trim());
   if (configured && taskProxyEnabledEl && !taskProxyEnabledEl.checked) taskProxyEnabledEl.checked = true;
@@ -1448,6 +1545,33 @@ function renderTaskProxyEditor() {
   if (selectedTaskHttpsProxyEl) selectedTaskHttpsProxyEl.value = task.preferred_https_proxy || "";
   if (selectedTaskNoProxyEl) selectedTaskNoProxyEl.value = task.preferred_no_proxy || defaultNoProxy;
   if (taskProxyStateEl) taskProxyStateEl.textContent = taskProxySummary(task);
+}
+
+function renderTaskSupervisionEditor() {
+  if (!taskSupervisionEditorEl || !taskSupervisionFormEl) return;
+  const task = selectedTask();
+  const disabled = !task;
+  taskSupervisionFormEl.querySelectorAll("input, select, button").forEach(item => {
+    item.disabled = disabled;
+  });
+  if (!task) {
+    if (selectedTaskSupervisionModeEl) selectedTaskSupervisionModeEl.value = "manual";
+    if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = "5";
+    if (taskSupervisionStateEl) taskSupervisionStateEl.textContent = "Select a task to edit supervision.";
+    return;
+  }
+  const policy = taskSupervisionPolicy(task);
+  if (selectedTaskSupervisionModeEl) selectedTaskSupervisionModeEl.value = taskSupervisionModeValue(policy);
+  if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = String(policy.max_rounds || 5);
+  syncTaskSupervisionModeFields();
+  if (taskSupervisionStateEl) taskSupervisionStateEl.textContent = taskSupervisionSummary(task);
+}
+
+function syncTaskSupervisionModeFields() {
+  if (!taskSupervisionFormEl) return;
+  const manual = selectedTaskSupervisionModeEl?.value === "manual";
+  selectedTaskSupervisionMaxRoundsFieldEl?.classList.toggle("hidden", manual);
+  if (selectedTaskSupervisionMaxRoundsFieldEl) selectedTaskSupervisionMaxRoundsFieldEl.hidden = manual;
 }
 
 function visibleTasks() {
@@ -1538,11 +1662,23 @@ function markTaskProxyEditing(durationMs = 10000) {
   taskProxyEditingUntil = Date.now() + durationMs;
 }
 
+function markTaskSupervisionEditing(durationMs = 10000) {
+  taskSupervisionEditingUntil = Date.now() + durationMs;
+}
+
 function isTaskProxyEditing() {
   const active = document.activeElement;
   return (
     Date.now() < taskProxyEditingUntil ||
     (active instanceof Element && Boolean(taskProxyFormEl?.contains(active)))
+  );
+}
+
+function isTaskSupervisionEditing() {
+  const active = document.activeElement;
+  return (
+    Date.now() < taskSupervisionEditingUntil ||
+    (active instanceof Element && Boolean(taskSupervisionFormEl?.contains(active)))
   );
 }
 
@@ -1585,6 +1721,10 @@ const timelineEventTypes = new Set([
   "task_final_requested",
   "task_round_summary_requested",
   "task_proxy_config_updated",
+  "task_supervision_config_updated",
+  "main_reported_to_host",
+  "host_decision",
+  "main_applied_decision",
   "task_reopened",
   "task_completed",
   "task_waiting_for_subagents",
@@ -1638,7 +1778,12 @@ function eventAgentRefs(event) {
     addAgentRef(refs, data.sender);
     if (["role", "from_agent", "to_agent", "sender", "target"].some(key => String(data[key] || "").toLowerCase() === "aha")) refs.add("main");
   }
-  if (!refs.size && (event.type.startsWith("agent_") || event.type.startsWith("task_") || event.type === "workspace_missing")) {
+  if (!refs.size && (
+    event.type.startsWith("agent_") ||
+    event.type.startsWith("task_") ||
+    supervisionEventTypes.has(event.type) ||
+    event.type === "workspace_missing"
+  )) {
     refs.add("main");
   }
   return refs;
@@ -1709,30 +1854,35 @@ function conversationBackendSession(taskId, target = backendTarget()) {
 }
 
 function dedupedConversationEvents(taskId) {
-  let latestAgentMessage = "";
-  return conversationSourceEvents(taskId).filter(event => {
+  const events = conversationSourceEvents(taskId);
+  const consumedAgentMessages = new Set();
+  events.forEach((event, index) => {
     const data = eventData(event);
     if (event.type === "agent_message") {
       const text = String(data.text || "").trim();
-      if (isAhaActionEnvelopeText(text)) return false;
-      latestAgentMessage = text;
-      return true;
+      const agent = String(data.target || "main").trim();
+      if (!text || isAhaActionEnvelopeText(text)) return;
+      const consumed = events.slice(index + 1).some(candidate => {
+        if (candidate.type !== "message") return false;
+        const candidateData = eventData(candidate);
+        const message = String(candidateData.message || "").trim();
+        const sender = String(candidateData.display_sender || candidateData.sender || candidateData.from_agent || "").trim();
+        return message === text && sender === agent;
+      });
+      if (consumed) consumedAgentMessages.add(index);
     }
-    if (
-      event.type === "message" &&
-      data.sender === "main" &&
-      (data.to_agent || data.target) === "browser" &&
-      latestAgentMessage &&
-      String(data.message || "").trim() === latestAgentMessage
-    ) {
-      return false;
+  });
+  return events.filter((event, index) => {
+    if (event.type === "agent_message") {
+      const text = String(eventData(event).text || "").trim();
+      if (isAhaActionEnvelopeText(text)) return false;
+      if (consumedAgentMessages.has(index)) return false;
     }
     return true;
   });
 }
 
 function conversationEventCategory(event) {
-  const data = eventData(event);
   if (event.type === "agent_message") return "chat";
   if (event.type === "agent_usage" || event.type === "agent_prompt_metrics") return "usage";
   if (event.type === "agent_command_started" || event.type === "agent_command_finished") return "commands";
@@ -2728,6 +2878,9 @@ function applyStatusData(options = {}) {
   if (options.forceTaskProxy || !isTaskProxyEditing()) {
     renderTaskProxyEditor();
   }
+  if (options.forceTaskSupervision || !isTaskSupervisionEditing()) {
+    renderTaskSupervisionEditor();
+  }
   if (options.forceAgents || !isAgentsPanelEditing()) {
     renderAgents();
   } else {
@@ -3306,17 +3459,17 @@ function renderTaskList() {
     item.innerHTML = `
       <div class="task-row">
         <strong>${escapeHtml(task.id)}</strong>
-        <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}</span>
+        <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}${taskSupervisionBadge(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
+      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
     `;
-    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nworkspace=${task.workspace_path || "-"}`;
+    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nsupervision=${taskSupervisionSummary(task)}\nworkspace=${task.workspace_path || "-"}`;
     item.addEventListener("click", async event => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("button")) return;
@@ -3329,6 +3482,7 @@ function renderTaskList() {
 async function selectTask(taskId) {
   selectedTaskId = taskId;
   taskProxyEditingUntil = 0;
+  taskSupervisionEditingUntil = 0;
   conversationAutoFollow = true;
   if (activeTab === "logs") logState(taskId).autoFollow = true;
   closeMobileSheets();
@@ -3336,6 +3490,7 @@ async function selectTask(taskId) {
   renderTaskList();
   renderSelectedHeader();
   renderTaskProxyEditor();
+  renderTaskSupervisionEditor();
   renderAgents();
   await loadBackendStatus();
   await ensureActiveTabData();
@@ -3388,6 +3543,26 @@ async function saveTaskProxyConfig() {
   await loadStatus({ forceAgents: true, forceTaskProxy: true });
 }
 
+async function saveTaskSupervisionConfig() {
+  const task = selectedTask();
+  if (!task) return;
+  const selectedMode = selectedTaskSupervisionModeEl?.value || "manual";
+  const assisted = selectedMode !== "manual";
+  const claudeHost = selectedMode === "assisted_claude";
+  await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/supervision`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(runScopedPayload({
+      mode: assisted ? "assisted" : "manual",
+      host_backend: claudeHost ? "claude" : "stub",
+      real_agent_enabled: claudeHost,
+      max_rounds: Number(selectedTaskSupervisionMaxRoundsEl?.value || "5")
+    }))
+  }, "Failed to update task supervision");
+  taskSupervisionEditingUntil = 0;
+  await loadStatus({ forceTaskSupervision: true });
+}
+
 function renderSelectedHeader() {
   const task = selectedTask();
   if (!task) {
@@ -3406,8 +3581,8 @@ function renderSelectedHeader() {
   renderMobileTaskSummary(task);
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
-  selectedTaskMetaEl.textContent = "";
-  selectedTaskMetaEl.hidden = true;
+  selectedTaskMetaEl.textContent = `supervision ${taskSupervisionSummary(task)}`;
+  selectedTaskMetaEl.hidden = false;
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
   selectedStatusEl.textContent = displayStatus;
   selectedStatusEl.className = `status ${displayStatus}`;
@@ -3447,6 +3622,8 @@ function renderAgents() {
     return;
   }
   for (const agent of task.agents || []) {
+    const isHostAgent = agent.role === "host" || agent.role === "supervision-host";
+    const roleLabel = isHostAgent ? "host / user proxy" : agent.role;
     const sandbox = agent.sandbox || task.preferred_sandbox || "workspace-write";
     const approval = agent.approval || task.preferred_approval || "never";
     const proxyEnabled = Boolean(agent.proxy_enabled);
@@ -3463,12 +3640,12 @@ function renderAgents() {
     ].filter(Boolean).join(" | ");
     const opt = document.createElement("option");
     opt.value = agent.id;
-    opt.textContent = `${agent.id} (${agent.backend})`;
+    opt.textContent = isHostAgent ? `${agent.id} (host/${agent.backend})` : `${agent.id} (${agent.backend})`;
     agentTargetEl.appendChild(opt);
     const card = document.createElement("div");
-    card.className = `agent-card ${agent.id === previous ? "active" : ""}`;
+    card.className = `agent-card ${isHostAgent ? "host-agent" : ""} ${agent.id === previous ? "active" : ""}`;
     card.title = [
-      `${agent.id} ${agent.role}`,
+      `${agent.id} ${roleLabel}`,
       `backend=${agent.backend}`,
       `model=${agent.model || "default"}`,
       `sandbox=${sandbox}`,
@@ -3486,7 +3663,7 @@ function renderAgents() {
         <strong>${escapeHtml(agent.id)}</strong>
         <span class="agent-process ${escapeHtml(processStatus)}" title="backend process status">${escapeHtml(agentBackendProcessLabel(agent))}</span>
       </div>
-      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(agent.role)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
+      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(roleLabel)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
       <div class="meta truncate">proxy=${escapeHtml(proxyEnabled ? "on" : "off")} | task proxy=${escapeHtml(taskProxySummary(task))}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
@@ -3735,9 +3912,11 @@ function renderConversation(taskId) {
 function renderTimelineEvent(event) {
   const data = eventData(event);
   if (event.type === "message") {
-    const cls = data.sender === "browser" ? "from-browser" : data.sender === "main" ? "from-main" : data.sender === "system" ? "from-system" : "";
+    const displaySender = data.display_sender || data.sender || "-";
+    const displayTarget = data.display_target || data.to_agent || data.role || data.target || "-";
+    const cls = data.display_sender ? "from-supervision" : data.sender === "browser" ? "from-browser" : data.sender === "main" ? "from-main" : data.sender === "system" ? "from-system" : "";
     return renderTimelineCard(
-      `${data.sender || "-"} -> ${data.to_agent || data.role || data.target || "-"}`,
+      `${displaySender} -> ${displayTarget}`,
       data.message || "",
       eventTimeLabel(event),
       cls,
@@ -3792,6 +3971,10 @@ function renderTimelineEvent(event) {
   if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
   if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
   if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy updated", `default=${data.proxy_enabled ? "on" : "off"} http=${data.http_proxy_configured ? "set" : "-"} https=${data.https_proxy_configured ? "set" : "-"} no_proxy=${data.no_proxy_configured ? "set" : "-"}`, "session", ts);
+  if (event.type === "task_supervision_config_updated") return renderTimelineStatus("task supervision updated", `${data.mode || "-"} via ${data.host_backend || "stub"} max_rounds=${data.max_rounds || "-"}`, "session", ts);
+  if (event.type === "main_reported_to_host") return renderTimelineStatus("main reported to host", `${data.host_backend || "stub"} ${data.channel || "main_only"} reply=${data.reply_chars || 0} chars`, "session", ts);
+  if (event.type === "host_decision") return renderTimelineStatus("host decision", data.decision || "-", "session", ts);
+  if (event.type === "main_applied_decision") return renderTimelineStatus("main applied host decision", `${data.decision || "-"} effect=${data.effect || "noop"}`, data.applied ? "running" : "session", ts);
   if (event.type === "agent_thread") return renderTimelineStatus(`${data.source || "backend"} session`, data.thread_id || "-", "session", ts);
   if (event.type === "agent_finished") return renderTimelineStatus("agent finished", `exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", ts);
   if (event.type === "task_dispatched") return renderTimelineStatus("task dispatched", `target=${data.target || "-"}`, "session", ts);
@@ -4378,6 +4561,21 @@ taskProxyFormEl?.addEventListener("submit", async event => {
     alert(err?.message || String(err));
   }
 });
+taskSupervisionFormEl?.addEventListener("pointerdown", () => markTaskSupervisionEditing());
+taskSupervisionFormEl?.addEventListener("focusin", () => markTaskSupervisionEditing());
+taskSupervisionFormEl?.addEventListener("input", () => markTaskSupervisionEditing());
+taskSupervisionFormEl?.addEventListener("change", () => {
+  markTaskSupervisionEditing();
+  syncTaskSupervisionModeFields();
+});
+taskSupervisionFormEl?.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await saveTaskSupervisionConfig();
+  } catch (err) {
+    alert(err?.message || String(err));
+  }
+});
 [selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl].forEach(input => {
   input?.addEventListener("input", () => {
     const configured = Boolean(selectedTaskHttpProxyEl?.value.trim() || selectedTaskHttpsProxyEl?.value.trim());
@@ -4404,6 +4602,7 @@ showHiddenEl.addEventListener("change", () => {
   renderTaskList();
   renderSelectedHeader();
   renderTaskProxyEditor();
+  renderTaskSupervisionEditor();
   renderAgents();
   renderConversationFilters();
   renderPanel();

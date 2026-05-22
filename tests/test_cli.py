@@ -20,13 +20,14 @@ import urllib.request
 from unittest import mock
 
 from aha_cli.backends.claude import build_claude_exec_command, claude_permission_mode, handle_claude_event, run_claude_exec
-from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message
+from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message, run_codex_exec
 from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
 from aha_cli.services.prompt_templates import render_prompt_template
+from aha_cli.services.messages import format_event
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.orchestrator import (
     action_response_text,
@@ -61,6 +62,7 @@ from aha_cli.store.filesystem import (
     task_final_snapshot,
     task_log_page,
     update_task_proxy_config,
+    update_task_supervision_config,
     update_agent_config,
     update_agent_runtime,
     write_task_result,
@@ -264,6 +266,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status_from_agent_result(0, "NAS mp4 写入失败，导致状态抖动"), "completed")
         self.assertEqual(status_from_agent_result(0, "不是 NAS 参数写入失败，配置已经生效"), "completed")
         self.assertEqual(status_from_agent_result(0, '`write_task_result()` 写入 `task["output_file"]`'), "completed")
+        self.assertEqual(
+            status_from_agent_result(
+                0,
+                '{"actions":[{"type":"record_task_update","summary":"host uses read-only sandbox"}],"response":"done"}',
+            ),
+            "completed",
+        )
 
     def test_running_status_keeps_original_task_start_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -594,6 +603,42 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("super-secret-user-text", metrics_json)
         self.assertNotIn("old-event", metrics_json)
 
+    def test_chat_prompt_filters_private_host_notes_from_main_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host note isolation", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "让 main 下一轮只回复数字2",
+                    sender="browser",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="browser",
+                    to_agent="host",
+                )
+                main_message = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "请直接回复数字1",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                )
+
+                prompt = chat_prompt(root, run_id, "main", main_message, "")
+
+        self.assertIn("请直接回复数字1", prompt)
+        self.assertNotIn("让 main 下一轮只回复数字2", prompt)
+
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(
             codex_bin="codex",
@@ -669,6 +714,30 @@ class CliTests(unittest.TestCase):
         self.assertFalse(is_context_overflow_message("authentication failed"))
         self.assertEqual([row["type"] for row in rows], ["agent_error", "agent_context_overflow"])
         self.assertEqual(rows[1]["data"]["reason"], "context_window")
+
+    def test_codex_exec_reports_missing_cli_as_agent_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            events = Path(tmp) / "events.jsonl"
+            with mock.patch("aha_cli.backends.codex.subprocess.Popen", side_effect=FileNotFoundError(2, "No such file or directory", "codex")):
+                code, reply, _ = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="codex-chat",
+                    target="main",
+                )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+            output_text = output.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 127)
+        self.assertIn("Failed to start Codex backend command", reply)
+        self.assertEqual(output_text, reply)
+        self.assertEqual(rows[-1]["type"], "agent_error")
+        self.assertEqual(rows[-1]["data"]["reason"], "backend_start_failed")
 
     def test_claude_permission_mode_maps_sandbox(self) -> None:
         self.assertEqual(claude_permission_mode("research", "read-only"), "plan")
@@ -1027,6 +1096,389 @@ class CliTests(unittest.TestCase):
                 self.assertIn("message task=task-001 main -> browser: 真实回复", watch_output)
                 self.assertIn("task_status_changed", watch_output)
                 self.assertNotIn("task_result_written", watch_output)
+
+    def test_codex_chat_records_supervision_stub_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Supervision stub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task_status = status_snapshot(root, run_id)["tasks"][0]["status"]
+
+        self.assertEqual(code, 0)
+        self.assertIn("main -> browser: 托管回复", output)
+        self.assertIn("main_reported_to_host", [row["type"] for row in rows])
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "ask_user")
+        self.assertNotIn("allowed", host_decisions[-1]["data"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "await_user")
+        self.assertEqual(task_status, "awaiting_user")
+
+    def test_codex_chat_records_claude_supervision_host_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude supervision host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "后续如果要继续，优先用列表格式。",
+                    sender="browser",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="browser",
+                    to_agent="host",
+                )
+                append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
+                host_reply = '{"decision":"continue","reason":"needs priority","response":"先按阻塞项排优先级。","actions":[]}'
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                with (
+                    mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)) as host_run,
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    host_code, _host_output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "host",
+                        "--sender",
+                        "host",
+                        "--sandbox",
+                        "read-only",
+                        "--task-id",
+                        "task-001",
+                        "--once",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20)
+                host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20)
+                host_inbox_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host"), 0)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(host_code, 0)
+        self.assertIn("main -> browser: 托管回复", output)
+        start_host.assert_called_once()
+        self.assertEqual(start_host.call_args.args[2], "host")
+        self.assertEqual(host_run.call_args.kwargs["permission_mode"], "plan")
+        self.assertIn("后续如果要继续，优先用列表格式。", host_run.call_args.args[0])
+        self.assertIn("托管回复", host_run.call_args.args[0])
+        host = next(agent for agent in task["agents"] if agent["role"] == "host")
+        self.assertEqual(host["backend"], "claude")
+        self.assertEqual(host["sandbox"], "read-only")
+        start_main.assert_called_once()
+        self.assertTrue(any(row.get("message") == "托管回复" for row in host_inbox_messages))
+        display_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message" and row["data"].get("display_sender")
+        ]
+        self.assertEqual(
+            [(row["display_sender"], row["display_target"], row["message"]) for row in display_messages],
+            [("main", "host", "托管回复"), ("host", "main", "先按阻塞项排优先级。")],
+        )
+        self.assertFalse(any((row["data"].get("conversation") == "supervision") for row in rows if row["type"] == "message"))
+        self.assertFalse(any("AHA 启动托管 host" in row["data"].get("message", "") for row in rows if row["type"] == "message"))
+        self.assertFalse(any("host 正在判断" in row["data"].get("message", "") for row in rows if row["type"] == "message"))
+        main_host_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("sender") == "main"
+            and row["data"].get("target") == "host"
+            and row["data"].get("message") == "托管回复"
+        ]
+        self.assertEqual(len(main_host_messages), 1)
+        self.assertEqual(main_host_messages[0]["from_agent"], "main")
+        self.assertEqual(main_host_messages[0]["to_agent"], "host")
+        self.assertEqual(main_host_messages[0]["agent_id"], "host")
+        routed_user_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("sender") == "browser"
+            and row["data"].get("target") == "main"
+            and row["data"].get("message") == "先按阻塞项排优先级。"
+        ]
+        self.assertEqual(len(routed_user_messages), 1)
+        self.assertEqual(routed_user_messages[0]["from_agent"], "browser")
+        self.assertEqual(routed_user_messages[0]["to_agent"], "main")
+        self.assertEqual(routed_user_messages[0]["display_sender"], "host")
+        self.assertEqual(routed_user_messages[0]["display_target"], "main")
+        self.assertEqual(routed_user_messages[0]["agent_id"], "host")
+        self.assertIn("browser -> main", format_event({"type": "message", "ts": "now", "data": routed_user_messages[0]}))
+        self.assertTrue(any(event.get("data", {}).get("message") == "先按阻塞项排优先级。" for event in main_page["events"]))
+        self.assertTrue(
+            any(
+                (event.get("data") or {}).get("display_sender") == "main"
+                and (event.get("data") or {}).get("display_target") == "host"
+                for event in main_page["events"]
+            )
+        )
+        self.assertTrue(any((event.get("data") or {}).get("display_sender") == "main" and (event.get("data") or {}).get("display_target") == "host" for event in host_page["events"]))
+        self.assertTrue(any((event.get("data") or {}).get("display_sender") == "host" and (event.get("data") or {}).get("display_target") == "main" for event in host_page["events"]))
+        self.assertTrue(any(row["type"] == "main_reported_to_host" for row in rows))
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["host_backend"], "claude")
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "continue")
+        self.assertEqual(host_decisions[-1]["data"]["executed_action_count"], 0)
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_main"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "routed_to_main")
+        self.assertTrue(applied[-1]["data"]["routed_to_main"])
+        self.assertEqual(task["status"], "running")
+
+    def test_codex_chat_routes_claude_supervision_ask_user_to_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude supervision asks user", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
+                host_reply = '{"decision":"ask_user","reason":"needs real user","response":"你要继续改代码吗？","actions":[]}'
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                with (
+                    mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    host_code, _host_output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "host",
+                        "--sender",
+                        "host",
+                        "--sandbox",
+                        "read-only",
+                        "--task-id",
+                        "task-001",
+                        "--once",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20)
+                host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(host_code, 0)
+        start_host.assert_called_once()
+        start_main.assert_not_called()
+        main_host_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("sender") == "main"
+            and row["data"].get("target") == "host"
+            and row["data"].get("message") == "托管回复"
+        ]
+        self.assertEqual(len(main_host_messages), 1)
+        self.assertEqual(main_host_messages[0]["display_sender"], "main")
+        self.assertEqual(main_host_messages[0]["display_target"], "host")
+        host_browser_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("sender") == "host"
+            and row["data"].get("target") == "browser"
+            and row["data"].get("message") == "你要继续改代码吗？"
+        ]
+        self.assertEqual(len(host_browser_messages), 1)
+        self.assertEqual(host_browser_messages[0]["display_sender"], "host")
+        self.assertEqual(host_browser_messages[0]["display_target"], "browser")
+        self.assertEqual(host_browser_messages[0]["agent_id"], "main")
+        self.assertTrue(any(event.get("data", {}).get("message") == "你要继续改代码吗？" for event in main_page["events"]))
+        self.assertTrue(any(event.get("data", {}).get("message") == "你要继续改代码吗？" for event in host_page["events"]))
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "ask_user")
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_browser"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "await_user")
+        self.assertTrue(applied[-1]["data"]["routed_to_browser"])
+        self.assertEqual(task["status"], "awaiting_user")
+
+    def test_claude_supervision_max_rounds_are_per_user_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude supervision max rounds", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=1,
+                )
+                for index in range(3):
+                    append_event(
+                        root,
+                        run_id,
+                        "host_decision",
+                        {
+                            "task_id": "task-001",
+                            "host_agent_id": "host",
+                            "decision": "continue",
+                            "host_round": index + 1,
+                        },
+                    )
+                append_message(root, run_id, "main", "新一轮测试", sender="browser", task_id="task-001", role="main")
+                host_reply = '{"decision":"continue","reason":"new turn","response":"继续处理这一轮。","actions":[]}'
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "main 本轮回复", None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}),
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                with (
+                    mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    host_code, _host_output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "host",
+                        "--sender",
+                        "host",
+                        "--sandbox",
+                        "read-only",
+                        "--task-id",
+                        "task-001",
+                        "--once",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(host_code, 0)
+        start_main.assert_called_once()
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["host_round"], 1)
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_main"])
+
+    def test_codex_chat_routes_claude_supervision_stop_to_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude supervision stops", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
+                host_reply = '{"decision":"stop","reason":"done","response":"没问题，这轮可以结束。","actions":[]}'
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                with (
+                    mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    host_code, _host_output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "host",
+                        "--sender",
+                        "host",
+                        "--sandbox",
+                        "read-only",
+                        "--task-id",
+                        "task-001",
+                        "--once",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(host_code, 0)
+        start_host.assert_called_once()
+        start_main.assert_not_called()
+        host_browser_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("sender") == "host"
+            and row["data"].get("target") == "browser"
+            and row["data"].get("message") == "没问题，这轮可以结束。"
+        ]
+        self.assertEqual(len(host_browser_messages), 1)
+        self.assertEqual(host_browser_messages[0]["display_sender"], "host")
+        self.assertEqual(host_browser_messages[0]["display_target"], "browser")
+        host_main_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("display_sender") == "host"
+            and row["data"].get("display_target") == "main"
+        ]
+        self.assertEqual(host_main_messages, [])
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "stop")
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_browser"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "stopped")
+        self.assertTrue(applied[-1]["data"]["routed_to_browser"])
+        self.assertEqual(task["status"], "awaiting_user")
 
     def test_codex_chat_records_prompt_metrics_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2357,6 +2809,78 @@ class CliTests(unittest.TestCase):
         self.assertFalse(older["has_more"])
         self.assertEqual(older["events"][0]["data"]["message"], "one")
 
+    def test_conversation_events_page_includes_supervision_events_for_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(root, run_id, "main_reported_to_host", {"task_id": "task-001", "host_backend": "stub"})
+            append_event(root, run_id, "host_decision", {"task_id": "task-001", "decision": "ask_user"})
+            append_event(root, run_id, "main_applied_decision", {"task_id": "task-001", "decision": "ask_user", "applied": True})
+            append_event(root, run_id, "host_decision", {"task_id": "task-002", "decision": "stop"})
+
+            main_page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
+            sub_page = conversation_events_page(root, run_id, "task-001", "sub-001", limit=10)
+
+        self.assertEqual(
+            [event["type"] for event in main_page["events"]],
+            ["main_reported_to_host", "host_decision", "main_applied_decision"],
+        )
+        self.assertEqual(sub_page["events"], [])
+
+    def test_conversation_events_page_shares_host_forwarding_but_hides_aha_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "host",
+                    "from_agent": "main",
+                    "to_agent": "host",
+                    "agent_id": "host",
+                    "display_sender": "main",
+                    "display_target": "host",
+                    "message": "main reply",
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "AHA",
+                    "target": "host",
+                    "display_sender": "host",
+                    "display_target": "host",
+                    "message": "host 正在判断本轮下一步。",
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "browser",
+                    "target": "main",
+                    "agent_id": "host",
+                    "display_sender": "host",
+                    "display_target": "main",
+                    "message": "next step",
+                },
+            )
+
+            main_page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
+            host_page = conversation_events_page(root, run_id, "task-001", "host", limit=10)
+
+        self.assertEqual([event["data"]["message"] for event in main_page["events"]], ["main reply", "next step"])
+        self.assertEqual([event["data"]["message"] for event in host_page["events"]], ["main reply", "next step"])
+
     def test_conversation_events_api_hides_action_envelope_agent_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2397,6 +2921,44 @@ class CliTests(unittest.TestCase):
         self.assertEqual(timeline_texts, [user_facing_response])
         self.assertNotIn(action_envelope, timeline_texts)
         self.assertFalse(any('"actions"' in text and '"response"' in text for text in timeline_texts))
+
+    def test_web_restart_api_schedules_source_ui_on_8766(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Restart web", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="scheduled\n", stderr="")
+                with mock.patch("aha_cli.web.server.subprocess.run", return_value=completed) as run_command:
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/web/restart",
+                            method="POST",
+                            payload={"host": "0.0.0.0", "port": 8766},
+                        )
+                    )
+                body = json_response_body(response)
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                events = [row["type"] for row in rows]
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["host"], "0.0.0.0")
+        self.assertEqual(body["port"], 8766)
+        self.assertEqual(body["service_unit"], "aha-ui-source-8766.service")
+        command = run_command.call_args.args[0]
+        self.assertEqual(command[0], "systemd-run")
+        self.assertIn("--on-active=1s", command)
+        command_text = " ".join(command)
+        self.assertIn(str(root), command_text)
+        self.assertIn("0.0.0.0", command_text)
+        self.assertIn("8766", command_text)
+        self.assertIn("systemctl --user restart aha-ui-source-8766.service", command_text)
+        self.assertIn("web_restart_requested", events)
 
     def test_conversation_events_api_restores_latest_turn_metrics_outside_page(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3136,6 +3698,109 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
+    def test_api_task_supervision_config_updates_existing_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Supervision API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                initial = status_snapshot(root, run_id)["tasks"][0]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/supervision",
+                        method="POST",
+                        payload={
+                            "mode": "assisted",
+                            "max_rounds": 7,
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                updated = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(initial["supervision"]["mode"], "manual")
+        self.assertEqual(initial["supervision"]["channel"], "main_only")
+        self.assertFalse(initial["supervision"]["real_agent_enabled"])
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["supervision"]["mode"], "assisted")
+        self.assertEqual(body["task"]["supervision"]["host_backend"], "stub")
+        self.assertFalse(body["task"]["supervision"]["real_agent_enabled"])
+        self.assertEqual(body["task"]["supervision"]["max_rounds"], 7)
+        self.assertNotIn("allowed_actions", body["task"]["supervision"])
+        self.assertEqual(updated["supervision"], body["task"]["supervision"])
+
+    def test_task_supervision_host_agent_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Supervision host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                )
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        host = next(agent for agent in task["agents"] if agent["role"] == "host")
+        self.assertEqual(host["backend"], "claude")
+        self.assertEqual(host["workspace_path"], task["workspace_path"])
+        self.assertEqual(host["sandbox"], "read-only")
+        self.assertEqual(host["approval"], "never")
+        self.assertEqual(task["supervision"]["host_agent_id"], "host")
+
+    def test_send_to_supervision_host_stores_note_without_autostart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host note", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                )
+
+                with mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}) as start:
+                    response = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "host",
+                            "task_id": "task-001",
+                            "role": "host",
+                            "sender": "browser",
+                            "from_agent": "browser",
+                            "to_agent": "host",
+                            "message": "后续收到测试消息后再决定是否让 main 继续。",
+                        },
+                    )
+                host_inbox = inbox_path(root, run_id, "host")
+                host_messages, _ = iter_jsonl_from(host_inbox, 0)
+                offset = read_json(chat_offset_path(run_dir(root, run_id), "host", "task-001"))
+                host_inbox_size = host_inbox.stat().st_size
+
+        self.assertTrue(response["ok"])
+        self.assertNotIn("backend", response)
+        start.assert_not_called()
+        self.assertEqual(host_messages[-1]["message"], "后续收到测试消息后再决定是否让 main 继续。")
+        self.assertEqual(offset["offset"], host_inbox_size)
+
     def test_api_routes_fallback_to_latest_run_without_server_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3399,11 +4064,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("task-create-dialog", html)
         self.assertIn("new-task-description", html)
         self.assertIn('form id="task-form"', html)
+        self.assertIn("task-supervision-editor", html)
+        self.assertIn("selected-task-supervision-mode", html)
+        self.assertIn("assisted Claude host", html)
+        self.assertNotIn("selected-task-supervision-actions", html)
+        create_form = html.split('<form id="task-form"', 1)[1].split("</form>", 1)[0]
+        self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn("openTaskCreateDialog", script)
         self.assertIn("closeTaskCreateDialog", script)
+        self.assertIn("saveTaskSupervisionConfig", script)
+        self.assertIn('policy.mode === "manual"', script)
+        self.assertIn('"host / user proxy"', script)
+        self.assertIn("host-agent", script)
+        self.assertIn("display_sender", script)
+        self.assertIn("from-supervision", script)
+        self.assertIn("consumedAgentMessages", script)
+        self.assertIn('candidate.type !== "message"', script)
+        self.assertNotIn("latestAgentMessage", script)
         self.assertIn('action === "add-task"', script)
         self.assertIn("task-dialog", styles)
         self.assertIn("task-create-trigger", styles)
+        self.assertIn("task-supervision-editor", styles)
+        self.assertIn("agent-card.host-agent", styles)
+        self.assertIn("timeline-card.from-supervision", styles)
 
     def test_frontend_renders_prompt_metrics_visualization(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -3456,6 +4139,14 @@ class CliTests(unittest.TestCase):
         self.assertIn("session-ok", styles)
         self.assertIn("prompt-metrics", styles)
         self.assertIn("prompt-component-track", styles)
+
+    def test_frontend_keeps_supervision_state_in_runtime_filter(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn('supervisionEventTypes.has(event.type)) return "chat"', script)
+        self.assertIn('if (event.type === "message") return "chat";', script)
+        self.assertIn('if (event.type === "host_decision") return renderTimelineStatus("host decision"', script)
 
     def test_prompt_templates_are_packaged_and_renderable(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -3615,6 +4306,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
         self.assertTrue(Path(env["PYTHONPATH"].split(os.pathsep)[0]).is_absolute())
 
+    def test_start_backend_adds_common_user_bin_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            fake_home = Path(tmp) / "home"
+            nvm_bin = fake_home / ".nvm" / "versions" / "node" / "v24.15.0" / "bin"
+            local_bin = fake_home / ".local" / "bin"
+            nvm_bin.mkdir(parents=True)
+            local_bin.mkdir(parents=True)
+            root.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Backend PATH", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+                    mock.patch("aha_cli.services.backend_runtime.Path.home", return_value=fake_home),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        parts = popen.call_args.kwargs["env"]["PATH"].split(os.pathsep)
+        self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+        self.assertLess(parts.index(str(nvm_bin)), parts.index("/usr/bin"))
+
     def test_start_backend_uses_zipapp_invocation_for_onebin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3765,6 +4486,33 @@ class CliTests(unittest.TestCase):
             self.assertIn("Claude authentication is not configured", reply)
             self.assertEqual(output.read_text(encoding="utf-8"), reply)
             popen.assert_not_called()
+
+    def test_claude_exec_reports_missing_cli_as_agent_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            events = Path(tmp) / "events.jsonl"
+            with (
+                mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True),
+                mock.patch("aha_cli.backends.claude.subprocess.Popen", side_effect=FileNotFoundError(2, "No such file or directory", "claude")),
+            ):
+                code, reply, _ = run_claude_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="claude-chat",
+                    target="main",
+                )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+            output_text = output.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 127)
+        self.assertIn("Failed to start Claude backend command", reply)
+        self.assertEqual(output_text, reply)
+        self.assertEqual(rows[-1]["type"], "agent_error")
+        self.assertEqual(rows[-1]["data"]["reason"], "backend_start_failed")
 
     def test_start_backend_applies_task_proxy_env_for_enabled_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
