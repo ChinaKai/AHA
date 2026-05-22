@@ -69,6 +69,19 @@ from aha_cli.store.runs import (
     run_summary_from_plan,
     save_plan,
 )
+from aha_cli.store.rounds import (
+    ensure_current_task_round as _ensure_current_task_round,
+    ensure_task_round_record as _ensure_task_round_record,
+    list_task_lifecycle_rounds,
+    list_task_rounds,
+    round_sequence_from_id as _round_sequence_from_id,
+    task_lifecycle_round_dir,
+    task_lifecycle_round_path,
+    task_lifecycle_rounds_dir,
+    task_round_final_meta_path,
+    task_round_final_path,
+    task_rounds_path,
+)
 from aha_cli.store.sessions import (
     ensure_session as _ensure_session,
     list_sessions as _list_sessions,
@@ -114,36 +127,6 @@ def list_sessions(root: Path, run_id: str, task_id: str | None = None) -> list[d
     return _list_sessions(root, run_id, task_id)
 
 
-def _round_sequence_from_id(round_id: object) -> int | None:
-    text = str(round_id or "")
-    if text.startswith("round-"):
-        try:
-            return int(text.split("-", 1)[1])
-        except ValueError:
-            return None
-    return None
-
-
-def task_lifecycle_rounds_dir(root: Path, run_id: str, task_id: str) -> Path:
-    return run_dir(root, run_id) / "tasks" / task_id / "rounds"
-
-
-def task_lifecycle_round_dir(root: Path, run_id: str, task_id: str, round_id: str) -> Path:
-    return task_lifecycle_rounds_dir(root, run_id, task_id) / round_id
-
-
-def task_lifecycle_round_path(root: Path, run_id: str, task_id: str, round_id: str) -> Path:
-    return task_lifecycle_round_dir(root, run_id, task_id, round_id) / "round.json"
-
-
-def task_round_final_path(root: Path, run_id: str, task_id: str, round_id: str) -> Path:
-    return task_lifecycle_round_dir(root, run_id, task_id, round_id) / "final.md"
-
-
-def task_round_final_meta_path(root: Path, run_id: str, task_id: str, round_id: str) -> Path:
-    return task_round_final_path(root, run_id, task_id, round_id).with_suffix(".meta.json")
-
-
 def _run_relative_path(root: Path, run_id: str, path: Path) -> str:
     try:
         return str(path.relative_to(run_dir(root, run_id)))
@@ -156,67 +139,8 @@ def _resolve_run_path(root: Path, run_id: str, value: object) -> Path:
     return path if path.is_absolute() else run_dir(root, run_id) / path
 
 
-def _task_round_started_at(task: dict) -> str:
-    return str(task.get("started_at") or task.get("created_at") or utc_now())
-
-
-def _ensure_task_round_record(root: Path, run_id: str, task: dict) -> dict:
-    task_id = str(task["id"])
-    sequence = int(task.get("round_sequence") or _round_sequence_from_id(task.get("current_round_id")) or 1)
-    round_id = str(task.get("current_round_id") or f"round-{sequence:03d}")
-    sequence = _round_sequence_from_id(round_id) or sequence
-    task["current_round_id"] = round_id
-    task["round_sequence"] = sequence
-    task.setdefault("last_final_round_id", None)
-    task.setdefault("last_final_at", None)
-
-    path = task_lifecycle_round_path(root, run_id, task_id, round_id)
-    if path.exists():
-        record = read_json(path)
-        changed = False
-        for key, value in {"task_id": task_id, "round_id": round_id, "sequence": sequence}.items():
-            if record.get(key) != value:
-                record[key] = value
-                changed = True
-        record.setdefault("status", "active")
-        record.setdefault("started_at", _task_round_started_at(task))
-        record.setdefault("finalized_at", None)
-        record.setdefault("final_path", None)
-        record.setdefault("final_meta_path", None)
-        record.setdefault("reopened_from_round_id", None)
-        if changed:
-            write_json(path, record)
-        return record
-
-    record = make_task_round(task_id, sequence, _task_round_started_at(task))
-    write_json(path, record)
-    return record
-
-
 def ensure_current_task_round(root: Path, run_id: str, task_id: str) -> dict:
-    with locked_plan(root, run_id):
-        plan = require_plan(root, run_id)
-        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
-        if task is None or task.get("deleted_at"):
-            raise SystemExit(f"Task not found: {task_id}")
-        record = _ensure_task_round_record(root, run_id, task)
-        plan["updated_at"] = utc_now()
-        save_plan(root, plan)
-        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    return record
-
-
-def list_task_lifecycle_rounds(root: Path, run_id: str, task_id: str) -> list[dict]:
-    base = task_lifecycle_rounds_dir(root, run_id, task_id)
-    if not base.is_dir():
-        return []
-    rounds: list[dict] = []
-    for path in sorted(base.glob("round-*/round.json")):
-        try:
-            rounds.append(read_json(path))
-        except (OSError, ValueError):
-            continue
-    return sorted(rounds, key=lambda item: int(item.get("sequence") or _round_sequence_from_id(item.get("round_id")) or 0))
+    return _ensure_current_task_round(root, run_id, task_id, now_func=utc_now)
 
 
 def append_message(
@@ -1013,15 +937,6 @@ def write_task_result(root: Path, run_id: str, task_id: str, content: str, polic
     if policy == "finalize":
         render_task_overview_result_if_needed(root, run_id, task_id, policy=policy)
     return path
-
-
-def task_rounds_path(root: Path, run_id: str, task_id: str) -> Path:
-    return run_dir(root, run_id) / "tasks" / task_id / "rounds.jsonl"
-
-
-def list_task_rounds(root: Path, run_id: str, task_id: str) -> list[dict]:
-    rounds, _ = iter_jsonl_from(task_rounds_path(root, run_id, task_id), 0)
-    return rounds
 
 
 def _string_list(value) -> list[str]:
