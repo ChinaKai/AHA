@@ -69,7 +69,9 @@ tests/test_store_state.py       persistence helpers, compatibility, snapshots
 tests/test_cli_core.py          init, plan, status, commit policy, packaging
 tests/test_backend_*.py         backend registry, runners, sessions, runtime
 tests/test_chat_*.py            chat turns, prompt context, finalization flow
-tests/test_web_api.py           HTTP API, task views, run APIs, log/event pages
+tests/test_web_run_api.py       bootstrap, workspace, run creation, archives
+tests/test_web_task_api.py      task create/resume, settings, proxy APIs
+tests/test_web_events_api.py    UI core, conversation events, logs, event replay
 tests/test_web_status.py        status snapshots, recovery, send/interrupt APIs
 tests/test_websocket.py         WebSocket replay and realtime stream behavior
 tests/test_frontend_static.py   static UI behavior that does not need a browser
@@ -85,8 +87,8 @@ Current follow-up candidates:
 
 - `tests/test_chat_flow.py` is large and can split into prompt context,
   supervision, and finalization modules if those areas change again.
-- `tests/test_web_api.py` is large and can split into run APIs, conversation
-  events, and task/settings APIs.
+- `tests/test_web_task_api.py` can split further if task creation/settings and
+  proxy behavior start changing independently.
 
 ## Parallel Split Workflow
 
@@ -117,7 +119,7 @@ git diff --check
 For test-file splits, also run the focused modules that were moved:
 
 ```bash
-python3 -m unittest tests.test_backend_runners tests.test_cli_core tests.test_web_api
+python3 -m unittest tests.test_backend_runners tests.test_cli_core tests.test_web_run_api tests.test_web_task_api tests.test_web_events_api
 python3 -m unittest discover
 git diff --check
 ```
