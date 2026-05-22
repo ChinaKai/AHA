@@ -5,25 +5,35 @@ import gzip
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
 from unittest import mock
 
-from aha_cli.cli import append_message, main
+from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
+    add_agent,
     append_event,
+    conversation_events_page,
+    event_path,
     inbox_path,
     iter_jsonl_from,
+    iter_jsonl_reverse,
     read_json,
     run_dir,
     set_task_status,
     status_snapshot,
     task_context_snapshot,
+    task_final_snapshot,
+    task_log_page,
+    update_agent_config,
+    update_task_proxy_config,
     update_task_supervision_config,
+    write_task_result,
 )
-from aha_cli.web.server import handle_send_payload
+from aha_cli.web.server import handle_send_payload, workspace_options
 from tests.helpers import fetch_ui_response, json_response_body
 
 
@@ -561,3 +571,521 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(body["limit"], 3)
         self.assertTrue(body["has_more"])
         self.assertLess(body["offset"], body["snapshot_offset"])
+
+    def test_web_task_creation_autostarts_dispatched_main_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task create autostart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running", "started": True}) as start_backend:
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/tasks",
+                            method="POST",
+                            payload={
+                                "title": "Autostart task",
+                                "backend": "codex",
+                                "sandbox": "danger-full-access",
+                                "approval": "never",
+                                "dispatch": True,
+                            },
+                        )
+                    )
+                    body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["backend"]["status"], "running")
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], body["task"]["id"])
+        self.assertTrue(start_backend.call_args.kwargs["from_start"])
+
+    def test_conversation_events_page_filters_and_pages_by_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "to_agent": "main", "message": "one"})
+            append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "two"})
+            append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "sub-001", "text": "sub"})
+            append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "other task"})
+
+            latest = conversation_events_page(root, run_id, "task-001", "main", limit=1)
+            append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "new realtime"})
+            realtime, _ = iter_jsonl_from(event_path(root, run_id), latest["after_offset"])
+            older = conversation_events_page(root, run_id, "task-001", "main", limit=1, before=latest["next_before_offset"])
+
+        self.assertEqual(latest["count"], 1)
+        self.assertTrue(latest["has_more"])
+        self.assertEqual(latest["events"][0]["data"]["text"], "two")
+        self.assertEqual(realtime[0]["data"]["text"], "new realtime")
+        self.assertFalse(older["has_more"])
+        self.assertEqual(older["events"][0]["data"]["message"], "one")
+
+    def test_conversation_events_page_includes_supervision_events_for_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(root, run_id, "main_reported_to_host", {"task_id": "task-001", "host_backend": "stub"})
+            append_event(root, run_id, "host_decision", {"task_id": "task-001", "decision": "ask_user"})
+            append_event(root, run_id, "main_applied_decision", {"task_id": "task-001", "decision": "ask_user", "applied": True})
+            append_event(root, run_id, "host_decision", {"task_id": "task-002", "decision": "stop"})
+
+            main_page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
+            sub_page = conversation_events_page(root, run_id, "task-001", "sub-001", limit=10)
+
+        self.assertEqual(
+            [event["type"] for event in main_page["events"]],
+            ["main_reported_to_host", "host_decision", "main_applied_decision"],
+        )
+        self.assertEqual(sub_page["events"], [])
+
+    def test_conversation_events_page_shares_host_forwarding_but_hides_aha_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "host",
+                    "from_agent": "main",
+                    "to_agent": "host",
+                    "agent_id": "host",
+                    "display_sender": "main",
+                    "display_target": "host",
+                    "message": "main reply",
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "AHA",
+                    "target": "host",
+                    "display_sender": "host",
+                    "display_target": "host",
+                    "message": "host 正在判断本轮下一步。",
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "browser",
+                    "target": "main",
+                    "agent_id": "host",
+                    "display_sender": "host",
+                    "display_target": "main",
+                    "message": "next step",
+                },
+            )
+
+            main_page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
+            host_page = conversation_events_page(root, run_id, "task-001", "host", limit=10)
+
+        self.assertEqual([event["data"]["message"] for event in main_page["events"]], ["main reply", "next step"])
+        self.assertEqual([event["data"]["message"] for event in host_page["events"]], ["main reply", "next step"])
+
+    def test_conversation_events_api_hides_action_envelope_agent_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Conversation action envelope", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                user_facing_response = "只展示投影后的 response"
+                action_envelope = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "raw envelope should stay out of timeline",
+                                "changed_files": [],
+                                "verification": [],
+                                "risks": [],
+                            }
+                        ],
+                        "response": user_facing_response,
+                    },
+                    ensure_ascii=False,
+                )
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": action_envelope})
+                append_event(
+                    root,
+                    run_id,
+                    "message",
+                    {"task_id": "task-001", "sender": "main", "target": "browser", "message": user_facing_response},
+                )
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        timeline_texts = [str(event["data"].get("text") or event["data"].get("message") or "") for event in body["events"]]
+        self.assertEqual(timeline_texts, [user_facing_response])
+        self.assertNotIn(action_envelope, timeline_texts)
+        self.assertFalse(any('"actions"' in text and '"response"' in text for text in timeline_texts))
+
+    def test_web_restart_api_schedules_source_ui_on_8766(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Restart web", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="scheduled\n", stderr="")
+                with mock.patch("aha_cli.web.server.subprocess.run", return_value=completed) as run_command:
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/web/restart",
+                            method="POST",
+                            payload={"host": "0.0.0.0", "port": 8766},
+                        )
+                    )
+                body = json_response_body(response)
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                events = [row["type"] for row in rows]
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["host"], "0.0.0.0")
+        self.assertEqual(body["port"], 8766)
+        self.assertEqual(body["service_unit"], "aha-ui-source-8766.service")
+        command = run_command.call_args.args[0]
+        self.assertEqual(command[0], "systemd-run")
+        self.assertIn("--on-active=1s", command)
+        command_text = " ".join(command)
+        self.assertIn(str(root), command_text)
+        self.assertIn("0.0.0.0", command_text)
+        self.assertIn("8766", command_text)
+        self.assertIn("systemctl --user restart aha-ui-source-8766.service", command_text)
+        self.assertIn("web_restart_requested", events)
+
+    def test_conversation_events_api_restores_latest_turn_metrics_outside_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Conversation prompt metrics", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "agent_started", {"task_id": "task-001", "target": "main", "sender": "browser"})
+                append_event(
+                    root,
+                    run_id,
+                    "agent_prompt_metrics",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "source": "codex-chat",
+                        "total": {"chars": 1234, "bytes": 1234, "lines": 12},
+                        "components": {"status_snapshot": {"chars": 1000, "bytes": 1000, "lines": 1}},
+                    },
+                )
+                append_event(root, run_id, "agent_thread", {"task_id": "task-001", "target": "main", "thread_id": "thread-1"})
+                append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
+                append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+                for index in range(10):
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_command_finished",
+                        {"task_id": "task-001", "target": "main", "command": f"cmd-{index}", "exit_code": 0},
+                    )
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=5"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertNotIn("agent_prompt_metrics", [event["type"] for event in body["events"]])
+        turn_event_types = [event["type"] for event in body["turn_events"]]
+        self.assertEqual(turn_event_types, ["agent_started", "agent_prompt_metrics", "agent_thread", "agent_usage", "agent_finished"])
+        metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
+        self.assertEqual(metrics["data"]["total"]["chars"], 1234)
+
+    def test_conversation_events_api_filters_categories_server_side(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Conversation categories", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "hello", sender="browser", task_id="task-001", role="main")
+                append_event(root, run_id, "agent_command_started", {"task_id": "task-001", "target": "main", "command": "pwd"})
+                append_event(root, run_id, "agent_command_finished", {"task_id": "task-001", "target": "main", "command": "pwd", "exit_code": 0, "output_tail": "large output"})
+                append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
+                append_event(root, run_id, "task_status_changed", {"task_id": "task-001", "status": "running"})
+
+                chat_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=chat"))
+                command_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=chat,commands"))
+                full_command_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=commands&include_command_output=1"))
+                none_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=none"))
+
+        chat_body = json_response_body(chat_response)
+        command_body = json_response_body(command_response)
+        full_command_body = json_response_body(full_command_response)
+        none_body = json_response_body(none_response)
+        self.assertEqual([event["type"] for event in chat_body["events"]], ["message"])
+        self.assertEqual(
+            [event["type"] for event in command_body["events"]],
+            ["message", "agent_command_started", "agent_command_finished"],
+        )
+        finished = command_body["events"][-1]["data"]
+        self.assertNotIn("output_tail", finished)
+        self.assertTrue(finished["output_tail_omitted"])
+        self.assertEqual(finished["output_tail_chars"], len("large output"))
+        self.assertEqual(full_command_body["events"][-1]["data"]["output_tail"], "large output")
+        self.assertEqual(none_body["events"], [])
+
+    def test_events_api_replays_from_saved_offset_after_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Replay events", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                initial = json_response_body(asyncio.run(fetch_ui_response(root, run_id, "/api/events?offset=-1")))
+                last_event_id = initial["offset"]
+
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "missed-1"})
+                append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+
+                first_page = json_response_body(
+                    asyncio.run(fetch_ui_response(root, run_id, f"/api/events?offset={last_event_id}&limit=1"))
+                )
+                replay = json_response_body(asyncio.run(fetch_ui_response(root, run_id, f"/api/events?offset={last_event_id}&limit=10")))
+
+            self.assertEqual(first_page["events"][0]["data"]["text"], "missed-1")
+            self.assertTrue(first_page["has_more"])
+            self.assertGreater(first_page["offset"], last_event_id)
+            self.assertEqual([event["type"] for event in replay["events"]], ["agent_message", "agent_finished"])
+            self.assertEqual(replay["events"][1]["data"]["exit_code"], 0)
+            self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "pending")
+
+    def test_reverse_jsonl_reader_pages_by_byte_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            for index in range(5):
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "to_agent": "main", "message": f"line-{index}-" + ("x" * 40)})
+
+            path = event_path(root, run_id)
+            newest = list(iter_jsonl_reverse(path, chunk_size=32))
+            older = list(iter_jsonl_reverse(path, before=newest[0][0], chunk_size=32))
+
+        self.assertEqual(newest[0][1]["data"]["message"].split("-", 2)[:2], ["line", "4"])
+        self.assertEqual(older[0][1]["data"]["message"].split("-", 2)[:2], ["line", "3"])
+        self.assertGreater(newest[0][0], older[0][0])
+
+    def test_task_log_page_tails_and_pages_by_byte_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Logs", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                task = task_snapshot(root, run_id, "task-001")["task"]
+                log_path = run_dir(root, run_id) / task["log_file"]
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text("\n".join(f"line-{index}" for index in range(5)) + "\n", encoding="utf-8")
+
+                latest = task_log_page(root, run_id, "task-001", limit=2)
+                older = task_log_page(root, run_id, "task-001", limit=2, before=latest["next_before_offset"])
+
+        self.assertEqual(latest["text"], "line-3\nline-4")
+        self.assertTrue(latest["has_more"])
+        self.assertEqual(older["text"], "line-1\nline-2")
+        self.assertTrue(older["has_more"])
+
+    def test_task_log_page_falls_back_to_event_log_when_task_log_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Event logs", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "first"})
+                append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "other task"})
+                append_event(root, run_id, "agent_command_finished", {"task_id": "task-001", "target": "main", "command": "pwd", "output_tail": "second"})
+
+                latest = task_log_page(root, run_id, "task-001", limit=1)
+                older = task_log_page(root, run_id, "task-001", limit=1, before=latest["next_before_offset"], source=latest["source"])
+
+        self.assertEqual(latest["source"], "events")
+        self.assertIn("agent_command_finished", latest["text"])
+        self.assertIn("second", latest["text"])
+        self.assertNotIn("other task", latest["text"])
+        self.assertEqual(older["source"], "events")
+        self.assertIn("first", older["text"])
+
+    def test_task_lightweight_snapshots_exclude_heavy_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Lightweight", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "large message", sender="browser", task_id="task-001")
+                write_task_result(root, run_id, "task-001", "final text")
+
+                final = task_final_snapshot(root, run_id, "task-001")
+                context = task_context_snapshot(root, run_id, "task-001")
+
+        self.assertEqual(final["result"].strip(), "final text")
+        self.assertNotIn("messages", final)
+        self.assertNotIn("log", final)
+        self.assertIn("prompt", context)
+        self.assertNotIn("messages", context)
+        self.assertNotIn("log", context)
+
+    def test_workspace_options_include_multiple_project_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            hl_root = base / "hl_project"
+            my_root = base / "my_project"
+            (hl_root / "fw_omni_builder").mkdir(parents=True)
+            (my_root / "aha").mkdir(parents=True)
+
+            options = workspace_options([hl_root, my_root])
+
+        self.assertEqual(
+            options,
+            [
+                {
+                    "name": "fw_omni_builder",
+                    "label": "hl_project/fw_omni_builder",
+                    "path": str(hl_root / "fw_omni_builder"),
+                    "root": str(hl_root),
+                },
+                {
+                    "name": "aha",
+                    "label": "my_project/aha",
+                    "path": str(my_root / "aha"),
+                    "root": str(my_root),
+                },
+            ],
+        )
+
+    def test_task_proxy_config_and_agent_toggle_are_in_status_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli(
+                    "plan",
+                    "Proxy defaults",
+                    "--agents",
+                    "1",
+                    "--http-proxy",
+                    "http://127.0.0.1:7890",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                update_agent_config(root, run_id, "task-001", "sub-001", proxy_enabled=False)
+                task = update_task_proxy_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    proxy_enabled=False,
+                    http_proxy="http://127.0.0.1:8888",
+                    https_proxy="http://127.0.0.1:8888",
+                    no_proxy="localhost,127.0.0.1",
+                )
+                self.assertFalse(task["preferred_proxy_enabled"])
+
+                snapshot = status_snapshot(root, run_id)
+                task = snapshot["tasks"][0]
+                agents = {agent["id"]: agent for agent in task["agents"]}
+
+        self.assertEqual(task["preferred_http_proxy"], "http://127.0.0.1:8888")
+        self.assertEqual(task["preferred_https_proxy"], "http://127.0.0.1:8888")
+        self.assertEqual(task["preferred_no_proxy"], "localhost,127.0.0.1")
+        self.assertFalse(task["preferred_proxy_enabled"])
+        self.assertTrue(agents["main"]["proxy_enabled"])
+        self.assertFalse(agents["sub-001"]["proxy_enabled"])
+
+    def test_task_proxy_config_api_updates_existing_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Proxy API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-config",
+                        method="POST",
+                        payload={
+                            "task_id": "task-001",
+                            "proxy_enabled": True,
+                            "http_proxy": "http://proxy.local:8080",
+                            "https_proxy": "http://proxy.local:8080",
+                            "no_proxy": "localhost,127.0.0.1",
+                        },
+                    )
+                )
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["task"]["preferred_proxy_enabled"])
+        self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
+        self.assertEqual(body["task"]["preferred_no_proxy"], "localhost,127.0.0.1")
+
+    def test_task_proxy_action_api_updates_existing_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Proxy action API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/proxy",
+                        method="POST",
+                        payload={
+                            "proxy_enabled": True,
+                            "http_proxy": "http://proxy.local:8080",
+                            "https_proxy": "http://proxy.local:8080",
+                            "no_proxy": "localhost,127.0.0.1",
+                        },
+                    )
+                )
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["task"]["preferred_proxy_enabled"])
+        self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
