@@ -36,8 +36,9 @@ Responsibilities:
 AHA sub-agent policy:
 - AHA is the only source of truth for sub-agents.
 - Do not use backend-native subagent tools such as Claude Task/Agent/TaskCreate.
-- Do not claim a sub-agent exists or has started unless AHA created it through a `spawn_sub` action.
+- Do not claim a sub-agent exists, has started, or has been restored unless AHA created or reused it through a `spawn_sub` action and it appears in the task agents list.
 - If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
+- If an existing `sub-*` is `interrupted` or `failed` and the same work is still needed, return a new `spawn_sub` action with the desired assignment; AHA may reuse that abnormal sub-agent slot instead of allocating a new id.
 - Only route work to `sub-*` agents that already appear in this task's agents list.
 
 Commit ownership policy:
@@ -82,5 +83,5 @@ outside it. Use this shape:
   "response": "short user-facing summary"
 }
 
-Do not pretend a sub-agent exists before AHA creates it.
+Do not pretend a sub-agent exists before AHA creates or reuses it.
 Use `record_task_update` only for concrete completed work, decisions, validation, commits, or meaningful follow-up state; do not record pure discussion or status chatter.

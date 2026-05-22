@@ -1874,9 +1874,41 @@ function conversationBackendSession(taskId, target = backendTarget()) {
   return state?.backendSession || null;
 }
 
+function normalizedMessageEndpoint(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function messageDisplaySender(data) {
+  return normalizedMessageEndpoint(data.display_sender || data.sender || data.from_agent);
+}
+
+function messageDisplayTarget(data) {
+  return normalizedMessageEndpoint(data.display_target || data.to_agent || data.target);
+}
+
+function isMainBrowserMessage(event) {
+  if (event.type !== "message") return false;
+  const data = eventData(event);
+  return messageDisplaySender(data) === "main" && messageDisplayTarget(data) === "browser";
+}
+
+function isMainHostSupervisionMirror(event, text) {
+  if (event.type !== "message") return false;
+  const data = eventData(event);
+  const target = messageDisplayTarget(data);
+  return (
+    String(data.message || "").trim() === text &&
+    messageDisplaySender(data) === "main" &&
+    target &&
+    !["browser", "system", "aha", "main"].includes(target) &&
+    Boolean(data.display_target || data.agent_id)
+  );
+}
+
 function dedupedConversationEvents(taskId) {
   const events = conversationSourceEvents(taskId);
   const consumedAgentMessages = new Set();
+  const mirroredMainBrowserMessages = new Set();
   events.forEach((event, index) => {
     const data = eventData(event);
     if (event.type === "agent_message") {
@@ -1892,6 +1924,14 @@ function dedupedConversationEvents(taskId) {
       });
       if (consumed) consumedAgentMessages.add(index);
     }
+    if (backendTarget() === "main" && isMainBrowserMessage(event)) {
+      const text = String(data.message || "").trim();
+      if (!text) return;
+      const mirroredToHost = events.some((candidate, candidateIndex) => (
+        candidateIndex !== index && isMainHostSupervisionMirror(candidate, text)
+      ));
+      if (mirroredToHost) mirroredMainBrowserMessages.add(index);
+    }
   });
   return events.filter((event, index) => {
     if (event.type === "agent_message") {
@@ -1899,6 +1939,7 @@ function dedupedConversationEvents(taskId) {
       if (isAhaActionEnvelopeText(text)) return false;
       if (consumedAgentMessages.has(index)) return false;
     }
+    if (event.type === "message" && mirroredMainBrowserMessages.has(index)) return false;
     return true;
   });
 }

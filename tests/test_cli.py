@@ -24,7 +24,7 @@ from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event,
 from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
-from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
+from aha_cli.services.chat import apply_supervision_host_decision, chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset, status_from_agent_result
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.messages import format_event
@@ -1360,6 +1360,88 @@ class CliTests(unittest.TestCase):
         self.assertTrue(applied[-1]["data"]["routed_to_main"])
         self.assertEqual(task["status"], "running")
 
+    def test_claude_supervision_wait_does_not_route_main_while_sub_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude supervision waits", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+                set_task_status(root, run_id, "task-001", "running")
+
+                with mock.patch("aha_cli.services.chat.start_backend") as start_main:
+                    result = apply_supervision_host_decision(
+                        root,
+                        run_id,
+                        "task-001",
+                        host_agent_id="host",
+                        host_reply='{"decision":"continue","reason":"waiting for sub","response":"好。","actions":[]}',
+                        exit_code=0,
+                    )
+
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertTrue(result["waiting"])
+        self.assertFalse(result["routed_to_main"])
+        start_main.assert_not_called()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(next(agent for agent in task["agents"] if agent["id"] == "main")["status"], "waiting")
+        self.assertFalse(
+            any(
+                row["type"] == "message"
+                and row["data"].get("display_sender") == "host"
+                and row["data"].get("display_target") == "main"
+                for row in rows
+            )
+        )
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "wait")
+        self.assertTrue(host_decisions[-1]["data"]["waiting"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "waiting")
+
+    def test_codex_chat_empty_main_reply_waits_when_sub_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Empty main reply with sub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+                set_task_status(root, run_id, "task-001", "running")
+                append_message(root, run_id, "main", "继续", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "", None)),
+                    mock.patch("aha_cli.services.chat.stop_task_backends") as stop_backends,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        stop_backends.assert_not_called()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(next(agent for agent in task["agents"] if agent["id"] == "main")["status"], "waiting")
+        self.assertTrue(any(row["type"] == "agent_message_skipped" for row in rows))
+        self.assertFalse(any(row["type"] == "agent_error" and row["data"].get("target") == "main" for row in rows))
+
     def test_codex_chat_routes_claude_supervision_ask_user_to_browser(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1690,6 +1772,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("AHA-Task: task-001", assignment_prompt)
         self.assertIn("return ONLY one JSON object", assignment_prompt)
         self.assertIn('"actions"', assignment_prompt)
+        self.assertIn("AHA may reuse that abnormal sub-agent slot", assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1714,6 +1797,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn("AHA-Agent: main", main_prompt)
                 self.assertIn("aha commit --type <type>", main_prompt)
                 self.assertIn("UI routing changes", main_prompt)
+                self.assertIn("AHA may reuse that abnormal sub-agent slot", main_prompt)
 
                 sub_message = append_message(root, run_id, "sub-001", "提交你负责的部分", sender="main", task_id="task-001", role="sub")
                 sub_prompt = chat_prompt(root, run_id, "sub-001", sub_message, "")
@@ -2055,6 +2139,99 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "running")
                 browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
                 self.assertIn("等待子 agent 完成", browser_messages[-1]["message"])
+
+    def test_execute_actions_reuses_interrupted_sub_agent_at_max(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover sub slot", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_two = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_three = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                append_message(root, run_id, sub["id"], "old assignment", sender="main", task_id="task-001", role="sub")
+                set_agent_status(root, run_id, "task-001", sub["id"], "interrupted")
+                set_agent_status(root, run_id, "task-001", sub_two["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub_three["id"], "completed", 0)
+                update_agent_runtime(root, run_id, "task-001", sub["id"], recovery_context="old failure")
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "Recover and inspect issue 02",
+                                "backend": "codex",
+                                "reason": "previous sub interrupted",
+                            }
+                        ],
+                        "response": "请求 AHA 恢复 sub",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend") as start_backend_mock:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                agent = next(item for item in detail["agents"] if item["id"] == sub["id"])
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), 0)
+                offset = load_chat_offset(
+                    inbox_path(root, run_id, sub["id"]),
+                    chat_offset_path(run_dir(root, run_id), sub["id"], "task-001"),
+                    from_start=False,
+                )
+                new_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), offset)
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0]["type"], "spawn_sub")
+        self.assertTrue(executed[0]["reused"])
+        self.assertEqual(executed[0]["agent"]["id"], sub["id"])
+        self.assertEqual(agent["status"], "pending")
+        self.assertEqual(agent["assignment"], "Recover and inspect issue 02")
+        self.assertEqual(agent["recovery_context"], "")
+        self.assertEqual(len([item for item in detail["agents"] if item.get("role") == "sub"]), 3)
+        self.assertEqual(messages[-1]["message"], "Recover and inspect issue 02")
+        self.assertEqual([item["message"] for item in new_messages], ["Recover and inspect issue 02"])
+        start_backend_mock.assert_called_once()
+        self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
+        self.assertTrue(any(row["type"] == "sub_agent_reused" for row in rows))
+
+    def test_execute_actions_reports_spawn_sub_skipped_without_reusable_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "No sub slot", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_two = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                sub_three = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub_two["id"], "completed", 0)
+                set_agent_status(root, run_id, "task-001", sub_three["id"], "completed", 0)
+                reply = json.dumps(
+                    {
+                        "actions": [{"type": "spawn_sub", "title": "Extra sub", "backend": "codex"}],
+                        "response": "请求 AHA 创建 sub",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend") as start_backend_mock:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertEqual(executed, [])
+        start_backend_mock.assert_not_called()
+        self.assertEqual(len([item for item in detail["agents"] if item.get("role") == "sub"]), 3)
+        self.assertTrue(any(row["type"] == "action_skipped" and row["data"].get("reason") == "max_sub_agents reached" for row in rows))
+        self.assertEqual(browser_messages[-1]["sender"], "aha")
+        self.assertIn("没有创建新的 sub-agent", browser_messages[-1]["message"])
 
     def test_codex_chat_flags_subagent_claim_without_spawn_sub(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2645,6 +2822,137 @@ class CliTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "completed")
         self.assertEqual(persisted["agents"][0]["status"], "completed")
         self.assertNotIn("agent_status_recovered", event_log)
+
+    def test_recovered_agent_followup_includes_recovery_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover context", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}):
+                    web_status_snapshot(root, run_id)
+                recovered = task_snapshot(root, run_id, "task-001")["task"]
+                self.assertIn("工作异常中断", recovered["agents"][0]["recovery_context"])
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}),
+                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "role": "main",
+                            "task_id": "task-001",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "sender": "browser",
+                            "message": "继续",
+                        },
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                sent_text = messages[-1]["message"]
+                consumed = task_snapshot(root, run_id, "task-001")["task"]
+                event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+        self.assertTrue(result["ok"])
+        start_backend.assert_called_once()
+        self.assertIn("工作异常中断", sent_text)
+        self.assertIn("用户当前发送的新消息：\n继续", sent_text)
+        self.assertEqual(consumed["agents"][0]["recovery_context"], "")
+        self.assertIn("agent_recovery_context_consumed", event_log)
+
+    def test_recovered_running_sub_agent_queues_notice_to_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub recovery while main runs", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+                stale_task = task_snapshot(root, run_id, "task-001")["task"]
+                stale_sub = next(agent for agent in stale_task["agents"] if agent["id"] == sub["id"])
+
+                recovered = recover_stale_running_agent(
+                    root,
+                    run_id,
+                    stale_task,
+                    stale_sub,
+                    {"status": "stopped", "pid": None},
+                )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+        self.assertTrue(recovered)
+        self.assertEqual(detail["status"], "running")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == "main")["status"], "running")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == sub["id"])["status"], "interrupted")
+        self.assertEqual(messages[-1]["sender"], "aha")
+        self.assertEqual(messages[-1]["coordination"], "agent_recovery_notice")
+        self.assertIn(sub["id"], messages[-1]["message"])
+        self.assertIn("不要假设它已经完成", messages[-1]["message"])
+        self.assertIn("task_recovery_context_recorded", event_log)
+
+    def test_recovered_idle_sub_agent_adds_context_to_next_main_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub recovery before follow-up", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "waiting")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+                stale_task = task_snapshot(root, run_id, "task-001")["task"]
+                stale_sub = next(agent for agent in stale_task["agents"] if agent["id"] == sub["id"])
+
+                recover_stale_running_agent(
+                    root,
+                    run_id,
+                    stale_task,
+                    stale_sub,
+                    {"status": "stopped", "pid": None},
+                )
+                context_task = task_snapshot(root, run_id, "task-001")["task"]
+                main_agent = next(agent for agent in context_task["agents"] if agent["id"] == "main")
+                self.assertIn(sub["id"], main_agent["recovery_context"])
+
+                with (
+                    mock.patch("aha_cli.web.server.backend_status", return_value={"status": "stopped", "pid": None}),
+                    mock.patch("aha_cli.web.server.start_backend", return_value={"status": "running"}),
+                ):
+                    handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "role": "main",
+                            "task_id": "task-001",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "sender": "browser",
+                            "message": "继续",
+                        },
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                consumed = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertIn(sub["id"], messages[-1]["message"])
+        self.assertIn("用户当前发送的新消息：\n继续", messages[-1]["message"])
+        self.assertEqual(next(agent for agent in consumed["agents"] if agent["id"] == "main")["recovery_context"], "")
 
     def test_web_status_snapshot_keeps_outcome_during_active_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4245,6 +4553,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("display_sender", script)
         self.assertIn("from-supervision", script)
         self.assertIn("consumedAgentMessages", script)
+        self.assertIn("mirroredMainBrowserMessages", script)
+        self.assertIn("isMainHostSupervisionMirror", script)
+        self.assertIn('backendTarget() === "main"', script)
         self.assertIn('candidate.type !== "message"', script)
         self.assertNotIn("latestAgentMessage", script)
         self.assertIn('action === "add-task"', script)

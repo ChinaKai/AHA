@@ -66,7 +66,7 @@ BLOCKED_REPLY_MARKERS = (
 )
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
-SUPERVISION_HOST_DECISIONS = {"ask_user", "continue", "stop", "route_to_agent", "spawn_sub", "record_task_update"}
+SUPERVISION_HOST_DECISIONS = {"ask_user", "continue", "stop", "wait", "route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_EVENT_TYPES = {
     "main_reported_to_host",
     "host_decision",
@@ -308,14 +308,15 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None) ->
         "Do not mention host, agent, supervision, proxy, decision, JSON, or that you represent the user.\n"
         "Do not restate or praise main's answer; ask for or direct the next concrete step.\n"
         "Use continue only when task-main should do more concrete work.\n"
+        "Use wait when task-main or sub-agents are already working and your only next message would be an acknowledgement like OK, waiting, or report when ready.\n"
         "Use stop when task-main's latest reply already completes the user's request, or when your only next message would be to say done/finish.\n"
         "Use ask_user only when continuing would be destructive, commit code, spend money, or require information that is impossible to infer.\n"
         "Inspect context only. Do not modify files or execute state-changing commands.\n"
         "Decide what task-main should do next after its latest user-facing reply.\n\n"
         "Return only one JSON object with this shape:\n"
         '{"decision":"continue","reason":"short runtime reason","response":"natural message for main","actions":[]}\n\n'
-        "Allowed decision values: ask_user, continue, stop, route_to_agent, spawn_sub, record_task_update.\n"
-        "For continue, the response field is what main sees in Chat. For ask_user or stop, the response field is what the user sees in Chat.\n"
+        "Allowed decision values: ask_user, continue, wait, stop, route_to_agent, spawn_sub, record_task_update.\n"
+        "For continue, the response field is what main sees in Chat. For ask_user or stop, the response field is what the user sees in Chat. For wait, response is recorded only in Runtime and is not routed.\n"
         "Do not include decision/reason labels in response.\n"
         "Use actions only when main should execute concrete AHA actions; otherwise return an empty list.\n\n"
         f"Task context:\n{json.dumps(task_context, ensure_ascii=False, indent=2)}\n\n"
@@ -347,6 +348,47 @@ def parse_supervision_host_decision(reply: str) -> dict:
         "response": str(payload.get("response") or "").strip(),
         "actions": actions,
     }
+
+
+def low_information_supervision_response(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return True
+    compact = "".join(normalized.split())
+    exact = {
+        "ok",
+        "okay",
+        "好",
+        "好的",
+        "嗯",
+        "嗯嗯",
+        "收到",
+        "行",
+        "可以",
+        "等着",
+        "好。",
+        "好的。",
+        "收到。",
+    }
+    if compact in exact:
+        return True
+    wait_markers = (
+        "等你的汇总",
+        "等汇总",
+        "等结果",
+        "有结果",
+        "不用回",
+        "不用反复确认",
+        "不用再确认",
+        "先这样",
+        "继续等",
+        "waiting",
+        "wait for",
+        "report when",
+    )
+    if any(marker in compact for marker in wait_markers):
+        return True
+    return len(compact) <= 6 and any(marker in compact for marker in ("好", "嗯", "收", "等"))
 
 
 def supervision_host_decision_count(root: Path, run_id: str, task_id: str, host_agent_id: str = "host") -> int:
@@ -495,15 +537,34 @@ def apply_supervision_host_decision(
         decision = parse_supervision_host_decision(host_reply)
         executed = execute_actions(root, run_id, task_id, host_reply)
     host_chat_message = decision["response"] or decision["reason"] or host_reply.strip()
+    if (
+        decision["decision"] == "continue"
+        and not executed
+        and task_has_incomplete_sub_agents(task)
+        and low_information_supervision_response(host_chat_message)
+    ):
+        decision = {
+            **decision,
+            "decision": "wait",
+            "reason": decision["reason"] or "host response is wait-like while sub-agents are still running",
+        }
     routed_to_main = False
     routed_to_browser = False
+    waiting_for_subagents = False
     route_skipped_reason = ""
     try:
         max_rounds = max(1, int(supervision.get("max_rounds") or 5))
     except (TypeError, ValueError):
         max_rounds = 5
     previous_host_rounds = supervision_host_decision_count(root, run_id, task_id, host_agent_id)
-    if decision["decision"] == "continue" and host_chat_message and not executed:
+    if decision["decision"] == "wait":
+        waiting_for_subagents = task_has_incomplete_sub_agents(task)
+        if waiting_for_subagents:
+            set_task_status(root, run_id, task_id, "running")
+            set_agent_status(root, run_id, task_id, "main", "waiting")
+        else:
+            route_skipped_reason = "wait requested without incomplete sub-agents"
+    elif decision["decision"] == "continue" and host_chat_message and not executed:
         if previous_host_rounds < max_rounds:
             append_message(
                 root,
@@ -575,6 +636,7 @@ def apply_supervision_host_decision(
         "exit_code": exit_code,
         "routed_to_main": routed_to_main,
         "routed_to_browser": routed_to_browser,
+        "waiting": waiting_for_subagents,
         "host_round": previous_host_rounds + 1,
         "max_rounds": max_rounds,
     }
@@ -588,7 +650,11 @@ def apply_supervision_host_decision(
             else (
                 "await_user"
                 if decision["decision"] == "ask_user"
-                else ("stopped" if decision["decision"] == "stop" and routed_to_browser else (route_skipped_reason or "decision_recorded"))
+                else (
+                    "waiting"
+                    if waiting_for_subagents
+                    else ("stopped" if decision["decision"] == "stop" and routed_to_browser else (route_skipped_reason or "decision_recorded"))
+                )
             )
         )
     )
@@ -599,15 +665,16 @@ def apply_supervision_host_decision(
         {
             "task_id": task_id,
             "decision": decision["decision"],
-            "applied": routed_to_main or routed_to_browser or bool(executed) or decision["decision"] == "ask_user",
+            "applied": routed_to_main or routed_to_browser or bool(executed) or waiting_for_subagents or decision["decision"] == "ask_user",
             "effect": effect,
             "executed_action_count": len(executed),
             "routed_to_main": routed_to_main,
             "routed_to_browser": routed_to_browser,
+            "waiting": waiting_for_subagents,
             "reason": decision["reason"],
         },
     )
-    return event_payload | {"executed": executed, "routed_to_main": routed_to_main}
+    return event_payload | {"executed": executed, "routed_to_main": routed_to_main, "waiting": waiting_for_subagents}
 
 
 def redact_proxy_fields_for_prompt(value):
@@ -1260,6 +1327,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         if host_result.get("routed_to_main"):
                             set_agent_status(root, run_id, item_task_id, "main", "pending")
                             set_task_status(root, run_id, item_task_id, "running")
+                        elif host_result.get("waiting"):
+                            set_agent_status(root, run_id, item_task_id, "main", "waiting")
+                            set_task_status(root, run_id, item_task_id, "running")
                         elif host_result.get("executed"):
                             request_round_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")
@@ -1402,6 +1472,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                     exit_after_message = bool(worker_task_id)
                     print(f"{args.sender} -> {reply_target}: {display_reply}", flush=True)
                 else:
+                    empty_reply_waiting_for_subagents = False
                     if manages_task_status:
                         if agent_id != "main":
                             set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
@@ -1409,11 +1480,32 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             set_task_status(root, run_id, item_task_id, "running")
                             exit_after_message = bool(worker_task_id)
                         else:
-                            set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
-                            set_task_status(root, run_id, item_task_id, "failed", exit_code)
-                            stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
-                            exit_after_message = bool(worker_task_id)
-                    append_event(root, run_id, "agent_error", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                            detail = task_snapshot(root, run_id, item_task_id)
+                            if exit_code == 0 and task_has_incomplete_sub_agents(detail["task"]):
+                                empty_reply_waiting_for_subagents = True
+                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", exit_code)
+                                set_task_status(root, run_id, item_task_id, "running")
+                                append_event(
+                                    root,
+                                    run_id,
+                                    "agent_message_skipped",
+                                    {
+                                        "source": source_name,
+                                        "target": args.target,
+                                        "task_id": item_task_id,
+                                        "reason": "empty_reply_while_subagents_running",
+                                    },
+                                )
+                            else:
+                                set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
+                                if task_has_incomplete_sub_agents(detail["task"]):
+                                    set_task_status(root, run_id, item_task_id, "running", exit_code)
+                                else:
+                                    set_task_status(root, run_id, item_task_id, "failed", exit_code)
+                                    stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
+                                exit_after_message = bool(worker_task_id)
+                    if not empty_reply_waiting_for_subagents:
+                        append_event(root, run_id, "agent_error", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if exit_after_message and worker_task_id:
                     save_chat_offset(offset_file, item_offset)

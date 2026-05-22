@@ -13,6 +13,7 @@ from aha_cli.store.filesystem import (
     append_event,
     append_message,
     append_task_round,
+    inbox_path,
     mark_task_coordination,
     set_agent_status,
     set_task_status,
@@ -20,9 +21,11 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_runtime,
     run_dir,
+    write_json,
 )
 
 TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted"}
+REUSABLE_SUB_AGENT_STATUSES = {"failed", "interrupted"}
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_STUB_DECISION = "ask_user"
@@ -129,11 +132,79 @@ def action_response_text(text: str) -> str:
 
 
 def chat_offset_exists(root: Path, run_id: str, target: str, task_id: str | None = None) -> bool:
-    safe_target = target.replace("/", "_")
+    safe_target = safe_chat_key(target)
     if task_id:
-        safe_task = task_id.replace("/", "_")
+        safe_task = safe_chat_key(task_id)
         return (run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_task}-{safe_target}.json").exists()
     return (run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_target}.json").exists()
+
+
+def safe_chat_key(value: str) -> str:
+    return (value or "main").replace("/", "_")
+
+
+def chat_offset_path(root: Path, run_id: str, target: str, task_id: str | None = None) -> Path:
+    safe_target = safe_chat_key(target)
+    if task_id:
+        return run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_chat_key(task_id)}-{safe_target}.json"
+    return run_dir(root, run_id) / "runtime" / f"chat-offset-{safe_target}.json"
+
+
+def save_chat_offset(root: Path, run_id: str, target: str, task_id: str | None = None) -> None:
+    inbox = inbox_path(root, run_id, target)
+    offset = inbox.stat().st_size if inbox.exists() else 0
+    write_json(chat_offset_path(root, run_id, target, task_id), {"offset": offset, "updated_at": utc_now()})
+
+
+def reusable_sub_agent(task: dict) -> dict | None:
+    for status in ("interrupted", "failed"):
+        for agent in sub_agents(task):
+            if agent.get("status") == status:
+                return agent
+    return None
+
+
+def spawn_sub_skipped_message(reason: str, max_sub_agents: int) -> str:
+    if reason == "delegation disabled":
+        return "AHA 没有创建新的 sub-agent：当前任务已禁用 delegation。"
+    return (
+        "AHA 没有创建新的 sub-agent："
+        f"已达到 max_sub_agents={max_sub_agents}，且没有 interrupted/failed 的 sub-agent 可复用。"
+        "请先提高 max_sub_agents，或恢复/清理已有 sub-agent。"
+    )
+
+
+def append_spawn_sub_skipped(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    reason: str,
+    max_sub_agents: int,
+) -> None:
+    append_event(
+        root,
+        run_id,
+        "action_skipped",
+        {
+            "task_id": task_id,
+            "type": "spawn_sub",
+            "reason": reason,
+            "max_sub_agents": max_sub_agents,
+        },
+    )
+    append_message(
+        root,
+        run_id,
+        "browser",
+        spawn_sub_skipped_message(reason, max_sub_agents),
+        sender="aha",
+        task_id=task_id,
+        role="main",
+        from_agent="aha",
+        to_agent="browser",
+        coordination="action_skipped",
+    )
 
 
 def apply_supervision_stub(
@@ -307,19 +378,14 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             continue
         if action_type != "spawn_sub":
             continue
-        if task.get("delegation_policy") == "disabled" or current_sub_agents >= max_sub_agents:
-            append_event(
-                root,
-                run_id,
-                "action_skipped",
-                {
-                    "task_id": task_id,
-                    "type": "spawn_sub",
-                    "reason": "delegation disabled or max_sub_agents reached",
-                    "max_sub_agents": max_sub_agents,
-                },
-                )
+        if task.get("delegation_policy") == "disabled":
+            append_spawn_sub_skipped(root, run_id, task_id, reason="delegation disabled", max_sub_agents=max_sub_agents)
             continue
+        reusable_agent = reusable_sub_agent(task) if max_sub_agents > 0 and current_sub_agents >= max_sub_agents else None
+        if current_sub_agents >= max_sub_agents and reusable_agent is None:
+            append_spawn_sub_skipped(root, run_id, task_id, reason="max_sub_agents reached", max_sub_agents=max_sub_agents)
+            continue
+        assignment = str(action.get("title") or action.get("prompt") or "Assist task-main with this task.")
         mark_task_coordination(
             root,
             run_id,
@@ -331,6 +397,69 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             followup_started_at=utc_now(),
         )
         set_task_status(root, run_id, task_id, "running")
+        if reusable_agent is not None:
+            previous_status = str(reusable_agent.get("status") or "")
+            agent_id = str(reusable_agent.get("id") or "")
+            set_agent_status(root, run_id, task_id, agent_id, "pending")
+            backend = str(action.get("backend") or reusable_agent.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex")
+            agent = update_agent_runtime(
+                root,
+                run_id,
+                task_id,
+                agent_id,
+                assignment=assignment,
+                backend=backend,
+                model=action.get("model") if action.get("model") is not None else reusable_agent.get("model"),
+                sandbox=action.get("sandbox") if action.get("sandbox") is not None else reusable_agent.get("sandbox") or task.get("preferred_sandbox"),
+                approval=action.get("approval") if action.get("approval") is not None else reusable_agent.get("approval") or task.get("preferred_approval"),
+                created_by="main",
+                created_reason=str(action.get("reason") or action.get("title") or "main requested sub-agent recovery"),
+                recovery_context="",
+                recovery_context_reason="",
+                recovery_context_at="",
+                recovery_context_consumed_at="",
+                recovery_attempts=0,
+                last_recovery_at="",
+                reused_at=utc_now(),
+                reused_from_status=previous_status,
+            )
+            save_chat_offset(root, run_id, agent_id, task_id)
+            append_message(
+                root,
+                run_id,
+                agent_id,
+                assignment,
+                sender="main",
+                task_id=task_id,
+                role="sub",
+                from_agent="main",
+                to_agent=agent_id,
+            )
+            append_event(
+                root,
+                run_id,
+                "sub_agent_reused",
+                {
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "previous_status": previous_status,
+                    "reason": "spawn_sub reused abnormal sub-agent slot at max_sub_agents",
+                },
+            )
+            if backend in PROCESS_AGENT_BACKENDS:
+                start_backend(
+                    root,
+                    run_id,
+                    agent_id,
+                    backend=backend,
+                    model=agent.get("model"),
+                    sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+                    approval=agent.get("approval") or task.get("preferred_approval") or "never",
+                    from_start=False,
+                    task_id=task_id,
+                )
+            executed.append({"type": "spawn_sub", "agent": agent, "reused": True})
+            continue
         agent = add_agent(
             root,
             run_id,
@@ -344,7 +473,6 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             created_reason=str(action.get("reason") or action.get("title") or "main requested sub-agent"),
         )
         current_sub_agents += 1
-        assignment = str(action.get("title") or action.get("prompt") or "Assist task-main with this task.")
         agent = update_agent_runtime(root, run_id, task_id, agent["id"], assignment=assignment)
         append_message(
             root,
