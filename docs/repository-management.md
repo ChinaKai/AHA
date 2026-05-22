@@ -51,6 +51,8 @@ Rules for store edits:
 - `services/backend_runtime.py` owns managed backend processes, locks, and
   runtime cleanup.
 - `services/chat.py` owns backend chat turns and finalization handling.
+- `services/chat_offsets.py` owns chat inbox offset path/load/save helpers and
+  task-scoped worker exit checks.
 - `services/orchestrator.py` owns AHA action execution and sub-agent
   coordination.
 - `services/proxy.py` owns task proxy normalization and backend environment

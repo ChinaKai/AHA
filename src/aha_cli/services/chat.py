@@ -10,6 +10,7 @@ from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, mark_backend_stopped, start_backend, stop_task_backends
+from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.orchestrator import (
@@ -39,7 +40,6 @@ from aha_cli.store.filesystem import (
     iter_jsonl_reverse,
     load_config,
     mark_task_coordination,
-    read_json,
     require_plan,
     run_dir,
     save_session,
@@ -47,7 +47,6 @@ from aha_cli.store.filesystem import (
     set_task_status,
     status_snapshot,
     task_snapshot,
-    write_json,
     write_task_result,
 )
 from aha_cli.services.messages import format_event
@@ -238,35 +237,6 @@ def _agents_visible_to_prompt(task: dict, target: str) -> list[dict]:
     return [agent for agent in agents if not _is_task_supervision_host_agent_record(task, agent)]
 
 
-def safe_target_name(target: str) -> str:
-    return (target or "main").replace("/", "_")
-
-
-def chat_offset_path(run: Path, target: str, task_id: str | None = None) -> Path:
-    target_name = safe_target_name(target)
-    if task_id:
-        return run / "runtime" / f"chat-offset-{safe_target_name(task_id)}-{target_name}.json"
-    return run / "runtime" / f"chat-offset-{target_name}.json"
-
-
-def load_chat_offset(inbox: Path, offset_file: Path, from_start: bool) -> int:
-    if from_start:
-        return 0
-    if offset_file.exists():
-        try:
-            offset = int(read_json(offset_file).get("offset") or 0)
-            if not inbox.exists() or offset <= inbox.stat().st_size:
-                return max(0, offset)
-        except (OSError, TypeError, ValueError):
-            pass
-    _, offset = iter_jsonl_from(inbox, 0)
-    return offset
-
-
-def save_chat_offset(offset_file: Path, offset: int) -> None:
-    write_json(offset_file, {"offset": offset, "updated_at": utc_now()})
-
-
 def status_from_agent_result(exit_code: int, reply: str) -> str:
     if exit_code != 0:
         return "failed"
@@ -276,33 +246,6 @@ def status_from_agent_result(exit_code: int, reply: str) -> str:
     if any(marker in reply for marker in BLOCKED_REPLY_MARKERS):
         return "blocked"
     return "completed"
-
-
-def worker_backend_should_exit_after_turn(
-    root: Path,
-    run_id: str,
-    task_id: str | None,
-    worker_task_id: str | None,
-    inbox: Path,
-    processed_offset: int,
-) -> bool:
-    if not task_id or not worker_task_id:
-        return False
-    try:
-        task = task_snapshot(root, run_id, task_id)["task"]
-    except KeyError:
-        return True
-    status = str(task.get("status") or "")
-    if status != "awaiting_user" and status not in TERMINAL_TASK_STATUSES:
-        return False
-    if task_has_incomplete_sub_agents(task):
-        return False
-    try:
-        if inbox.exists() and inbox.stat().st_size > processed_offset:
-            return False
-    except OSError:
-        return False
-    return True
 
 
 def supervision_host_context(task: dict, host_notes: list[str] | None = None) -> str:
