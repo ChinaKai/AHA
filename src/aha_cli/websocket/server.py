@@ -101,24 +101,30 @@ def _parse_ws_cursor(query: dict[str, list[str]], max_event_id: int) -> tuple[in
     return cursor, None
 
 
+def _parse_ws_status_options(query: dict[str, list[str]]) -> dict:
+    lite = str((query.get("lite") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+    selected_task_id = str((query.get("selected_task_id") or query.get("task_id") or [""])[0]).strip() or None
+    return {"lite": lite, "selected_task_id": selected_task_id}
+
+
 async def ws_handshake_from_headers(
     root: Path,
     run_id: str,
     target: str,
     headers: dict[str, str],
     writer: asyncio.StreamWriter,
-) -> tuple[bool, int | None]:
+) -> tuple[bool, int | None, dict]:
     query = parse_qs(urlparse(target).query, keep_blank_values=True)
     key = headers.get("sec-websocket-key")
     if not key:
         writer.write(_http_error("400 Bad Request", "missing Sec-WebSocket-Key"))
         await writer.drain()
-        return False, None
+        return False, None, {}
     cursor, cursor_error = _parse_ws_cursor(query, event_stream_position(root, run_id))
     if cursor_error:
         writer.write(_http_error("400 Bad Request", cursor_error))
         await writer.drain()
-        return False, None
+        return False, None, {}
     accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode("ascii")).digest()).decode("ascii")
     response = (
         "HTTP/1.1 101 Switching Protocols\r\n"
@@ -129,10 +135,10 @@ async def ws_handshake_from_headers(
     )
     writer.write(response.encode("ascii"))
     await writer.drain()
-    return True, cursor
+    return True, cursor, _parse_ws_status_options(query)
 
 
-async def ws_handshake(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[bool, int | None]:
+async def ws_handshake(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[bool, int | None, dict]:
     raw = await reader.readuntil(b"\r\n\r\n")
     lines = raw.decode("utf-8", errors="replace").split("\r\n")
     request = lines[0].split()
@@ -145,8 +151,23 @@ async def ws_handshake(root: Path, run_id: str, reader: asyncio.StreamReader, wr
     return await ws_handshake_from_headers(root, run_id, target, headers, writer)
 
 
-async def _send_status(root: Path, run_id: str, writer: asyncio.StreamWriter) -> None:
-    await ws_send_text(writer, json.dumps({"type": "status", "data": status_snapshot_projection(root, run_id)}, ensure_ascii=False))
+async def _send_status(root: Path, run_id: str, writer: asyncio.StreamWriter, status_options: dict | None = None) -> None:
+    options = status_options or {}
+    await ws_send_text(
+        writer,
+        json.dumps(
+            {
+                "type": "status",
+                "data": status_snapshot_projection(
+                    root,
+                    run_id,
+                    lite=bool(options.get("lite")),
+                    selected_task_id=options.get("selected_task_id"),
+                ),
+            },
+            ensure_ascii=False,
+        ),
+    )
 
 
 async def _send_events(root: Path, run_id: str, writer: asyncio.StreamWriter, last_event_id: int, snapshot_event_id: int) -> int:
@@ -174,6 +195,7 @@ async def handle_ws_connection(
     writer: asyncio.StreamWriter,
     interval: float,
     cursor: int | None,
+    status_options: dict | None = None,
 ) -> None:
     conn_id = f"{id(writer):x}"
     realtime_debug_log(
@@ -185,7 +207,7 @@ async def handle_ws_connection(
         cursor=cursor if cursor is not None else "",
         peer=writer.get_extra_info("peername"),
     )
-    await _send_status(root, run_id, writer)
+    await _send_status(root, run_id, writer, status_options)
     last_heartbeat_at = asyncio.get_running_loop().time()
     realtime_debug_log("ws", _root=root, phase="status_sent", conn_id=conn_id, run_id=run_id)
     offset = cursor
@@ -271,7 +293,7 @@ async def handle_ws_connection(
                         to_agent=payload.get("to_agent"),
                     )
             elif payload.get("type") == "status":
-                await _send_status(root, run_id, writer)
+                await _send_status(root, run_id, writer, status_options)
                 realtime_debug_log("ws", _root=root, phase="status_sent", conn_id=conn_id, run_id=run_id)
             else:
                 await ws_send_text(writer, json.dumps({"type": "error", "message": "unknown message type"}))
@@ -284,12 +306,12 @@ async def handle_ws_connection(
 
 
 async def handle_ws_client(root: Path, run_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, interval: float) -> None:
-    ok, cursor = await ws_handshake(root, run_id, reader, writer)
+    ok, cursor, status_options = await ws_handshake(root, run_id, reader, writer)
     if not ok:
         writer.close()
         await writer.wait_closed()
         return
-    await handle_ws_connection(root, run_id, reader, writer, interval, cursor)
+    await handle_ws_connection(root, run_id, reader, writer, interval, cursor, status_options)
 
 
 async def run_ws_server(root: Path, run_id: str, host: str, port: int, interval: float) -> None:

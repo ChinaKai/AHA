@@ -60,7 +60,7 @@ const allEvents = [];
 const seenRealtimeEvents = new Set();
 const pendingMessages = [];
 const interruptedContexts = new Set();
-const conversationPageLimit = 50;
+const conversationPageLimit = 30;
 const logPageLimit = 200;
 const conversationStates = new Map();
 const expandedMessageKeys = new Set();
@@ -92,6 +92,15 @@ const supervisionEventTypes = new Set([
   "main_reported_to_host",
   "host_decision",
   "main_applied_decision"
+]);
+const turnEventTypes = new Set([
+  "agent_started",
+  "agent_prompt_metrics",
+  "agent_usage",
+  "agent_context_overflow",
+  "agent_thread",
+  "agent_finished",
+  "agent_status_changed"
 ]);
 
 const runIdEl = document.getElementById("run-id");
@@ -571,6 +580,7 @@ async function loadBootstrap() {
   bootstrapData = payload;
   applyRunListData(payload);
   applyWorkspaceData(payload.workspaces || workspaceData);
+  applyBackendData(payload.backends || []);
   runsError = "";
   runsLoaded = true;
   renderSessionMenu();
@@ -769,8 +779,7 @@ async function refreshRunScopedView() {
     return;
   }
   await loadStatus({ forceAgents: true });
-  await ensureConversationLoaded();
-  await loadBackendStatus();
+  await Promise.all([ensureConversationLoaded(), loadBackendStatus()]);
   await syncRealtimeEvents();
   renderPanel();
 }
@@ -1218,6 +1227,10 @@ function selectedTask() {
   return (statusData?.tasks || []).find(task => task.id === selectedTaskId) || null;
 }
 
+function selectedTaskNeedsAgentDetails(task = selectedTask()) {
+  return Boolean(task && taskAgentCount(task) > (task.agents || []).length);
+}
+
 function selectedAgent() {
   const task = selectedTask();
   return (task?.agents || []).find(item => item.id === agentTargetEl.value) || null;
@@ -1520,6 +1533,12 @@ function taskSupervisionSummary(task) {
   const policy = taskSupervisionPolicy(task);
   if (policy.mode === "manual") return "manual";
   return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds}`;
+}
+
+function taskAgentCount(task) {
+  const value = Number(task?.agent_count);
+  if (Number.isFinite(value)) return value;
+  return (task?.agents || []).length;
 }
 
 function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue) {
@@ -1826,6 +1845,17 @@ function conversationKey(taskId = selectedTaskId, target = backendTarget()) {
   return `${taskId || ""}::${target || "main"}`;
 }
 
+function activeConversationCategoryList() {
+  return conversationFilterOptions
+    .map(item => item.key)
+    .filter(key => conversationFilters[key]);
+}
+
+function activeConversationCategoryKey() {
+  const categories = activeConversationCategoryList();
+  return categories.length ? categories.join(",") : "none";
+}
+
 function parseConversationKey(key) {
   const index = key.indexOf("::");
   return index < 0 ? { taskId: key, target: "main" } : { taskId: key.slice(0, index), target: key.slice(index + 2) || "main" };
@@ -1859,7 +1889,7 @@ function mergeConversationEvents(current, incoming, prepend = false) {
 function conversationState(taskId = selectedTaskId, target = backendTarget()) {
   const key = conversationKey(taskId, target);
   if (!conversationStates.has(key)) {
-    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false, error: "", backendSession: null });
+    conversationStates.set(key, { events: [], beforeOffset: null, hasMore: true, initialized: false, loading: false, error: "", backendSession: null, categoryKey: "" });
   }
   return conversationStates.get(key);
 }
@@ -2854,12 +2884,11 @@ function latestTurnTiming(taskId) {
   };
 }
 
-async function loadBackends() {
-  const payload = await fetchJson("/api/backends", {}, "Failed to load backends");
+function applyBackendData(backends = []) {
   backendModels = new Map();
   backendCommands = new Map();
   taskBackendEl.innerHTML = "";
-  for (const backend of payload.backends) {
+  for (const backend of backends) {
     backendModels.set(backend.name, backend.models || [{ name: "", label: "default" }]);
     backendCommands.set(backend.name, backend.commands || []);
     const opt = document.createElement("option");
@@ -2869,6 +2898,12 @@ async function loadBackends() {
   }
   if ([...taskBackendEl.options].some(item => item.value === "codex")) taskBackendEl.value = "codex";
   renderModelOptions();
+}
+
+async function loadBackends() {
+  const payload = await fetchJson("/api/backends", {}, "Failed to load backends");
+  applyBackendData(payload.backends || []);
+  return payload;
 }
 
 function renderModelOptions() {
@@ -2957,8 +2992,17 @@ async function loadStatus(options = {}) {
     renderFirstRunState();
     return null;
   }
-  statusData = await fetchJson(apiUrl("/api/status"), {}, "Failed to load status");
+  const params = { lite: "1" };
+  const requestedSelectedTaskId = selectedTaskId;
+  if (selectedTaskId) params.selected_task_id = selectedTaskId;
+  statusData = await fetchJson(apiUrl("/api/status", params), {}, "Failed to load status");
   applyStatusData(options);
+  if (options.ensureSelectedAgents !== false && !requestedSelectedTaskId && selectedTaskNeedsAgentDetails()) {
+    loadStatus({ ...options, forceAgents: true, ensureSelectedAgents: false })
+      .then(() => loadBackendStatus())
+      .then(() => renderPanelForRealtime())
+      .catch(err => console.warn("Failed to load selected task agent details", err));
+  }
   return statusData;
 }
 
@@ -3054,13 +3098,23 @@ function assignConversationKeys(events, start = 0) {
 async function loadConversationPage(taskId = selectedTaskId, target = backendTarget(), older = false, force = false) {
   if (!taskId) return null;
   const state = conversationState(taskId, target);
+  const categoryKey = activeConversationCategoryKey();
+  if (!older && state.categoryKey !== categoryKey) {
+    state.events = [];
+    state.beforeOffset = null;
+    state.hasMore = true;
+    state.initialized = false;
+    state.error = "";
+    state.categoryKey = categoryKey;
+  }
   if (state.loading || (!force && !older && state.initialized) || (older && !state.hasMore)) return state;
   state.loading = true;
   try {
     const params = new URLSearchParams({
       task_id: taskId,
       target,
-      limit: String(conversationPageLimit)
+      limit: String(conversationPageLimit),
+      categories: categoryKey
     });
     if (older && state.beforeOffset !== null && state.beforeOffset !== undefined) params.set("before_offset", String(state.beforeOffset));
     let res;
@@ -3156,7 +3210,12 @@ function appendRealtimeConversationEvents(events) {
   for (const [key, state] of conversationStates.entries()) {
     if (!state.initialized) continue;
     const { taskId, target } = parseConversationKey(key);
-    const matching = events.filter(event => isTaskEvent(event, taskId) && isTimelineEvent(event) && eventMatchesAgent(event, target));
+    const matching = events.filter(event => (
+      isTaskEvent(event, taskId) &&
+      isTimelineEvent(event) &&
+      eventMatchesAgent(event, target) &&
+      (conversationFilters[conversationEventCategory(event)] || turnEventTypes.has(event.type))
+    ));
     if (matching.length) state.events = mergeConversationEvents(state.events, matching, false);
   }
 }
@@ -3299,6 +3358,8 @@ function eventWebSocketUrl() {
   const url = eventWebSocketBaseUrl();
   if (currentRunId) url.searchParams.set("run_id", currentRunId);
   if (lastEventId) url.searchParams.set("last_event_id", lastEventId);
+  url.searchParams.set("lite", "1");
+  if (selectedTaskId) url.searchParams.set("selected_task_id", selectedTaskId);
   return url.toString();
 }
 
@@ -3524,7 +3585,7 @@ function renderTaskList() {
         <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}${taskSupervisionBadge(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml((task.agents || []).length)} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
+      <div class="meta truncate">${escapeHtml(taskAgentCount(task))} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
@@ -3542,7 +3603,12 @@ function renderTaskList() {
 }
 
 async function selectTask(taskId) {
+  const changedTask = selectedTaskId !== taskId;
   selectedTaskId = taskId;
+  if (changedTask) {
+    eventSocketReconnectAt = 0;
+    closeEventWebSocket();
+  }
   taskProxyEditingUntil = 0;
   taskSupervisionEditingUntil = 0;
   conversationAutoFollow = true;
@@ -3554,8 +3620,7 @@ async function selectTask(taskId) {
   renderTaskProxyEditor();
   renderTaskSupervisionEditor();
   renderAgents();
-  await loadBackendStatus();
-  await ensureActiveTabData();
+  await Promise.all([loadBackendStatus(), ensureActiveTabData()]);
   renderPendingMessages();
   renderPanel();
 }
@@ -3983,7 +4048,11 @@ function renderTimelineEvent(event) {
   if (event.type === "agent_message") return renderTimelineCard(`agent update (${data.target || "main"})`, data.text || "", eventTimeLabel(event), "agent-update", event._uiKey);
   if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey);
   if (event.type === "agent_command_finished") {
-    const output = data.output_tail ? `\n\nOutput tail:\n${data.output_tail}` : "";
+    const output = data.output_tail
+      ? `\n\nOutput tail:\n${data.output_tail}`
+      : data.output_tail_omitted
+        ? `\n\nOutput tail omitted (${data.output_tail_chars || 0} chars).`
+        : "";
     return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey);
   }
   if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey);
@@ -4518,12 +4587,13 @@ backendStatusEl.addEventListener("click", async event => {
   }
 });
 
-conversationFiltersEl.addEventListener("change", event => {
+conversationFiltersEl.addEventListener("change", async event => {
   const input = event.target instanceof HTMLInputElement ? event.target : null;
   const key = input?.dataset.conversationFilter;
   if (!key || !(key in conversationFilters)) return;
   conversationFilters[key] = input.checked;
   conversationAutoFollow = true;
+  await loadConversationPage(selectedTaskId, backendTarget(), false, true);
   renderPanel();
 });
 
@@ -4710,8 +4780,8 @@ async function tick() {
   tickInFlight = true;
   try {
     await loadStatus();
-    await ensureConversationLoaded();
-    await loadBackendStatus();
+    renderPanelForRealtime();
+    await Promise.all([ensureConversationLoaded(), loadBackendStatus()]);
     const autoFlushResponse = await maybeAutoFlushPending();
     if (autoFlushResponse) {
       await loadStatus({ forceAgents: true });
@@ -4730,8 +4800,7 @@ async function tick() {
   }
 }
 
-Promise.all([loadBackends(), loadWorkspaces()]).then(async () => {
-  await loadBootstrap();
+loadBootstrap().then(async () => {
   if (currentRunId) {
     await tick();
   } else {

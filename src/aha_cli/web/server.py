@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from email.parser import BytesParser
 from email.policy import default as email_policy
+import gzip
 from importlib import resources
 import json
 import os
@@ -78,6 +79,9 @@ from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_hea
 STATIC_PACKAGE = "aha_cli.web"
 HL_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/hl_project")
 MY_PROJECT_ROOT = Path("/home/kaikai/kk-workspace/my_project")
+BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
+_BACKEND_STATUS_CACHE: dict[tuple[str, str, str, str], tuple[float, dict]] = {}
+GZIP_MIN_BYTES = 1024
 WORKSPACE_ROOTS = [HL_PROJECT_ROOT, MY_PROJECT_ROOT]
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
@@ -410,6 +414,22 @@ def is_raw_action_agent_message(event: dict) -> bool:
     return is_aha_action_envelope_text(str(data.get("text") or ""))
 
 
+def slim_conversation_event(event: dict, *, include_command_output: bool = False) -> dict:
+    if include_command_output or event.get("type") != "agent_command_finished":
+        return event
+    data = event.get("data") or {}
+    output_tail = str(data.get("output_tail") or "")
+    if not output_tail:
+        return event
+    slim = dict(event)
+    slim_data = dict(data)
+    slim_data.pop("output_tail", None)
+    slim_data["output_tail_omitted"] = True
+    slim_data["output_tail_chars"] = len(output_tail)
+    slim["data"] = slim_data
+    return slim
+
+
 def conversation_view_page(
     root: Path,
     run_id: str,
@@ -417,12 +437,20 @@ def conversation_view_page(
     target: str,
     limit: int = 50,
     before: int | None = None,
+    categories: set[str] | None = None,
+    include_command_output: bool = False,
 ) -> dict:
-    page = conversation_events_page(root, run_id, task_id, target, limit=limit, before=before)
-    events = [event for event in page.get("events", []) if not is_raw_action_agent_message(event)]
+    page = conversation_events_page(root, run_id, task_id, target, limit=limit, before=before, categories=categories)
+    events = [
+        slim_conversation_event(event, include_command_output=include_command_output)
+        for event in page.get("events", [])
+        if not is_raw_action_agent_message(event)
+    ]
     view = dict(page)
     view["events"] = events
     view["count"] = len(events)
+    view["categories"] = sorted(categories) if categories is not None else []
+    view["include_command_output"] = include_command_output
     view["turn_events"] = conversation_turn_events(root, run_id, task_id, target) if before is None else []
     session_file = session_path(root, run_id, task_id, target)
     view["backend_session"] = backend_session_jsonl_info(read_json(session_file)) if session_file.exists() else {}
@@ -436,31 +464,54 @@ class ApiRunNotFound(Exception):
         super().__init__(run_id)
 
 
+def request_accepts_gzip(headers: dict[str, str] | None) -> bool:
+    accepted = str((headers or {}).get("accept-encoding") or "").lower()
+    return any(item.strip().split(";", 1)[0] == "gzip" for item in accepted.split(","))
+
+
 def http_response(
     status: str,
     body: bytes,
     content_type: str = "text/plain; charset=utf-8",
     headers: dict[str, str] | None = None,
+    request_headers: dict[str, str] | None = None,
+    cache_control: str = "no-store",
 ) -> bytes:
+    response_headers = dict(headers or {})
+    response_body = body
+    if (
+        response_body
+        and len(response_body) >= GZIP_MIN_BYTES
+        and request_accepts_gzip(request_headers)
+        and not any(str(key).lower() == "content-encoding" for key in response_headers)
+    ):
+        response_body = gzip.compress(response_body)
+        response_headers["Content-Encoding"] = "gzip"
+        response_headers["Vary"] = "Accept-Encoding"
     header_lines = [
         f"HTTP/1.1 {status}",
         f"Content-Type: {content_type}",
-        f"Content-Length: {len(body)}",
-        "Cache-Control: no-store",
+        f"Content-Length: {len(response_body)}",
+        f"Cache-Control: {cache_control}",
     ]
-    for key, value in (headers or {}).items():
+    for key, value in response_headers.items():
         safe_key = str(key).replace("\r", "").replace("\n", "")
         safe_value = str(value).replace("\r", " ").replace("\n", " ")
         header_lines.append(f"{safe_key}: {safe_value}")
     header_lines.append("Connection: close")
-    return ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii") + body
+    return ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii") + response_body
 
 
-def json_response(data: dict, status: str = "200 OK") -> bytes:
-    return http_response(status, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+def json_response(data: dict, status: str = "200 OK", request_headers: dict[str, str] | None = None) -> bytes:
+    return http_response(
+        status,
+        json.dumps(data, ensure_ascii=False).encode("utf-8"),
+        "application/json; charset=utf-8",
+        request_headers=request_headers,
+    )
 
 
-def static_response(name: str, method: str) -> bytes:
+def static_response(name: str, method: str, request_headers: dict[str, str] | None = None) -> bytes:
     try:
         resource = resources.files(STATIC_PACKAGE).joinpath("static", name)
         if not resource.is_file():
@@ -474,7 +525,7 @@ def static_response(name: str, method: str) -> bytes:
         ".css": "text/css; charset=utf-8",
         ".js": "application/javascript; charset=utf-8",
     }.get(suffix, "application/octet-stream")
-    return http_response("200 OK", b"" if method == "HEAD" else body, content_type)
+    return http_response("200 OK", b"" if method == "HEAD" else body, content_type, request_headers=request_headers)
 
 
 async def read_http_request(reader: asyncio.StreamReader) -> tuple[str, str, dict[str, str], bytes]:
@@ -635,6 +686,17 @@ def task_activity_status(task: dict) -> str:
     if str(task.get("status") or "").lower() == "running":
         return "running"
     return "idle"
+
+
+def cached_backend_status(root: Path, run_id: str, target: str, task_id: str | None) -> dict:
+    key = (str(root), run_id, task_id or "", target or "main")
+    now = time.monotonic()
+    cached = _BACKEND_STATUS_CACHE.get(key)
+    if cached and now - cached[0] <= BACKEND_STATUS_CACHE_TTL_SECONDS:
+        return dict(cached[1])
+    state = backend_status(root, run_id, target, task_id=task_id)
+    _BACKEND_STATUS_CACHE[key] = (now, dict(state))
+    return state
 
 
 def agent_recovery_context(agent_id: str, reason: str) -> str:
@@ -816,7 +878,7 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     return True
 
 
-def web_status_snapshot(root: Path, run_id: str) -> dict:
+def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
     snapshot = status_snapshot(root, run_id)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
     outcomes = task_outcome_snapshots(root, run_id, task_ids)
@@ -824,11 +886,17 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
     for task in snapshot.get("tasks", []):
         raw_task_id = str(task.get("id") or "")
         task_id = raw_task_id or None
-        for agent in task.get("agents", []):
+        include_all_agent_details = not lite or (selected_task_id is not None and raw_task_id == selected_task_id)
+        agents = task.get("agents", [])
+        task["agent_count"] = len(agents)
+        for agent in agents:
             target = str(agent.get("id") or "main")
+            agent_status = str(agent.get("status") or "").lower()
+            if lite and not include_all_agent_details and agent_status != "running":
+                continue
             key = (task_id, target)
             if key not in backend_cache:
-                backend_cache[key] = backend_status(root, run_id, target, task_id=task_id)
+                backend_cache[key] = cached_backend_status(root, run_id, target, task_id=task_id)
             state = backend_cache[key]
             recover_stale_running_agent(root, run_id, task, agent, state)
             agent["backend_process_status"] = state.get("status") or "stopped"
@@ -841,6 +909,8 @@ def web_status_snapshot(root: Path, run_id: str) -> dict:
         task["outcome_status"] = outcome
         task["activity_status"] = task_activity_status(task)
         task["display_status"] = display_status
+        if lite and (not selected_task_id or raw_task_id != selected_task_id):
+            task["agents"] = []
     return snapshot
 
 
@@ -1384,18 +1454,18 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
         query = parse_qs(parsed.query)
         if method == "GET" and path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
             selected_run_id = require_api_run_id(root, run_id, query)
-            ok, cursor = await ws_handshake_from_headers(root, selected_run_id, target, headers, writer)
+            ok, cursor, status_options = await ws_handshake_from_headers(root, selected_run_id, target, headers, writer)
             if ok:
-                await handle_ws_connection(root, selected_run_id, reader, writer, 1.0, cursor)
+                await handle_ws_connection(root, selected_run_id, reader, writer, 1.0, cursor, status_options)
             return
         if method in {"GET", "HEAD"} and path == "/":
-            writer.write(static_response("index.html", method))
+            writer.write(static_response("index.html", method, headers))
         elif method in {"GET", "HEAD"} and path.startswith("/static/"):
             static_name = unquote(path.removeprefix("/static/"))
             if "/" in static_name or static_name.startswith("."):
                 writer.write(http_response("404 Not Found", b"not found\n"))
             else:
-                writer.write(static_response(static_name, method))
+                writer.write(static_response(static_name, method, headers))
         elif method in {"GET", "HEAD"} and path == "/api/runs":
             response = json_response({"default_run_id": default_api_run_id(root, run_id), "runs": list_run_summaries(root)})
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
@@ -1487,7 +1557,9 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                     "default_run_id": default_run_id,
                     "runs": runs,
                     "workspaces": workspace_options(aha_home=root),
-                }
+                    "backends": agent_backends(),
+                },
+                request_headers=headers,
             )
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method == "POST" and path == "/api/runs":
@@ -1572,7 +1644,9 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(json_response(response, "201 Created"))
         elif method in {"GET", "HEAD"} and path == "/api/status":
             selected_run_id = require_api_run_id(root, run_id, query)
-            response = json_response(web_status_snapshot(root, selected_run_id))
+            lite = str(query.get("lite", [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+            selected_task_id = str(query.get("selected_task_id", [""])[0] or query.get("task_id", [""])[0] or "").strip() or None
+            response = json_response(web_status_snapshot(root, selected_run_id, lite=lite, selected_task_id=selected_task_id), request_headers=headers)
             writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method in {"GET", "HEAD"} and path == "/api/backends":
             response = json_response({"backends": agent_backends()})
@@ -1708,6 +1782,13 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             task_id = query.get("task_id", [""])[0]
             target = query.get("target", ["main"])[0] or "main"
             limit = int(query.get("limit", ["50"])[0] or "50")
+            categories_text = query.get("categories", [""])[0]
+            categories = {
+                item.strip().lower()
+                for item in categories_text.split(",")
+                if item.strip().lower() in {"chat", "runtime", "commands", "usage"}
+            } if categories_text else None
+            include_command_output = str(query.get("include_command_output", [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             before_values = query.get("before_offset", []) or query.get("before", [])
             try:
                 before = int(before_values[0]) if before_values and before_values[0] else None
@@ -1716,7 +1797,19 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             if not task_id:
                 writer.write(json_response({"error": "task_id required"}, "400 Bad Request"))
             else:
-                response = json_response(conversation_view_page(root, selected_run_id, task_id, target, limit=limit, before=before))
+                response = json_response(
+                    conversation_view_page(
+                        root,
+                        selected_run_id,
+                        task_id,
+                        target,
+                        limit=limit,
+                        before=before,
+                        categories=categories,
+                        include_command_output=include_command_output,
+                    ),
+                    request_headers=headers,
+                )
                 writer.write(http_response("200 OK", b"", "application/json; charset=utf-8") if method == "HEAD" else response)
         elif method == "POST" and path == "/api/web/restart":
             selected_run_id = require_api_run_id(root, run_id, query)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import gzip
 import io
 import json
 import multiprocessing
@@ -2862,6 +2863,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
 
+    def test_web_status_snapshot_lite_skips_nonselected_idle_backend_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Lite status", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+
+                with mock.patch("aha_cli.web.server.backend_status") as backend_status_mock:
+                    snapshot = web_status_snapshot(root, run_id, lite=True, selected_task_id="task-other")
+                    snapshot_without_selection = web_status_snapshot(root, run_id, lite=True)
+
+        backend_status_mock.assert_not_called()
+        task = snapshot["tasks"][0]
+        self.assertEqual(task["agent_count"], 2)
+        self.assertEqual(task["agents"], [])
+        self.assertEqual(snapshot_without_selection["tasks"][0]["agent_count"], 2)
+        self.assertEqual(snapshot_without_selection["tasks"][0]["agents"], [])
+
     def test_web_status_snapshot_recovers_stale_running_agent_after_backend_loss(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3529,6 +3552,41 @@ class CliTests(unittest.TestCase):
         self.assertEqual(turn_event_types, ["agent_started", "agent_prompt_metrics", "agent_thread", "agent_usage", "agent_finished"])
         metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
         self.assertEqual(metrics["data"]["total"]["chars"], 1234)
+
+    def test_conversation_events_api_filters_categories_server_side(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Conversation categories", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "hello", sender="browser", task_id="task-001", role="main")
+                append_event(root, run_id, "agent_command_started", {"task_id": "task-001", "target": "main", "command": "pwd"})
+                append_event(root, run_id, "agent_command_finished", {"task_id": "task-001", "target": "main", "command": "pwd", "exit_code": 0, "output_tail": "large output"})
+                append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
+                append_event(root, run_id, "task_status_changed", {"task_id": "task-001", "status": "running"})
+
+                chat_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=chat"))
+                command_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=chat,commands"))
+                full_command_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=commands&include_command_output=1"))
+                none_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20&categories=none"))
+
+        chat_body = json_response_body(chat_response)
+        command_body = json_response_body(command_response)
+        full_command_body = json_response_body(full_command_response)
+        none_body = json_response_body(none_response)
+        self.assertEqual([event["type"] for event in chat_body["events"]], ["message"])
+        self.assertEqual(
+            [event["type"] for event in command_body["events"]],
+            ["message", "agent_command_started", "agent_command_finished"],
+        )
+        finished = command_body["events"][-1]["data"]
+        self.assertNotIn("output_tail", finished)
+        self.assertTrue(finished["output_tail_omitted"])
+        self.assertEqual(finished["output_tail_chars"], len("large output"))
+        self.assertEqual(full_command_body["events"][-1]["data"]["output_tail"], "large output")
+        self.assertEqual(none_body["events"], [])
 
     def test_backend_session_jsonl_info_analyzes_aha_prompt_duplication(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4413,6 +4471,29 @@ class CliTests(unittest.TestCase):
         status_body = json_response_body(responses["/api/status"])
         self.assertEqual(status_body["tasks"][0]["display_status"], "completed")
 
+    def test_ui_gzips_large_static_and_json_responses_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Gzip UI", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                script_response = asyncio.run(
+                    fetch_ui_response(root, run_id, "/static/app.js", headers={"Accept-Encoding": "gzip"})
+                )
+                status_response = asyncio.run(
+                    fetch_ui_response(root, run_id, "/api/status?lite=1", headers={"Accept-Encoding": "gzip"})
+                )
+
+        self.assertIn(b"Content-Encoding: gzip\r\n", script_response)
+        self.assertIn(b"Content-Encoding: gzip\r\n", status_response)
+        script_body = gzip.decompress(script_response.split(b"\r\n\r\n", 1)[1]).decode("utf-8")
+        status_body = json.loads(gzip.decompress(status_response.split(b"\r\n\r\n", 1)[1]).decode("utf-8"))
+        self.assertIn("conversationPageLimit", script_body)
+        self.assertEqual(status_body["run_id"], run_id)
+
     def test_api_events_uses_snapshot_and_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4723,6 +4804,21 @@ class CliTests(unittest.TestCase):
         self.assertIn('if (event.type === "message") return "chat";', script)
         self.assertIn('if (event.type === "host_decision") return renderTimelineStatus("host decision"', script)
 
+    def test_frontend_keeps_turn_events_realtime_with_chat_only_filter(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const conversationPageLimit = 30;", script)
+        self.assertIn("const turnEventTypes = new Set", script)
+        self.assertIn('"agent_started"', script)
+        self.assertIn("conversationFilters[conversationEventCategory(event)] || turnEventTypes.has(event.type)", script)
+        self.assertIn("taskAgentCount(task)", script)
+        self.assertIn('url.searchParams.set("lite", "1")', script)
+        self.assertIn('url.searchParams.set("selected_task_id", selectedTaskId)', script)
+        self.assertIn("selectedTaskNeedsAgentDetails", script)
+        self.assertIn("applyBackendData(payload.backends || [])", script)
+        self.assertNotIn("Promise.all([loadBackends(), loadWorkspaces()])", script)
+
     def test_prompt_templates_are_packaged_and_renderable(self) -> None:
         root = Path(__file__).resolve().parents[1]
         pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -4774,6 +4870,24 @@ class CliTests(unittest.TestCase):
         self.assertEqual(messages[0]["type"], "status")
         self.assertEqual(messages[1]["type"], "heartbeat")
         self.assertIn("last_event_id", messages[1])
+
+    def test_websocket_status_supports_lite_selected_task_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Websocket lite", "--agents", "2")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-002", backend="codex", role="sub")
+
+                messages = asyncio.run(fetch_ws_messages(root, run_id, "/?lite=1&selected_task_id=task-001", max_messages=1))
+
+        self.assertEqual(messages[0]["type"], "status")
+        tasks = {task["id"]: task for task in messages[0]["data"]["tasks"]}
+        self.assertGreaterEqual(len(tasks["task-001"]["agents"]), 1)
+        self.assertEqual(tasks["task-002"]["agent_count"], 2)
+        self.assertEqual(tasks["task-002"]["agents"], [])
 
     def test_websocket_replays_from_last_event_id_after_reconnect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

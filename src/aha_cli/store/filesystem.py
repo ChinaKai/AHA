@@ -810,6 +810,18 @@ SUPERVISION_EVENT_TYPES = {
 }
 
 
+def conversation_event_category(event_type: str) -> str:
+    if event_type == "agent_message":
+        return "chat"
+    if event_type in {"agent_usage", "agent_prompt_metrics"}:
+        return "usage"
+    if event_type in {"agent_command_started", "agent_command_finished"}:
+        return "commands"
+    if event_type == "message":
+        return "chat"
+    return "runtime"
+
+
 def event_task_id(event: dict) -> str | None:
     data = event.get("data") or {}
     if data.get("task_id"):
@@ -861,15 +873,20 @@ def conversation_events_page(
     target: str,
     limit: int = 50,
     before: int | None = None,
+    categories: set[str] | None = None,
 ) -> dict:
     path = event_path(root, run_id)
     after_offset = path.stat().st_size if path.exists() else 0
     end_offset = after_offset if before is None else max(0, min(before, after_offset))
     safe_limit = max(1, min(limit, 200))
+    allowed_categories = categories
     matches: list[dict] = []
     for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
+        event_type = str(event.get("type") or "")
+        if allowed_categories is not None and conversation_event_category(event_type) not in allowed_categories:
+            continue
         if (
-            event.get("type") in TIMELINE_EVENT_TYPES
+            event_type in TIMELINE_EVENT_TYPES
             and event_task_id(event) == task_id
             and (target or "main") in event_agent_refs(event)
         ):
@@ -2156,9 +2173,15 @@ def status_snapshot(root: Path, run_id: str) -> dict:
     }
 
 
-def status_snapshot_projection(root: Path, run_id: str) -> dict:
+def status_snapshot_projection(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
     snapshot_event_id = event_stream_position(root, run_id)
     snapshot = status_snapshot(root, run_id)
+    if lite and selected_task_id:
+        for task in snapshot.get("tasks", []):
+            agents = task.get("agents") or []
+            task["agent_count"] = len(agents)
+            if str(task.get("id") or "") != selected_task_id:
+                task["agents"] = []
     snapshot["snapshot_event_id"] = snapshot_event_id
     return snapshot
 
