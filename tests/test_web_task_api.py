@@ -182,7 +182,7 @@ class WebTaskApiTests(unittest.TestCase):
                     real_agent_enabled=True,
                 )
 
-                with mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running"}) as start:
+                with mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start:
                     response = handle_send_payload(
                         root,
                         run_id,
@@ -216,7 +216,7 @@ class WebTaskApiTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
-                with mock.patch("aha_cli.web.task_actions.start_backend", return_value={"status": "running", "started": True}) as start_backend:
+                with mock.patch("aha_cli.web.task_runtime.start_backend", return_value={"status": "running", "started": True}) as start_backend:
                     response = asyncio.run(
                         fetch_ui_response(
                             root,
