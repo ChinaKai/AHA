@@ -218,9 +218,14 @@ header > div:first-child h1 {
   color: #667085;
   font-size: 12px;
 }
+.weixin-console-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .weixin-console-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .weixin-console-grid section {
@@ -251,6 +256,46 @@ header > div:first-child h1 {
   color: #1e3a8a;
   font-size: 12px;
   line-height: 1.5;
+}
+.weixin-console-note.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+.weixin-console-note.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+.weixin-qr {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: center;
+}
+.weixin-qr img {
+  width: min(220px, 100%);
+  height: auto;
+  image-rendering: pixelated;
+}
+.weixin-qr a {
+  color: #175cd3;
+  font-size: 12px;
+  text-decoration: none;
+}
+.weixin-test {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 12px;
+}
+.weixin-test textarea {
+  resize: vertical;
+  min-height: 70px;
 }
 #session-detail {
   display: grid;

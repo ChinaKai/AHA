@@ -133,14 +133,21 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function closeWeixinConsoleForOutsideEvent", script)
         self.assertIn('document.addEventListener("pointerdown", closeWeixinConsoleForOutsideEvent, true);', script)
         self.assertIn("function renderWeixinConsole", script)
+        self.assertIn("function startWeixinPairing", script)
+        self.assertIn("function sendWeixinTestNotification", script)
+        self.assertIn('apiUrl("/api/weixin/pair")', script)
+        self.assertIn('apiUrl("/api/weixin/test")', script)
+        self.assertIn("微信配对二维码", script)
+        self.assertIn("发送测试通知", script)
         self.assertNotIn('await activateTab("weixin");', script)
         self.assertNotIn('if (activeTab === "weixin") return;', script)
-        self.assertIn("codex-weixin", script)
-        self.assertIn("在 codex-weixin 仓库内执行", script)
+        self.assertNotIn("codex-weixin", script)
         self.assertNotIn("/home/kaikai/kk-workspace/my_project/codex-weixin", script)
         self.assertIn(".weixin-console", styles)
         self.assertIn(".weixin-console-popover", styles)
         self.assertIn(".weixin-console-grid", styles)
+        self.assertIn(".weixin-qr", styles)
+        self.assertIn(".weixin-test", styles)
 
     def test_frontend_renders_prompt_metrics_visualization(self) -> None:
         root = Path(__file__).resolve().parents[1]

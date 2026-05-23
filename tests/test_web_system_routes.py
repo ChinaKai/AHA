@@ -112,3 +112,40 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertIn('"seq": 7', log_text)
         self.assertNotIn("ignored", log_text)
         self.assertTrue(any(event["type"] == "web_restart_requested" for event in events))
+
+    def test_system_routes_handle_weixin_console_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Weixin routes", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                status_payload = {"ok": True, "paired": False, "pairing": None}
+                pair_payload = {"ok": True, "paired": False, "pairing": {"status": "waiting", "qrcode_svg": "<svg/>"}}
+                sent_payload = {"ok": True, "sent": True, "message_id": "msg-1", "target": "user-1@im.wechat"}
+                with (
+                    mock.patch("aha_cli.web.system_routes.weixin_status_snapshot", return_value=status_payload) as status_snapshot,
+                    mock.patch("aha_cli.web.system_routes.start_pairing", return_value=pair_payload) as start_pair,
+                    mock.patch("aha_cli.web.system_routes.send_test_notification", return_value=sent_payload) as send_test,
+                ):
+                    status = system_route_response(root, run_id, "GET", "/api/weixin", parse_qs(""))
+                    pair = system_route_response(root, run_id, "POST", "/api/weixin/pair", parse_qs(""))
+                    test = system_route_response(
+                        root,
+                        run_id,
+                        "POST",
+                        "/api/weixin/test",
+                        parse_qs(""),
+                        json.dumps({"message": "hello"}).encode("utf-8"),
+                    )
+
+        self.assertTrue(status and status.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(pair and pair.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(test and test.startswith(b"HTTP/1.1 200 OK"))
+        self.assertFalse(json_response_body(status)["paired"])
+        self.assertEqual(json_response_body(pair)["pairing"]["status"], "waiting")
+        self.assertEqual(json_response_body(test)["message_id"], "msg-1")
+        status_snapshot.assert_called_once_with(root, run_id)
+        start_pair.assert_called_once_with(root, run_id)
+        send_test.assert_called_once_with(root, run_id, "hello")

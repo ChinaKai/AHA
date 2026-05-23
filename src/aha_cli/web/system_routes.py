@@ -10,6 +10,7 @@ import time
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.backend_runtime import backend_status
+from aha_cli.services.weixin import WeixinError, send_test_notification, start_pairing, status_snapshot as weixin_status_snapshot
 from aha_cli.store.filesystem import append_event
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
@@ -249,4 +250,24 @@ def system_route_response(
             return json_response({"ok": True, **restart})
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as exc:
             return json_response({"error": f"failed to schedule web restart: {exc}"}, "500 Internal Server Error")
+    if method in {"GET", "HEAD"} and path == "/api/weixin":
+        run_id = require_api_run_id(root, default_run_id, query)
+        return head_or_json(method, weixin_status_snapshot(root, run_id), request_headers=headers)
+    if method == "POST" and path == "/api/weixin/pair":
+        run_id = require_api_run_id(root, default_run_id, query)
+        try:
+            payload = start_pairing(root, run_id)
+            append_event(root, run_id, "weixin_pairing_started", {"status": payload.get("pairing", {}).get("status")})
+            return json_response(payload)
+        except WeixinError as exc:
+            return json_response({"error": str(exc)}, "502 Bad Gateway")
+    if method == "POST" and path == "/api/weixin/test":
+        payload = parse_json_body(body) if body.strip() else {}
+        run_id = require_api_run_id(root, default_run_id, query, payload)
+        try:
+            sent = send_test_notification(root, run_id, str(payload.get("message") or ""))
+            append_event(root, run_id, "weixin_test_notification_sent", {"target": sent.get("target"), "message_id": sent.get("message_id")})
+            return json_response(sent)
+        except WeixinError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
     return None

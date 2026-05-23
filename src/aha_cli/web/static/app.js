@@ -207,6 +207,16 @@ const conversationFiltersEl = document.getElementById("conversation-filters");
 const commandMenuEl = document.getElementById("command-menu");
 let commandSelection = 0;
 let weixinConsoleOpen = false;
+let weixinPollTimer = null;
+const weixinState = {
+  loaded: false,
+  loading: false,
+  sending: false,
+  error: "",
+  notice: "",
+  status: null,
+  testMessage: "AHA 微信通知测试"
+};
 const ahaSlashCommands = [
   { scope: "aha", name: "/aha help", insert: "/aha help", desc: "Show AHA commands. Handled locally." },
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
@@ -791,7 +801,7 @@ function renderSessionMenu() {
   if (!hasRun || runActionInFlight) {
     setWeixinConsoleOpen(false);
   } else if (weixinConsoleOpen && weixinConsolePopoverEl) {
-    weixinConsolePopoverEl.innerHTML = renderWeixinConsole();
+    renderWeixinConsolePopover();
   }
   renderRunArchiveState();
   renderSessionSummary();
@@ -826,9 +836,11 @@ function setWeixinConsoleOpen(open) {
   weixinConsoleOpen = Boolean(open && currentRunId && weixinConsolePopoverEl);
   if (!weixinConsolePopoverEl) return;
   if (weixinConsoleOpen) {
-    weixinConsolePopoverEl.innerHTML = renderWeixinConsole();
+    renderWeixinConsolePopover();
     weixinConsolePopoverEl.hidden = false;
+    void loadWeixinStatus({ silent: weixinState.loaded });
   } else {
+    clearWeixinPoll();
     weixinConsolePopoverEl.hidden = true;
     weixinConsolePopoverEl.innerHTML = "";
   }
@@ -840,6 +852,98 @@ function closeWeixinConsoleForOutsideEvent(event) {
   const target = event.target instanceof Element ? event.target : null;
   if (weixinConsoleEl?.contains(target) || weixinConsolePopoverEl?.contains(target)) return;
   setWeixinConsoleOpen(false);
+}
+
+function clearWeixinPoll() {
+  if (weixinPollTimer) {
+    clearTimeout(weixinPollTimer);
+    weixinPollTimer = null;
+  }
+}
+
+function weixinPairingStatus() {
+  const status = weixinState.status || {};
+  return status.pairing?.status || (status.paired ? "paired" : "idle");
+}
+
+function scheduleWeixinPoll() {
+  clearWeixinPoll();
+  if (!weixinConsoleOpen) return;
+  if (weixinState.loading || weixinState.sending) return;
+  if (!["waiting", "scanned"].includes(weixinPairingStatus())) return;
+  weixinPollTimer = setTimeout(() => {
+    void loadWeixinStatus({ silent: true });
+  }, 2000);
+}
+
+function renderWeixinConsolePopover() {
+  if (!weixinConsolePopoverEl) return;
+  weixinConsolePopoverEl.innerHTML = renderWeixinConsole();
+  scheduleWeixinPoll();
+}
+
+async function loadWeixinStatus(options = {}) {
+  if (!currentRunId) return;
+  const silent = Boolean(options.silent);
+  if (!silent) {
+    weixinState.loading = true;
+    renderWeixinConsolePopover();
+  }
+  try {
+    const payload = await fetchJson(apiUrl("/api/weixin"), {}, "加载微信状态失败");
+    weixinState.status = payload;
+    weixinState.loaded = true;
+    weixinState.error = payload.error || "";
+  } catch (err) {
+    weixinState.error = err?.message || String(err || "加载微信状态失败");
+  } finally {
+    weixinState.loading = false;
+    renderWeixinConsolePopover();
+  }
+}
+
+async function startWeixinPairing() {
+  if (!currentRunId || weixinState.loading) return;
+  weixinState.loading = true;
+  weixinState.error = "";
+  weixinState.notice = "";
+  renderWeixinConsolePopover();
+  try {
+    const payload = await fetchJson(apiUrl("/api/weixin/pair"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    }, "生成微信配对二维码失败");
+    weixinState.status = payload;
+    weixinState.loaded = true;
+  } catch (err) {
+    weixinState.error = err?.message || String(err || "生成微信配对二维码失败");
+  } finally {
+    weixinState.loading = false;
+    renderWeixinConsolePopover();
+  }
+}
+
+async function sendWeixinTestNotification() {
+  if (!currentRunId || weixinState.sending) return;
+  weixinState.sending = true;
+  weixinState.error = "";
+  weixinState.notice = "";
+  renderWeixinConsolePopover();
+  try {
+    await fetchJson(apiUrl("/api/weixin/test"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: weixinState.testMessage })
+    }, "发送微信测试通知失败");
+    weixinState.notice = "测试通知已发送";
+    await loadWeixinStatus({ silent: true });
+  } catch (err) {
+    weixinState.error = err?.message || String(err || "发送微信测试通知失败");
+  } finally {
+    weixinState.sending = false;
+    renderWeixinConsolePopover();
+  }
 }
 
 async function refreshRunScopedView() {
@@ -1431,6 +1535,18 @@ function initSessionControl() {
     setWeixinConsoleOpen(!weixinConsoleOpen);
   });
   weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
+  weixinConsolePopoverEl?.addEventListener("click", event => {
+    const target = event.target instanceof Element ? event.target : null;
+    const actionEl = target?.closest("[data-weixin-action]");
+    const action = actionEl?.getAttribute("data-weixin-action") || "";
+    if (action === "pair") void startWeixinPairing();
+    if (action === "refresh") void loadWeixinStatus();
+    if (action === "test") void sendWeixinTestNotification();
+  });
+  weixinConsolePopoverEl?.addEventListener("input", event => {
+    const target = event.target instanceof HTMLTextAreaElement ? event.target : null;
+    if (target?.matches("[data-weixin-test-message]")) weixinState.testMessage = target.value;
+  });
   runImportEl?.addEventListener("click", () => {
     if (runActionInFlight) return;
     runImportFileEl?.click();
@@ -4712,9 +4828,23 @@ function renderBootstrapError(error) {
 }
 
 function renderWeixinConsole() {
-  const statusCommand = "npm run status";
-  const loginCommand = "npm run login";
-  const testCommand = './wxsend "AHA 微信通知测试"';
+  const payload = weixinState.status || {};
+  const pairing = payload.pairing || {};
+  const account = payload.account || {};
+  const paired = Boolean(payload.paired);
+  const status = weixinPairingStatus();
+  const statusText = {
+    idle: "未配对",
+    waiting: "等待扫码",
+    scanned: "已扫码，等待确认",
+    paired: "已配对",
+    expired: "二维码已过期"
+  }[status] || status;
+  const qrSvg = pairing.qrcode_svg || "";
+  const qrSrc = qrSvg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg)}` : "";
+  const pairingActive = ["waiting", "scanned"].includes(status);
+  const displayPaired = paired && !pairingActive;
+  const canSendTest = paired && !weixinState.sending && !weixinState.loading;
   return `
     <div class="weixin-console">
       <div class="weixin-console-head">
@@ -4722,26 +4852,37 @@ function renderWeixinConsole() {
           <h3>微信操作台</h3>
           <p>当前 Run: ${escapeHtml(currentRunId || "-")}</p>
         </div>
-        <span class="status session">pairing</span>
+        <span class="status ${displayPaired ? "completed" : "session"}">${escapeHtml(statusText)}</span>
       </div>
-      <p class="weixin-console-path-hint">在 codex-weixin 仓库内执行以下命令。</p>
+      <div class="weixin-console-actions">
+        <button type="button" data-weixin-action="pair" ${weixinState.loading ? "disabled" : ""}>${status === "waiting" || status === "scanned" ? "重新生成二维码" : "配对"}</button>
+        <button type="button" data-weixin-action="refresh" ${weixinState.loading ? "disabled" : ""}>刷新状态</button>
+      </div>
+      ${weixinState.loading ? '<div class="weixin-console-note">正在连接微信服务...</div>' : ""}
+      ${weixinState.error ? `<div class="weixin-console-note error">${escapeHtml(weixinState.error)}</div>` : ""}
+      ${weixinState.notice ? `<div class="weixin-console-note success">${escapeHtml(weixinState.notice)}</div>` : ""}
+      ${qrSrc && status !== "paired" ? `
+        <div class="weixin-qr">
+          <img src="${escapeHtml(qrSrc)}" alt="微信配对二维码">
+          <p>${status === "scanned" ? "已扫码，请在微信里确认授权。" : "用微信扫码并确认授权，页面会自动刷新配对状态。"}</p>
+          ${pairing.qrcode_payload ? `<a href="${escapeHtml(pairing.qrcode_payload)}" target="_blank" rel="noreferrer">二维码无法识别时打开链接</a>` : ""}
+        </div>
+      ` : ""}
       <div class="weixin-console-grid">
         <section>
-          <strong>配对</strong>
-          <code>${escapeHtml(loginCommand)}</code>
+          <strong>账号</strong>
+          <code>${escapeHtml(account.user_id || pairing.user_id || "未配对")}</code>
         </section>
         <section>
-          <strong>状态</strong>
-          <code>${escapeHtml(statusCommand)}</code>
-        </section>
-        <section>
-          <strong>测试通知</strong>
-          <code>${escapeHtml(testCommand)}</code>
+          <strong>通道</strong>
+          <code>${paired ? "可发送" : "等待配对"}</code>
         </section>
       </div>
-      <div class="weixin-console-note">
-        <span>发送通道默认投递到扫码登录的微信账号；指定其他微信 ID 需要先取得 context_token。</span>
-      </div>
+      <label class="weixin-test">
+        <span>测试通知</span>
+        <textarea data-weixin-test-message rows="3">${escapeHtml(weixinState.testMessage)}</textarea>
+      </label>
+      <button type="button" data-weixin-action="test" ${canSendTest ? "" : "disabled"}>${weixinState.sending ? "发送中..." : "发送测试通知"}</button>
     </div>
   `;
 }
