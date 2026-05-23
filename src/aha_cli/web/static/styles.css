@@ -1282,6 +1282,7 @@ button, input, select, textarea { font: inherit; }
   background: #fffbeb;
 }
 .turn-timer.completed { border-left-color: #16a34a; }
+.turn-timer.idle { border-left-color: #98a2b3; }
 .turn-timer.failed { border-left-color: #dc2626; }
 .turn-timer.blocked { border-left-color: #d97706; }
 .turn-timer.interrupted { border-left-color: #d97706; }
@@ -1290,6 +1291,7 @@ button, input, select, textarea { font: inherit; }
   box-shadow: 0 0 0 4px #dbeafe;
 }
 .turn-timer.completed .activity-dot { background: #16a34a; }
+.turn-timer.idle .activity-dot { background: #98a2b3; }
 .turn-timer.busy .activity-dot {
   background: #d97706;
   box-shadow: 0 0 0 4px #fef3c7;

@@ -4232,9 +4232,10 @@ function renderConversation(taskId) {
   }
   const events = taskConversationEvents(taskId);
   if (!events.length && !state.hasMore) {
-    const metricsDock = renderPromptMetricsDock(taskId);
+    const timer = renderTurnTimer(taskId);
+    const metricsDock = timer ? "" : renderPromptMetricsDock(taskId);
     const empty = `<div class="empty">No conversation for ${escapeHtml(backendTarget())} yet.</div>`;
-    return metricsDock ? `<div class="conversation timeline">${empty}${metricsDock}</div>` : empty;
+    return `<div class="conversation timeline">${empty}${timer}${metricsDock}</div>`;
   }
   const older = state.hasMore ? `<button class="load-older" type="button" data-load-older="true">${state.loading ? "Loading..." : "Load older"}</button>` : "";
   const timer = renderTurnTimer(taskId);
@@ -4329,17 +4330,30 @@ function renderTimelineEvent(event) {
 }
 
 function renderTurnTimer(taskId) {
-  const timing = latestTurnTiming(taskId);
-  if (!timing) return "";
+  const task = (statusData?.tasks || []).find(item => item.id === taskId);
+  const target = backendTarget();
+  const agent = (task?.agents || []).find(item => item.id === target);
+  const timing = latestTurnTiming(taskId) || {
+    startedAt: null,
+    finishedAt: null,
+    elapsedMs: 0,
+    running: false,
+    status: "idle",
+    target,
+    sender: "-"
+  };
   const title = timing.running
     ? (timing.status === "waiting" ? "Agent is waiting" : "Agent is working")
-    : `Agent turn ${timing.status}`;
-  const label = timing.running ? "elapsed" : "duration";
+    : timing.status === "idle"
+      ? "Agent is idle"
+      : `Agent turn ${timing.status}`;
+  const label = timing.status === "idle" ? "" : (timing.running ? "elapsed" : "duration");
   const details = [
-    `${label} ${formatDuration(timing.elapsedMs)}`,
+    label ? `${label} ${formatDuration(timing.elapsedMs)}` : "",
     `status ${timing.status}`,
     `target ${timing.target}`,
-    `started ${formatClock(timing.startedAt)}`,
+    agent ? `agent ${agentLifecycleStatus(agent)}` : "",
+    timing.startedAt ? `started ${formatClock(timing.startedAt)}` : "",
     timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : ""
   ].filter(Boolean).join(" | ");
   return `
