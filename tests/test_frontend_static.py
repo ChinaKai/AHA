@@ -170,3 +170,28 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("selectedTaskNeedsAgentDetails", script)
         self.assertIn("applyBackendData(payload.backends || [])", script)
         self.assertNotIn("Promise.all([loadBackends(), loadWorkspaces()])", script)
+
+    def test_frontend_adjusts_mobile_viewport_for_keyboard(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("interactive-widget=overlays-content", html)
+        self.assertIn("initMobileViewport", script)
+        self.assertIn("window.visualViewport", script)
+        self.assertIn("navigator.virtualKeyboard", script)
+        self.assertIn("keepMobileControlVisible", script)
+        self.assertIn("mobileDialogScrollerFor", script)
+        self.assertNotIn('style.setProperty("--app-viewport-height"', script)
+        self.assertIn("--mobile-keyboard-inset", script)
+        self.assertIn("mobile-keyboard-active", script)
+        self.assertIn('document.addEventListener("focusin"', script)
+        self.assertIn('document.addEventListener("focusout"', script)
+        self.assertIn("--app-viewport-height", styles)
+        self.assertIn("--mobile-keyboard-inset", styles)
+        self.assertIn("height: var(--app-viewport-height)", styles)
+        self.assertIn("translate3d(0, calc(-1 * var(--mobile-keyboard-inset)), 0)", styles)
+        self.assertIn("body.mobile-keyboard-active .composer", styles)
+        self.assertIn("body.mobile-keyboard-active .task-dialog-panel", styles)
+        self.assertIn("body.mobile-keyboard-active .task-dialog-actions", styles)

@@ -2,6 +2,13 @@
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #17202a;
   background: #f5f7fa;
+  --app-viewport-height: 100vh;
+  --mobile-keyboard-inset: 0px;
+}
+@supports (height: 100dvh) {
+  :root {
+    --app-viewport-height: 100dvh;
+  }
 }
 * { box-sizing: border-box; }
 html { min-height: 100%; }
@@ -27,7 +34,7 @@ main {
   display: grid;
   grid-template-columns: var(--overview-width) minmax(420px, 1fr) var(--agents-width);
   grid-template-rows: minmax(0, 1fr);
-  height: calc(100vh - 64px);
+  height: calc(var(--app-viewport-height) - 64px);
   min-height: 0;
   overflow: hidden;
 }
@@ -1993,7 +2000,7 @@ body.empty-run .panel {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto;
     height: auto;
-    min-height: calc(100dvh - 64px);
+    min-height: calc(var(--app-viewport-height) - 64px);
     overflow: visible;
   }
   .panel-collapse {
@@ -2001,7 +2008,7 @@ body.empty-run .panel {
   }
   .workspace {
     order: 1;
-    height: calc(100dvh - 64px);
+    height: calc(var(--app-viewport-height) - 64px);
     min-height: 0;
   }
   .panel {
@@ -2057,7 +2064,7 @@ body.empty-run .panel {
 @media (max-width: 640px) {
   html,
   body {
-    height: 100dvh;
+    height: var(--app-viewport-height);
     min-height: 0;
     overflow: hidden;
   }
@@ -2197,16 +2204,21 @@ body.empty-run .panel {
   .task-dialog {
     width: 100vw;
     max-width: none;
-    max-height: 100dvh;
+    max-height: var(--app-viewport-height);
     margin: 0;
     border-radius: 0;
   }
   .task-dialog-panel {
-    min-height: 100dvh;
-    max-height: 100dvh;
+    min-height: var(--app-viewport-height);
+    max-height: var(--app-viewport-height);
     border-radius: 0;
     border-width: 0;
     padding: 14px;
+    scroll-padding-bottom: 86px;
+  }
+  body.mobile-keyboard-active .task-dialog-panel {
+    padding-bottom: calc(14px + var(--mobile-keyboard-inset));
+    scroll-padding-bottom: calc(86px + var(--mobile-keyboard-inset));
   }
   .task-dialog-actions {
     position: sticky;
@@ -2215,6 +2227,10 @@ body.empty-run .panel {
     padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
     border-top: 1px solid #e4e7ec;
     background: #ffffff;
+  }
+  body.mobile-keyboard-active .task-dialog-actions {
+    bottom: var(--mobile-keyboard-inset);
+    box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
   }
   .field-row,
   .agent-permissions {
@@ -2438,7 +2454,7 @@ body.empty-run .panel {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: var(--mobile-composer-offset);
+    bottom: calc(var(--mobile-composer-offset) + var(--mobile-keyboard-inset));
     z-index: 30;
     max-height: min(42dvh, 260px);
     overflow: auto;
@@ -2474,6 +2490,11 @@ body.empty-run .panel {
     gap: 6px;
     padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid #e4e7ec;
+    transform: translateZ(0);
+  }
+  body.mobile-keyboard-active .composer {
+    transform: translate3d(0, calc(-1 * var(--mobile-keyboard-inset)), 0);
+    box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
   }
   #agent-target {
     display: none;

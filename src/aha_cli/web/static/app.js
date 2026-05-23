@@ -56,6 +56,7 @@ let realtimeDebugSeq = 0;
 let deferredPanelRender = false;
 let deferredPanelRenderTimer = 0;
 let openPromptMetricsKey = "";
+let mobileViewportRaf = 0;
 const allEvents = [];
 const seenRealtimeEvents = new Set();
 const pendingMessages = [];
@@ -1133,6 +1134,115 @@ function syncMobileComposerAction() {
   mobileActionsToggleEl.setAttribute("aria-label", hasMessage ? "发送消息" : "打开工具面板");
   mobileActionsToggleEl.title = hasMessage ? "发送消息" : "打开工具面板";
   if (hasMessage) closeMobileActionPanel();
+}
+
+function mobileViewportMatches() {
+  return window.matchMedia("(max-width: 640px)").matches;
+}
+
+function isKeyboardTextControl(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  if (element.isContentEditable) return true;
+  if (element instanceof HTMLTextAreaElement) return true;
+  if (!(element instanceof HTMLInputElement)) return false;
+  const nonTextTypes = new Set([
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit"
+  ]);
+  return !nonTextTypes.has(String(element.type || "text").toLowerCase());
+}
+
+function activeKeyboardTextControl() {
+  return isKeyboardTextControl(document.activeElement) ? document.activeElement : null;
+}
+
+function mobileKeyboardInset() {
+  const virtualKeyboardHeight = Number(navigator.virtualKeyboard?.boundingRect?.height || 0);
+  if (virtualKeyboardHeight > 0) return virtualKeyboardHeight;
+  const viewport = window.visualViewport;
+  if (!viewport) return 0;
+  return Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+}
+
+function mobileDialogScrollerFor(element) {
+  if (!taskCreateDialogEl?.open || !element || !taskCreateDialogEl.contains(element)) return null;
+  return taskCreateDialogEl.querySelector(".task-dialog-panel");
+}
+
+function keepMobileControlVisible(control, keyboardInset) {
+  if (!control || !mobileViewportMatches()) return;
+  const scroller = mobileDialogScrollerFor(control);
+  if (!scroller) return;
+  const rect = control.getBoundingClientRect();
+  const topLimit = 16;
+  const bottomLimit = window.innerHeight - keyboardInset - 86;
+  if (rect.bottom > bottomLimit) {
+    scroller.scrollTop += rect.bottom - bottomLimit;
+  } else if (rect.top < topLimit) {
+    scroller.scrollTop -= topLimit - rect.top;
+  }
+}
+
+function applyMobileViewport() {
+  mobileViewportRaf = 0;
+  if (!mobileViewportMatches()) {
+    document.documentElement.style.setProperty("--mobile-keyboard-inset", "0px");
+    document.body.classList.remove("mobile-keyboard-active");
+    return;
+  }
+  const keyboardActive = Boolean(activeKeyboardTextControl());
+  const keyboardInset = keyboardActive ? mobileKeyboardInset() : 0;
+  document.body.classList.toggle("mobile-keyboard-active", keyboardActive);
+  document.documentElement.style.setProperty("--mobile-keyboard-inset", `${Math.round(keyboardInset)}px`);
+  if (keyboardActive) keepMobileControlVisible(activeKeyboardTextControl(), keyboardInset);
+}
+
+function scheduleMobileViewportSync() {
+  if (!mobileViewportRaf) {
+    mobileViewportRaf = window.requestAnimationFrame(applyMobileViewport);
+  }
+}
+
+function clearMobileViewportSync() {
+  if (mobileViewportRaf) window.cancelAnimationFrame(mobileViewportRaf);
+  mobileViewportRaf = 0;
+}
+
+function initMobileViewport() {
+  const mobileQuery = window.matchMedia("(max-width: 640px)");
+  if (mobileQuery.addEventListener) {
+    mobileQuery.addEventListener("change", scheduleMobileViewportSync);
+  } else {
+    mobileQuery.addListener(scheduleMobileViewportSync);
+  }
+  window.addEventListener("resize", scheduleMobileViewportSync, { passive: true });
+  window.addEventListener("orientationchange", scheduleMobileViewportSync);
+  window.visualViewport?.addEventListener("resize", scheduleMobileViewportSync, { passive: true });
+  window.visualViewport?.addEventListener("scroll", scheduleMobileViewportSync, { passive: true });
+  if (navigator.virtualKeyboard) {
+    try {
+      navigator.virtualKeyboard.overlaysContent = true;
+    } catch (_err) {
+      // Some browsers expose the API as read-only.
+    }
+    navigator.virtualKeyboard.addEventListener?.("geometrychange", scheduleMobileViewportSync);
+  }
+  document.addEventListener("focusin", event => {
+    if (isKeyboardTextControl(event.target)) scheduleMobileViewportSync();
+  }, true);
+  document.addEventListener("focusout", event => {
+    if (isKeyboardTextControl(event.target)) scheduleMobileViewportSync();
+  }, true);
+  window.addEventListener("pagehide", clearMobileViewportSync);
+  scheduleMobileViewportSync();
 }
 
 function initMobileSheets() {
@@ -4800,6 +4910,7 @@ if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
 syncDelegationFields();
 syncCreateTaskSupervisionModeFields();
 initDesktopSidebars();
+initMobileViewport();
 initMobileSheets();
 initMobileActionPanel();
 initSessionControl();
