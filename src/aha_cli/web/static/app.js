@@ -126,6 +126,7 @@ const runImportFileEl = document.getElementById("run-import-file");
 const runArchiveStateEl = document.getElementById("run-archive-state");
 const webRestartEl = document.getElementById("web-restart");
 const weixinConsoleEl = document.getElementById("weixin-console");
+const weixinConsolePopoverEl = document.getElementById("weixin-console-popover");
 const webRestartStateEl = document.getElementById("web-restart-state");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
@@ -205,6 +206,7 @@ const pendingMessagesEl = document.getElementById("pending-messages");
 const conversationFiltersEl = document.getElementById("conversation-filters");
 const commandMenuEl = document.getElementById("command-menu");
 let commandSelection = 0;
+let weixinConsoleOpen = false;
 const ahaSlashCommands = [
   { scope: "aha", name: "/aha help", insert: "/aha help", desc: "Show AHA commands. Handled locally." },
   { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
@@ -786,6 +788,11 @@ function renderSessionMenu() {
   if (runImportFileEl) runImportFileEl.disabled = runActionInFlight;
   if (webRestartEl) webRestartEl.disabled = webRestartInFlight || !hasRun;
   if (weixinConsoleEl) weixinConsoleEl.disabled = runActionInFlight || !hasRun;
+  if (!hasRun || runActionInFlight) {
+    setWeixinConsoleOpen(false);
+  } else if (weixinConsoleOpen && weixinConsolePopoverEl) {
+    weixinConsolePopoverEl.innerHTML = renderWeixinConsole();
+  }
   renderRunArchiveState();
   renderSessionSummary();
 }
@@ -812,6 +819,27 @@ function setSessionMenu(open) {
   sessionMenuOpen = Boolean(open);
   sessionMenuEl?.classList.toggle("hidden", !sessionMenuOpen);
   sessionToggleEl?.setAttribute("aria-expanded", String(sessionMenuOpen));
+  if (!sessionMenuOpen) setWeixinConsoleOpen(false);
+}
+
+function setWeixinConsoleOpen(open) {
+  weixinConsoleOpen = Boolean(open && currentRunId && weixinConsolePopoverEl);
+  if (!weixinConsolePopoverEl) return;
+  if (weixinConsoleOpen) {
+    weixinConsolePopoverEl.innerHTML = renderWeixinConsole();
+    weixinConsolePopoverEl.hidden = false;
+  } else {
+    weixinConsolePopoverEl.hidden = true;
+    weixinConsolePopoverEl.innerHTML = "";
+  }
+  weixinConsoleEl?.setAttribute("aria-expanded", String(weixinConsoleOpen));
+}
+
+function closeWeixinConsoleForOutsideEvent(event) {
+  if (!weixinConsoleOpen) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (weixinConsoleEl?.contains(target) || weixinConsolePopoverEl?.contains(target)) return;
+  setWeixinConsoleOpen(false);
 }
 
 async function refreshRunScopedView() {
@@ -1397,10 +1425,12 @@ function initSessionControl() {
   runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
   runExportEl?.addEventListener("click", exportCurrentRun);
   webRestartEl?.addEventListener("click", restartWebService);
-  weixinConsoleEl?.addEventListener("click", async () => {
-    setSessionMenu(false);
-    await activateTab("weixin");
+  weixinConsoleEl?.addEventListener("click", event => {
+    event.stopPropagation();
+    if (runActionInFlight || !currentRunId) return;
+    setWeixinConsoleOpen(!weixinConsoleOpen);
   });
+  weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
   runImportEl?.addEventListener("click", () => {
     if (runActionInFlight) return;
     runImportFileEl?.click();
@@ -1421,9 +1451,16 @@ function initSessionControl() {
   document.addEventListener("click", event => {
     const target = event.target instanceof Element ? event.target : null;
     if (sessionMenuOpen && !sessionControlEl?.contains(target)) setSessionMenu(false);
+    if (weixinConsoleOpen && !weixinConsoleEl?.contains(target) && !weixinConsolePopoverEl?.contains(target)) {
+      setWeixinConsoleOpen(false);
+    }
   });
+  document.addEventListener("pointerdown", closeWeixinConsoleForOutsideEvent, true);
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape") setSessionMenu(false);
+    if (event.key === "Escape") {
+      setSessionMenu(false);
+      setWeixinConsoleOpen(false);
+    }
   });
   renderSessionMenu();
 }
@@ -3395,7 +3432,6 @@ async function loadLogPage(taskId, older = false, force = false) {
 }
 
 async function ensureActiveTabData() {
-  if (activeTab === "weixin") return;
   if (!selectedTaskId) return;
   if (activeTab === "conversation") {
     await ensureConversationLoaded();
@@ -4772,10 +4808,6 @@ function renderPanel(options = {}) {
   renderConversationFilters();
   if (!currentRunId) {
     renderFirstRunState();
-    return;
-  }
-  if (activeTab === "weixin") {
-    panelEl.innerHTML = renderWeixinConsole();
     return;
   }
   const task = selectedTask();

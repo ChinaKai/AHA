@@ -167,6 +167,7 @@ header > div:first-child h1 {
   grid-template-columns: minmax(96px, auto) minmax(104px, auto) minmax(0, 1fr);
   align-items: center;
   gap: 8px;
+  position: relative;
 }
 .web-service-actions button {
   min-height: 30px;
@@ -184,6 +185,20 @@ header > div:first-child h1 {
   display: grid;
   gap: 14px;
   padding: 18px;
+}
+.weixin-console-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(520px, calc(100vw - 32px));
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
+.weixin-console-popover[hidden] {
+  display: none;
 }
 .weixin-console-head {
   display: flex;
@@ -2348,6 +2363,11 @@ body.empty-run .panel {
   .web-service-actions,
   .weixin-console-grid {
     grid-template-columns: 1fr;
+  }
+  .weixin-console-popover {
+    left: 0;
+    right: 0;
+    width: auto;
   }
   .task-header {
     display: none;
