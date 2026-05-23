@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aha_cli.domain.models import TASK_SUPERVISION_ASK_USER_GATES
 from aha_cli.services.backend_runtime import backend_status, start_backend, stop_backend
 from aha_cli.web.http_utils import parse_optional_bool
 from aha_cli.web.task_commands import (
@@ -66,6 +67,14 @@ def parse_task_supervision_fields(payload: dict) -> dict[str, object]:
         update["channel"] = channel
     if "max_rounds" in payload:
         update["max_rounds"] = max(1, int(payload.get("max_rounds") or 1))
+    if "ask_user_gates" in payload:
+        gates = payload.get("ask_user_gates")
+        if not isinstance(gates, dict):
+            raise ValueError("ask_user_gates must be an object")
+        update["ask_user_gates"] = {
+            key: parse_optional_bool(gates.get(key), key) if key in gates else True
+            for key in TASK_SUPERVISION_ASK_USER_GATES
+        }
     return update
 
 

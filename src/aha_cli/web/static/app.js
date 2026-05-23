@@ -172,6 +172,8 @@ const maxSubAgentsFieldEl = document.getElementById("max-sub-agents-field");
 const taskSupervisionModeEl = document.getElementById("task-supervision-mode");
 const taskSupervisionMaxRoundsFieldEl = document.getElementById("task-supervision-max-rounds-field");
 const taskSupervisionMaxRoundsEl = document.getElementById("task-supervision-max-rounds");
+const taskSupervisionAskUserFieldEl = document.getElementById("task-supervision-ask-user-field");
+const taskSupervisionAskUserGatesEl = document.getElementById("task-supervision-ask-user-gates");
 const workspaceSelectEl = document.getElementById("workspace-select");
 const workspaceCustomEl = document.getElementById("workspace-custom");
 const taskProxyEditorEl = document.getElementById("task-proxy-editor");
@@ -186,6 +188,8 @@ const taskSupervisionFormEl = document.getElementById("task-supervision-form");
 const selectedTaskSupervisionModeEl = document.getElementById("selected-task-supervision-mode");
 const selectedTaskSupervisionMaxRoundsFieldEl = document.getElementById("selected-task-supervision-max-rounds-field");
 const selectedTaskSupervisionMaxRoundsEl = document.getElementById("selected-task-supervision-max-rounds");
+const selectedTaskSupervisionAskUserFieldEl = document.getElementById("selected-task-supervision-ask-user-field");
+const selectedTaskSupervisionAskUserGatesEl = document.getElementById("selected-task-supervision-ask-user-gates");
 const taskSupervisionStateEl = document.getElementById("task-supervision-state");
 const taskCreateConfirmDialogEl = document.getElementById("task-create-confirm");
 const taskCreateConfirmDetailsEl = document.getElementById("task-create-confirm-details");
@@ -1622,13 +1626,57 @@ function taskProxySummary(task) {
   return parts.length ? `${task.preferred_proxy_enabled ? "default on" : "default off"} · ${parts.join(" · ")}` : "not configured";
 }
 
+const supervisionAskUserGateDefs = [
+  ["real_ui_validation", "Real UI/device"],
+  ["scope_change", "Scope change"],
+  ["commit_merge_delete", "Commit/merge/delete"],
+  ["destructive_or_high_risk", "High risk"],
+  ["permissions_or_external", "Permissions/external"],
+  ["product_preference", "Product preference"]
+];
+
+function defaultAskUserGates() {
+  return Object.fromEntries(supervisionAskUserGateDefs.map(([key]) => [key, true]));
+}
+
+function normalizeAskUserGates(value) {
+  const gates = defaultAskUserGates();
+  if (value && typeof value === "object") {
+    supervisionAskUserGateDefs.forEach(([key]) => {
+      if (Object.prototype.hasOwnProperty.call(value, key)) gates[key] = Boolean(value[key]);
+    });
+  }
+  return gates;
+}
+
+function renderAskUserGateControls(containerEl, gates) {
+  if (!containerEl) return;
+  const normalized = normalizeAskUserGates(gates);
+  containerEl.innerHTML = supervisionAskUserGateDefs.map(([key, label]) => `
+    <label>
+      <input type="checkbox" data-supervision-ask-user-gate="${escapeHtml(key)}" ${normalized[key] ? "checked" : ""}>
+      <span>${escapeHtml(label)}</span>
+    </label>
+  `).join("");
+}
+
+function readAskUserGateControls(containerEl) {
+  const gates = defaultAskUserGates();
+  if (!containerEl) return gates;
+  containerEl.querySelectorAll("[data-supervision-ask-user-gate]").forEach(input => {
+    gates[input.dataset.supervisionAskUserGate] = Boolean(input.checked);
+  });
+  return gates;
+}
+
 function taskSupervisionPolicy(task) {
   const policy = task?.supervision && typeof task.supervision === "object" ? task.supervision : {};
   return {
     mode: policy.mode === "assisted" ? "assisted" : "manual",
     host_backend: policy.host_backend || "stub",
     real_agent_enabled: Boolean(policy.real_agent_enabled),
-    max_rounds: Number(policy.max_rounds || 5)
+    max_rounds: Number(policy.max_rounds || 5),
+    ask_user_gates: normalizeAskUserGates(policy.ask_user_gates)
   };
 }
 
@@ -1648,7 +1696,8 @@ function taskSupervisionBadge(task) {
 function taskSupervisionSummary(task) {
   const policy = taskSupervisionPolicy(task);
   if (policy.mode === "manual") return "manual";
-  return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds}`;
+  const askCount = Object.values(policy.ask_user_gates).filter(Boolean).length;
+  return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds} | ask user ${askCount}/${supervisionAskUserGateDefs.length}`;
 }
 
 function taskAgentCount(task) {
@@ -1657,7 +1706,7 @@ function taskAgentCount(task) {
   return (task?.agents || []).length;
 }
 
-function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue) {
+function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates) {
   const assisted = selectedMode !== "manual";
   const codexHost = selectedMode === "assisted_codex";
   const claudeHost = selectedMode === "assisted_claude";
@@ -1665,7 +1714,8 @@ function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue) {
     mode: assisted ? "assisted" : "manual",
     host_backend: codexHost ? "codex" : (claudeHost ? "claude" : "stub"),
     real_agent_enabled: codexHost || claudeHost,
-    max_rounds: Number(maxRoundsValue || "5")
+    max_rounds: Number(maxRoundsValue || "5"),
+    ask_user_gates: normalizeAskUserGates(askUserGates)
   };
 }
 
@@ -1701,34 +1751,41 @@ function renderTaskSupervisionEditor() {
   if (!taskSupervisionEditorEl || !taskSupervisionFormEl) return;
   const task = selectedTask();
   const disabled = !task;
-  taskSupervisionFormEl.querySelectorAll("input, select, button").forEach(item => {
+  const applyDisabledState = () => taskSupervisionFormEl.querySelectorAll("input, select, button").forEach(item => {
     item.disabled = disabled;
   });
   if (!task) {
     if (selectedTaskSupervisionModeEl) selectedTaskSupervisionModeEl.value = "manual";
     if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = "5";
+    renderAskUserGateControls(selectedTaskSupervisionAskUserGatesEl, defaultAskUserGates());
     if (taskSupervisionStateEl) taskSupervisionStateEl.textContent = "Select a task to edit supervision.";
+    syncTaskSupervisionModeFields();
+    applyDisabledState();
     return;
   }
   const policy = taskSupervisionPolicy(task);
   if (selectedTaskSupervisionModeEl) selectedTaskSupervisionModeEl.value = taskSupervisionModeValue(policy);
   if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = String(policy.max_rounds || 5);
+  renderAskUserGateControls(selectedTaskSupervisionAskUserGatesEl, policy.ask_user_gates);
   syncTaskSupervisionModeFields();
   if (taskSupervisionStateEl) taskSupervisionStateEl.textContent = taskSupervisionSummary(task);
+  applyDisabledState();
 }
 
 function syncTaskSupervisionModeFields() {
-  syncSupervisionModeFields(selectedTaskSupervisionModeEl, selectedTaskSupervisionMaxRoundsFieldEl);
+  syncSupervisionModeFields(selectedTaskSupervisionModeEl, selectedTaskSupervisionMaxRoundsFieldEl, selectedTaskSupervisionAskUserFieldEl);
 }
 
 function syncCreateTaskSupervisionModeFields() {
-  syncSupervisionModeFields(taskSupervisionModeEl, taskSupervisionMaxRoundsFieldEl);
+  syncSupervisionModeFields(taskSupervisionModeEl, taskSupervisionMaxRoundsFieldEl, taskSupervisionAskUserFieldEl);
 }
 
-function syncSupervisionModeFields(modeEl, maxRoundsFieldEl) {
+function syncSupervisionModeFields(modeEl, maxRoundsFieldEl, askUserFieldEl) {
   const manual = modeEl?.value === "manual";
   maxRoundsFieldEl?.classList.toggle("hidden", manual);
   if (maxRoundsFieldEl) maxRoundsFieldEl.hidden = manual;
+  askUserFieldEl?.classList.toggle("hidden", manual);
+  if (askUserFieldEl) askUserFieldEl.hidden = manual;
 }
 
 function visibleTasks() {
@@ -3791,7 +3848,11 @@ async function saveTaskSupervisionConfig() {
   const task = selectedTask();
   if (!task) return;
   const selectedMode = selectedTaskSupervisionModeEl?.value || "manual";
-  const supervision = taskSupervisionPayloadFromMode(selectedMode, selectedTaskSupervisionMaxRoundsEl?.value || "5");
+  const supervision = taskSupervisionPayloadFromMode(
+    selectedMode,
+    selectedTaskSupervisionMaxRoundsEl?.value || "5",
+    readAskUserGateControls(selectedTaskSupervisionAskUserGatesEl)
+  );
   await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/supervision`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4584,7 +4645,11 @@ taskFormEl?.addEventListener("submit", async event => {
   if (!title) return;
   const description = newTaskDescriptionEl?.value.trim() || "";
   const delegationPolicy = delegationPolicyEl?.value || "disabled";
-  const supervision = taskSupervisionPayloadFromMode(taskSupervisionModeEl?.value || "manual", taskSupervisionMaxRoundsEl?.value || "5");
+  const supervision = taskSupervisionPayloadFromMode(
+    taskSupervisionModeEl?.value || "manual",
+    taskSupervisionMaxRoundsEl?.value || "5",
+    readAskUserGateControls(taskSupervisionAskUserGatesEl)
+  );
   setCreateProxyDefaultsFromInputs();
   const createHttpProxy = taskHttpProxyEl?.value.trim() || "";
   const createHttpsProxy = taskHttpsProxyEl?.value.trim() || "";
@@ -4907,6 +4972,7 @@ window.addEventListener("online", () => {
 
 initTaskCreateDialog();
 if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
+renderAskUserGateControls(taskSupervisionAskUserGatesEl, defaultAskUserGates());
 syncDelegationFields();
 syncCreateTaskSupervisionModeFields();
 initDesktopSidebars();

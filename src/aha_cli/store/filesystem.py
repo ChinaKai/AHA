@@ -555,6 +555,7 @@ def update_task_supervision_config(
     host_backend: object = UNSET,
     real_agent_enabled: object = UNSET,
     max_rounds: object = UNSET,
+    ask_user_gates: object = UNSET,
 ) -> dict:
     should_ensure_host = False
     with locked_plan(root, run_id):
@@ -573,6 +574,8 @@ def update_task_supervision_config(
             supervision["real_agent_enabled"] = True
         if max_rounds is not UNSET:
             supervision["max_rounds"] = max_rounds
+        if ask_user_gates is not UNSET:
+            supervision["ask_user_gates"] = ask_user_gates
         task["supervision"] = normalize_task_supervision(supervision)
         should_ensure_host = bool(
             task["supervision"].get("mode") == "assisted"
@@ -600,6 +603,7 @@ def update_task_supervision_config(
             "host_agent_id": task["supervision"].get("host_agent_id"),
             "real_agent_enabled": task["supervision"].get("real_agent_enabled"),
             "max_rounds": task["supervision"].get("max_rounds"),
+            "ask_user_gates": task["supervision"].get("ask_user_gates"),
         },
     )
     return task

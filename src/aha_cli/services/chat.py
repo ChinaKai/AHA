@@ -324,6 +324,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         elif host_result.get("waiting"):
                             set_agent_status(root, run_id, item_task_id, "main", "waiting")
                             set_task_status(root, run_id, item_task_id, "running")
+                        elif host_result.get("routed_to_browser"):
+                            set_task_status(root, run_id, item_task_id, "awaiting_user", exit_code)
                         elif host_result.get("executed"):
                             request_round_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")

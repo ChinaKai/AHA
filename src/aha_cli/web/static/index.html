@@ -113,6 +113,10 @@
               <span>Max rounds</span>
               <input id="selected-task-supervision-max-rounds" type="number" min="1" max="100" value="5">
             </label>
+            <fieldset id="selected-task-supervision-ask-user-field" class="supervision-gates">
+              <legend>Ask user when</legend>
+              <div id="selected-task-supervision-ask-user-gates" class="supervision-gate-list"></div>
+            </fieldset>
             <button type="submit">Save Supervision</button>
             <div id="task-supervision-state" class="meta"></div>
           </form>
@@ -266,6 +270,10 @@
               <input id="task-supervision-max-rounds" type="number" min="1" max="100" value="5">
             </label>
           </div>
+          <fieldset id="task-supervision-ask-user-field" class="supervision-gates">
+            <legend>Ask user when</legend>
+            <div id="task-supervision-ask-user-gates" class="supervision-gate-list"></div>
+          </fieldset>
           <div class="field-row">
             <label class="field-label">
               <span>HTTP proxy</span>

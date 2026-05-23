@@ -88,6 +88,10 @@ class WebTaskApiTests(unittest.TestCase):
                                 "host_backend": "codex",
                                 "real_agent_enabled": True,
                                 "max_rounds": 9,
+                                "ask_user_gates": {
+                                    "real_ui_validation": False,
+                                    "commit_merge_delete": False,
+                                },
                             },
                         },
                     )
@@ -102,6 +106,9 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["supervision"]["host_agent_id"], "host")
         self.assertTrue(body["task"]["supervision"]["real_agent_enabled"])
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 9)
+        self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["real_ui_validation"])
+        self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["commit_merge_delete"])
+        self.assertTrue(body["task"]["supervision"]["ask_user_gates"]["scope_change"])
         self.assertEqual(task["supervision"], body["task"]["supervision"])
         self.assertTrue(any(agent["id"] == "host" and agent["role"] == "host" and agent["backend"] == "codex" for agent in task["agents"]))
 
@@ -124,6 +131,10 @@ class WebTaskApiTests(unittest.TestCase):
                         payload={
                             "mode": "assisted",
                             "max_rounds": 7,
+                            "ask_user_gates": {
+                                "scope_change": False,
+                                "product_preference": False,
+                            },
                         },
                     )
                 )
@@ -138,6 +149,9 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["supervision"]["host_backend"], "stub")
         self.assertFalse(body["task"]["supervision"]["real_agent_enabled"])
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 7)
+        self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["scope_change"])
+        self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["product_preference"])
+        self.assertTrue(body["task"]["supervision"]["ask_user_gates"]["commit_merge_delete"])
         self.assertNotIn("allowed_actions", body["task"]["supervision"])
         self.assertEqual(updated["supervision"], body["task"]["supervision"])
 

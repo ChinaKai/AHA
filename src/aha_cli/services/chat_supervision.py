@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aha_cli.domain.models import utc_now
+from aha_cli.domain.models import TASK_SUPERVISION_ASK_USER_GATES, utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, start_backend
 from aha_cli.services.chat_offsets import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import (
@@ -39,10 +39,20 @@ from aha_cli.store.filesystem import (
 SUPERVISION_HOST_DECISIONS = {"ask_user", "continue", "stop", "wait", "route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_FAILURE_FALLBACK_STATUS = "awaiting_user"
 SUPERVISION_STATUS_CHANNELS = ("main_backend", "host_backend", "steward_decision")
+ASK_USER_GATE_LABELS = {
+    "real_ui_validation": "real UI/device validation",
+    "scope_change": "scope or goal change",
+    "commit_merge_delete": "commit/merge/delete",
+    "destructive_or_high_risk": "destructive, high-risk, or irreversible operation",
+    "permissions_or_external": "permissions, credentials, spending, or external resources",
+    "product_preference": "product preference or choice not inferable from the repository",
+}
 DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT = (
     "Delegated browser control plane contract:\n"
     "- You are the delegated browser->main control plane, not a third-party reviewer.\n"
     "- Steward handles deterministic low-risk continuation; you handle semantic handoff decisions.\n"
+    "- Use your read-only project access to inspect code, diffs, tests, logs, events, and task state before deciding.\n"
+    "- Do not rely only on main's wording when the project state can verify or falsify it.\n"
     "- Keep the task moving, correct direction, route or wait when needed, and escalate only when required.\n"
     "- Do not replace main's technical implementation judgment or make product decisions for the user.\n"
     "- Do not approve destructive operations, commits, spending, permission changes, or irreversible choices; use ask_user.\n"
@@ -136,7 +146,18 @@ def supervision_host_handoff_notes(root: Path, run_id: str, task_id: str, limit:
     return list(reversed(notes))
 
 
+def supervision_ask_user_gate_notes(supervision: dict) -> list[str]:
+    raw_gates = supervision.get("ask_user_gates") if isinstance(supervision.get("ask_user_gates"), dict) else {}
+    notes: list[str] = []
+    for key in TASK_SUPERVISION_ASK_USER_GATES:
+        enabled = bool(raw_gates.get(key, True))
+        mode = "ask_user required" if enabled else "host may decide"
+        notes.append(f"- {key}: {mode} ({ASK_USER_GATE_LABELS[key]})")
+    return notes
+
+
 def supervision_host_context(task: dict, host_notes: list[str] | None = None, handoff_notes: list[str] | None = None) -> str:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     task_context = {
         "id": task.get("id"),
         "title": task.get("title"),
@@ -145,7 +166,7 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "workspace_path": task.get("workspace_path"),
         "current_round_id": task.get("current_round_id"),
         "round_sequence": task.get("round_sequence"),
-        "supervision": task.get("supervision"),
+        "supervision": supervision,
         "agents": [
             {
                 "id": agent.get("id"),
@@ -163,11 +184,15 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "Talk to task-main as the next browser control message: direct, natural, and focused on the next step.\n"
         "Your response field is inserted as the next user message to task-main.\n"
         "Do not mention host, agent, supervision, proxy, decision, JSON, or delegated control-plane mechanics.\n"
-        "Do not restate or praise main's answer; ask for or direct the next concrete step.\n"
+        "Do not merely restate main's answer. Give a browser-facing judgment: agree, disagree, ask for user confirmation, or direct the next concrete step.\n"
+        "When main is right and the next step is user-facing, say so concisely, for example: 同意，请按 main 的方案复测这个点。\n"
+        "When main is wrong, incomplete, drifting, or under-verified, say what must happen next instead of echoing the report.\n"
         "Use continue only when task-main should do more concrete work.\n"
         "Use wait when task-main or sub-agents are already working and your only next message would be an acknowledgement like OK, waiting, or report when ready.\n"
-        "Use stop when task-main's latest reply already completes the user's request, or when your only next message would be to say done/finish.\n"
-        "Use ask_user only when continuing would be destructive, commit code, spend money, or require information that is impossible to infer.\n"
+        "Use stop when task-main's latest reply already completes the user's request; response should be a short agreement or closure, not a duplicate summary.\n"
+        "Use ask_user when the ask-user gate policy marks that class as required.\n"
+        "When a gate says host may decide, use read-only evidence and make the call yourself unless a hard safety boundary blocks you.\n"
+        "Hard safety still requires ask_user: unavailable permissions, credentials, external facts you cannot observe, or destructive operations outside the user's task/request.\n"
         "Inspect context only. Do not modify files or execute state-changing commands.\n"
         "Decide what task-main should do next after its latest user-facing reply.\n\n"
         "Return only one JSON object with this shape:\n"
@@ -176,6 +201,7 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "For continue, the response field is what main sees in Chat. For ask_user or stop, the response field is what the user sees in Chat. For wait, response is recorded only in Runtime and is not routed.\n"
         "Do not include decision/reason labels in response.\n"
         "Use actions only when main should execute concrete AHA actions; otherwise return an empty list.\n\n"
+        f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
         f"Task context:\n{json.dumps(task_context, ensure_ascii=False, indent=2)}\n\n"
         f"Recent steward handoffs:\n{chr(10).join(handoff_notes or ['(none)'])}\n\n"
         f"Recent browser-to-host notes:\n{chr(10).join(host_notes or ['(none)'])}"
@@ -529,15 +555,15 @@ def apply_supervision_host_decision(
         "routed_to_main"
         if routed_to_main
         else (
-            "actions_executed"
-            if executed
+            "await_user"
+            if decision["decision"] == "ask_user" and routed_to_browser
             else (
-                "await_user"
-                if decision["decision"] == "ask_user"
+                "stopped"
+                if decision["decision"] == "stop" and routed_to_browser
                 else (
-                    "waiting"
-                    if waiting_for_subagents
-                    else ("stopped" if decision["decision"] == "stop" and routed_to_browser else (route_skipped_reason or "decision_recorded"))
+                    "actions_executed"
+                    if executed
+                    else ("waiting" if waiting_for_subagents else (route_skipped_reason or "decision_recorded"))
                 )
             )
         )
@@ -558,7 +584,12 @@ def apply_supervision_host_decision(
             "reason": decision["reason"],
         },
     )
-    return event_payload | {"executed": executed, "routed_to_main": routed_to_main, "waiting": waiting_for_subagents}
+    return event_payload | {
+        "executed": executed,
+        "routed_to_main": routed_to_main,
+        "routed_to_browser": routed_to_browser,
+        "waiting": waiting_for_subagents,
+    }
 
 
 __all__ = [

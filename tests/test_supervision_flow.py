@@ -41,7 +41,15 @@ class SupervisionFlowTests(unittest.TestCase):
                 "id": "task-001",
                 "title": "Delegated browser",
                 "status": "running",
-                "supervision": {"mode": "assisted", "host_backend": "codex"},
+                "supervision": {
+                    "mode": "assisted",
+                    "host_backend": "codex",
+                    "ask_user_gates": {
+                        "real_ui_validation": False,
+                        "scope_change": True,
+                        "commit_merge_delete": True,
+                    },
+                },
                 "agents": [{"id": "main", "role": "task-main", "backend": "codex", "status": "running"}],
             },
             handoff_notes=["steward -> host: semantic_review (needs semantic decision)"],
@@ -50,7 +58,17 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertIn("delegated browser->main control plane", context)
         self.assertIn("not a third-party reviewer", context)
         self.assertIn("Steward handles deterministic low-risk continuation", context)
+        self.assertIn("Use your read-only project access", context)
+        self.assertIn("Do not rely only on main's wording", context)
         self.assertIn("response must read like the next browser instruction", context)
+        self.assertIn("Give a browser-facing judgment", context)
+        self.assertIn("同意，请按 main 的方案复测这个点。", context)
+        self.assertIn("Ask-user gate policy", context)
+        self.assertIn("real UI/device validation", context)
+        self.assertIn("real_ui_validation: host may decide", context)
+        self.assertIn("scope or goal change", context)
+        self.assertIn("scope_change: ask_user required", context)
+        self.assertIn("commit/merge/delete", context)
         self.assertIn("Recent steward handoffs", context)
         self.assertIn("needs semantic decision", context)
 
@@ -528,6 +546,75 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertTrue(host_decisions[-1]["data"]["routed_to_browser"])
         applied = [row for row in rows if row["type"] == "main_applied_decision"]
         self.assertEqual(applied[-1]["data"]["effect"], "await_user")
+        self.assertTrue(applied[-1]["data"]["routed_to_browser"])
+        self.assertEqual(task["status"], "awaiting_user")
+
+    def test_supervision_ask_user_with_record_update_still_awaits_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host ask user with update", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
+                host_reply = json.dumps(
+                    {
+                        "decision": "ask_user",
+                        "reason": "commit needs user confirmation",
+                        "response": "要现在提交这部分改动吗？",
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "配置项改动已完成，等待用户确认提交。",
+                                "changed_files": ["src/aha_cli/web/run_api.py"],
+                                "verification": ["python3 -m unittest tests.test_web_task_api"],
+                                "risks": ["尚未提交"],
+                            }
+                        ],
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "改动已完成，尚未提交。", None)),
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, host_reply, None)):
+                    host_code, _host_output = self.run_cli(
+                        "codex-chat",
+                        run_id,
+                        "host",
+                        "--sender",
+                        "host",
+                        "--sandbox",
+                        "read-only",
+                        "--task-id",
+                        "task-001",
+                        "--once",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(host_code, 0)
+        start_host.assert_called_once()
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "ask_user")
+        self.assertEqual(host_decisions[-1]["data"]["executed_action_count"], 1)
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_browser"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "await_user")
+        self.assertEqual(applied[-1]["data"]["executed_action_count"], 1)
         self.assertTrue(applied[-1]["data"]["routed_to_browser"])
         self.assertEqual(task["status"], "awaiting_user")
 

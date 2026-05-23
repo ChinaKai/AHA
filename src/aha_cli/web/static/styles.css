@@ -435,6 +435,34 @@ button, input, select, textarea { font: inherit; }
   min-height: 32px;
   font-size: 12px;
 }
+.supervision-gates {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.supervision-gates legend {
+  margin-bottom: 5px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+.supervision-gate-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 5px 8px;
+}
+.supervision-gate-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #344054;
+  font-size: 12px;
+}
+.supervision-gate-list input {
+  min-height: auto;
+  padding: 0;
+}
 .status.supervision-assisted { background: #e0f2fe; color: #075985; }
 .status.supervision-manual { background: #f2f4f7; color: #475467; }
 .task {

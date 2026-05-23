@@ -43,6 +43,32 @@ def default_config() -> dict:
 
 TASK_SUPERVISION_MODES = {"manual", "assisted"}
 TASK_SUPERVISION_HOST_BACKENDS = {"stub", "codex", "claude"}
+TASK_SUPERVISION_ASK_USER_GATES = (
+    "real_ui_validation",
+    "scope_change",
+    "commit_merge_delete",
+    "destructive_or_high_risk",
+    "permissions_or_external",
+    "product_preference",
+)
+
+
+def default_task_supervision_ask_user_gates() -> dict:
+    return {key: True for key in TASK_SUPERVISION_ASK_USER_GATES}
+
+
+def normalize_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
 
 
 def default_task_supervision() -> dict:
@@ -54,6 +80,7 @@ def default_task_supervision() -> dict:
         "real_agent_enabled": False,
         "channel": "main_only",
         "max_rounds": 5,
+        "ask_user_gates": default_task_supervision_ask_user_gates(),
     }
 
 
@@ -67,7 +94,14 @@ def normalize_task_supervision(value: object | None = None) -> dict:
     host_agent_id = raw.get("host_agent_id")
     supervision["host_agent_id"] = str(host_agent_id).strip() if host_agent_id else None
     if "real_agent_enabled" in raw:
-        supervision["real_agent_enabled"] = bool(raw.get("real_agent_enabled"))
+        supervision["real_agent_enabled"] = normalize_bool(raw.get("real_agent_enabled"))
+    raw_gates = raw.get("ask_user_gates") if isinstance(raw.get("ask_user_gates"), dict) else raw.get("ask_user")
+    if isinstance(raw_gates, dict):
+        gates = default_task_supervision_ask_user_gates()
+        for key in TASK_SUPERVISION_ASK_USER_GATES:
+            if key in raw_gates:
+                gates[key] = normalize_bool(raw_gates.get(key), default=True)
+        supervision["ask_user_gates"] = gates
     try:
         supervision["max_rounds"] = max(1, min(100, int(raw.get("max_rounds") or supervision["max_rounds"])))
     except (TypeError, ValueError):
