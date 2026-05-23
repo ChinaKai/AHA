@@ -40,6 +40,14 @@ def account_path(root: Path) -> Path:
     return weixin_dir(root) / "account.json"
 
 
+def updates_path(root: Path) -> Path:
+    return weixin_dir(root) / "updates.json"
+
+
+def contexts_path(root: Path) -> Path:
+    return weixin_dir(root) / "contexts.json"
+
+
 def _read_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -388,6 +396,48 @@ def save_account(root: Path, account: dict) -> None:
     _write_secret_json(account_path(root), normalized)
 
 
+def load_context_token(root: Path, user_id: str) -> str:
+    contexts = _read_json(contexts_path(root))
+    token = contexts.get(user_id)
+    return token if isinstance(token, str) else ""
+
+
+def fetch_updates(root: Path) -> dict:
+    account = load_account(root)
+    token = str(account.get("token") or "")
+    if not token:
+        raise WeixinError("微信尚未配对，不能接收入站消息")
+    sync = _read_json(updates_path(root))
+    try:
+        resp = _api_post_json(
+            str(account.get("base_url") or DEFAULT_BASE_URL),
+            "ilink/bot/getupdates",
+            token,
+            {"get_updates_buf": sync.get("get_updates_buf") or ""},
+            timeout=QR_POLL_TIMEOUT_SECONDS,
+        )
+    except WeixinError as exc:
+        if "timed out" not in str(exc).lower():
+            raise
+        resp = {"msgs": [], "get_updates_buf": sync.get("get_updates_buf") or ""}
+    if resp.get("get_updates_buf"):
+        _write_secret_json(updates_path(root), {"get_updates_buf": resp.get("get_updates_buf"), "updated_at": utc_now()})
+    contexts = _read_json(contexts_path(root))
+    changed = False
+    messages = resp.get("msgs") if isinstance(resp.get("msgs"), list) else []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        user_id = str(msg.get("from_user_id") or "")
+        context_token = str(msg.get("context_token") or "")
+        if user_id and context_token and contexts.get(user_id) != context_token:
+            contexts[user_id] = context_token
+            changed = True
+    if changed:
+        _write_secret_json(contexts_path(root), contexts)
+    return {"ok": True, "messages": messages, "message_count": len(messages), "account": _public_account(account)}
+
+
 def start_pairing(root: Path, run_id: str) -> dict:
     qr = _api_get_json(
         DEFAULT_BASE_URL,
@@ -513,22 +563,25 @@ def send_test_notification(root: Path, run_id: str, message: str | None = None) 
     target = str(account.get("user_id") or "")
     if not token or not target:
         raise WeixinError("微信尚未配对，不能发送测试通知")
+    fetch_updates(root)
+    context_token = load_context_token(root, target)
     text = str(message or "").strip() or f"AHA 微信通知测试\nRun: {run_id}"
     client_id = f"aha:{int(time.time())}-{secrets.token_hex(4)}"
+    msg = {
+        "from_user_id": "",
+        "to_user_id": target,
+        "client_id": client_id,
+        "message_type": MESSAGE_TYPE_BOT,
+        "message_state": MESSAGE_STATE_FINISH,
+        "item_list": [{"type": MESSAGE_ITEM_TEXT, "text_item": {"text": text}}],
+    }
+    if context_token:
+        msg["context_token"] = context_token
     _api_post_json(
         str(account.get("base_url") or DEFAULT_BASE_URL),
         "ilink/bot/sendmessage",
         token,
-        {
-            "msg": {
-                "from_user_id": "",
-                "to_user_id": target,
-                "client_id": client_id,
-                "message_type": MESSAGE_TYPE_BOT,
-                "message_state": MESSAGE_STATE_FINISH,
-                "item_list": [{"type": MESSAGE_ITEM_TEXT, "text_item": {"text": text}}],
-            },
-        },
+        {"msg": msg},
     )
     return {
         "ok": True,
