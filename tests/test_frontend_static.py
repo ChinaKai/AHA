@@ -117,6 +117,24 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("agent-card.host-agent", styles)
         self.assertIn("timeline-card.from-supervision", styles)
 
+    def test_frontend_has_weixin_console_entry(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="weixin-console"', html)
+        self.assertIn("微信操作台", html)
+        self.assertIn("const weixinConsoleEl", script)
+        self.assertIn("function renderWeixinConsole", script)
+        self.assertIn('await activateTab("weixin");', script)
+        self.assertIn('if (activeTab === "weixin") return;', script)
+        self.assertIn("codex-weixin", script)
+        self.assertIn("在 codex-weixin 仓库内执行", script)
+        self.assertNotIn("/home/kaikai/kk-workspace/my_project/codex-weixin", script)
+        self.assertIn(".weixin-console", styles)
+        self.assertIn(".weixin-console-grid", styles)
+
     def test_frontend_renders_prompt_metrics_visualization(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")

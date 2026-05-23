@@ -125,6 +125,7 @@ const runExportLogsEl = document.getElementById("run-export-logs");
 const runImportFileEl = document.getElementById("run-import-file");
 const runArchiveStateEl = document.getElementById("run-archive-state");
 const webRestartEl = document.getElementById("web-restart");
+const weixinConsoleEl = document.getElementById("weixin-console");
 const webRestartStateEl = document.getElementById("web-restart-state");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
@@ -784,6 +785,7 @@ function renderSessionMenu() {
   if (runExportLogsEl) runExportLogsEl.disabled = runActionInFlight || !hasRun;
   if (runImportFileEl) runImportFileEl.disabled = runActionInFlight;
   if (webRestartEl) webRestartEl.disabled = webRestartInFlight || !hasRun;
+  if (weixinConsoleEl) weixinConsoleEl.disabled = runActionInFlight || !hasRun;
   renderRunArchiveState();
   renderSessionSummary();
 }
@@ -1395,6 +1397,10 @@ function initSessionControl() {
   runSelectEl?.addEventListener("change", async () => switchRun(runSelectEl.value));
   runExportEl?.addEventListener("click", exportCurrentRun);
   webRestartEl?.addEventListener("click", restartWebService);
+  weixinConsoleEl?.addEventListener("click", async () => {
+    setSessionMenu(false);
+    await activateTab("weixin");
+  });
   runImportEl?.addEventListener("click", () => {
     if (runActionInFlight) return;
     runImportFileEl?.click();
@@ -3389,6 +3395,7 @@ async function loadLogPage(taskId, older = false, force = false) {
 }
 
 async function ensureActiveTabData() {
+  if (activeTab === "weixin") return;
   if (!selectedTaskId) return;
   if (activeTab === "conversation") {
     await ensureConversationLoaded();
@@ -3396,7 +3403,7 @@ async function ensureActiveTabData() {
     await loadLogPage(selectedTaskId);
   } else if (activeTab === "final") {
     await loadFinalDetail(selectedTaskId, true);
-  } else {
+  } else if (activeTab === "context") {
     await loadContextDetail(selectedTaskId);
   }
 }
@@ -4668,6 +4675,41 @@ function renderBootstrapError(error) {
   `;
 }
 
+function renderWeixinConsole() {
+  const statusCommand = "npm run status";
+  const loginCommand = "npm run login";
+  const testCommand = './wxsend "AHA 微信通知测试"';
+  return `
+    <div class="weixin-console">
+      <div class="weixin-console-head">
+        <div>
+          <h3>微信操作台</h3>
+          <p>当前 Run: ${escapeHtml(currentRunId || "-")}</p>
+        </div>
+        <span class="status session">pairing</span>
+      </div>
+      <p class="weixin-console-path-hint">在 codex-weixin 仓库内执行以下命令。</p>
+      <div class="weixin-console-grid">
+        <section>
+          <strong>配对</strong>
+          <code>${escapeHtml(loginCommand)}</code>
+        </section>
+        <section>
+          <strong>状态</strong>
+          <code>${escapeHtml(statusCommand)}</code>
+        </section>
+        <section>
+          <strong>测试通知</strong>
+          <code>${escapeHtml(testCommand)}</code>
+        </section>
+      </div>
+      <div class="weixin-console-note">
+        <span>发送通道默认投递到扫码登录的微信账号；指定其他微信 ID 需要先取得 context_token。</span>
+      </div>
+    </div>
+  `;
+}
+
 function bootstrapWorkspaceSelection(form) {
   const select = form.querySelector("[data-bootstrap-workspace-select]");
   const custom = form.querySelector("[data-bootstrap-workspace-custom]");
@@ -4730,6 +4772,10 @@ function renderPanel(options = {}) {
   renderConversationFilters();
   if (!currentRunId) {
     renderFirstRunState();
+    return;
+  }
+  if (activeTab === "weixin") {
+    panelEl.innerHTML = renderWeixinConsole();
     return;
   }
   const task = selectedTask();
