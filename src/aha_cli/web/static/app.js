@@ -212,6 +212,7 @@ const weixinState = {
   loaded: false,
   loading: false,
   sending: false,
+  togglingNotifications: false,
   error: "",
   notice: "",
   status: null,
@@ -946,6 +947,29 @@ async function sendWeixinTestNotification() {
   }
 }
 
+async function setWeixinNotificationsEnabled(enabled) {
+  if (!currentRunId || weixinState.togglingNotifications) return;
+  weixinState.togglingNotifications = true;
+  weixinState.error = "";
+  weixinState.notice = "";
+  renderWeixinConsolePopover();
+  try {
+    const payload = await fetchJson(apiUrl("/api/weixin/notifications"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: Boolean(enabled) })
+    }, "更新微信通知开关失败");
+    weixinState.status = { ...(weixinState.status || {}), notifications: payload.notifications || {} };
+    weixinState.notice = payload.notifications?.enabled ? "微信通知已开启" : "微信通知已关闭";
+  } catch (err) {
+    weixinState.error = err?.message || String(err || "更新微信通知开关失败");
+    await loadWeixinStatus({ silent: true });
+  } finally {
+    weixinState.togglingNotifications = false;
+    renderWeixinConsolePopover();
+  }
+}
+
 async function refreshRunScopedView() {
   if (!currentRunId) {
     renderFirstRunState();
@@ -1546,6 +1570,10 @@ function initSessionControl() {
   weixinConsolePopoverEl?.addEventListener("input", event => {
     const target = event.target instanceof HTMLTextAreaElement ? event.target : null;
     if (target?.matches("[data-weixin-test-message]")) weixinState.testMessage = target.value;
+  });
+  weixinConsolePopoverEl?.addEventListener("change", event => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (target?.matches("[data-weixin-notifications-toggle]")) void setWeixinNotificationsEnabled(target.checked);
   });
   runImportEl?.addEventListener("click", () => {
     if (runActionInFlight) return;
@@ -4833,6 +4861,8 @@ function renderWeixinConsole() {
   const account = payload.account || {};
   const paired = Boolean(payload.paired);
   const status = weixinPairingStatus();
+  const notifications = payload.notifications || {};
+  const notificationsEnabled = Boolean(notifications.enabled);
   const statusText = {
     idle: "未配对",
     waiting: "等待扫码",
@@ -4845,6 +4875,7 @@ function renderWeixinConsole() {
   const pairingActive = ["waiting", "scanned"].includes(status);
   const displayPaired = paired && !pairingActive;
   const canSendTest = paired && !weixinState.sending && !weixinState.loading;
+  const notificationToggleDisabled = !paired || weixinState.loading || weixinState.togglingNotifications;
   return `
     <div class="weixin-console">
       <div class="weixin-console-head">
@@ -4877,6 +4908,13 @@ function renderWeixinConsole() {
           <strong>通道</strong>
           <code>${paired ? "可发送" : "等待配对"}</code>
         </section>
+      </div>
+      <div class="weixin-notifications">
+        <label class="checkbox-line">
+          <input type="checkbox" data-weixin-notifications-toggle ${notificationsEnabled ? "checked" : ""} ${notificationToggleDisabled ? "disabled" : ""}>
+          <span>微信通知</span>
+        </label>
+        <small>${paired ? "状态变更、等待用户、完成摘要会推送到当前微信。" : "配对成功后可开启任务通知。"}</small>
       </div>
       <label class="weixin-test">
         <span>测试通知</span>

@@ -124,10 +124,12 @@ class WebSystemRoutesTests(unittest.TestCase):
                 status_payload = {"ok": True, "paired": False, "pairing": None}
                 pair_payload = {"ok": True, "paired": False, "pairing": {"status": "waiting", "qrcode_svg": "<svg/>"}}
                 sent_payload = {"ok": True, "sent": True, "message_id": "msg-1", "target": "user-1@im.wechat"}
+                notifications_payload = {"enabled": True, "ready": True, "sent_count": 0, "updated_at": "now", "last_sent_at": ""}
                 with (
                     mock.patch("aha_cli.web.system_routes.weixin_status_snapshot", return_value=status_payload) as status_snapshot,
                     mock.patch("aha_cli.web.system_routes.start_pairing", return_value=pair_payload) as start_pair,
                     mock.patch("aha_cli.web.system_routes.send_test_notification", return_value=sent_payload) as send_test,
+                    mock.patch("aha_cli.web.system_routes.set_notifications_enabled", return_value=notifications_payload) as set_notifications,
                 ):
                     status = system_route_response(root, run_id, "GET", "/api/weixin", parse_qs(""))
                     pair = system_route_response(root, run_id, "POST", "/api/weixin/pair", parse_qs(""))
@@ -139,13 +141,27 @@ class WebSystemRoutesTests(unittest.TestCase):
                         parse_qs(""),
                         json.dumps({"message": "hello"}).encode("utf-8"),
                     )
+                    notifications = system_route_response(
+                        root,
+                        run_id,
+                        "POST",
+                        "/api/weixin/notifications",
+                        parse_qs(""),
+                        json.dumps({"enabled": True}).encode("utf-8"),
+                    )
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertTrue(status and status.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(pair and pair.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(test and test.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(notifications and notifications.startswith(b"HTTP/1.1 200 OK"))
         self.assertFalse(json_response_body(status)["paired"])
+        self.assertFalse(json_response_body(status)["notifications"]["enabled"])
         self.assertEqual(json_response_body(pair)["pairing"]["status"], "waiting")
         self.assertEqual(json_response_body(test)["message_id"], "msg-1")
+        self.assertTrue(json_response_body(notifications)["notifications"]["enabled"])
         status_snapshot.assert_called_once_with(root, run_id)
         start_pair.assert_called_once_with(root, run_id)
         send_test.assert_called_once_with(root, run_id, "hello")
+        set_notifications.assert_called_once_with(root, run_id, True)
+        self.assertTrue(any(event["type"] == "weixin_notifications_updated" for event in events))
