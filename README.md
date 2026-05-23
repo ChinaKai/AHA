@@ -76,6 +76,14 @@ aha merge <run-id>
 aha list
 ```
 
+Optional dashboard workspace discovery can be configured in `.aha/config.json`:
+
+```json
+{
+  "workspace_roots": ["/path/to/projects"]
+}
+```
+
 ## Quick Start
 
 From this project:

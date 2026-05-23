@@ -21,6 +21,7 @@ def default_config() -> dict:
         "runner_command": None,
         "default_parallel": 4,
         "default_mode": "research",
+        "workspace_roots": [],
         "codex": {
             "bin": "codex",
             "model": None,

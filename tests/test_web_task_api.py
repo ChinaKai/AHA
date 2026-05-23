@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -304,6 +305,29 @@ class WebTaskApiTests(unittest.TestCase):
                     "label": "my_project/aha",
                     "path": str(my_root / "aha"),
                     "root": str(my_root),
+                },
+            ],
+        )
+
+    def test_workspace_options_reads_project_roots_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            aha_home = base / ".aha"
+            project_root = base / "projects"
+            (project_root / "demo").mkdir(parents=True)
+            aha_home.mkdir()
+            (aha_home / "config.json").write_text(json.dumps({"workspace_roots": [str(project_root)]}), encoding="utf-8")
+
+            options = workspace_options(aha_home=aha_home)
+
+        self.assertEqual(
+            options,
+            [
+                {
+                    "name": "demo",
+                    "label": "projects/demo",
+                    "path": str(project_root / "demo"),
+                    "root": str(project_root),
                 },
             ],
         )
