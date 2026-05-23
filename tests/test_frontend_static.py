@@ -177,6 +177,19 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('if (event.type === "message") return "chat";', script)
         self.assertIn('if (event.type === "host_decision") return renderTimelineStatus("host decision"', script)
 
+    def test_frontend_prefills_empty_task_agent_composer_from_prompt_hint(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function taskAgentInputPrompt", script)
+        self.assertIn("function fillTaskAgentPromptFromHint", script)
+        self.assertIn("if (!messageEl || messageEl.value.trim()) return false;", script)
+        self.assertIn("继续处理任务：", script)
+        self.assertIn("任务说明：", script)
+        self.assertIn('messageEl.addEventListener("focus", () => {', script)
+        self.assertIn("if (fillTaskAgentPromptFromHint()) return;", script)
+        self.assertIn('messageEl.addEventListener("click", () => {', script)
+
     def test_frontend_keeps_turn_events_realtime_with_chat_only_filter(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")

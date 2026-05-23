@@ -1413,6 +1413,35 @@ function isSupervisionAgent(agent) {
   return role === "host" || role === "supervision-host";
 }
 
+function taskAgentInputPrompt(task = selectedTask(), agent = selectedAgent()) {
+  if (!task || isSupervisionAgent(agent)) return "";
+  const agentId = compactText(agent?.id || backendTarget() || "main", 60);
+  const title = compactText(task.title || task.id || "当前任务", 180);
+  const description = compactText(task.description || "", 260);
+  const assignment = agent && agent.created_reason !== "task creation" ? compactText(agent.created_reason || "", 180) : "";
+  const scope = compactText(agent?.scope_id || "", 100);
+  const parts = agentId === "main"
+    ? [`继续处理任务：${title}`]
+    : [`请 ${agentId} 继续处理当前分配`];
+  if (assignment) parts.push(`分配：${assignment}`);
+  if (scope) parts.push(`scope=${scope}`);
+  if (description) parts.push(`任务说明：${description}`);
+  return parts.join("；");
+}
+
+function fillTaskAgentPromptFromHint() {
+  if (!messageEl || messageEl.value.trim()) return false;
+  const prompt = taskAgentInputPrompt();
+  if (!prompt) return false;
+  messageEl.value = prompt;
+  const cursor = messageEl.value.length;
+  messageEl.setSelectionRange?.(cursor, cursor);
+  commandSelection = 0;
+  commandMenuEl.classList.add("hidden");
+  syncMobileComposerAction();
+  return true;
+}
+
 function messageContextKey(taskId = selectedTaskId, target = backendTarget()) {
   return `${currentRunId || ""}::${taskId || ""}::${target || "main"}`;
 }
@@ -4843,7 +4872,11 @@ messageEl.addEventListener("input", () => {
   renderCommandMenu();
 });
 messageEl.addEventListener("focus", () => {
+  if (fillTaskAgentPromptFromHint()) return;
   renderCommandMenu();
+});
+messageEl.addEventListener("click", () => {
+  fillTaskAgentPromptFromHint();
 });
 messageEl.addEventListener("keydown", event => {
   const commands = matchingSlashCommands();
