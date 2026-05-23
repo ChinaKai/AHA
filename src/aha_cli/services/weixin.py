@@ -283,11 +283,16 @@ def _qr_svg(payload: str) -> str:
                 continue
             draw_alignment(row, col)
     set_module(4 * version + 9, 8, True)
-    for i in range(9):
-        set_module(8, i, False)
+    for i in range(6):
         set_module(i, 8, False)
+        set_module(8, i, False)
+    set_module(7, 8, False)
+    set_module(8, 7, False)
+    set_module(8, 8, False)
+    for i in range(8):
         set_module(8, size - 1 - i, False)
-        set_module(size - 1 - i, 8, False)
+    for i in range(8, 15):
+        set_module(size - 15 + i, 8, False)
     if version >= 7:
         for i in range(18):
             row = i // 3
@@ -318,16 +323,17 @@ def _qr_svg(payload: str) -> str:
     format_data = (1 << 3) | 0
     format_bits = ((format_data << 10) | _bch_remainder(format_data, 0x537)) ^ 0x5412
     for i in range(6):
-        set_module(8, i, bool((format_bits >> i) & 1))
-    set_module(8, 7, bool((format_bits >> 6) & 1))
+        set_module(i, 8, bool((format_bits >> i) & 1))
+    set_module(7, 8, bool((format_bits >> 6) & 1))
     set_module(8, 8, bool((format_bits >> 7) & 1))
-    set_module(7, 8, bool((format_bits >> 8) & 1))
+    set_module(8, 7, bool((format_bits >> 8) & 1))
     for i in range(9, 15):
-        set_module(14 - i, 8, bool((format_bits >> i) & 1))
+        set_module(8, 14 - i, bool((format_bits >> i) & 1))
     for i in range(8):
-        set_module(size - 1 - i, 8, bool((format_bits >> i) & 1))
+        set_module(8, size - 1 - i, bool((format_bits >> i) & 1))
     for i in range(8, 15):
-        set_module(8, size - 15 + i, bool((format_bits >> i) & 1))
+        set_module(size - 15 + i, 8, bool((format_bits >> i) & 1))
+    set_module(4 * version + 9, 8, True)
 
     if version >= 7:
         version_bits = (version << 12) | _bch_remainder(version, 0x1F25)
@@ -416,11 +422,18 @@ def _poll_pairing(root: Path, pairing: dict) -> dict:
         _write_secret_json(pairing_path(root), pairing)
         return pairing
     base_url = str(pairing.get("base_url") or DEFAULT_BASE_URL)
-    status = _api_get_json(
-        base_url,
-        f"ilink/bot/get_qrcode_status?qrcode={quote(str(pairing.get('qrcode') or ''))}",
-        timeout=QR_POLL_TIMEOUT_SECONDS,
-    )
+    try:
+        status = _api_get_json(
+            base_url,
+            f"ilink/bot/get_qrcode_status?qrcode={quote(str(pairing.get('qrcode') or ''))}",
+            timeout=QR_POLL_TIMEOUT_SECONDS,
+        )
+    except WeixinError as exc:
+        if "timed out" not in str(exc).lower():
+            raise
+        next_pairing = {**pairing, "status": "waiting", "raw_status": "wait", "updated_at": utc_now()}
+        _write_secret_json(pairing_path(root), next_pairing)
+        return next_pairing
     raw_status = str(status.get("status") or "wait")
     next_pairing = {**pairing, "raw_status": raw_status, "updated_at": utc_now()}
     if raw_status == "scaned":
@@ -454,6 +467,14 @@ def status_snapshot(root: Path, run_id: str, *, poll: bool = True) -> dict:
     account = load_account(root)
     pairing = _read_json(pairing_path(root))
     pairing_error = ""
+    if pairing.get("qrcode_payload"):
+        try:
+            qrcode_svg = _qr_svg(str(pairing.get("qrcode_payload") or ""))
+            if pairing.get("qrcode_svg") != qrcode_svg:
+                pairing = {**pairing, "qrcode_svg": qrcode_svg, "updated_at": utc_now()}
+                _write_secret_json(pairing_path(root), pairing)
+        except WeixinError as exc:
+            pairing_error = str(exc)
     if poll and pairing.get("status") in {"waiting", "scanned"}:
         try:
             pairing = _poll_pairing(root, pairing)
