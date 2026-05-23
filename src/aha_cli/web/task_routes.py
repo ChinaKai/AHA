@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names
+from aha_cli.domain.models import TASK_COLLABORATION_MODES
 from aha_cli.services.chat_supervision import apply_supervision_real_host
 from aha_cli.services.steward import apply_steward_decision, steward_decision_snapshot
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -40,6 +41,12 @@ from aha_cli.web.task_actions import (
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
+
+
+def optional_int_payload(payload: dict, key: str) -> int | None:
+    if key not in payload or payload.get(key) in (None, ""):
+        return None
+    return int(payload.get(key))
 
 
 def route_result(payload: dict, status: str = "200 OK") -> dict:
@@ -199,6 +206,9 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
         return route_result({"error": "title cannot be empty"}, "400 Bad Request")
     backend = str(payload.get("backend", "codex") or "codex")
     preferred_sub_backend = str(payload.get("preferred_sub_backend", "") or "") or None
+    collaboration_mode = str(payload.get("collaboration_mode", "") or "") or None
+    if collaboration_mode and collaboration_mode not in TASK_COLLABORATION_MODES:
+        return route_result({"error": f"unknown collaboration mode: {collaboration_mode}"}, "400 Bad Request")
     error = validate_backend_name(backend)
     if error:
         return route_result({"error": error}, "400 Bad Request")
@@ -238,8 +248,9 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
             http_proxy=str(payload.get("http_proxy", "") or "") or None,
             https_proxy=str(payload.get("https_proxy", "") or "") or None,
             no_proxy=str(payload.get("no_proxy", "") or "") or None,
-            delegation_policy=str(payload.get("delegation_policy", "auto") or "auto"),
-            max_sub_agents=int(payload.get("max_sub_agents", 3) or 0),
+            collaboration_mode=collaboration_mode,
+            delegation_policy=str(payload.get("delegation_policy", "") or "") or None,
+            max_sub_agents=optional_int_payload(payload, "max_sub_agents"),
             preferred_sub_backend=preferred_sub_backend,
             preferred_sub_model=str(payload.get("preferred_sub_model", "") or "") or None,
             description=description,

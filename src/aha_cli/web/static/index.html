@@ -29,7 +29,14 @@
             <option value="research">research</option>
             <option value="implementation">implementation</option>
           </select>
+          <select id="new-run-collaboration" aria-label="Collaboration">
+            <option value="auto">auto</option>
+            <option value="solo">solo</option>
+            <option value="pair">pair</option>
+            <option value="team">team</option>
+          </select>
           <button type="submit">新建</button>
+          <div id="new-run-collaboration-help" class="collaboration-help"></div>
         </form>
         <div class="run-archive">
           <div class="run-archive-actions">
@@ -244,15 +251,19 @@
           </div>
           <div class="field-row">
             <label class="field-label">
-              <span>Delegation</span>
-              <select id="delegation-policy">
+              <span>Collaboration</span>
+              <select id="collaboration-mode">
                 <option value="auto">auto</option>
-                <option value="disabled">off</option>
+                <option value="solo">solo</option>
+                <option value="pair">pair</option>
+                <option value="team">team</option>
               </select>
+              <div id="collaboration-mode-help" class="collaboration-help"></div>
             </label>
             <label id="max-sub-agents-field" class="field-label">
               <span>Max auto sub-agents</span>
               <input id="max-sub-agents" type="number" min="1" max="16" value="3">
+              <div class="field-help">只限制 auto 模式下最多能启用几个 sub-agent，不代表一定会启用。</div>
             </label>
           </div>
           <div class="field-row">

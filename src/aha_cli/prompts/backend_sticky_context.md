@@ -6,6 +6,8 @@ Current task delta:
 - role selected by user: $role
 - backend: $backend
 - workspace: $workspace
+- collaboration_mode: $collaboration_mode
+- max_sub_agents: $max_sub_agents
 - sandbox: $sandbox
 - approval: $approval
 - session_policy: $session_policy

@@ -115,6 +115,8 @@ const runSelectEl = document.getElementById("run-select");
 const runCreateFormEl = document.getElementById("run-create-form");
 const newRunGoalEl = document.getElementById("new-run-goal");
 const newRunModeEl = document.getElementById("new-run-mode");
+const newRunCollaborationEl = document.getElementById("new-run-collaboration");
+const newRunCollaborationHelpEl = document.getElementById("new-run-collaboration-help");
 const runExportEl = document.getElementById("run-export");
 const runImportEl = document.getElementById("run-import");
 const runExportLogsEl = document.getElementById("run-export-logs");
@@ -166,7 +168,8 @@ const taskHttpProxyEl = document.getElementById("task-http-proxy");
 const taskHttpsProxyEl = document.getElementById("task-https-proxy");
 const taskNoProxyEl = document.getElementById("task-no-proxy");
 const taskRunContextEl = document.getElementById("task-run-context");
-const delegationPolicyEl = document.getElementById("delegation-policy");
+const collaborationModeEl = document.getElementById("collaboration-mode");
+const collaborationModeHelpEl = document.getElementById("collaboration-mode-help");
 const maxSubAgentsEl = document.getElementById("max-sub-agents");
 const maxSubAgentsFieldEl = document.getElementById("max-sub-agents-field");
 const taskSupervisionModeEl = document.getElementById("task-supervision-mode");
@@ -816,10 +819,12 @@ async function createRun(goal, mode, options = {}) {
   const trimmedGoal = String(goal || "").trim();
   if (!trimmedGoal) return;
   const selectedMode = String(mode || "research").trim() || "research";
+  const collaborationMode = String(options.collaborationMode || "auto").trim() || "auto";
   const body = {
     goal: trimmedGoal,
     mode: selectedMode,
     backend: options.backend || "codex",
+    collaboration_mode: collaborationMode,
     dispatch: options.dispatch !== false,
     task_titles: options.taskTitles || [trimmedGoal]
   };
@@ -1011,13 +1016,61 @@ function initTaskCreateDialog() {
   });
 }
 
-function syncDelegationFields() {
-  const isAuto = delegationPolicyEl?.value === "auto";
+const collaborationModeOptions = ["auto", "solo", "pair", "team"];
+const collaborationModeDescriptions = {
+  auto: "AHA 会在能提速时自动组队，否则保持 solo。",
+  solo: "单人模式：main 自己完成全部工作，适合小任务和快速修改。",
+  pair: "双人模式：最多 1 个 sub-agent 并行处理实现、调研或 review。",
+  team: "团队模式：最多 2 个 sub-agent 处理可拆分责任区，main 负责协调和合并。"
+};
+
+function renderCollaborationModeOptions(selected = "auto") {
+  return collaborationModeOptions.map(mode => (
+    `<option value="${escapeHtml(mode)}" ${mode === selected ? "selected" : ""}>${escapeHtml(mode)}</option>`
+  )).join("");
+}
+
+function collaborationModeDescription(mode) {
+  return collaborationModeDescriptions[mode] || collaborationModeDescriptions.auto;
+}
+
+function syncCollaborationHelp(selectEl, helpEl) {
+  if (!helpEl) return;
+  const mode = selectEl?.value || "auto";
+  helpEl.textContent = collaborationModeDescription(mode);
+}
+
+function collaborationModeMaxSubAgents(mode) {
+  if (mode === "solo") return 0;
+  if (mode === "pair") return 1;
+  if (mode === "team") return 2;
+  return Number(maxSubAgentsEl?.value || "3");
+}
+
+function collaborationModeDelegationPolicy(mode) {
+  return mode === "solo" ? "disabled" : "auto";
+}
+
+function syncCollaborationFields() {
+  const isAuto = collaborationModeEl?.value === "auto";
+  syncCollaborationHelp(collaborationModeEl, collaborationModeHelpEl);
   if (maxSubAgentsFieldEl) {
     maxSubAgentsFieldEl.hidden = !isAuto;
     maxSubAgentsFieldEl.classList.toggle("hidden", !isAuto);
   }
   if (maxSubAgentsEl) maxSubAgentsEl.disabled = !isAuto;
+}
+
+function syncNewRunCollaborationHelp() {
+  syncCollaborationHelp(newRunCollaborationEl, newRunCollaborationHelpEl);
+}
+
+function syncBootstrapCollaborationHelp(form) {
+  if (!form) return;
+  syncCollaborationHelp(
+    form.querySelector("[data-bootstrap-collaboration-mode]"),
+    form.querySelector("[data-bootstrap-collaboration-help]")
+  );
 }
 
 function sidebarStorageKey(side) {
@@ -1323,6 +1376,7 @@ function initSessionControl() {
   runCreateFormEl?.addEventListener("submit", async event => {
     event.preventDefault();
     await createRun(newRunGoalEl?.value || "", newRunModeEl?.value || "research", {
+      collaborationMode: newRunCollaborationEl?.value || "auto",
       workspaceId: selectedWorkspaceId(),
       workspacePath: selectedWorkspacePath()
     });
@@ -1624,6 +1678,29 @@ function taskProxySummary(task) {
   if (task.preferred_https_proxy) parts.push("HTTPS");
   if (task.preferred_no_proxy) parts.push("NO_PROXY");
   return parts.length ? `${task.preferred_proxy_enabled ? "default on" : "default off"} · ${parts.join(" · ")}` : "not configured";
+}
+
+function inferredTaskCollaborationMode(task) {
+  const mode = String(task?.collaboration_mode || "").toLowerCase();
+  if (collaborationModeOptions.includes(mode)) return mode;
+  if (task?.delegation_policy === "disabled") return "solo";
+  const rawLimit = task?.max_sub_agents;
+  const limit = rawLimit === undefined || rawLimit === null ? 3 : Number(rawLimit || 0);
+  if (limit === 0) return "solo";
+  if (limit === 1) return "pair";
+  if (limit === 2) return "team";
+  return "auto";
+}
+
+function taskCollaborationSummary(task) {
+  const mode = inferredTaskCollaborationMode(task);
+  const rawLimit = task?.max_sub_agents;
+  const limit = rawLimit === undefined || rawLimit === null ? 3 : Number(rawLimit || 0);
+  if (mode === "auto") return `auto (${limit})`;
+  if (mode === "solo") return "solo";
+  if (mode === "pair") return "pair (1)";
+  if (mode === "team") return "team (2)";
+  return mode;
 }
 
 const supervisionAskUserGateDefs = [
@@ -3759,14 +3836,14 @@ function renderTaskList() {
         <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}${taskSupervisionBadge(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml(taskAgentCount(task))} agent(s) | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
+      <div class="meta truncate">${escapeHtml(taskAgentCount(task))} agent(s) | collaboration ${escapeHtml(taskCollaborationSummary(task))} | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
     `;
-    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nsupervision=${taskSupervisionSummary(task)}\nworkspace=${task.workspace_path || "-"}`;
+    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ncollaboration=${taskCollaborationSummary(task)}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nsupervision=${taskSupervisionSummary(task)}\nworkspace=${task.workspace_path || "-"}`;
     item.addEventListener("click", async event => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("button")) return;
@@ -3880,7 +3957,7 @@ function renderSelectedHeader() {
   renderMobileTaskSummary(task);
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
-  selectedTaskMetaEl.textContent = `supervision ${taskSupervisionSummary(task)}`;
+  selectedTaskMetaEl.textContent = `collaboration ${taskCollaborationSummary(task)} | supervision ${taskSupervisionSummary(task)}`;
   selectedTaskMetaEl.hidden = false;
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
   selectedStatusEl.textContent = displayStatus;
@@ -4165,7 +4242,7 @@ function addTaskConfirmRows(payload) {
     ["Backend", `${payload.backend || "default"} / ${payload.model || "default"}`],
     ["Sandbox", payload.sandbox || "-"],
     ["Approval", payload.approval || "-"],
-    ["Delegation", payload.delegation_policy === "auto" ? `auto (${payload.max_sub_agents || 0})` : "off"],
+    ["Collaboration", `${payload.collaboration_mode || "auto"} (${payload.max_sub_agents || 0})`],
     ["Supervision", taskSupervisionSummary({ supervision: payload.supervision || {} })],
     ["Proxy", proxyLabel]
   ];
@@ -4453,6 +4530,13 @@ function renderFirstRunState(force = false) {
             <option value="implementation">implementation</option>
           </select>
         </label>
+        <label class="field-label">
+          <span>Collaboration</span>
+          <select data-bootstrap-collaboration-mode>
+            ${renderCollaborationModeOptions("auto")}
+          </select>
+          <div data-bootstrap-collaboration-help class="collaboration-help"></div>
+        </label>
         <details class="bootstrap-proxy">
           <summary>Proxy</summary>
           <div class="proxy-form">
@@ -4478,6 +4562,7 @@ function renderFirstRunState(force = false) {
       </form>
     </div>
   `;
+  syncBootstrapCollaborationHelp(panelEl.querySelector("[data-bootstrap-run-form]"));
 }
 
 function renderBootstrapError(error) {
@@ -4523,6 +4608,7 @@ function bootstrapWorkspaceSelection(form) {
 async function createRunFromBootstrapForm(form) {
   const goalEl = form.querySelector("[data-bootstrap-run-goal]");
   const modeEl = form.querySelector("[data-bootstrap-run-mode]");
+  const collaborationEl = form.querySelector("[data-bootstrap-collaboration-mode]");
   const proxyEnabledEl = form.querySelector("[data-bootstrap-proxy-enabled]");
   const httpProxyEl = form.querySelector("[data-bootstrap-http-proxy]");
   const httpsProxyEl = form.querySelector("[data-bootstrap-https-proxy]");
@@ -4550,6 +4636,7 @@ async function createRunFromBootstrapForm(form) {
     const httpsProxy = String(httpsProxyEl?.value || "").trim();
     const proxyEnabled = Boolean(proxyEnabledEl?.checked || httpProxy || httpsProxy);
     await createRun(goal, modeEl?.value || "research", {
+      collaborationMode: collaborationEl?.value || "auto",
       workspaceId,
       workspacePath,
       proxyEnabled,
@@ -4658,7 +4745,8 @@ taskFormEl?.addEventListener("submit", async event => {
   const title = newTaskTitleEl?.value.trim() || "";
   if (!title) return;
   const description = newTaskDescriptionEl?.value.trim() || "";
-  const delegationPolicy = delegationPolicyEl?.value || "disabled";
+  const collaborationMode = collaborationModeEl?.value || "auto";
+  const maxSubAgents = collaborationModeMaxSubAgents(collaborationMode);
   const supervision = taskSupervisionPayloadFromMode(
     taskSupervisionModeEl?.value || "manual",
     taskSupervisionMaxRoundsEl?.value || "5",
@@ -4681,8 +4769,9 @@ taskFormEl?.addEventListener("submit", async event => {
     no_proxy: (createProxyEnabled || createHttpProxy || createHttpsProxy) ? (taskNoProxyEl?.value.trim() || "") : "",
     workspace_id: selectedWorkspaceId(),
     workspace_path: selectedWorkspacePath(),
-    delegation_policy: delegationPolicy,
-    max_sub_agents: delegationPolicy === "auto" ? Number(maxSubAgentsEl?.value || "0") : 0,
+    collaboration_mode: collaborationMode,
+    delegation_policy: collaborationModeDelegationPolicy(collaborationMode),
+    max_sub_agents: maxSubAgents,
     preferred_sub_backend: taskBackendEl.value,
     supervision,
     dispatch: true
@@ -4855,8 +4944,13 @@ panelEl.addEventListener("submit", event => {
 });
 panelEl.addEventListener("change", event => {
   const select = event.target instanceof HTMLSelectElement ? event.target : null;
-  if (!select?.matches("[data-bootstrap-workspace-select]")) return;
+  if (!select) return;
   const form = select.closest("[data-bootstrap-run-form]");
+  if (select?.matches("[data-bootstrap-collaboration-mode]")) {
+    syncBootstrapCollaborationHelp(form);
+    return;
+  }
+  if (!select?.matches("[data-bootstrap-workspace-select]")) return;
   const custom = form?.querySelector("[data-bootstrap-workspace-custom]");
   const isCustom = select.value === "__custom__";
   custom?.classList.toggle("hidden", !isCustom);
@@ -4954,7 +5048,8 @@ agentTargetEl.addEventListener("change", async () => {
   renderPanel();
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
-delegationPolicyEl?.addEventListener("change", syncDelegationFields);
+collaborationModeEl?.addEventListener("change", syncCollaborationFields);
+newRunCollaborationEl?.addEventListener("change", syncNewRunCollaborationHelp);
 taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeFields);
 [taskHttpProxyEl, taskHttpsProxyEl].forEach(input => input?.addEventListener("input", setCreateProxyDefaultsFromInputs));
 showHiddenEl.addEventListener("change", () => {
@@ -4987,7 +5082,8 @@ window.addEventListener("online", () => {
 initTaskCreateDialog();
 if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
 renderAskUserGateControls(taskSupervisionAskUserGatesEl, defaultAskUserGates());
-syncDelegationFields();
+syncCollaborationFields();
+syncNewRunCollaborationHelp();
 syncCreateTaskSupervisionModeFields();
 initDesktopSidebars();
 initMobileViewport();

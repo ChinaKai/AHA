@@ -51,6 +51,13 @@ TASK_SUPERVISION_ASK_USER_GATES = (
     "permissions_or_external",
     "product_preference",
 )
+TASK_COLLABORATION_MODES = {"auto", "solo", "pair", "team"}
+TASK_COLLABORATION_DEFAULTS = {
+    "auto": ("auto", 3),
+    "solo": ("disabled", 0),
+    "pair": ("auto", 1),
+    "team": ("auto", 2),
+}
 
 
 def default_task_supervision_ask_user_gates() -> dict:
@@ -69,6 +76,59 @@ def normalize_bool(value: object, default: bool = False) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def normalize_delegation_policy(value: object, default: str = "auto") -> str:
+    policy = str(value or default).strip().lower()
+    return policy if policy in {"auto", "disabled"} else default
+
+
+def normalize_collaboration_mode(value: object, default: str = "auto") -> str:
+    mode = str(value or default).strip().lower()
+    return mode if mode in TASK_COLLABORATION_MODES else default
+
+
+def non_negative_int(value: object, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, default)
+
+
+def infer_collaboration_mode(delegation_policy: object, max_sub_agents: object) -> str:
+    policy = normalize_delegation_policy(delegation_policy)
+    limit = non_negative_int(max_sub_agents)
+    if policy == "disabled" or limit == 0:
+        return "solo"
+    if limit == 1:
+        return "pair"
+    if limit == 2:
+        return "team"
+    return "auto"
+
+
+def resolve_task_collaboration(
+    collaboration_mode: object | None = None,
+    delegation_policy: object | None = None,
+    max_sub_agents: object | None = None,
+) -> tuple[str, str, int]:
+    explicit_mode = collaboration_mode is not None and str(collaboration_mode).strip() != ""
+    if explicit_mode:
+        mode = normalize_collaboration_mode(collaboration_mode)
+        default_policy, default_limit = TASK_COLLABORATION_DEFAULTS[mode]
+        if mode == "auto":
+            policy = normalize_delegation_policy(delegation_policy, default_policy)
+            if policy == "disabled":
+                return "solo", "disabled", 0
+            limit = non_negative_int(max_sub_agents, default_limit) if max_sub_agents is not None else default_limit
+            return "auto", "auto", limit
+        return mode, default_policy, default_limit
+
+    policy = normalize_delegation_policy(delegation_policy)
+    if policy == "disabled":
+        return "solo", "disabled", 0
+    limit = non_negative_int(max_sub_agents, 3) if max_sub_agents is not None else 3
+    return infer_collaboration_mode(policy, limit), "auto", limit
 
 
 def default_task_supervision() -> dict:
@@ -191,13 +251,19 @@ def make_task(
     http_proxy: str | None = None,
     https_proxy: str | None = None,
     no_proxy: str | None = None,
-    delegation_policy: str = "auto",
-    max_sub_agents: int = 3,
+    collaboration_mode: str | None = None,
+    delegation_policy: str | None = "auto",
+    max_sub_agents: int | None = 3,
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
     description: str | None = None,
     supervision: dict | None = None,
 ) -> dict:
+    resolved_collaboration_mode, resolved_delegation_policy, resolved_max_sub_agents = resolve_task_collaboration(
+        collaboration_mode,
+        delegation_policy,
+        max_sub_agents,
+    )
     return {
         "id": task_id,
         "title": title,
@@ -214,8 +280,9 @@ def make_task(
         "preferred_no_proxy": no_proxy,
         "preferred_sub_backend": preferred_sub_backend or backend,
         "preferred_sub_model": preferred_sub_model if preferred_sub_model is not None else model,
-        "delegation_policy": delegation_policy,
-        "max_sub_agents": max(0, max_sub_agents),
+        "collaboration_mode": resolved_collaboration_mode,
+        "delegation_policy": resolved_delegation_policy,
+        "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
@@ -389,6 +456,14 @@ def enrich_plan(plan: dict, backend: str = "codex") -> dict:
         task.setdefault("preferred_http_proxy", None)
         task.setdefault("preferred_https_proxy", None)
         task.setdefault("preferred_no_proxy", None)
+        collaboration_mode, delegation_policy, max_sub_agents = resolve_task_collaboration(
+            task.get("collaboration_mode"),
+            task.get("delegation_policy"),
+            task.get("max_sub_agents"),
+        )
+        task["collaboration_mode"] = collaboration_mode
+        task["delegation_policy"] = delegation_policy
+        task["max_sub_agents"] = max_sub_agents
         task["supervision"] = normalize_task_supervision(task.get("supervision"))
         ensure_task_agents(task, backend)
     plan.setdefault("main_agent", make_agent("main", "run-main", backend, status="active"))

@@ -31,6 +31,21 @@ REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", 
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_STUB_DECISION = "ask_user"
+COLLABORATION_GUIDANCE = {
+    "auto": (
+        "Auto: spawn sub-agents only when expected parallel speedup is greater than startup, "
+        "coordination, and merge cost. Stay solo for small or tightly coupled work."
+    ),
+    "solo": "Solo: do not spawn sub-agents. Handle the work directly as task-main.",
+    "pair": (
+        "Pair: use at most one sub-agent for a genuinely parallel responsibility, such as "
+        "implementation, research, or review. Keep task-main as lead and merger."
+    ),
+    "team": (
+        "Team: use up to two sub-agents for parallel responsibility areas. Prefer disjoint "
+        "scopes such as coder plus viewer/verifier while task-main leads and merges."
+    ),
+}
 
 
 def task_has_active_followup(task: dict) -> bool:
@@ -45,11 +60,14 @@ def task_has_active_followup(task: dict) -> bool:
 
 
 def task_assignment_prompt(task: dict) -> str:
+    collaboration_mode = str(task.get("collaboration_mode") or "auto")
     return render_prompt_template(
         "task_assignment.md",
         task_title=task.get("title", ""),
         task_description=task.get("description", ""),
         workspace_path=task.get("workspace_path") or "(not set)",
+        collaboration_mode=collaboration_mode,
+        collaboration_guidance=COLLABORATION_GUIDANCE.get(collaboration_mode, COLLABORATION_GUIDANCE["auto"]),
         delegation_policy=task.get("delegation_policy", "auto"),
         max_sub_agents=task.get("max_sub_agents", 0),
         preferred_sub_backend=task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex",

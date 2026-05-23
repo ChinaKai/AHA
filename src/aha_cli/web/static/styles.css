@@ -125,8 +125,11 @@ header > div:first-child h1 {
 }
 .session-create {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(112px, auto) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(112px, auto) minmax(112px, auto) auto;
   gap: 8px;
+}
+.session-create .collaboration-help {
+  grid-column: 1 / -1;
 }
 .session-create button {
   border-color: #1f6feb;
@@ -323,6 +326,12 @@ button, input, select, textarea { font: inherit; }
 .field-label span {
   color: #667085;
   font-size: 11px;
+}
+.collaboration-help,
+.field-help {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.35;
 }
 .task-create-form {
   gap: 12px;

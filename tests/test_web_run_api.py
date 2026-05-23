@@ -77,6 +77,7 @@ class WebRunApiTests(unittest.TestCase):
                         "goal": "Proxy setup",
                         "mode": "research",
                         "backend": "codex",
+                        "collaboration_mode": "team",
                         "proxy_enabled": True,
                         "http_proxy": "http://127.0.0.1:7890",
                         "https_proxy": "http://127.0.0.1:7890",
@@ -89,6 +90,8 @@ class WebRunApiTests(unittest.TestCase):
             task = plan["tasks"][0]
 
         self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(task["collaboration_mode"], "team")
+        self.assertEqual(task["max_sub_agents"], 2)
         self.assertTrue(task["preferred_proxy_enabled"])
         self.assertEqual(task["preferred_http_proxy"], "http://127.0.0.1:7890")
         self.assertEqual(task["preferred_https_proxy"], "http://127.0.0.1:7890")

@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
+from aha_cli.domain.models import TASK_COLLABORATION_MODES
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
 from aha_cli.store.filesystem import (
@@ -128,6 +129,9 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
         return json_response({"error": f"unknown sandbox: {sandbox}"}, "400 Bad Request")
     if approval is not None and approval not in APPROVAL_OPTIONS:
         return json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request")
+    collaboration_mode = str(payload.get("collaboration_mode", "auto") or "auto")
+    if collaboration_mode not in TASK_COLLABORATION_MODES:
+        return json_response({"error": f"unknown collaboration mode: {collaboration_mode}"}, "400 Bad Request")
 
     task_titles = payload.get("task_titles", payload.get("tasks", []))
     if isinstance(task_titles, str):
@@ -167,6 +171,7 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
         http_proxy=str(payload.get("http_proxy", "") or "") or None,
         https_proxy=str(payload.get("https_proxy", "") or "") or None,
         no_proxy=str(payload.get("no_proxy", "") or "") or None,
+        collaboration_mode=collaboration_mode,
     )
     backend_states = []
     if bool(payload.get("dispatch", False)):

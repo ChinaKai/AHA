@@ -148,7 +148,7 @@ sub-agent: run:<run-id>:task:<task-id>:agent:<sub-id>
 
 `run-main` is currently a reserved identity. AHA stores run-level metadata for it, but the active team model today is task-scoped: one `task-main` plus optional sub-agents. AHA itself handles run-level orchestration until a real run-main project-manager workflow is implemented.
 
-Every task has one `task-main`. Sub-agents are optional and can be 0..n per task. Backend sessions are scoped to task/agent boundaries so task context does not bleed across unrelated work.
+Every task has one `task-main`. Sub-agents are optional and can be 0..n per task. User-facing task setup uses a collaboration mode (`auto`, `solo`, `pair`, or `team`), which AHA maps to delegation policy and sub-agent limits internally. Backend sessions are scoped to task/agent boundaries so task context does not bleed across unrelated work.
 
 Creating a task automatically dispatches an AHA-mode assignment to that task's `task-main`. The assignment asks `task-main` to judge complexity and, if needed, return structured `spawn_sub` actions. AHA executes those actions by creating sub-agents scoped to the current task.
 
@@ -159,7 +159,7 @@ aha task add <run-id> "Analyze package rules" \
   --workspace-path /home/kaikai/kk-workspace/hl_project/fw_omni_builder \
   --backend codex \
   --model gpt-5.2 \
-  --delegation-policy auto \
+  --collaboration-mode auto \
   --max-sub-agents 3
 aha task list <run-id>
 aha task show <run-id> task-001
@@ -352,7 +352,7 @@ Task proxy configuration lives on the task (`http_proxy`, `https_proxy`, `no_pro
 It shows a task list on the left, a task workspace in the center, and task agents on the right. Selecting a task opens that task's conversation, result, logs, and prompt context.
 
 ```text
-left: task list and task creation with workspace/backend/model/delegation policy
+left: task list and task creation with workspace/backend/model/collaboration mode
 center: conversation/result/logs/context
 right: task-main/sub agents and backend session details
 ```

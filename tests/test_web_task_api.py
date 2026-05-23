@@ -53,6 +53,7 @@ class WebTaskApiTests(unittest.TestCase):
                         payload={
                             "title": "Detailed task",
                             "description": "Use the attached notes and preserve existing behavior.",
+                            "collaboration_mode": "team",
                             "dispatch": False,
                         },
                     )
@@ -63,6 +64,9 @@ class WebTaskApiTests(unittest.TestCase):
 
         self.assertTrue(body["ok"])
         self.assertEqual(body["task"]["description"], "Use the attached notes and preserve existing behavior.")
+        self.assertEqual(body["task"]["collaboration_mode"], "team")
+        self.assertEqual(body["task"]["delegation_policy"], "auto")
+        self.assertEqual(body["task"]["max_sub_agents"], 2)
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 

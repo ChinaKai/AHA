@@ -4,6 +4,9 @@ Current task context:
 - description: $description
 - status: $status
 - role selected by user: $role
+- collaboration_mode: $collaboration_mode
+- delegation_policy: $delegation_policy
+- max_sub_agents: $max_sub_agents
 - agents: $agents
 $final_context
 $task_journal

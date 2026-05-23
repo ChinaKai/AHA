@@ -127,7 +127,14 @@ Creating a task appends an AHA-mode assignment message:
 }
 ```
 
-If `task-main` needs sub-agents or must route follow-up work to an existing owner, it can include a JSON action payload in its response:
+Tasks expose a `collaboration_mode` intent:
+
+- `auto`: AHA asks `task-main` to create sub-agents only when parallel speedup should beat startup, coordination, and merge cost.
+- `solo`: no sub-agents; `task-main` handles the work directly.
+- `pair`: at most one sub-agent for a parallel implementation, research, or review responsibility.
+- `team`: up to two sub-agents for parallel responsibility areas, with `task-main` leading and merging.
+
+The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard execution controls. If `task-main` needs sub-agents or must route follow-up work to an existing owner, it can include a JSON action payload in its response:
 
 ```json
 {

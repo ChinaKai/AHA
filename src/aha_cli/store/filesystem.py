@@ -255,6 +255,7 @@ def create_plan(
     http_proxy: str | None = None,
     https_proxy: str | None = None,
     no_proxy: str | None = None,
+    collaboration_mode: str | None = None,
 ) -> dict:
     run_id = new_run_id()
     titles = task_titles or default_tasks(goal, agents, mode)
@@ -278,6 +279,7 @@ def create_plan(
             http_proxy=http_proxy,
             https_proxy=https_proxy,
             no_proxy=no_proxy,
+            collaboration_mode=collaboration_mode,
         )
         for idx, title in enumerate(titles, start=1)
     ]
@@ -340,8 +342,9 @@ def add_task(
     http_proxy: str | None = None,
     https_proxy: str | None = None,
     no_proxy: str | None = None,
-    delegation_policy: str = "auto",
-    max_sub_agents: int = 3,
+    collaboration_mode: str | None = None,
+    delegation_policy: str | None = "auto",
+    max_sub_agents: int | None = 3,
     preferred_sub_backend: str | None = None,
     preferred_sub_model: str | None = None,
     description: str | None = None,
@@ -367,6 +370,7 @@ def add_task(
             http_proxy=http_proxy,
             https_proxy=https_proxy,
             no_proxy=no_proxy,
+            collaboration_mode=collaboration_mode,
             delegation_policy=delegation_policy,
             max_sub_agents=max_sub_agents,
             preferred_sub_backend=preferred_sub_backend,
@@ -416,8 +420,9 @@ def add_task(
             "proxy_configured": task_has_proxy_config(task),
             "workspace_id": task.get("workspace_id"),
             "workspace_path": task.get("workspace_path"),
-            "delegation_policy": delegation_policy,
-            "max_sub_agents": max_sub_agents,
+            "collaboration_mode": task.get("collaboration_mode"),
+            "delegation_policy": task.get("delegation_policy"),
+            "max_sub_agents": task.get("max_sub_agents"),
             "supervision": task.get("supervision"),
         },
     )

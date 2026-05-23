@@ -130,6 +130,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         http_proxy=args.http_proxy,
         https_proxy=args.https_proxy,
         no_proxy=args.no_proxy,
+        collaboration_mode=args.collaboration_mode,
     )
     print(f"Created run: {plan['id']}")
     print(f"Plan file: {plan_path(root, plan['id'])}")
@@ -364,6 +365,7 @@ def cmd_task(args: argparse.Namespace) -> int:
             http_proxy=args.http_proxy,
             https_proxy=args.https_proxy,
             no_proxy=args.no_proxy,
+            collaboration_mode=args.collaboration_mode,
             delegation_policy=args.delegation_policy,
             max_sub_agents=args.max_sub_agents,
             preferred_sub_backend=args.preferred_sub_backend,

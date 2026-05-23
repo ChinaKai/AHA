@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from pathlib import Path
 import socket
@@ -279,6 +280,8 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("Completed, stopped, failed, interrupted, or blocked", assignment_prompt)
         self.assertIn("Include a stable `scope_id`", assignment_prompt)
         self.assertIn("include `agent_id` in that `spawn_sub` action", assignment_prompt)
+        self.assertIn("Collaboration mode:", assignment_prompt)
+        self.assertIn("parallel speedup", assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -314,6 +317,56 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("report back to `task-main`", sub_prompt)
                 self.assertIn("AHA-Task: task-001", sub_prompt)
                 self.assertIn("AHA-Agent: sub-001", sub_prompt)
+
+    def test_task_add_collaboration_modes_map_to_sub_agent_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Collaboration modes", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                code, task_output = self.run_cli(
+                    "task",
+                    "add",
+                    run_id,
+                    "Pair task",
+                    "--collaboration-mode",
+                    "pair",
+                    "--no-dispatch",
+                )
+                self.assertEqual(code, 0)
+                task = json.loads(task_output)
+
+        self.assertEqual(task["collaboration_mode"], "pair")
+        self.assertEqual(task["delegation_policy"], "auto")
+        self.assertEqual(task["max_sub_agents"], 1)
+
+    def test_task_add_legacy_disabled_delegation_infers_solo_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Legacy delegation", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                code, task_output = self.run_cli(
+                    "task",
+                    "add",
+                    run_id,
+                    "Solo task",
+                    "--delegation-policy",
+                    "disabled",
+                    "--no-dispatch",
+                )
+                self.assertEqual(code, 0)
+                task = json.loads(task_output)
+
+        self.assertEqual(task["collaboration_mode"], "solo")
+        self.assertEqual(task["delegation_policy"], "disabled")
+        self.assertEqual(task["max_sub_agents"], 0)
 
     def test_commit_policy_formats_validates_and_prints_dry_run_messages(self) -> None:
         message = format_commit_message("feat", "add lazy loading", "task-001", "main", scope="web", aha_scope="lazy-log")
