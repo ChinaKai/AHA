@@ -74,6 +74,8 @@ const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interrupted"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
+const defaultHttpProxy = "http://127.0.0.1:7890";
+const defaultHttpsProxy = defaultHttpProxy;
 const defaultNoProxy = "localhost,127.0.0.1,::1";
 const collapsedMessageCharLimit = 900;
 const collapsedMessageLineLimit = 2;
@@ -1442,35 +1444,6 @@ function isSupervisionAgent(agent) {
   return role === "host" || role === "supervision-host";
 }
 
-function taskAgentInputPrompt(task = selectedTask(), agent = selectedAgent()) {
-  if (!task || isSupervisionAgent(agent)) return "";
-  const agentId = compactText(agent?.id || backendTarget() || "main", 60);
-  const title = compactText(task.title || task.id || "当前任务", 180);
-  const description = compactText(task.description || "", 260);
-  const assignment = agent && agent.created_reason !== "task creation" ? compactText(agent.created_reason || "", 180) : "";
-  const scope = compactText(agent?.scope_id || "", 100);
-  const parts = agentId === "main"
-    ? [`继续处理任务：${title}`]
-    : [`请 ${agentId} 继续处理当前分配`];
-  if (assignment) parts.push(`分配：${assignment}`);
-  if (scope) parts.push(`scope=${scope}`);
-  if (description) parts.push(`任务说明：${description}`);
-  return parts.join("；");
-}
-
-function fillTaskAgentPromptFromHint() {
-  if (!messageEl || messageEl.value.trim()) return false;
-  const prompt = taskAgentInputPrompt();
-  if (!prompt) return false;
-  messageEl.value = prompt;
-  const cursor = messageEl.value.length;
-  messageEl.setSelectionRange?.(cursor, cursor);
-  commandSelection = 0;
-  commandMenuEl.classList.add("hidden");
-  syncMobileComposerAction();
-  return true;
-}
-
 function messageContextKey(taskId = selectedTaskId, target = backendTarget()) {
   return `${currentRunId || ""}::${taskId || ""}::${target || "main"}`;
 }
@@ -1852,6 +1825,46 @@ function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGat
     max_rounds: Number(maxRoundsValue || "5"),
     ask_user_gates: normalizeAskUserGates(askUserGates)
   };
+}
+
+function applyProxyDefaultValues(httpEl, httpsEl, noProxyEl, enabledEl) {
+  let changed = false;
+  if (httpEl && !httpEl.value.trim()) {
+    httpEl.value = defaultHttpProxy;
+    changed = true;
+  }
+  if (httpsEl && !httpsEl.value.trim()) {
+    httpsEl.value = defaultHttpsProxy;
+    changed = true;
+  }
+  if (noProxyEl && !noProxyEl.value.trim()) {
+    noProxyEl.value = defaultNoProxy;
+    changed = true;
+  }
+  if ((httpEl?.value.trim() || httpsEl?.value.trim()) && enabledEl && !enabledEl.checked) {
+    enabledEl.checked = true;
+    changed = true;
+  }
+  return changed;
+}
+
+function fillTaskCreateProxyDefaults() {
+  return applyProxyDefaultValues(taskHttpProxyEl, taskHttpsProxyEl, taskNoProxyEl, taskProxyEnabledEl);
+}
+
+function fillSelectedTaskProxyDefaults() {
+  return applyProxyDefaultValues(selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl, selectedTaskNoProxyEl, selectedTaskProxyEnabledEl);
+}
+
+function fillBootstrapProxyDefaults(input) {
+  const form = input?.closest?.("[data-bootstrap-run-form]");
+  if (!form) return false;
+  return applyProxyDefaultValues(
+    form.querySelector("[data-bootstrap-http-proxy]"),
+    form.querySelector("[data-bootstrap-https-proxy]"),
+    form.querySelector("[data-bootstrap-no-proxy]"),
+    form.querySelector("[data-bootstrap-proxy-enabled]")
+  );
 }
 
 function setCreateProxyDefaultsFromInputs() {
@@ -4916,11 +4929,7 @@ messageEl.addEventListener("input", () => {
   renderCommandMenu();
 });
 messageEl.addEventListener("focus", () => {
-  if (fillTaskAgentPromptFromHint()) return;
   renderCommandMenu();
-});
-messageEl.addEventListener("click", () => {
-  fillTaskAgentPromptFromHint();
 });
 messageEl.addEventListener("keydown", event => {
   const commands = matchingSlashCommands();
@@ -5033,7 +5042,17 @@ panelEl.addEventListener("change", event => {
   custom?.classList.toggle("hidden", !isCustom);
   if (isCustom) custom?.focus();
 });
+panelEl.addEventListener("focusin", event => {
+  const input = event.target instanceof HTMLInputElement ? event.target : null;
+  if (input?.matches("[data-bootstrap-http-proxy], [data-bootstrap-https-proxy], [data-bootstrap-no-proxy]")) {
+    fillBootstrapProxyDefaults(input);
+  }
+});
 panelEl.addEventListener("click", event => {
+  const proxyInput = event.target instanceof HTMLInputElement ? event.target : null;
+  if (proxyInput?.matches("[data-bootstrap-http-proxy], [data-bootstrap-https-proxy], [data-bootstrap-no-proxy]")) {
+    fillBootstrapProxyDefaults(proxyInput);
+  }
   const copyButton = event.target instanceof Element ? event.target.closest("[data-copy-message-key]") : null;
   if (copyButton) {
     event.preventDefault();
@@ -5114,6 +5133,10 @@ taskSupervisionFormEl?.addEventListener("submit", async event => {
     if (configured && selectedTaskNoProxyEl && !selectedTaskNoProxyEl.value.trim()) selectedTaskNoProxyEl.value = defaultNoProxy;
   });
 });
+[selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl, selectedTaskNoProxyEl].forEach(input => {
+  input?.addEventListener("focus", fillSelectedTaskProxyDefaults);
+  input?.addEventListener("click", fillSelectedTaskProxyDefaults);
+});
 agentTargetEl.addEventListener("change", async () => {
   syncAgentCards();
   renderSelectedAgentInfo();
@@ -5129,6 +5152,10 @@ collaborationModeEl?.addEventListener("change", syncCollaborationFields);
 newRunCollaborationEl?.addEventListener("change", syncNewRunCollaborationHelp);
 taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeFields);
 [taskHttpProxyEl, taskHttpsProxyEl].forEach(input => input?.addEventListener("input", setCreateProxyDefaultsFromInputs));
+[taskHttpProxyEl, taskHttpsProxyEl, taskNoProxyEl].forEach(input => {
+  input?.addEventListener("focus", fillTaskCreateProxyDefaults);
+  input?.addEventListener("click", fillTaskCreateProxyDefaults);
+});
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
   if (!tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);

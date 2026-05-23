@@ -177,18 +177,20 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('if (event.type === "message") return "chat";', script)
         self.assertIn('if (event.type === "host_decision") return renderTimelineStatus("host decision"', script)
 
-    def test_frontend_prefills_empty_task_agent_composer_from_prompt_hint(self) -> None:
+    def test_frontend_prefills_empty_proxy_inputs_from_defaults(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("function taskAgentInputPrompt", script)
-        self.assertIn("function fillTaskAgentPromptFromHint", script)
-        self.assertIn("if (!messageEl || messageEl.value.trim()) return false;", script)
-        self.assertIn("继续处理任务：", script)
-        self.assertIn("任务说明：", script)
-        self.assertIn('messageEl.addEventListener("focus", () => {', script)
-        self.assertIn("if (fillTaskAgentPromptFromHint()) return;", script)
-        self.assertIn('messageEl.addEventListener("click", () => {', script)
+        self.assertNotIn("taskAgentInputPrompt", script)
+        self.assertNotIn("fillTaskAgentPromptFromHint", script)
+        self.assertIn('const defaultHttpProxy = "http://127.0.0.1:7890";', script)
+        self.assertIn("function applyProxyDefaultValues", script)
+        self.assertIn("function fillTaskCreateProxyDefaults", script)
+        self.assertIn("function fillSelectedTaskProxyDefaults", script)
+        self.assertIn("function fillBootstrapProxyDefaults", script)
+        self.assertIn('input?.addEventListener("focus", fillSelectedTaskProxyDefaults);', script)
+        self.assertIn('input?.addEventListener("click", fillTaskCreateProxyDefaults);', script)
+        self.assertIn('input?.matches("[data-bootstrap-http-proxy], [data-bootstrap-https-proxy], [data-bootstrap-no-proxy]")', script)
 
     def test_frontend_remembers_selected_task_and_selects_created_task(self) -> None:
         root = Path(__file__).resolve().parents[1]
