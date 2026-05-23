@@ -4,11 +4,15 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names
+from aha_cli.services.chat_supervision import apply_supervision_real_host
+from aha_cli.services.steward import apply_steward_decision, steward_decision_snapshot
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
+    append_event,
     add_agent,
     delete_task,
+    load_config,
     read_json,
     require_plan,
     resolve_workspace_path,
@@ -29,6 +33,8 @@ from aha_cli.web.task_actions import (
     parse_task_proxy_fields,
     parse_task_supervision_fields,
     request_task_finalization_with_backend,
+    prepare_task_main_autostart,
+    start_prepared_backend,
     start_dispatched_task_backend,
 )
 
@@ -74,6 +80,8 @@ def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str,
         return task_final_view_snapshot(root, run_id, task_id)
     if detail_name == "context":
         return task_context_snapshot(root, run_id, task_id)
+    if detail_name == "steward":
+        return steward_decision_snapshot(root, run_id, task_id)
     if not detail_name:
         return task_snapshot(root, run_id, task_id)
     raise LookupError("task detail not found")
@@ -128,6 +136,41 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             )
             task = task_snapshot(root, run_id, task_id)["task"]
             return route_result({"ok": True, "task": task, "compact_reset": compact_payload})
+        elif action == "steward/apply":
+            payload = parse_json_body(body)
+            autostart = prepare_task_main_autostart(root, run_id, task_id) if payload.get("autostart", True) else None
+            steward_payload = apply_steward_decision(root, run_id, task_id)
+            if steward_payload.get("semantic_review"):
+                latest_main_reply = next(
+                    (
+                        str(item.get("message") or "")
+                        for item in reversed(steward_payload["snapshot"].get("recent_messages") or [])
+                        if item.get("from") == "main" and item.get("to") == "browser"
+                    ),
+                    "",
+                )
+                host_result = apply_supervision_real_host(
+                    root,
+                    run_id,
+                    task_id,
+                    source_agent="main",
+                    reply_text=latest_main_reply,
+                    cfg=load_config(root),
+                    run=run_dir(root, run_id),
+                )
+                if host_result:
+                    steward_payload = {**steward_payload, "applied": bool(host_result.get("routed_to_host")), "semantic_host": host_result}
+                    append_event(root, run_id, "steward_semantic_review_routed", {"task_id": task_id, "routed_to_host": bool(host_result.get("routed_to_host"))})
+                else:
+                    append_event(root, run_id, "steward_semantic_review_skipped", {"task_id": task_id, "reason": "real supervision host is not configured"})
+                    steward_payload = {**steward_payload, "semantic_host": {"routed_to_host": False, "reason": "real supervision host is not configured"}}
+            task = task_snapshot(root, run_id, task_id)["task"]
+            response = {"ok": True, "task": task, "steward": steward_payload}
+            if steward_payload.get("applied") and not steward_payload.get("semantic_review"):
+                backend = start_prepared_backend(root, run_id, autostart)
+                if backend:
+                    response["backend"] = backend
+            return route_result(response)
         else:
             return route_result({"error": f"unknown task action: {action}"}, "400 Bad Request")
         return route_result({"ok": True, "task": task})

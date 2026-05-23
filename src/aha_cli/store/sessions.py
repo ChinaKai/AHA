@@ -22,6 +22,28 @@ def ensure_session(
     if path.exists():
         session = read_json(path)
         changed = False
+        if session.get("backend") != backend:
+            previous_backend_session_id = session.get("backend_session_id")
+            if previous_backend_session_id:
+                history = session.get("history_backend_sessions")
+                if not isinstance(history, list):
+                    history = []
+                history.append(
+                    {
+                        "backend_session_id": previous_backend_session_id,
+                        "backend": session.get("backend"),
+                        "model": session.get("model"),
+                        "started_at": session.get("created_at"),
+                        "archived_at": now_func(),
+                        "reason": "backend_changed",
+                    }
+                )
+                session["history_backend_sessions"] = history
+            session["backend"] = backend
+            session["backend_session_id"] = None
+            session["status"] = "reset"
+            session["compact_summary"] = None
+            changed = True
         for key, value in {"model": model, "workspace_path": workspace_path}.items():
             if value is not None and session.get(key) != value:
                 session[key] = value

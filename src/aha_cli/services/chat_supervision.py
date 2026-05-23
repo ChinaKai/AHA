@@ -1,3 +1,12 @@
+"""Delegated browser control plane for user-facing stewardship decisions.
+
+The host is not a third-party reviewer. It is the delegated ``browser -> main``
+control plane for ambiguous semantic decisions after the rules-only steward
+hands off with ``semantic_review``. If the host backend fails, AHA falls back
+to user confirmation instead of letting the task appear as a generic backend
+failure.
+"""
+
 from __future__ import annotations
 
 import json
@@ -28,6 +37,17 @@ from aha_cli.store.filesystem import (
 
 
 SUPERVISION_HOST_DECISIONS = {"ask_user", "continue", "stop", "wait", "route_to_agent", "spawn_sub", "record_task_update"}
+SUPERVISION_FAILURE_FALLBACK_STATUS = "awaiting_user"
+SUPERVISION_STATUS_CHANNELS = ("main_backend", "host_backend", "steward_decision")
+DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT = (
+    "Delegated browser control plane contract:\n"
+    "- You are the delegated browser->main control plane, not a third-party reviewer.\n"
+    "- Steward handles deterministic low-risk continuation; you handle semantic handoff decisions.\n"
+    "- Keep the task moving, correct direction, route or wait when needed, and escalate only when required.\n"
+    "- Do not replace main's technical implementation judgment or make product decisions for the user.\n"
+    "- Do not approve destructive operations, commits, spending, permission changes, or irreversible choices; use ask_user.\n"
+    "- Do not expose host/supervision mechanics to main; response must read like the next browser instruction.\n"
+)
 SUPERVISION_EVENT_TYPES = {
     "main_reported_to_host",
     "host_decision",
@@ -102,7 +122,21 @@ def agents_visible_to_prompt(task: dict, target: str) -> list[dict]:
     return [agent for agent in agents if not _is_task_supervision_host_agent_record(task, agent)]
 
 
-def supervision_host_context(task: dict, host_notes: list[str] | None = None) -> str:
+def supervision_host_handoff_notes(root: Path, run_id: str, task_id: str, limit: int = 5) -> list[str]:
+    notes: list[str] = []
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        data = event.get("data") or {}
+        if data.get("task_id") != task_id:
+            continue
+        if event.get("type") == "steward_semantic_review_requested":
+            reason = str(data.get("reason") or "").strip()
+            notes.append(f"steward -> host: semantic_review ({reason or 'no reason'})")
+        if len(notes) >= limit:
+            break
+    return list(reversed(notes))
+
+
+def supervision_host_context(task: dict, host_notes: list[str] | None = None, handoff_notes: list[str] | None = None) -> str:
     task_context = {
         "id": task.get("id"),
         "title": task.get("title"),
@@ -123,13 +157,12 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None) ->
         ],
     }
     return (
-        "Supervision host instructions:\n"
-        "You are the AHA supervision host for this task.\n"
-        "You represent the user in a private Chat conversation with task-main.\n"
+        "AHA host instructions:\n"
+        f"{DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT}"
         "The current message from main is task-main's latest user-facing reply.\n"
-        "Talk to task-main like the user would: direct, natural, and focused on the next step.\n"
+        "Talk to task-main as the next browser control message: direct, natural, and focused on the next step.\n"
         "Your response field is inserted as the next user message to task-main.\n"
-        "Do not mention host, agent, supervision, proxy, decision, JSON, or that you represent the user.\n"
+        "Do not mention host, agent, supervision, proxy, decision, JSON, or delegated control-plane mechanics.\n"
         "Do not restate or praise main's answer; ask for or direct the next concrete step.\n"
         "Use continue only when task-main should do more concrete work.\n"
         "Use wait when task-main or sub-agents are already working and your only next message would be an acknowledgement like OK, waiting, or report when ready.\n"
@@ -144,12 +177,18 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None) ->
         "Do not include decision/reason labels in response.\n"
         "Use actions only when main should execute concrete AHA actions; otherwise return an empty list.\n\n"
         f"Task context:\n{json.dumps(task_context, ensure_ascii=False, indent=2)}\n\n"
+        f"Recent steward handoffs:\n{chr(10).join(handoff_notes or ['(none)'])}\n\n"
         f"Recent browser-to-host notes:\n{chr(10).join(host_notes or ['(none)'])}"
     )
 
 
-def supervision_host_prompt(task: dict, main_reply: str, host_notes: list[str] | None = None) -> str:
-    return f"{supervision_host_context(task, host_notes)}\n\nMain latest reply:\n{main_reply}\n"
+def supervision_host_prompt(
+    task: dict,
+    main_reply: str,
+    host_notes: list[str] | None = None,
+    handoff_notes: list[str] | None = None,
+) -> str:
+    return f"{supervision_host_context(task, host_notes, handoff_notes)}\n\nMain latest reply:\n{main_reply}\n"
 
 
 def parse_supervision_host_decision(reply: str) -> dict:
@@ -354,7 +393,8 @@ def apply_supervision_host_decision(
     main_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == "main"), {})
     host_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == host_agent_id), {})
     host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or "stub")
-    if exit_code != 0:
+    backend_failed = exit_code != 0
+    if backend_failed:
         decision = {
             "decision": "ask_user",
             "reason": "host backend failed; defaulting to user confirmation",
@@ -362,6 +402,18 @@ def apply_supervision_host_decision(
             "actions": [],
         }
         executed: list[dict] = []
+        append_event(
+            root,
+            run_id,
+            "supervision_host_backend_failed",
+            {
+                "task_id": task_id,
+                "host_backend": host_backend,
+                "host_agent_id": host_agent_id,
+                "exit_code": exit_code,
+                "fallback_status": SUPERVISION_FAILURE_FALLBACK_STATUS,
+            },
+        )
     else:
         decision = parse_supervision_host_decision(host_reply)
         executed = execute_actions(root, run_id, task_id, host_reply)
@@ -463,6 +515,9 @@ def apply_supervision_host_decision(
         "action_count": len(decision["actions"]),
         "executed_action_count": len(executed),
         "exit_code": exit_code,
+        "backend_failed": backend_failed,
+        "status_channels": list(SUPERVISION_STATUS_CHANNELS),
+        "fallback_status": SUPERVISION_FAILURE_FALLBACK_STATUS if backend_failed else "",
         "routed_to_main": routed_to_main,
         "routed_to_browser": routed_to_browser,
         "waiting": waiting_for_subagents,
@@ -513,8 +568,10 @@ __all__ = [
     "is_task_supervision_host_agent",
     "low_information_supervision_response",
     "parse_supervision_host_decision",
+    "SUPERVISION_FAILURE_FALLBACK_STATUS",
     "prompt_event_visible_to_target",
     "supervision_host_context",
+    "supervision_host_handoff_notes",
     "supervision_host_notes",
     "supervision_host_prompt",
     "task_supervision_host_id",

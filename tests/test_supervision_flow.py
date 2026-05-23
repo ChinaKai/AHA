@@ -9,14 +9,18 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import apply_supervision_host_decision, chat_prompt
+from aha_cli.services.chat_supervision import supervision_host_context
 from aha_cli.services.messages import format_event
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     conversation_events_page,
+    ensure_session,
     event_path,
     inbox_path,
     iter_jsonl_from,
+    list_sessions,
+    save_session,
     set_agent_status,
     set_task_status,
     status_snapshot,
@@ -30,6 +34,25 @@ class SupervisionFlowTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_supervision_host_context_uses_delegated_browser_contract(self) -> None:
+        context = supervision_host_context(
+            {
+                "id": "task-001",
+                "title": "Delegated browser",
+                "status": "running",
+                "supervision": {"mode": "assisted", "host_backend": "codex"},
+                "agents": [{"id": "main", "role": "task-main", "backend": "codex", "status": "running"}],
+            },
+            handoff_notes=["steward -> host: semantic_review (needs semantic decision)"],
+        )
+
+        self.assertIn("delegated browser->main control plane", context)
+        self.assertIn("not a third-party reviewer", context)
+        self.assertIn("Steward handles deterministic low-risk continuation", context)
+        self.assertIn("response must read like the next browser instruction", context)
+        self.assertIn("Recent steward handoffs", context)
+        self.assertIn("needs semantic decision", context)
 
     def test_codex_chat_records_supervision_stub_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -113,6 +136,7 @@ class SupervisionFlowTests(unittest.TestCase):
                         "read-only",
                         "--task-id",
                         "task-001",
+                        "--from-start",
                         "--once",
                     )
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
@@ -193,6 +217,48 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertEqual(applied[-1]["data"]["effect"], "routed_to_main")
         self.assertTrue(applied[-1]["data"]["routed_to_main"])
         self.assertEqual(task["status"], "running")
+
+    def test_supervision_host_backend_switch_resets_backend_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Switch supervision backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                session = ensure_session(root, run_id, "task-001", "host", "codex")
+                session["backend_session_id"] = "codex-host-session"
+                session["status"] = "active"
+                save_session(root, session)
+
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                host_session = next(
+                    item for item in list_sessions(root, run_id, "task-001") if item["agent_id"] == "host"
+                )
+
+        self.assertEqual(host_session["backend"], "claude")
+        self.assertIsNone(host_session["backend_session_id"])
+        self.assertEqual(host_session["status"], "reset")
+        self.assertEqual(host_session["history_backend_sessions"][-1]["backend"], "codex")
+        self.assertEqual(host_session["history_backend_sessions"][-1]["backend_session_id"], "codex-host-session")
+        self.assertEqual(host_session["history_backend_sessions"][-1]["reason"], "backend_changed")
 
     def test_codex_chat_records_codex_supervision_host_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,6 +357,67 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertTrue(host_decisions[-1]["data"]["waiting"])
         applied = [row for row in rows if row["type"] == "main_applied_decision"]
         self.assertEqual(applied[-1]["data"]["effect"], "waiting")
+
+    def test_claude_supervision_backend_failure_falls_back_to_user_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude supervision fails", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "main reply for host",
+                    sender="main",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="main",
+                    to_agent="host",
+                )
+
+                with mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(1, "", None)):
+                    host_code, _host_output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "host",
+                        "--sender",
+                        "host",
+                        "--sandbox",
+                        "read-only",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(host_code, 1)
+        self.assertEqual(task["status"], "awaiting_user")
+        self.assertEqual(next(agent for agent in task["agents"] if agent["id"] == "host")["status"], "failed")
+        self.assertTrue(any(row["type"] == "supervision_host_backend_failed" for row in rows))
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "ask_user")
+        self.assertTrue(host_decisions[-1]["data"]["backend_failed"])
+        self.assertEqual(host_decisions[-1]["data"]["fallback_status"], "awaiting_user")
+        browser_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message" and row["data"].get("sender") == "host" and row["data"].get("target") == "browser"
+        ]
+        self.assertEqual(browser_messages[-1]["message"], "host backend failed; defaulting to user confirmation")
 
     def test_codex_chat_empty_main_reply_waits_when_sub_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

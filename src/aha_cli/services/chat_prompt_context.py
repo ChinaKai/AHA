@@ -7,6 +7,7 @@ from aha_cli.services.chat_supervision import (
     is_task_supervision_host_agent,
     prompt_event_visible_to_target,
     supervision_host_context,
+    supervision_host_handoff_notes,
     supervision_host_notes,
 )
 from aha_cli.services.commit_policy import commit_message_policy_prompt
@@ -420,6 +421,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 supervision_context = supervision_host_context(
                     detail["task"],
                     supervision_host_notes(root, run_id, str(task_id), target),
+                    supervision_host_handoff_notes(root, run_id, str(task_id)),
                 )
                 task_context = f"{task_context.rstrip()}\n\n{supervision_context}\n"
                 components["supervision_host_context"] = supervision_context
@@ -451,7 +453,11 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             backend_session_id=(agent or {}).get("backend_session_id") or "-",
         )
         if task and is_task_supervision_host_agent(task, target):
-            supervision_context = supervision_host_context(task, supervision_host_notes(root, run_id, str(task_id), target))
+            supervision_context = supervision_host_context(
+                task,
+                supervision_host_notes(root, run_id, str(task_id), target),
+                supervision_host_handoff_notes(root, run_id, str(task_id)),
+            )
             sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_context}\n"
             components["supervision_host_context"] = supervision_context
         for stale_component in ("task_context", "task_agents", "task_journal", "commit_policy"):

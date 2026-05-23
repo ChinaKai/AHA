@@ -12,6 +12,7 @@ from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_bac
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
 from aha_cli.services.chat_prompt_context import chat_prompt, chat_prompt_with_metrics
 from aha_cli.services.chat_supervision import (
+    SUPERVISION_FAILURE_FALLBACK_STATUS,
     apply_supervision_host_decision,
     apply_supervision_real_host,
     is_task_supervision_host_agent,
@@ -315,7 +316,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     if manages_task_status:
                         final_status = status_from_agent_result(exit_code, reply)
                         set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
-                        if host_result.get("routed_to_main"):
+                        if host_result.get("backend_failed"):
+                            set_task_status(root, run_id, item_task_id, SUPERVISION_FAILURE_FALLBACK_STATUS, exit_code)
+                        elif host_result.get("routed_to_main"):
                             set_agent_status(root, run_id, item_task_id, "main", "pending")
                             set_task_status(root, run_id, item_task_id, "running")
                         elif host_result.get("waiting"):
