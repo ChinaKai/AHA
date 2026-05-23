@@ -190,6 +190,20 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("if (fillTaskAgentPromptFromHint()) return;", script)
         self.assertIn('messageEl.addEventListener("click", () => {', script)
 
+    def test_frontend_remembers_selected_task_and_selects_created_task(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('queryParams.get("selected_task_id")', script)
+        self.assertIn("function selectedTaskStorageKey", script)
+        self.assertIn("function readStoredSelectedTaskId", script)
+        self.assertIn("function writeStoredSelectedTaskId", script)
+        self.assertIn("selectedTaskId = readStoredSelectedTaskId() || null;", script)
+        self.assertIn("writeStoredSelectedTaskId(selectedTaskId);", script)
+        self.assertIn("writeStoredSelectedTaskId(taskId);", script)
+        self.assertIn("const createdTaskId = String(response?.task?.id || \"\").trim();", script)
+        self.assertIn("if (createdTaskId) await selectTask(createdTaskId);", script)
+
     def test_frontend_keeps_turn_events_realtime_with_chat_only_filter(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")

@@ -28,7 +28,7 @@ let runArchiveError = false;
 let offset = -1;
 let lastEventId = "";
 let statusData = null;
-let selectedTaskId = null;
+let selectedTaskId = String(queryParams.get("selected_task_id") || queryParams.get("task_id") || "").trim() || null;
 let activeTab = "conversation";
 let backendModels = new Map();
 let backendCommands = new Map();
@@ -486,6 +486,35 @@ function clearStoredLastEventId() {
   }
 }
 
+function selectedTaskStorageKey(runId = currentRunId) {
+  return runId ? `aha:selected-task-id:${runId}` : "";
+}
+
+function readStoredSelectedTaskId(runId = currentRunId) {
+  const key = selectedTaskStorageKey(runId);
+  if (!key) return "";
+  try {
+    return String(window.localStorage?.getItem(key) || "").trim();
+  } catch (_err) {
+    return "";
+  }
+}
+
+function writeStoredSelectedTaskId(taskId, runId = currentRunId) {
+  const key = selectedTaskStorageKey(runId);
+  if (!key) return;
+  try {
+    const value = String(taskId || "").trim();
+    if (value) {
+      window.localStorage?.setItem(key, value);
+    } else {
+      window.localStorage?.removeItem(key);
+    }
+  } catch (_err) {
+    // localStorage can be disabled; task selection still works for this page session.
+  }
+}
+
 function restoreEventCursorFromStorage() {
   lastEventId = readStoredLastEventId();
   const numericOffset = Number(lastEventId);
@@ -646,7 +675,7 @@ function resetRunScopedState() {
   eventSocketReconnectAt = 0;
   lastRealtimeMessageAt = 0;
   lastRealtimeFallbackPollAt = 0;
-  selectedTaskId = null;
+  selectedTaskId = readStoredSelectedTaskId() || null;
   backendStatusData = null;
   restoreEventCursorFromStorage();
   conversationAutoFollow = true;
@@ -3249,7 +3278,9 @@ function applyStatusData(options = {}) {
   renderSessionSummary();
   summaryEl.textContent = statusData.goal;
   const tasks = visibleTasks();
+  if (!selectedTaskId) selectedTaskId = readStoredSelectedTaskId() || null;
   if (!selectedTaskId || !tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
+  writeStoredSelectedTaskId(selectedTaskId);
   renderTaskList();
   renderSelectedHeader();
   if (options.forceTaskProxy || !isTaskProxyEditing()) {
@@ -3885,6 +3916,7 @@ function renderTaskList() {
 async function selectTask(taskId) {
   const changedTask = selectedTaskId !== taskId;
   selectedTaskId = taskId;
+  writeStoredSelectedTaskId(taskId);
   if (changedTask) {
     eventSocketReconnectAt = 0;
     closeEventWebSocket();
@@ -3918,6 +3950,7 @@ async function updateTaskVisibility(taskId, action) {
     }
     if (action === "restore" || action === "final" || action === "complete" || action === "reopen") selectedTaskId = taskId;
     if (action === "hide" || action === "delete") selectedTaskId = null;
+    writeStoredSelectedTaskId(selectedTaskId);
     await loadStatus();
     renderPanel();
   } finally {
@@ -4813,14 +4846,25 @@ taskFormEl?.addEventListener("submit", async event => {
     return;
   }
   try {
-    await fetchJson(apiUrl("/api/tasks"), {
+    const response = await fetchJson(apiUrl("/api/tasks"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(runScopedPayload(payload))
     }, "Failed to create task");
+    const createdTaskId = String(response?.task?.id || "").trim();
+    if (createdTaskId) {
+      const previousTaskId = selectedTaskId;
+      selectedTaskId = createdTaskId;
+      writeStoredSelectedTaskId(createdTaskId);
+      if (previousTaskId !== createdTaskId) {
+        eventSocketReconnectAt = 0;
+        closeEventWebSocket();
+      }
+    }
     if (newTaskTitleEl) newTaskTitleEl.value = "";
     if (newTaskDescriptionEl) newTaskDescriptionEl.value = "";
-    await loadStatus();
+    await loadStatus({ forceAgents: Boolean(createdTaskId) });
+    if (createdTaskId) await selectTask(createdTaskId);
     closeMobileSheets();
     closeTaskCreateDialog();
   } catch (err) {
@@ -5088,6 +5132,7 @@ taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeF
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
   if (!tasks.some(task => task.id === selectedTaskId)) selectedTaskId = defaultTaskId(tasks);
+  writeStoredSelectedTaskId(selectedTaskId);
   renderTaskList();
   renderSelectedHeader();
   renderTaskProxyEditor();
