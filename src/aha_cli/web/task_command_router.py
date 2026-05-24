@@ -101,7 +101,7 @@ def handle_slash_command(
         )
         parts = stripped.split()
         name = parts[1] if len(parts) > 1 else "help"
-        if name in {"final", "finalize"}:
+        if name == "final":
             backend_autostart = handlers.prepare_task_main_autostart(root, run_id, task_id)
             reply = handlers.request_task_finalization(root, run_id, task_id, stripped)
         elif name == "checkpoint":

@@ -84,6 +84,23 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertEqual(calls[1][0], "append_event")
         self.assertEqual(calls[1][1][2], "aha_command_handled")
 
+    def test_aha_finalize_is_not_a_finalization_alias(self) -> None:
+        handlers, _ = self.make_handlers()
+
+        handled, forwarded, payload = handle_slash_command(
+            Path("/tmp/root"),
+            "run-1",
+            {"sender": "browser", "target": "main"},
+            "/aha finalize",
+            "task-001",
+            handlers=handlers,
+        )
+
+        self.assertTrue(handled)
+        self.assertIsNone(forwarded)
+        self.assertNotIn("backend_autostart", payload)
+        self.assertEqual(payload["message"]["message"], "formatted /aha finalize for main")
+
     def test_interrupt_and_compact_reset_attach_action_payloads(self) -> None:
         handlers, _ = self.make_handlers()
 

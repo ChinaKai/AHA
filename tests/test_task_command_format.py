@@ -34,13 +34,16 @@ class TaskCommandFormatTests(unittest.TestCase):
                 help_text = format_aha_command(root, run_id, "task-001", "/aha help")
                 status_text = format_aha_command(root, run_id, "task-001", "/aha status")
                 agents_text = format_aha_command(root, run_id, "task-001", "/aha agents")
+                finalize_text = format_aha_command(root, run_id, "task-001", "/aha finalize")
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
         self.assertIn("/aha checkpoint <summary>", help_text)
+        self.assertNotIn("/aha finalize", help_text)
         self.assertIn("/agent <command>", help_text)
         self.assertIn("Task: task-001 Map the relevant files", status_text)
         self.assertIn("Backend: stub", status_text)
         self.assertIn("- main role=task-main backend=stub", agents_text)
+        self.assertIn("Unknown AHA command", finalize_text)
         self.assertIn("Unknown AHA command", unknown_text)
 
     def test_format_aha_without_task_and_missing_task(self) -> None:

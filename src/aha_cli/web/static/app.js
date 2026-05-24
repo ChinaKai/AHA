@@ -225,7 +225,6 @@ const ahaSlashCommands = [
   { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
   { scope: "aha", name: "/aha checkpoint", insert: "/aha checkpoint ", desc: "Record a task journal checkpoint. Handled locally." },
   { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate the Final and complete the task." },
-  { scope: "aha", name: "/aha finalize", insert: "/aha finalize", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Alias for /aha final." },
   { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
   { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." },

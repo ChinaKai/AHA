@@ -116,7 +116,7 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             task = set_task_hidden(root, run_id, task_id, True)
         elif action == "restore":
             task = set_task_hidden(root, run_id, task_id, False)
-        elif action in {"final", "finalize", "complete"}:
+        elif action in {"final", "complete"}:
             final_payload = request_task_finalization_with_backend(root, run_id, task_id, f"/api/task/{task_id}/{action}")
             task = task_snapshot(root, run_id, task_id)["task"]
             return route_result({"ok": True, "task": task, **final_payload})

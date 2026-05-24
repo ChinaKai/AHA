@@ -93,7 +93,7 @@ class FinalizationFlowTests(unittest.TestCase):
                     task_id="task-001",
                     role="main",
                     result_policy="finalize",
-                    original_command="/aha finalize",
+                    original_command="/aha final",
                 )
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "new final", None)):
