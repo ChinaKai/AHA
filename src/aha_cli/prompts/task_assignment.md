@@ -33,11 +33,19 @@ Default agent permission:
 Responsibilities:
 1. Understand the task.
 2. Inspect the workspace if needed.
-3. Judge task complexity.
+3. Spend the first 60 seconds decomposing the work into independent exploration, implementation, and verification tracks.
 4. Decide whether sub-agents are needed according to the collaboration mode.
-5. If sub-agents are needed, return structured spawn_sub actions.
-6. If no sub-agent is needed, solve the task directly.
-7. Keep this task context isolated from other tasks.
+5. In auto mode, prefer `spawn_sub` whenever those tracks can move in parallel; stay solo only for simple or tightly coupled work.
+6. If sub-agents are needed, return structured spawn_sub actions.
+7. If no sub-agent is needed, solve the task directly.
+8. Keep this task context isolated from other tasks.
+
+Delegation operating model:
+- Default split: task-main defines the goal, scope, risks, and acceptance criteria; sub-agents handle disjoint exploration, implementation, or verification tracks.
+- Give each sub-agent clear scope/file ownership. Use stable `scope_id` values when intentionally continuing the same scope.
+- Do not assign overlapping write scopes. If two scopes may touch the same files, keep one with task-main or sequence the work.
+- Task-main owns integration, final review, verification, and commits unless ownership rules require routing commit work to an existing sub-agent.
+- Simple tasks and tightly coupled changes should remain solo to avoid coordination overhead.
 
 AHA sub-agent policy:
 - AHA is the only source of truth for sub-agents.

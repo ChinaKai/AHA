@@ -281,7 +281,12 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("Include a stable `scope_id`", assignment_prompt)
         self.assertIn("include `agent_id` in that `spawn_sub` action", assignment_prompt)
         self.assertIn("Collaboration mode:", assignment_prompt)
-        self.assertIn("parallel speedup", assignment_prompt)
+        self.assertIn("prefer spawning sub-agents", assignment_prompt)
+        self.assertIn("Spend the first 60 seconds decomposing", assignment_prompt)
+        self.assertIn("prefer `spawn_sub` whenever those tracks can move in parallel", assignment_prompt)
+        self.assertIn("simple or tightly coupled work", assignment_prompt)
+        self.assertIn("clear scope/file ownership", assignment_prompt)
+        self.assertIn("Task-main owns integration, final review, verification, and commits", assignment_prompt)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -309,6 +314,11 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("Completed, stopped, failed, interrupted, or blocked", main_prompt)
                 self.assertIn("Include a stable `scope_id`", main_prompt)
                 self.assertIn("Spawn/reassign format:", main_prompt)
+                self.assertIn("spend the first 60 seconds decomposing", main_prompt)
+                self.assertIn("prefer `spawn_sub` whenever those tracks can move in parallel", main_prompt)
+                self.assertIn("simple or tightly coupled work", main_prompt)
+                self.assertIn("disjoint scope/file ownership", main_prompt)
+                self.assertIn("task-main responsible for integration, final review, verification, and commits", main_prompt)
 
                 sub_message = append_message(root, run_id, "sub-001", "提交你负责的部分", sender="main", task_id="task-001", role="sub")
                 sub_prompt = chat_prompt(root, run_id, "sub-001", sub_message, "")

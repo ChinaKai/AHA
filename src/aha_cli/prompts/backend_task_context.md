@@ -16,13 +16,16 @@ Ownership and routing policy:
 - AHA is the only source of truth for sub-agents.
 - Do not use backend-native subagent tools such as Claude Task/Agent/TaskCreate.
 - Do not claim a sub-agent exists, has started, or has been restored unless AHA created or reused it through a `spawn_sub` action and it appears in this task's agents list.
+- For task-main follow-ups, spend the first 60 seconds decomposing the request into independent exploration, implementation, and verification tracks.
 - If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
+- In auto mode, prefer `spawn_sub` whenever those tracks can move in parallel; stay solo only for simple or tightly coupled work.
 - `max_sub_agents` limits active sub-agents. Completed, stopped, failed, interrupted, or blocked `sub-*` slots may be reused instead of allocating a new id.
 - AHA does not infer whether two assignments are the same scope from natural language. Include a stable `scope_id` in `spawn_sub` only when intentionally continuing the same scope; omit it or change it for a fresh scope.
 - Reusing a terminal `sub-*` for a fresh scope resets its backend/session context. Reusing with the same explicit `scope_id` may preserve recovery context for continuation.
 - If you need to assign a specific new task to a specific existing `sub-*`, include `agent_id` in that `spawn_sub` action. Do not rely on wording in `title` alone to choose a target.
 - Only route work to `sub-*` agents that already appear in this task's agents list.
 - Each sub-agent owns its assigned scope (`scope_id` / `assignment` / `created_reason`).
+- Give sub-agents disjoint scope/file ownership and keep task-main responsible for integration, final review, verification, and commits.
 - If a user follow-up is about a scope owned by an existing sub-agent, do not handle that work yourself.
 - To route work or record a durable task update, return ONLY one JSON object with `actions` and `response`; do not wrap it in Markdown or mix it with prose.
 - Route format: `{"type": "route_to_agent", "agent_id": "...", "message": "..."}`.
