@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
+from aha_cli.services.backend_runtime import start_backend
 from aha_cli.store.filesystem import (
     append_event,
     conversation_events_page,
@@ -295,6 +296,15 @@ class WebEventsApiTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Conversation prompt metrics", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root, run_id, "main", task_id="task-001")
                 append_event(root, run_id, "agent_started", {"task_id": "task-001", "target": "main", "sender": "browser"})
                 append_event(
                     root,
@@ -309,7 +319,7 @@ class WebEventsApiTests(unittest.TestCase):
                     },
                 )
                 append_event(root, run_id, "agent_thread", {"task_id": "task-001", "target": "main", "thread_id": "thread-1"})
-                append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
+                append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 735000}})
                 append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
                 for index in range(10):
                     append_event(
@@ -328,6 +338,10 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertEqual(turn_event_types, ["agent_started", "agent_prompt_metrics", "agent_thread", "agent_usage", "agent_finished"])
         metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
         self.assertEqual(metrics["data"]["total"]["chars"], 1234)
+        pressure = body["backend_session"]["context_pressure"]
+        self.assertEqual(pressure["context_window"], 1050000)
+        self.assertEqual(pressure["level"], "watch")
+        self.assertEqual(pressure["percent"], 70.0)
 
     def test_conversation_events_api_filters_categories_server_side(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

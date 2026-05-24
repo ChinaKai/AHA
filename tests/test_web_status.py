@@ -51,6 +51,9 @@ class WebStatusTests(unittest.TestCase):
                         "status": "running" if target == "main" else "stopped",
                         "pid": 1234 if target == "main" else None,
                         "last_reply_at": "2026-05-15T00:00:00+00:00" if target == "main" else None,
+                        "resolved_model": "gpt-5.5" if target == "main" else None,
+                        "latest_usage": {"input_tokens": 735000} if target == "main" else {},
+                        "context_pressure": {"level": "watch", "percent": 70.0} if target == "main" else {},
                     }
 
                 with mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status):
@@ -61,6 +64,9 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(snapshot["tasks"][0]["activity_status"], "idle")
         self.assertEqual(agents["main"]["backend_process_status"], "running")
         self.assertEqual(agents["main"]["backend_process_pid"], 1234)
+        self.assertEqual(agents["main"]["backend_resolved_model"], "gpt-5.5")
+        self.assertEqual(agents["main"]["backend_context_pressure"]["level"], "watch")
+        self.assertEqual(agents["main"]["backend_latest_usage"]["input_tokens"], 735000)
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
 

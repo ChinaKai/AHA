@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from aha_cli.services.backend_runtime import backend_status
 from aha_cli.store.event_views import conversation_events_page, event_agent_refs, event_task_id
 from aha_cli.store.filesystem import (
     event_path,
@@ -109,7 +110,14 @@ def conversation_view_page(
     view["include_command_output"] = include_command_output
     view["turn_events"] = conversation_turn_events(root, run_id, task_id, target) if before is None else []
     session_file = session_path(root, run_id, task_id, target)
-    view["backend_session"] = backend_session_jsonl_info(read_json(session_file)) if session_file.exists() else {}
+    backend_state = backend_status(root, run_id, target, task_id=task_id)
+    session_info = backend_session_jsonl_info(read_json(session_file)) if session_file.exists() else {}
+    session_info["runtime"] = backend_state
+    session_info["context_pressure"] = backend_state.get("context_pressure")
+    session_info["latest_usage"] = backend_state.get("latest_usage")
+    session_info["requested_model"] = backend_state.get("requested_model")
+    session_info["resolved_model"] = backend_state.get("resolved_model")
+    view["backend_session"] = session_info
     return view
 
 

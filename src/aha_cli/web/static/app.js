@@ -2645,6 +2645,31 @@ function formatMetricBytes(value) {
   return `${(number / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function contextPressureStatus(pressure) {
+  const level = String(pressure?.level || "unknown");
+  if (level === "high") return { label: "high", className: "context-high" };
+  if (level === "watch") return { label: "watch", className: "context-watch" };
+  if (level === "ok") return { label: "ok", className: "context-ok" };
+  return { label: "unknown", className: "context-unknown" };
+}
+
+function contextPressurePercent(pressure) {
+  const percent = Number(pressure?.percent);
+  return Number.isFinite(percent) ? `${percent.toFixed(percent >= 10 ? 1 : 2)}%` : "";
+}
+
+function contextPressureSummary(pressure) {
+  const percent = contextPressurePercent(pressure);
+  if (!pressure || !percent) return "context unknown";
+  const input = pressure.input_tokens != null ? formatMetricCompact(pressure.input_tokens) : "-";
+  const window = pressure.context_window != null ? formatMetricCompact(pressure.context_window) : "-";
+  return `${percent} context (${input}/${window})`;
+}
+
+function agentContextPressureSummary(agent) {
+  return contextPressureSummary(agent?.backend_context_pressure);
+}
+
 function formatMetricCountChars(count, chars, noun) {
   const safeCount = Number(count || 0);
   const safeChars = Number(chars || 0);
@@ -2792,7 +2817,7 @@ function usageCacheCreationTokens(usage) {
   return Number(usage.cache_creation_input_tokens ?? 0);
 }
 
-function renderUsageBreakdown(usage, usageStatus, source) {
+function renderUsageBreakdown(usage, usageStatus, source, contextPressure = null) {
   const isClaude = String(source || "").includes("claude");
   const inputTokens = Number(usage.input_tokens || 0);
   const cachedTokens = usageCacheReadTokens(usage);
@@ -2812,6 +2837,14 @@ function renderUsageBreakdown(usage, usageStatus, source) {
     ["reasoning_output_tokens", reasoningTokens],
     ["visible_output_tokens", Math.max(0, outputTokens - reasoningTokens)],
     ["total_reported_tokens", effectiveInputTokens + outputTokens]
+  ];
+  const contextRows = [
+    ["model", contextPressure?.model || "-"],
+    ["input_tokens", contextPressure?.input_tokens ?? "-"],
+    ["context_window", contextPressure?.context_window ?? "-"],
+    ["context_percent", contextPressurePercent(contextPressure) || "-"],
+    ["level", contextPressure?.level || "unknown"],
+    ["source", contextPressure?.context_window_source || "unknown"]
   ];
   const flags = [
     `status ${usageStatus.label}`,
@@ -2834,6 +2867,15 @@ function renderUsageBreakdown(usage, usageStatus, source) {
           <div class="session-breakdown-row">
             <span>${escapeHtml(name)}</span>
             <code>${escapeHtml(formatMetricNumber(value))}</code>
+          </div>
+        `).join("")}
+      </div>
+      <div class="session-breakdown-group">
+        <strong>Context Pressure</strong>
+        ${contextRows.map(([name, value]) => `
+          <div class="session-breakdown-row">
+            <span>${escapeHtml(name)}</span>
+            <code>${escapeHtml(typeof value === "number" ? formatMetricNumber(value) : String(value))}</code>
           </div>
         `).join("")}
       </div>
@@ -2871,19 +2913,20 @@ function promptMetricsState(taskId) {
   const overflow = Boolean(overflowEvent && (!metricsEvent || conversationEventOrder(overflowEvent) >= conversationEventOrder(metricsEvent)));
   const backendSession = conversationBackendSession(taskId);
   const sessionStatus = backendSessionStatus(backendSession, overflow);
-  return { ahaInputStatus, backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus };
+  const contextPressure = backendSession?.context_pressure || null;
+  return { ahaInputStatus, backendSession, contextPressure, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus };
 }
 
 function renderPromptMetricsPanel(taskId) {
   const metrics = promptMetricsState(taskId);
-  const { ahaInputStatus, backendSession, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus } = metrics;
+  const { ahaInputStatus, backendSession, contextPressure, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus } = metrics;
   const compactState = compactResetState(taskId);
   const displayedSessionStatus = compactState
     ? { label: compactState.label, className: compactState.className }
     : sessionStatus;
   const hasSessionHistory = Array.isArray(backendSession?.history) && backendSession.history.length > 0;
   const hasSessionInfo = Boolean(backendSession?.id || backendSession?.exists || hasSessionHistory || backendSession?.compact_summary);
-  if (!metricsEvent && !overflowEvent && !hasSessionInfo) {
+  if (!metricsEvent && !usageEvent && !contextPressure && !overflowEvent && !hasSessionInfo) {
     return `
       <section class="prompt-metrics empty-metrics">
         <div>
@@ -2897,6 +2940,8 @@ function renderPromptMetricsPanel(taskId) {
 
   const source = data.source || eventData(overflowEvent || {}).source || "backend";
   const usage = eventData(usageEvent || {}).usage || {};
+  const contextStatus = contextPressureStatus(contextPressure);
+  const contextSummary = contextPressureSummary(contextPressure);
   const sessionSize = Number(backendSession?.size_bytes);
   const sessionLabel = backendSession?.exists && Number.isFinite(sessionSize)
     ? `${backendSession.backend || "backend"} jsonl · ${formatMetricBytes(sessionSize)}`
@@ -2959,12 +3004,15 @@ function renderPromptMetricsPanel(taskId) {
     usage.output_tokens != null ? `output ${formatMetricNumber(usage.output_tokens)}` : "",
     usage.reasoning_output_tokens != null ? `reasoning ${formatMetricNumber(usage.reasoning_output_tokens)}` : "",
     usage.total_cost_usd != null ? `$${Number(usage.total_cost_usd || 0).toFixed(4)}` : "",
-    usage.num_turns != null ? `${formatMetricNumber(usage.num_turns)} turns` : ""
+    usage.num_turns != null ? `${formatMetricNumber(usage.num_turns)} turns` : "",
+    contextSummary
   ].filter(Boolean);
   const backendParts = [
     ...usageParts,
   ].filter(Boolean);
-  const backendSummary = usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
+  const backendSummary = contextPressurePercent(contextPressure)
+    ? `${formatMetricNumber(contextPressure.input_tokens || usage.input_tokens || 0)} input · ${contextPressurePercent(contextPressure)} ctx`
+    : usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `
     <section class="prompt-metrics ${overflow ? "has-overflow" : ""}">
@@ -3004,12 +3052,13 @@ function renderPromptMetricsPanel(taskId) {
           </div>
           <div class="prompt-metrics-head-actions">
             <span class="status ${usageStatus.className}">${escapeHtml(usageStatus.label)}</span>
+            <span class="status ${contextStatus.className}">${escapeHtml(`ctx ${contextStatus.label}`)}</span>
           </div>
         </div>
         <div class="prompt-metric-kpis">
           ${(backendParts.length ? backendParts : [`usage ${usageStatus.label}`]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
         </div>
-        ${renderUsageBreakdown(usage, usageStatus, source)}
+        ${renderUsageBreakdown(usage, usageStatus, source, contextPressure)}
       </div>
       <div class="prompt-metrics-section session-metrics-section">
         <div class="prompt-metrics-head">
@@ -3035,7 +3084,7 @@ function renderPromptMetricsPanel(taskId) {
 function renderPromptMetricsPopover(taskId) {
   const metrics = promptMetricsState(taskId);
   const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
-  const hasMetrics = Boolean(metrics.metricsEvent || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
+  const hasMetrics = Boolean(metrics.metricsEvent || metrics.usageEvent || metrics.contextPressure || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
   const summary = metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
   const top = metrics.largest?.name || "no components";
   const key = promptMetricsKey(taskId);
@@ -3061,7 +3110,7 @@ function renderPromptMetricsPopover(taskId) {
 function renderPromptMetricsDock(taskId) {
   const metrics = promptMetricsState(taskId);
   const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
-  if (!metrics.metricsEvent && !metrics.overflowEvent && !metrics.backendSession?.id && !metrics.backendSession?.exists && !hasHistory && !metrics.backendSession?.compact_summary) return "";
+  if (!metrics.metricsEvent && !metrics.usageEvent && !metrics.contextPressure && !metrics.overflowEvent && !metrics.backendSession?.id && !metrics.backendSession?.exists && !hasHistory && !metrics.backendSession?.compact_summary) return "";
   return `<div class="conversation-metrics-dock">${renderPromptMetricsPopover(taskId)}</div>`;
 }
 
@@ -4324,10 +4373,13 @@ function renderAgents() {
     const lifecycleTiming = agentStatusTiming(agent);
     const lifecycleTimingText = agentStatusTimingText(agent);
     const lastReply = formatLocalTimestamp(agent.backend_process_last_reply_at, agent.backend_process_last_reply_at || "");
+    const resolvedModel = agent.backend_resolved_model || agent.model || "default";
+    const contextPressure = agentContextPressureSummary(agent);
     const processDetail = [
       `process=${rawProcessStatus}`,
       agent.backend_process_pid ? `pid=${agent.backend_process_pid}` : "pid=-",
-      agent.backend_process_last_reply_at ? `last_reply=${lastReply}` : ""
+      agent.backend_process_last_reply_at ? `last_reply=${lastReply}` : "",
+      contextPressure
     ].filter(Boolean).join(" | ");
     const card = document.createElement("div");
     card.className = `agent-card ${isHostAgent ? "host-agent" : ""} ${agent.id === previous ? "active" : ""}`;
@@ -4335,7 +4387,7 @@ function renderAgents() {
     card.title = [
       `${agent.id} ${roleLabel}`,
       `backend=${agent.backend}`,
-      `model=${agent.model || "default"}`,
+      `model=${resolvedModel}`,
       `sandbox=${sandbox}`,
       `approval=${approval}`,
       `proxy=${proxyEnabled ? "on" : "off"} (${taskProxySummary(task)})`,
@@ -4351,10 +4403,10 @@ function renderAgents() {
         <strong>${escapeHtml(agent.id)}</strong>
         <span class="agent-process ${escapeHtml(processStatus)}" title="backend process status">${escapeHtml(agentBackendProcessLabel(agent))}</span>
       </div>
-      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(roleLabel)} | ${escapeHtml(agent.backend)} | ${escapeHtml(agent.model || "default")}</div>
+      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(roleLabel)} | ${escapeHtml(agent.backend)} | ${escapeHtml(resolvedModel)}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
       <div class="meta truncate">proxy=${escapeHtml(proxyEnabled ? "on" : "off")} | task proxy=${escapeHtml(taskProxySummary(task))}</div>
-      <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
+      <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | ${escapeHtml(contextPressure)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
         <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
         <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>
