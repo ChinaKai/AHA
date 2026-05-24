@@ -528,6 +528,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
             if message_records:
                 offset = next_offset
                 save_chat_offset(offset_file, offset)
+            elif worker_backend_should_exit_after_turn(root, run_id, worker_task_id, worker_task_id, inbox, offset):
+                mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                return 0
             if args.once:
                 return 0
             time.sleep(args.interval)
