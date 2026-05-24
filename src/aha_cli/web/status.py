@@ -301,6 +301,7 @@ def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected
             agent["backend_resolved_model"] = state.get("resolved_model")
             agent["backend_context_pressure"] = state.get("context_pressure")
             agent["backend_latest_usage"] = state.get("latest_usage")
+            agent["backend_latest_prompt_metrics"] = state.get("latest_prompt_metrics")
         current_status = str(task.get("status") or "pending")
         outcome = current_status if current_status in TERMINAL_TASK_STATUSES else outcomes.get(raw_task_id, {}).get("status")
         display_status = current_status if current_status in {"running", "awaiting_user"} else outcome or current_status

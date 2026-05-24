@@ -156,6 +156,21 @@ def _latest_agent_usage(root: Path, run_id: str, target: str, task_id: str | Non
     return {}
 
 
+def _latest_agent_prompt_metrics(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        if event.get("type") != "agent_prompt_metrics":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if data.get("target") != target:
+            continue
+        if task_id and data.get("task_id") != task_id:
+            continue
+        if task_id is None and data.get("task_id"):
+            continue
+        return data
+    return {}
+
+
 def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
     if "--task-id" not in parts:
         return task_id is None
@@ -235,6 +250,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     backend_name = _backend_name_from_state(state, discovered_backend or "unknown")
     resolved_model = state.get("resolved_model") or state.get("model")
     latest_usage = _latest_agent_usage(root, run_id, target, task_id)
+    latest_prompt_metrics = _latest_agent_prompt_metrics(root, run_id, target, task_id)
     return {
         "target": target,
         "task_id": task_id,
@@ -251,10 +267,11 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
         "latest_usage": latest_usage,
+        "latest_prompt_metrics": latest_prompt_metrics,
         "context_pressure": context_pressure(
             backend_name,
             str(resolved_model) if resolved_model else None,
-            latest_usage,
+            latest_prompt_metrics,
             cfg=load_config(root),
         ),
         **activity,

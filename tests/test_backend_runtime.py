@@ -103,7 +103,7 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["resolved_model"], CODEX_DEFAULT_MODEL)
         self.assertEqual(status["model"], CODEX_DEFAULT_MODEL)
 
-    def test_backend_status_reports_context_pressure_from_latest_usage(self) -> None:
+    def test_backend_status_reports_context_pressure_from_latest_prompt_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -124,15 +124,71 @@ class BackendRuntimeTests(unittest.TestCase):
                     root / ".aha",
                     run_id,
                     "agent_usage",
-                    {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 892500}},
+                    {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 99999999}},
+                )
+                append_event(
+                    root / ".aha",
+                    run_id,
+                    "agent_prompt_metrics",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "source": "codex-chat",
+                        "total": {"tokens": 892500, "chars": 1234, "bytes": 1234, "lines": 12},
+                    },
                 )
 
                 status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
 
-        self.assertEqual(status["latest_usage"]["input_tokens"], 892500)
+        self.assertEqual(status["latest_usage"]["input_tokens"], 99999999)
+        self.assertEqual(status["latest_prompt_metrics"]["total"]["tokens"], 892500)
         self.assertEqual(status["context_pressure"]["context_window"], 1_050_000)
         self.assertEqual(status["context_pressure"]["ratio"], 0.85)
         self.assertEqual(status["context_pressure"]["level"], "high")
+        self.assertEqual(status["context_pressure"]["prompt_tokens"], 892500)
+
+    def test_backend_status_keeps_context_pressure_unknown_without_prompt_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Context pressure unknown", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
+                append_event(
+                    root / ".aha",
+                    run_id,
+                    "agent_usage",
+                    {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 99999999}},
+                )
+                append_event(
+                    root / ".aha",
+                    run_id,
+                    "agent_prompt_metrics",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "source": "codex-chat",
+                        "total": {"chars": 1234, "bytes": 1234, "lines": 12},
+                    },
+                )
+
+                status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
+
+        self.assertEqual(status["latest_usage"]["input_tokens"], 99999999)
+        self.assertIsNone(status["context_pressure"]["prompt_tokens"])
+        self.assertEqual(status["context_pressure"]["prompt_chars"], 1234)
+        self.assertIsNone(status["context_pressure"]["percent"])
+        self.assertEqual(status["context_pressure"]["level"], "unknown")
 
     def test_start_backend_adds_common_user_bin_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

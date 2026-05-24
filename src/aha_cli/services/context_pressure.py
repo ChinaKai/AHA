@@ -67,14 +67,25 @@ def context_window_for_model(
 def context_pressure(
     backend: str,
     model: str | None,
-    usage: Mapping[str, object] | None,
+    prompt_metrics: Mapping[str, object] | None,
     *,
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict:
-    input_tokens = _positive_int((usage or {}).get("input_tokens"))
+    metrics = prompt_metrics or {}
+    total = metrics.get("total")
+    total_metrics = total if isinstance(total, Mapping) else {}
+    prompt_tokens = (
+        _positive_int(total_metrics.get("tokens"))
+        or _positive_int(total_metrics.get("input_tokens"))
+        or _positive_int(total_metrics.get("token_count"))
+        or _positive_int(metrics.get("prompt_tokens"))
+    )
+    prompt_chars = _positive_int(total_metrics.get("chars"))
+    prompt_bytes = _positive_int(total_metrics.get("bytes"))
+    prompt_lines = _positive_int(total_metrics.get("lines"))
     context_window, source = context_window_for_model(backend, model, cfg=cfg, environ=environ)
-    ratio = (input_tokens / context_window) if input_tokens is not None and context_window else None
+    ratio = (prompt_tokens / context_window) if prompt_tokens is not None and context_window else None
     level = "unknown"
     if ratio is not None:
         if ratio >= 0.85:
@@ -86,9 +97,14 @@ def context_pressure(
     return {
         "backend": str(backend or "").removesuffix("-chat").strip().lower() or None,
         "model": str(model).strip() if model else None,
-        "input_tokens": input_tokens,
+        "input_tokens": prompt_tokens,
+        "prompt_tokens": prompt_tokens,
+        "prompt_chars": prompt_chars,
+        "prompt_bytes": prompt_bytes,
+        "prompt_lines": prompt_lines,
         "context_window": context_window,
         "context_window_source": source,
+        "pressure_source": "prompt_metrics.tokens" if prompt_tokens is not None else "prompt_metrics.chars" if prompt_chars or prompt_bytes else "unknown",
         "ratio": round(ratio, 6) if ratio is not None else None,
         "percent": round(ratio * 100, 2) if ratio is not None else None,
         "level": level,

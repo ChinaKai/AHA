@@ -2660,8 +2660,12 @@ function contextPressurePercent(pressure) {
 
 function contextPressureSummary(pressure) {
   const percent = contextPressurePercent(pressure);
-  if (!pressure || !percent) return "context unknown";
-  const input = pressure.input_tokens != null ? formatMetricCompact(pressure.input_tokens) : "-";
+  if (!pressure) return "context unknown";
+  if (!percent) {
+    const promptChars = pressure.prompt_chars != null ? formatMetricCompact(pressure.prompt_chars) : "";
+    return promptChars ? `context unknown (${promptChars} chars)` : "context unknown";
+  }
+  const input = pressure.prompt_tokens != null ? formatMetricCompact(pressure.prompt_tokens) : "-";
   const window = pressure.context_window != null ? formatMetricCompact(pressure.context_window) : "-";
   return `${percent} context (${input}/${window})`;
 }
@@ -2840,11 +2844,14 @@ function renderUsageBreakdown(usage, usageStatus, source, contextPressure = null
   ];
   const contextRows = [
     ["model", contextPressure?.model || "-"],
-    ["input_tokens", contextPressure?.input_tokens ?? "-"],
+    ["prompt_tokens", contextPressure?.prompt_tokens ?? "-"],
+    ["prompt_chars", contextPressure?.prompt_chars ?? "-"],
+    ["prompt_bytes", contextPressure?.prompt_bytes ?? "-"],
     ["context_window", contextPressure?.context_window ?? "-"],
     ["context_percent", contextPressurePercent(contextPressure) || "-"],
     ["level", contextPressure?.level || "unknown"],
-    ["source", contextPressure?.context_window_source || "unknown"]
+    ["window_source", contextPressure?.context_window_source || "unknown"],
+    ["pressure_source", contextPressure?.pressure_source || "unknown"]
   ];
   const flags = [
     `status ${usageStatus.label}`,
@@ -3011,7 +3018,7 @@ function renderPromptMetricsPanel(taskId) {
     ...usageParts,
   ].filter(Boolean);
   const backendSummary = contextPressurePercent(contextPressure)
-    ? `${formatMetricNumber(contextPressure.input_tokens || usage.input_tokens || 0)} input · ${contextPressurePercent(contextPressure)} ctx`
+    ? `${formatMetricNumber(contextPressure.prompt_tokens || 0)} prompt tokens · ${contextPressurePercent(contextPressure)} ctx`
     : usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `

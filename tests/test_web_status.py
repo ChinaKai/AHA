@@ -53,6 +53,7 @@ class WebStatusTests(unittest.TestCase):
                         "last_reply_at": "2026-05-15T00:00:00+00:00" if target == "main" else None,
                         "resolved_model": "gpt-5.5" if target == "main" else None,
                         "latest_usage": {"input_tokens": 735000} if target == "main" else {},
+                        "latest_prompt_metrics": {"total": {"chars": 1234, "bytes": 1234}} if target == "main" else {},
                         "context_pressure": {"level": "watch", "percent": 70.0} if target == "main" else {},
                     }
 
@@ -67,6 +68,7 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(agents["main"]["backend_resolved_model"], "gpt-5.5")
         self.assertEqual(agents["main"]["backend_context_pressure"]["level"], "watch")
         self.assertEqual(agents["main"]["backend_latest_usage"]["input_tokens"], 735000)
+        self.assertEqual(agents["main"]["backend_latest_prompt_metrics"]["total"]["chars"], 1234)
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
 
