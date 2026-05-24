@@ -22,7 +22,6 @@ from aha_cli.store.filesystem import (
 )
 from aha_cli.web.task_command_actions import (
     compact_reset_selected_agent,
-    complete_selected_task,
     interrupt_selected_agent,
     record_task_checkpoint,
     reopen_selected_task,
@@ -69,18 +68,16 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertIn("Checkpoint recorded", message)
         self.assertEqual(rounds[0]["summary"], "first checkpoint")
 
-    def test_final_and_complete_request_main_finalization(self) -> None:
+    def test_final_requests_main_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_id = self.init_run(root)
 
             final_message = request_task_finalization(root, run_id, "task-001", "/aha final")
-            complete_message = complete_selected_task(root, run_id, "task-001")
             main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
             detail = task_snapshot(root, run_id, "task-001")["task"]
 
         self.assertIn("Finalization requested", final_message)
-        self.assertIn("Finalization requested", complete_message)
         self.assertEqual(detail["status"], "running")
         self.assertEqual(main_messages[-1]["result_policy"], "finalize")
         self.assertIn("Generate or update the task Final", main_messages[-1]["message"])

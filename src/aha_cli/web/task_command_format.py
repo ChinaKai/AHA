@@ -18,7 +18,6 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
                 "- /aha agents: list selected task agents",
                 "- /aha checkpoint <summary>: record a task journal checkpoint",
                 "- /aha final: ask task-main to generate the Final and complete the task",
-                "- /aha complete: alias for /aha final",
                 "- /aha reopen: cancel completion and allow follow-up messages",
                 "- /aha interrupt: interrupt the selected agent's current turn",
                 "- /aha session compact-reset: compact and reset selected agent backend session",
@@ -58,8 +57,6 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
         return "Use `/aha checkpoint <summary>` from the selected task conversation to record a journal checkpoint."
     if name == "final":
         return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
-    if name in {"complete", "done"}:
-        return "Use `/aha complete` as an alias for `/aha final`."
     if name in {"reopen", "resume"}:
         return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
     if name == "session" and len(parts) > 2 and parts[2] == "compact-reset":

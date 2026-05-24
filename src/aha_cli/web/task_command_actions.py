@@ -55,10 +55,6 @@ def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command
     return f"Checkpoint recorded for {task_id}: {record['round_id']}"
 
 
-def complete_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
-    return request_task_finalization(root, run_id, task_id, "/aha complete")
-
-
 def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
     if not task_id:
         return "No task is selected."
@@ -106,7 +102,6 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
 
 __all__ = [
     "compact_reset_selected_agent",
-    "complete_selected_task",
     "finalization_prompt",
     "format_task_journal_for_prompt",
     "interrupt_selected_agent",

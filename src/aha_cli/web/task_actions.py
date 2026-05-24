@@ -5,7 +5,6 @@ from aha_cli.services.backend_runtime import backend_status, start_backend, stop
 from aha_cli.web.http_utils import parse_optional_bool
 from aha_cli.web.task_commands import (
     compact_reset_selected_agent,
-    complete_selected_task,
     finalization_prompt,
     format_agent_command,
     format_aha_command,
@@ -81,7 +80,6 @@ def parse_task_supervision_fields(payload: dict) -> dict[str, object]:
 __all__ = [
     "backend_status",
     "compact_reset_selected_agent",
-    "complete_selected_task",
     "ensure_chat_offset_before_message",
     "finalization_prompt",
     "format_agent_command",

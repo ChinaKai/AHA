@@ -13,7 +13,6 @@ class SlashCommandHandlers:
     format_agent_command: Callable[[Path, str, str | None, str | None, str], tuple[bool, str | None, str | None]]
     record_task_checkpoint: Callable[[Path, str, str | None, str], str]
     request_task_finalization: Callable[[Path, str, str | None, str], str]
-    complete_selected_task: Callable[[Path, str, str | None], str]
     reopen_selected_task: Callable[[Path, str, str | None], str]
     interrupt_selected_agent: Callable[[Path, str, str | None, str], tuple[str, dict]]
     compact_reset_selected_agent: Callable[[Path, str, str | None, str], tuple[str, dict]]
@@ -25,7 +24,6 @@ class SlashCommandHandlers:
 def default_slash_command_handlers() -> SlashCommandHandlers:
     from aha_cli.web.task_command_actions import (
         compact_reset_selected_agent,
-        complete_selected_task,
         interrupt_selected_agent,
         record_task_checkpoint,
         request_task_finalization,
@@ -39,7 +37,6 @@ def default_slash_command_handlers() -> SlashCommandHandlers:
         format_agent_command=format_agent_command,
         record_task_checkpoint=record_task_checkpoint,
         request_task_finalization=request_task_finalization,
-        complete_selected_task=complete_selected_task,
         reopen_selected_task=reopen_selected_task,
         interrupt_selected_agent=interrupt_selected_agent,
         compact_reset_selected_agent=lambda root, run_id, task_id, target: compact_reset_selected_agent(
@@ -106,9 +103,6 @@ def handle_slash_command(
             reply = handlers.request_task_finalization(root, run_id, task_id, stripped)
         elif name == "checkpoint":
             reply = handlers.record_task_checkpoint(root, run_id, task_id, stripped)
-        elif name in {"complete", "done"}:
-            backend_autostart = handlers.prepare_task_main_autostart(root, run_id, task_id)
-            reply = handlers.complete_selected_task(root, run_id, task_id)
         elif name in {"reopen", "resume"}:
             reply = handlers.reopen_selected_task(root, run_id, task_id)
         elif name in {"interrupt", "stop"}:

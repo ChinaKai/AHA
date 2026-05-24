@@ -143,6 +143,14 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("box-shadow: 0 -12px 28px rgba(15, 23, 42, 0.14);", styles)
         self.assertIn("bottom: calc(var(--mobile-composer-offset) + var(--mobile-keyboard-inset));", styles)
 
+    def test_frontend_command_menu_only_lists_aha_final(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('name: "/aha final"', script)
+        self.assertNotIn('name: "/aha complete"', script)
+        self.assertNotIn("Alias for /aha final", script)
+
     def test_frontend_has_weixin_console_entry(self) -> None:
         root = Path(__file__).resolve().parents[1]
         html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")

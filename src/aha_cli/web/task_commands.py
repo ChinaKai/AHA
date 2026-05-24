@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from aha_cli.web.task_command_actions import (
     compact_reset_selected_agent,
-    complete_selected_task,
     interrupt_selected_agent,
     record_task_checkpoint,
     reopen_selected_task,
@@ -19,7 +18,6 @@ from aha_cli.web.task_command_router import handle_slash_command
 
 __all__ = [
     "compact_reset_selected_agent",
-    "complete_selected_task",
     "finalization_prompt",
     "format_agent_command",
     "format_aha_command",
