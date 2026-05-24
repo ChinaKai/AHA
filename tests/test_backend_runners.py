@@ -11,6 +11,7 @@ from unittest import mock
 
 from aha_cli.backends.claude import build_claude_exec_command, claude_permission_mode, handle_claude_event
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message, run_codex_exec
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_prompt
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -38,11 +39,54 @@ class BackendRunnerSessionTests(unittest.TestCase):
             session_id="session-123",
         )
         self.assertEqual(
-            cmd[:9],
-            ["codex", "-a", "never", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", "/tmp/project"],
+            cmd[:11],
+            [
+                "codex",
+                "-m",
+                CODEX_DEFAULT_MODEL,
+                "-a",
+                "never",
+                "exec",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "workspace-write",
+                "-C",
+                "/tmp/project",
+            ],
         )
         self.assertIn("resume", cmd)
         self.assertIn("session-123", cmd)
+
+    def test_codex_exec_records_resolved_default_model_in_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+            session: dict = {}
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO("")
+
+                def wait(self) -> int:
+                    return 0
+
+            with mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()) as popen:
+                code, reply, updated_session = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    model=None,
+                    session=session,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(reply, "done")
+            self.assertIs(updated_session, session)
+            self.assertIsNone(session["requested_model"])
+            self.assertEqual(session["resolved_model"], CODEX_DEFAULT_MODEL)
+            self.assertEqual(session["model"], CODEX_DEFAULT_MODEL)
+            command = popen.call_args.args[0]
+            self.assertEqual(command[:3], ["codex", "-m", CODEX_DEFAULT_MODEL])
 
     def test_codex_command_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,6 +337,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 code, output = self.run_cli("run", run_id, "--backend", "codex", "--dry-run")
                 self.assertEqual(code, 0)
                 self.assertIn("aha_cli codex-runner", output)
+                self.assertIn(f"--model {CODEX_DEFAULT_MODEL}", output)
 
     def test_claude_backend_dry_run_uses_claude_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

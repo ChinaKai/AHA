@@ -7,6 +7,7 @@ import uuid
 
 from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
 from aha_cli.backends.codex import codex_sandbox, run_codex_exec
+from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
@@ -239,6 +240,17 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 output_file = run / "chat" / f"{args.target}-{uuid.uuid4().hex[:8]}.md"
                 requested_sandbox = (agent or {}).get("sandbox") or task.get("preferred_sandbox") or args.sandbox
                 requested_approval = (agent or {}).get("approval") or task.get("preferred_approval") or args.approval
+                configured_model = args.model or (agent or {}).get("model") or task.get("preferred_model")
+                model = configured_model or session.get("model")
+                raw_requested_model = getattr(args, "requested_model", None)
+                requested_model = None if raw_requested_model == "" else raw_requested_model
+                if raw_requested_model is None:
+                    requested_model = configured_model if configured_model is not None else session.get("requested_model", model)
+                resolved_model = resolve_model(backend_name, model)
+                if backend_name == "codex":
+                    session["requested_model"] = requested_model
+                    session["resolved_model"] = resolved_model
+                    session["model"] = resolved_model
                 sandbox = codex_sandbox("research", requested_sandbox) if backend_name == "codex" else requested_sandbox
                 workspace = Path(task.get("workspace_path") or root)
                 if not workspace.exists():
@@ -258,13 +270,14 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         "task_id": item_task_id,
                         "sandbox": sandbox,
                         "approval": requested_approval,
+                        "requested_model": requested_model,
+                        "resolved_model": resolved_model,
                         "proxy_enabled": bool((agent or {}).get("proxy_enabled")),
                     },
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task)
                 prompt, prompt_metrics = chat_prompt_with_metrics(root, run_id, args.target, item, args.prompt_prefix)
                 append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
-                model = args.model or (agent or {}).get("model") or task.get("preferred_model") or session.get("model")
                 if backend_name == "claude":
                     exit_code, reply, session = run_claude_exec(
                         prompt,

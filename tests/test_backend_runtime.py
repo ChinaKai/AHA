@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.backends.claude import run_claude_exec
 from aha_cli.cli import main
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
@@ -74,6 +75,33 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertIn("--home", command)
         self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
         self.assertTrue(Path(env["PYTHONPATH"].split(os.pathsep)[0]).is_absolute())
+
+    def test_start_codex_backend_resolves_default_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Codex default model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    status = start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        command = popen.call_args.args[0]
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], CODEX_DEFAULT_MODEL)
+        self.assertIn("--requested-model", command)
+        self.assertEqual(command[command.index("--requested-model") + 1], "")
+        self.assertIsNone(status["requested_model"])
+        self.assertEqual(status["resolved_model"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(status["model"], CODEX_DEFAULT_MODEL)
 
     def test_start_backend_adds_common_user_bin_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

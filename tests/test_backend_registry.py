@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from aha_cli.backends.registry import agent_backend_names, agent_backends, backend_names, model_options
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names, agent_backends, backend_names, model_options, resolve_model
 
 
 class BackendRegistryTests(unittest.TestCase):
@@ -17,8 +17,15 @@ class BackendRegistryTests(unittest.TestCase):
         claude_options = model_options("claude")
         stub_options = model_options("stub")
         self.assertEqual(codex_options[0]["name"], "")
-        self.assertEqual(codex_options[0]["label"], "default")
+        self.assertEqual(codex_options[0]["label"], f"default ({CODEX_DEFAULT_MODEL})")
         self.assertIn("gpt-5.3-codex", {item["name"] for item in codex_options})
         self.assertEqual(claude_options, [{"name": "", "label": "default"}])
         self.assertEqual(stub_options, [{"name": "", "label": "default"}])
         self.assertIn("commands", agent_backends()[0])
+
+    def test_codex_default_model_resolves_explicitly(self) -> None:
+        self.assertEqual(resolve_model("codex", None), CODEX_DEFAULT_MODEL)
+        self.assertEqual(resolve_model("codex", ""), CODEX_DEFAULT_MODEL)
+        self.assertEqual(resolve_model("codex", "default"), CODEX_DEFAULT_MODEL)
+        self.assertEqual(resolve_model("codex", "gpt-5.4"), "gpt-5.4")
+        self.assertIsNone(resolve_model("claude", None))

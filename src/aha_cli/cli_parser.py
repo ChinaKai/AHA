@@ -211,6 +211,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     codex_chat_p.add_argument("--once", action="store_true")
     codex_chat_p.add_argument("--codex-bin", default="codex")
     codex_chat_p.add_argument("--model", default=None)
+    codex_chat_p.add_argument("--requested-model", default=None)
     codex_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
     codex_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     codex_chat_p.add_argument("--extra-arg", action="append", default=[])

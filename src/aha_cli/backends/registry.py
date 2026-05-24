@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+CODEX_DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_MODEL_OPTION = {"name": "", "label": "default"}
+
 MODEL_OPTIONS = [
-    {"name": "", "label": "default"},
+    {"name": "", "label": f"default ({CODEX_DEFAULT_MODEL})"},
     {"name": "gpt-5.5", "label": "gpt-5.5"},
     {"name": "gpt-5.4", "label": "gpt-5.4"},
     {"name": "gpt-5.4-mini", "label": "gpt-5.4-mini"},
@@ -10,7 +13,7 @@ MODEL_OPTIONS = [
     {"name": "gpt-5.2", "label": "gpt-5.2"},
 ]
 
-DEFAULT_MODEL_OPTIONS = [MODEL_OPTIONS[0]]
+DEFAULT_MODEL_OPTIONS = [DEFAULT_MODEL_OPTION]
 CODEX_AGENT_COMMANDS = [
     {"scope": "agent", "name": "/agent <command>", "insert": "/agent ", "desc": "Route a command to the selected agent."},
 ]
@@ -27,6 +30,13 @@ BACKENDS = {
     "stub": {"name": "stub", "kind": "agent", "models": DEFAULT_MODEL_OPTIONS, "commands": STUB_AGENT_COMMANDS, "native_commands": []},
     "command": {"name": "command", "kind": "runner", "label": "Shell command runner", "models": DEFAULT_MODEL_OPTIONS},
 }
+
+
+def resolve_model(backend: str, model: str | None) -> str | None:
+    normalized = str(model or "").strip()
+    if backend == "codex" and normalized in {"", "default"}:
+        return CODEX_DEFAULT_MODEL
+    return normalized or None
 
 
 def backend_names() -> list[str]:

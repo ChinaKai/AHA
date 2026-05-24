@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 
+from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
@@ -117,6 +118,12 @@ def run_codex_exec(
     proxy_env: dict[str, str] | None = None,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
+    requested_model = session.get("requested_model") if session is not None and "requested_model" in session else model
+    model = resolve_model("codex", model)
+    if session is not None:
+        session["requested_model"] = requested_model
+        session["resolved_model"] = model
+        session["model"] = model
     session_id = session.get("backend_session_id") if session else None
     cmd = build_codex_exec_command(
         codex_bin=codex_bin,
@@ -192,6 +199,7 @@ def build_codex_exec_command(
     json_events: bool,
     session_id: str | None,
 ) -> list[str]:
+    model = resolve_model("codex", model)
     cmd = [codex_bin]
     if model:
         cmd.extend(["-m", model])
@@ -215,7 +223,7 @@ def codex_runner_command(args, cfg: dict) -> str:
     codex_cfg = cfg.get("codex", {})
     parts = [shlex.quote(sys.executable), "-m", "aha_cli", "codex-runner"]
     parts.extend(["--codex-bin", shlex.quote(args.codex_bin or codex_cfg.get("bin") or "codex")])
-    model = args.codex_model if args.codex_model is not None else codex_cfg.get("model")
+    model = resolve_model("codex", args.codex_model if args.codex_model is not None else codex_cfg.get("model"))
     if model:
         parts.extend(["--model", shlex.quote(model)])
     sandbox = args.codex_sandbox or codex_cfg.get("sandbox") or "auto"

@@ -11,6 +11,7 @@ import time
 import zipfile
 
 from aha_cli.backends.claude import apply_claude_environment
+from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
@@ -226,6 +227,9 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "stopped_at": state.get("stopped_at"),
         "log_path": state.get("log_path") or str(backend_log_path(root, run_id, target, task_id)),
         "command": state.get("command", []),
+        "model": state.get("model"),
+        "requested_model": state.get("requested_model"),
+        "resolved_model": state.get("resolved_model"),
         **activity,
     }
 
@@ -334,6 +338,7 @@ def _agent_chat_command(
 ) -> list[str]:
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
+    command_model = resolve_model(backend, model)
     command = [
         *_aha_cli_invocation(),
         "--home",
@@ -358,8 +363,10 @@ def _agent_chat_command(
         command.extend(["--claude-bin", claude_bin])
     if task_id:
         command.extend(["--task-id", task_id])
-    if model:
-        command.extend(["--model", model])
+    if command_model:
+        command.extend(["--model", command_model])
+        if backend == "codex" and not model:
+            command.extend(["--requested-model", ""])
     if from_start:
         command.append("--from-start")
     if no_json and backend == "codex":
@@ -444,6 +451,8 @@ def start_backend(
     target = target or "main"
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
+    requested_model = model
+    resolved_model = resolve_model(backend, model)
     with locked_backend(root, run_id, target, task_id):
         current = backend_status(root, run_id, target, task_id)
         if current["status"] in {"running", "busy"}:
@@ -496,12 +505,26 @@ def start_backend(
             "command": command,
             "sandbox": sandbox,
             "approval": approval,
-            "model": model,
+            "model": resolved_model,
+            "requested_model": requested_model,
+            "resolved_model": resolved_model,
             "from_start": from_start,
             "proxy_enabled": proxy_env is not None and bool(proxy_env),
         }
         _write_state(root, run_id, target, state, task_id)
-        append_event(root, run_id, "backend_started", {"target": target, "task_id": task_id, "pid": process.pid, "log_path": str(log_path)})
+        append_event(
+            root,
+            run_id,
+            "backend_started",
+            {
+                "target": target,
+                "task_id": task_id,
+                "pid": process.pid,
+                "log_path": str(log_path),
+                "requested_model": requested_model,
+                "resolved_model": resolved_model,
+            },
+        )
         return backend_status(root, run_id, target, task_id) | {"started": True}
 
 
