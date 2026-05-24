@@ -380,6 +380,8 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Current compact prompt title", prompt)
         self.assertIn("current-event", prompt)
         self.assertIn("task_counts", prompt)
+        self.assertIn("Intent priority policy:", prompt)
+        self.assertIn("original request / historical background", prompt)
         self.assertNotIn("Foreign verbose task title that should stay out", prompt)
         self.assertNotIn("foreign-event", prompt)
 
@@ -422,6 +424,12 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Current task delta:", prompt)
         self.assertIn("backend-session-1", prompt)
         self.assertIn("next request", prompt)
+        self.assertIn("Intent priority policy:", prompt)
+        self.assertIn(
+            "Current user message > task journal / active intent > compact summary / recent messages > original task description",
+            prompt,
+        )
+        self.assertIn("task.description as the original request / historical background", prompt)
         self.assertIn("task_hidden", prompt)
         self.assertNotIn("Ownership and routing policy", prompt)
         self.assertNotIn("already-in-backend-session", prompt)

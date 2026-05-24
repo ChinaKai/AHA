@@ -496,6 +496,14 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertTrue(summary_exists)
         self.assertIn("Backend compact summary from previous session", prompt)
         self.assertIn("previous request", prompt)
+        self.assertIn(
+            "Intent priority: current user message > task journal / active intent > compact summary / recent messages > original task description",
+            prompt,
+        )
+        self.assertIn("original_request:", prompt)
+        self.assertIn("Completed or superseded original requirements should not be restarted", prompt)
+        self.assertIn("Explicit exclusions from recent user messages override older requirements", prompt)
+        self.assertIn("Next action should come from the latest active user intent", prompt)
 
     def test_compact_reset_api_uses_selected_agent_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:
