@@ -3109,7 +3109,8 @@ function renderPromptMetricsPopover(taskId) {
   const top = metrics.largest?.name || "no components";
   const key = promptMetricsKey(taskId);
   const open = openPromptMetricsKey === key ? " open" : "";
-  const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", metrics.sessionStatus?.className || "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
+  const triggerContextStatus = contextPressureStatus(metrics.contextPressure);
+  const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", triggerContextStatus.className || "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
   const sessionLabel = metrics.sessionStatus?.label || "none";
   const label = hasMetrics
     ? `Context ${summary}; Session ${sessionLabel}: ${sessionSummary}; AHA input ${formatMetricNumber(metrics.totalChars)} chars, top ${top}`
