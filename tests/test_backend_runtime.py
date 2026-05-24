@@ -103,7 +103,7 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["resolved_model"], CODEX_DEFAULT_MODEL)
         self.assertEqual(status["model"], CODEX_DEFAULT_MODEL)
 
-    def test_backend_status_reports_context_pressure_from_latest_prompt_metrics(self) -> None:
+    def test_backend_status_reports_context_pressure_from_latest_codex_token_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home = root / "home"
@@ -136,13 +136,38 @@ class BackendRuntimeTests(unittest.TestCase):
                             "type": "event_msg",
                             "payload": {
                                 "type": "token_count",
-                                "info": {"model_context_window": 258400},
+                                "info": {
+                                    "model_context_window": 123456,
+                                    "last_token_usage": {"input_tokens": 10, "total_tokens": 11},
+                                },
                             },
                         }
                     )
                     + "\n",
                     encoding="utf-8",
                 )
+                with codex_session.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            {
+                                "type": "event_msg",
+                                "payload": {
+                                    "type": "token_count",
+                                    "info": {
+                                        "model_context_window": 258400,
+                                        "last_token_usage": {
+                                            "input_tokens": 226853,
+                                            "cached_input_tokens": 226176,
+                                            "output_tokens": 296,
+                                            "reasoning_output_tokens": 0,
+                                            "total_tokens": 227149,
+                                        },
+                                    },
+                                },
+                            }
+                        )
+                        + "\n"
+                    )
                 append_event(
                     root / ".aha",
                     run_id,
@@ -166,11 +191,16 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["latest_usage"]["input_tokens"], 99999999)
         self.assertEqual(status["latest_prompt_metrics"]["total"]["tokens"], 219640)
         self.assertEqual(status["runtime_context_window"], 258400)
+        self.assertEqual(status["runtime_context_usage"]["input_tokens"], 226853)
+        self.assertEqual(status["runtime_context_usage"]["cached_input_tokens"], 226176)
         self.assertEqual(status["context_pressure"]["context_window"], 258400)
         self.assertEqual(status["context_pressure"]["context_window_source"], "runtime")
-        self.assertEqual(status["context_pressure"]["ratio"], 0.85)
+        self.assertAlmostEqual(status["context_pressure"]["ratio"], 226853 / 258400, places=6)
         self.assertEqual(status["context_pressure"]["level"], "high")
+        self.assertEqual(status["context_pressure"]["input_tokens"], 226853)
         self.assertEqual(status["context_pressure"]["prompt_tokens"], 219640)
+        self.assertEqual(status["context_pressure"]["runtime_input_tokens"], 226853)
+        self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.input_tokens")
 
     def test_backend_status_keeps_context_pressure_unknown_without_prompt_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

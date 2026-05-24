@@ -34,6 +34,26 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["percent"], 50.0)
         self.assertEqual(pressure["level"], "ok")
 
+    def test_runtime_token_usage_takes_priority_over_prompt_metrics_tokens(self) -> None:
+        pressure = context_pressure(
+            "codex-chat",
+            "gpt-5.5",
+            {"total": {"tokens": 1000, "chars": 1234, "bytes": 1234}},
+            runtime_context_window=258400,
+            runtime_token_usage={"input_tokens": 226853, "cached_input_tokens": 226176, "total_tokens": 227149},
+            environ={},
+        )
+
+        self.assertEqual(pressure["input_tokens"], 226853)
+        self.assertEqual(pressure["prompt_tokens"], 1000)
+        self.assertEqual(pressure["runtime_input_tokens"], 226853)
+        self.assertEqual(pressure["runtime_cached_input_tokens"], 226176)
+        self.assertEqual(pressure["runtime_total_tokens"], 227149)
+        self.assertEqual(pressure["pressure_source"], "runtime.last_token_usage.input_tokens")
+        self.assertAlmostEqual(pressure["ratio"], 226853 / 258400, places=6)
+        self.assertEqual(pressure["percent"], round(226853 / 258400 * 100, 2))
+        self.assertEqual(pressure["level"], "high")
+
     def test_config_still_overrides_runtime_context_window(self) -> None:
         pressure = context_pressure(
             "codex-chat",

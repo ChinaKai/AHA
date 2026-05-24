@@ -75,6 +75,7 @@ def context_pressure(
     prompt_metrics: Mapping[str, object] | None,
     *,
     runtime_context_window: int | None = None,
+    runtime_token_usage: Mapping[str, object] | None = None,
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict:
@@ -90,6 +91,10 @@ def context_pressure(
     prompt_chars = _positive_int(total_metrics.get("chars"))
     prompt_bytes = _positive_int(total_metrics.get("bytes"))
     prompt_lines = _positive_int(total_metrics.get("lines"))
+    runtime_usage = runtime_token_usage or {}
+    runtime_input_tokens = _positive_int(runtime_usage.get("input_tokens"))
+    runtime_cached_input_tokens = _positive_int(runtime_usage.get("cached_input_tokens"))
+    runtime_total_tokens = _positive_int(runtime_usage.get("total_tokens"))
     context_window, source = context_window_for_model(
         backend,
         model,
@@ -97,7 +102,8 @@ def context_pressure(
         cfg=cfg,
         environ=environ,
     )
-    ratio = (prompt_tokens / context_window) if prompt_tokens is not None and context_window else None
+    input_tokens = runtime_input_tokens or prompt_tokens
+    ratio = (input_tokens / context_window) if input_tokens is not None and context_window else None
     level = "unknown"
     if ratio is not None:
         if ratio >= 0.85:
@@ -106,17 +112,28 @@ def context_pressure(
             level = "watch"
         else:
             level = "ok"
+    if runtime_input_tokens is not None:
+        pressure_source = "runtime.last_token_usage.input_tokens"
+    elif prompt_tokens is not None:
+        pressure_source = "prompt_metrics.tokens"
+    elif prompt_chars or prompt_bytes:
+        pressure_source = "prompt_metrics.chars"
+    else:
+        pressure_source = "unknown"
     return {
         "backend": str(backend or "").removesuffix("-chat").strip().lower() or None,
         "model": str(model).strip() if model else None,
-        "input_tokens": prompt_tokens,
+        "input_tokens": input_tokens,
         "prompt_tokens": prompt_tokens,
+        "runtime_input_tokens": runtime_input_tokens,
+        "runtime_cached_input_tokens": runtime_cached_input_tokens,
+        "runtime_total_tokens": runtime_total_tokens,
         "prompt_chars": prompt_chars,
         "prompt_bytes": prompt_bytes,
         "prompt_lines": prompt_lines,
         "context_window": context_window,
         "context_window_source": source,
-        "pressure_source": "prompt_metrics.tokens" if prompt_tokens is not None else "prompt_metrics.chars" if prompt_chars or prompt_bytes else "unknown",
+        "pressure_source": pressure_source,
         "ratio": round(ratio, 6) if ratio is not None else None,
         "percent": round(ratio * 100, 2) if ratio is not None else None,
         "level": level,

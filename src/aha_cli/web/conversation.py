@@ -114,6 +114,7 @@ def conversation_view_page(
     session_info = backend_session_jsonl_info(read_json(session_file)) if session_file.exists() else {}
     session_info["runtime"] = backend_state
     session_info["context_pressure"] = backend_state.get("context_pressure")
+    session_info["runtime_context_usage"] = backend_state.get("runtime_context_usage")
     session_info["latest_usage"] = backend_state.get("latest_usage")
     session_info["latest_prompt_metrics"] = backend_state.get("latest_prompt_metrics")
     session_info["requested_model"] = backend_state.get("requested_model")

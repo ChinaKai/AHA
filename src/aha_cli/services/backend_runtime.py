@@ -189,30 +189,56 @@ def _codex_session_jsonl_path(session_id: str) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _codex_runtime_context_window(root: Path, run_id: str, target: str, task_id: str | None = None) -> int | None:
+def _codex_token_count_info(record: dict) -> dict:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    if payload.get("type") == "token_count" and info:
+        return info
+    if record.get("type") == "token_count":
+        record_info = record.get("info") if isinstance(record.get("info"), dict) else {}
+        return record_info or info or payload
+    if info and (info.get("model_context_window") or info.get("last_token_usage")):
+        return info
+    if payload.get("model_context_window") or payload.get("last_token_usage"):
+        return payload
+    return {}
+
+
+def _codex_runtime_context(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
     session_file = session_path(root, run_id, task_id, target)
     if not session_file.exists():
-        return None
+        return {}
     try:
         session = read_json(session_file)
     except (OSError, ValueError):
-        return None
+        return {}
     path = _codex_session_jsonl_path(str(session.get("backend_session_id") or ""))
     if not path:
-        return None
+        return {}
     scanned = 0
     for _offset, record in iter_jsonl_reverse(path) or ():
         scanned += 1
-        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-        window = _positive_int(payload.get("model_context_window"))
-        if not window:
-            info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
-            window = _positive_int(info.get("model_context_window"))
-        if window:
-            return window
+        info = _codex_token_count_info(record)
+        if info:
+            usage = info.get("last_token_usage") if isinstance(info.get("last_token_usage"), dict) else {}
+            return {
+                "context_window": _positive_int(info.get("model_context_window")),
+                "last_token_usage": {
+                    key: value
+                    for key, value in {
+                        "input_tokens": _positive_int(usage.get("input_tokens")),
+                        "cached_input_tokens": _positive_int(usage.get("cached_input_tokens")),
+                        "output_tokens": _positive_int(usage.get("output_tokens")),
+                        "reasoning_output_tokens": _positive_int(usage.get("reasoning_output_tokens")),
+                        "total_tokens": _positive_int(usage.get("total_tokens")),
+                    }.items()
+                    if value is not None
+                },
+                "source": "runtime",
+            }
         if scanned >= CODEX_CONTEXT_WINDOW_SCAN_LIMIT:
             break
-    return None
+    return {}
 
 
 def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
@@ -295,11 +321,13 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     resolved_model = state.get("resolved_model") or state.get("model")
     latest_usage = _latest_agent_usage(root, run_id, target, task_id)
     latest_prompt_metrics = _latest_agent_prompt_metrics(root, run_id, target, task_id)
-    runtime_context_window = (
-        _codex_runtime_context_window(root, run_id, target, task_id)
+    runtime_context = (
+        _codex_runtime_context(root, run_id, target, task_id)
         if str(backend_name).removesuffix("-chat") == "codex"
-        else None
+        else {}
     )
+    runtime_context_window = _positive_int(runtime_context.get("context_window"))
+    runtime_context_usage = runtime_context.get("last_token_usage") if isinstance(runtime_context.get("last_token_usage"), dict) else {}
     return {
         "target": target,
         "task_id": task_id,
@@ -316,6 +344,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
         "runtime_context_window": runtime_context_window,
+        "runtime_context_usage": runtime_context_usage,
         "latest_usage": latest_usage,
         "latest_prompt_metrics": latest_prompt_metrics,
         "context_pressure": context_pressure(
@@ -323,6 +352,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
             str(resolved_model) if resolved_model else None,
             latest_prompt_metrics,
             runtime_context_window=runtime_context_window,
+            runtime_token_usage=runtime_context_usage,
             cfg=load_config(root),
         ),
         **activity,

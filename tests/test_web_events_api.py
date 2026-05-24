@@ -18,10 +18,13 @@ from aha_cli.store.filesystem import (
     event_path,
     iter_jsonl_from,
     iter_jsonl_reverse,
+    read_json,
     run_dir,
+    session_path,
     set_task_status,
     status_snapshot,
     task_log_page,
+    write_json,
 )
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -291,7 +294,11 @@ class WebEventsApiTests(unittest.TestCase):
     def test_conversation_events_api_restores_latest_turn_metrics_outside_page(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
+            home = root / "home"
+            with (
+                mock.patch("pathlib.Path.cwd", return_value=root),
+                mock.patch("pathlib.Path.home", return_value=home),
+            ):
                 self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Conversation prompt metrics", "--agents", "1")
                 self.assertEqual(code, 0)
@@ -305,6 +312,28 @@ class WebEventsApiTests(unittest.TestCase):
                     mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
                 ):
                     start_backend(root, run_id, "main", task_id="task-001")
+                session_file = session_path(root, run_id, "task-001", "main")
+                session = read_json(session_file)
+                session["backend_session_id"] = "codex-session-web"
+                write_json(session_file, session)
+                codex_session = home / ".codex" / "sessions" / "2026" / "05" / "24" / "rollout-codex-session-web.jsonl"
+                codex_session.parent.mkdir(parents=True)
+                codex_session.write_text(
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "token_count",
+                                "info": {
+                                    "model_context_window": 258400,
+                                    "last_token_usage": {"input_tokens": 226853, "cached_input_tokens": 226176},
+                                },
+                            },
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
                 append_event(root, run_id, "agent_started", {"task_id": "task-001", "target": "main", "sender": "browser"})
                 append_event(
                     root,
@@ -339,11 +368,14 @@ class WebEventsApiTests(unittest.TestCase):
         metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
         self.assertEqual(metrics["data"]["total"]["chars"], 1234)
         pressure = body["backend_session"]["context_pressure"]
-        self.assertEqual(pressure["context_window"], 258000)
-        self.assertEqual(pressure["context_window_source"], "table")
-        self.assertEqual(pressure["level"], "watch")
-        self.assertEqual(pressure["percent"], 70.0)
+        self.assertEqual(pressure["context_window"], 258400)
+        self.assertEqual(pressure["context_window_source"], "runtime")
+        self.assertEqual(pressure["pressure_source"], "runtime.last_token_usage.input_tokens")
+        self.assertEqual(pressure["level"], "high")
+        self.assertEqual(pressure["percent"], round(226853 / 258400 * 100, 2))
+        self.assertEqual(pressure["input_tokens"], 226853)
         self.assertEqual(pressure["prompt_tokens"], 180600)
+        self.assertEqual(body["backend_session"]["runtime_context_usage"]["input_tokens"], 226853)
         self.assertEqual(body["backend_session"]["latest_usage"]["input_tokens"], 99999999)
 
     def test_conversation_events_api_filters_categories_server_side(self) -> None:

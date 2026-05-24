@@ -2665,7 +2665,8 @@ function contextPressureSummary(pressure) {
     const promptChars = pressure.prompt_chars != null ? formatMetricCompact(pressure.prompt_chars) : "";
     return promptChars ? `context unknown (${promptChars} chars)` : "context unknown";
   }
-  const input = pressure.prompt_tokens != null ? formatMetricCompact(pressure.prompt_tokens) : "-";
+  const inputTokens = pressure.input_tokens ?? pressure.prompt_tokens;
+  const input = inputTokens != null ? formatMetricCompact(inputTokens) : "-";
   const window = pressure.context_window != null ? formatMetricCompact(pressure.context_window) : "-";
   return `${percent} context (${input}/${window})`;
 }
@@ -2846,7 +2847,11 @@ function renderUsageBreakdown(usage, usageStatus, source, contextPressure = null
   ];
   const contextRows = [
     ["model", contextPressure?.model || "-"],
+    ["input_tokens", contextPressure?.input_tokens ?? "-"],
     ["prompt_tokens", contextPressure?.prompt_tokens ?? "-"],
+    ["runtime_input_tokens", contextPressure?.runtime_input_tokens ?? "-"],
+    ["runtime_cached_input_tokens", contextPressure?.runtime_cached_input_tokens ?? "-"],
+    ["runtime_total_tokens", contextPressure?.runtime_total_tokens ?? "-"],
     ["prompt_chars", contextPressure?.prompt_chars ?? "-"],
     ["prompt_bytes", contextPressure?.prompt_bytes ?? "-"],
     ["context_window", contextPressure?.context_window ?? "-"],
@@ -3016,7 +3021,7 @@ function renderPromptMetricsPanel(taskId) {
     ...usageParts,
   ].filter(Boolean);
   const backendSummary = contextPressurePercent(contextPressure)
-    ? `${formatMetricNumber(contextPressure.prompt_tokens || 0)} prompt tokens · ${contextPressurePercent(contextPressure)} ctx`
+    ? `${formatMetricNumber(contextPressure.input_tokens ?? contextPressure.prompt_tokens ?? 0)} input tokens · ${contextPressurePercent(contextPressure)} ctx`
     : usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `
