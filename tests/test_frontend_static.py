@@ -105,7 +105,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("consumedAgentMessages", script)
         self.assertIn("mirroredMainBrowserMessages", script)
         self.assertIn("isMainHostSupervisionMirror", script)
-        self.assertIn('backendTarget() === "main"', script)
+        self.assertIn('target === "main"', script)
         self.assertIn('candidate.type !== "message"', script)
         self.assertNotIn("latestAgentMessage", script)
         self.assertIn('action === "add-task"', script)
@@ -116,6 +116,22 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("supervision-agents", styles)
         self.assertIn("agent-card.host-agent", styles)
         self.assertIn("timeline-card.from-supervision", styles)
+
+    def test_frontend_renders_host_work_log_in_host_view(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function agentTimelineEvents(taskId, target = backendTarget())", script)
+        self.assertIn("conversationStates.get(conversationKey(taskId, target))", script)
+        self.assertIn("agentTimelineEvents(taskId, target)", script)
+        self.assertIn("conversationSourceEvents(taskId, target)", script)
+        self.assertIn('target === "main" && isAhaActionEnvelopeText(text)', script)
+        self.assertIn("function agentUpdateBody", script)
+        self.assertIn("ahaActionEnvelopePayload(text)", script)
+        self.assertIn("decision:", script)
+        self.assertIn("response:", script)
+        self.assertIn("actions:", script)
+        self.assertIn("host update", script)
 
     def test_frontend_has_weixin_console_entry(self) -> None:
         root = Path(__file__).resolve().parents[1]

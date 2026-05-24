@@ -2235,15 +2235,19 @@ function eventData(event) {
   return event.data || {};
 }
 
-function isAhaActionEnvelopeText(text) {
+function ahaActionEnvelopePayload(text) {
   const raw = String(text || "").trim();
-  if (!raw.startsWith("{") || !raw.endsWith("}")) return false;
+  if (!raw.startsWith("{") || !raw.endsWith("}")) return null;
   try {
     const payload = JSON.parse(raw);
-    return Boolean(payload && Array.isArray(payload.actions) && typeof payload.response === "string");
+    return payload && Array.isArray(payload.actions) && typeof payload.response === "string" ? payload : null;
   } catch (_err) {
-    return false;
+    return null;
   }
+}
+
+function isAhaActionEnvelopeText(text) {
+  return Boolean(ahaActionEnvelopePayload(text));
 }
 
 function eventTaskId(event) {
@@ -2346,8 +2350,8 @@ function eventMatchesAgent(event, target) {
   return eventAgentRefs(event).has(target || "main");
 }
 
-function agentTimelineEvents(taskId) {
-  return taskTimelineEvents(taskId).filter(eventMatchesSelectedAgent);
+function agentTimelineEvents(taskId, target = backendTarget()) {
+  return taskTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
 }
 
 function conversationKey(taskId = selectedTaskId, target = backendTarget()) {
@@ -2403,9 +2407,9 @@ function conversationState(taskId = selectedTaskId, target = backendTarget()) {
   return conversationStates.get(key);
 }
 
-function conversationSourceEvents(taskId) {
-  const state = conversationStates.get(conversationKey(taskId));
-  return state?.initialized ? state.events : agentTimelineEvents(taskId);
+function conversationSourceEvents(taskId, target = backendTarget()) {
+  const state = conversationStates.get(conversationKey(taskId, target));
+  return state?.initialized ? state.events : agentTimelineEvents(taskId, target);
 }
 
 function conversationBackendSession(taskId, target = backendTarget()) {
@@ -2444,8 +2448,8 @@ function isMainHostSupervisionMirror(event, text) {
   );
 }
 
-function dedupedConversationEvents(taskId) {
-  const events = conversationSourceEvents(taskId);
+function dedupedConversationEvents(taskId, target = backendTarget()) {
+  const events = conversationSourceEvents(taskId, target);
   const consumedAgentMessages = new Set();
   const mirroredMainBrowserMessages = new Set();
   events.forEach((event, index) => {
@@ -2463,7 +2467,7 @@ function dedupedConversationEvents(taskId) {
       });
       if (consumed) consumedAgentMessages.add(index);
     }
-    if (backendTarget() === "main" && isMainBrowserMessage(event)) {
+    if (target === "main" && isMainBrowserMessage(event)) {
       const text = String(data.message || "").trim();
       if (!text) return;
       const mirroredToHost = events.some((candidate, candidateIndex) => (
@@ -2475,7 +2479,7 @@ function dedupedConversationEvents(taskId) {
   return events.filter((event, index) => {
     if (event.type === "agent_message") {
       const text = String(eventData(event).text || "").trim();
-      if (isAhaActionEnvelopeText(text)) return false;
+      if (target === "main" && isAhaActionEnvelopeText(text)) return false;
       if (consumedAgentMessages.has(index)) return false;
     }
     if (event.type === "message" && mirroredMainBrowserMessages.has(index)) return false;
@@ -2504,7 +2508,7 @@ function conversationFilterCounts(taskId) {
 }
 
 function promptMetricCandidateEvents(taskId, target = backendTarget()) {
-  const candidates = [...conversationSourceEvents(taskId), ...taskEvents(taskId)];
+  const candidates = [...conversationSourceEvents(taskId, target), ...taskEvents(taskId)];
   const seen = new Set();
   return candidates
     .filter(event => isTaskEvent(event, taskId) && eventMatchesAgent(event, target))
@@ -2518,7 +2522,7 @@ function promptMetricCandidateEvents(taskId, target = backendTarget()) {
 }
 
 function latestTurnStartOrder(taskId, target = backendTarget()) {
-  const events = conversationSourceEvents(taskId).filter(event => eventMatchesAgent(event, target));
+  const events = conversationSourceEvents(taskId, target).filter(event => eventMatchesAgent(event, target));
   for (let index = events.length - 1; index >= 0; index -= 1) {
     if (events[index].type === "agent_started") return conversationEventOrder(events[index]);
   }
@@ -4582,6 +4586,26 @@ function renderConversation(taskId) {
   return `<div class="conversation timeline">${older}${events.map(renderTimelineEvent).join("")}${timer}${metricsDock}</div>`;
 }
 
+function agentUpdateTitle(data) {
+  const target = data.target || "main";
+  return target === "host" ? "host update" : `agent update (${target})`;
+}
+
+function agentUpdateBody(data) {
+  const text = String(data.text || "");
+  const payload = ahaActionEnvelopePayload(text);
+  if (!payload) return text;
+  const actions = Array.isArray(payload.actions)
+    ? payload.actions.map(action => action?.type || "action").filter(Boolean).join(", ")
+    : "";
+  return [
+    payload.decision ? `decision: ${payload.decision}` : "",
+    payload.reason ? `reason: ${payload.reason}` : "",
+    payload.response ? `response: ${payload.response}` : "",
+    actions ? `actions: ${actions}` : "actions: none"
+  ].filter(Boolean).join("\n");
+}
+
 function renderTimelineEvent(event) {
   const data = eventData(event);
   if (event.type === "message") {
@@ -4596,7 +4620,7 @@ function renderTimelineEvent(event) {
       event._uiKey
     );
   }
-  if (event.type === "agent_message") return renderTimelineCard(`agent update (${data.target || "main"})`, data.text || "", eventTimeLabel(event), "agent-update", event._uiKey);
+  if (event.type === "agent_message") return renderTimelineCard(agentUpdateTitle(data), agentUpdateBody(data), eventTimeLabel(event), "agent-update", event._uiKey);
   if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey);
   if (event.type === "agent_command_finished") {
     const output = data.output_tail

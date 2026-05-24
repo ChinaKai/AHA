@@ -227,12 +227,27 @@ class WebEventsApiTests(unittest.TestCase):
 
                 response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=20"))
                 body = json_response_body(response)
+                host_action_envelope = json.dumps(
+                    {
+                        "decision": "stop",
+                        "reason": "host checked project state",
+                        "actions": [],
+                        "response": "host 视角应该保留这个决策摘要",
+                    },
+                    ensure_ascii=False,
+                )
+                append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "host", "text": host_action_envelope})
+                host_response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=host&limit=20"))
+                host_body = json_response_body(host_response)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         timeline_texts = [str(event["data"].get("text") or event["data"].get("message") or "") for event in body["events"]]
         self.assertEqual(timeline_texts, [user_facing_response])
         self.assertNotIn(action_envelope, timeline_texts)
         self.assertFalse(any('"actions"' in text and '"response"' in text for text in timeline_texts))
+        self.assertTrue(host_response.startswith(b"HTTP/1.1 200 OK"))
+        host_texts = [str(event["data"].get("text") or event["data"].get("message") or "") for event in host_body["events"]]
+        self.assertIn(host_action_envelope, host_texts)
 
     def test_web_restart_api_schedules_source_ui_on_8766(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

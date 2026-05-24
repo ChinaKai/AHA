@@ -66,6 +66,10 @@ def is_raw_action_agent_message(event: dict) -> bool:
     return is_aha_action_envelope_text(str(data.get("text") or ""))
 
 
+def hide_raw_action_agent_message(event: dict, target: str) -> bool:
+    return (target or "main") == "main" and is_raw_action_agent_message(event)
+
+
 def slim_conversation_event(event: dict, *, include_command_output: bool = False) -> dict:
     if include_command_output or event.get("type") != "agent_command_finished":
         return event
@@ -96,7 +100,7 @@ def conversation_view_page(
     events = [
         slim_conversation_event(event, include_command_output=include_command_output)
         for event in page.get("events", [])
-        if not is_raw_action_agent_message(event)
+        if not hide_raw_action_agent_message(event, target)
     ]
     view = dict(page)
     view["events"] = events

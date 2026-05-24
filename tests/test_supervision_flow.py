@@ -60,6 +60,9 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertIn("Steward handles deterministic low-risk continuation", context)
         self.assertIn("Use your read-only project access", context)
         self.assertIn("Do not rely only on main's wording", context)
+        self.assertIn("Publish concise public progress updates", context)
+        self.assertIn("Never reveal hidden chain-of-thought", context)
+        self.assertIn("observable evidence, commands, and next checks", context)
         self.assertIn("When an ask-user gate is disabled", context)
         self.assertIn("never offer to write code/config", context)
         self.assertIn("Treat commit handling as part of implementation closure", context)
@@ -633,6 +636,72 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertEqual(applied[-1]["data"]["executed_action_count"], 1)
         self.assertTrue(applied[-1]["data"]["routed_to_browser"])
         self.assertEqual(task["status"], "awaiting_user")
+
+    def test_supervision_continue_with_record_update_still_routes_to_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host continue with update", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                host_reply = json.dumps(
+                    {
+                        "decision": "continue",
+                        "reason": "commit finalization remains",
+                        "response": "继续收尾，只提交本任务相关文件。",
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "实现已验证，剩余提交收口。",
+                                "changed_files": ["src/aha_cli/services/chat_supervision.py"],
+                                "verification": ["python3 -m unittest tests.test_supervision_flow"],
+                                "risks": ["工作区存在无关改动，需要排除"],
+                            }
+                        ],
+                    }
+                )
+
+                with mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main:
+                    result = apply_supervision_host_decision(
+                        root,
+                        run_id,
+                        "task-001",
+                        host_agent_id="host",
+                        host_reply=host_reply,
+                        exit_code=0,
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                main_inbox_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertTrue(result["routed_to_main"])
+        self.assertEqual(result["executed"][0]["type"], "record_task_update")
+        start_main.assert_called_once()
+        routed = [row for row in main_inbox_messages if row.get("message") == "继续收尾，只提交本任务相关文件。"]
+        self.assertEqual(len(routed), 1)
+        self.assertEqual(routed[0]["sender"], "browser")
+        self.assertEqual(routed[0]["display_sender"], "host")
+        host_decisions = [row for row in rows if row["type"] == "host_decision"]
+        self.assertEqual(host_decisions[-1]["data"]["decision"], "continue")
+        self.assertEqual(host_decisions[-1]["data"]["executed_action_count"], 1)
+        self.assertTrue(host_decisions[-1]["data"]["routed_to_main"])
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "routed_to_main")
+        self.assertEqual(applied[-1]["data"]["executed_action_count"], 1)
+        self.assertTrue(applied[-1]["data"]["routed_to_main"])
+        self.assertEqual(task["status"], "running")
+        main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main_agent["status"], "pending")
 
     def test_claude_supervision_max_rounds_are_per_user_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

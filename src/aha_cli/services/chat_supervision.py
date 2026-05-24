@@ -39,6 +39,7 @@ from aha_cli.store.filesystem import (
 SUPERVISION_HOST_DECISIONS = {"ask_user", "continue", "stop", "wait", "route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_FAILURE_FALLBACK_STATUS = "awaiting_user"
 SUPERVISION_STATUS_CHANNELS = ("main_backend", "host_backend", "steward_decision")
+SUPERVISION_MAIN_ROUTE_BLOCKING_ACTIONS = {"route_to_agent", "spawn_sub"}
 ASK_USER_GATE_LABELS = {
     "real_ui_validation": "real UI/device validation",
     "scope_change": "scope or goal change",
@@ -53,6 +54,8 @@ DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT = (
     "- Steward handles deterministic low-risk continuation; you handle semantic handoff decisions.\n"
     "- Use your read-only project access to inspect code, diffs, tests, logs, events, and task state before deciding.\n"
     "- Do not rely only on main's wording when the project state can verify or falsify it.\n"
+    "- Publish concise public progress updates before or after non-trivial read-only inspections so the host view shows what you checked.\n"
+    "- Never reveal hidden chain-of-thought; summarize observable evidence, commands, and next checks only.\n"
     "- Keep the task moving, correct direction, route or wait when needed, and escalate only when required.\n"
     "- Do not replace main's technical implementation judgment or make product decisions for the user.\n"
     "- When an ask-user gate is disabled, make the browser-side call yourself from read-only evidence instead of asking.\n"
@@ -293,6 +296,10 @@ def low_information_supervision_response(text: str) -> bool:
     return len(compact) <= 6 and any(marker in compact for marker in ("好", "嗯", "收", "等"))
 
 
+def supervision_actions_block_main_route(executed: list[dict]) -> bool:
+    return any(str(action.get("type") or "") in SUPERVISION_MAIN_ROUTE_BLOCKING_ACTIONS for action in executed)
+
+
 def supervision_host_decision_count(root: Path, run_id: str, task_id: str, host_agent_id: str = "host") -> int:
     count = 0
     for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
@@ -457,9 +464,10 @@ def apply_supervision_host_decision(
         decision = parse_supervision_host_decision(host_reply)
         executed = execute_actions(root, run_id, task_id, host_reply)
     host_chat_message = decision["response"] or decision["reason"] or host_reply.strip()
+    main_route_blocked_by_actions = supervision_actions_block_main_route(executed)
     if (
         decision["decision"] == "continue"
-        and not executed
+        and not main_route_blocked_by_actions
         and task_has_incomplete_sub_agents(task)
         and low_information_supervision_response(host_chat_message)
     ):
@@ -484,7 +492,7 @@ def apply_supervision_host_decision(
             set_agent_status(root, run_id, task_id, "main", "waiting")
         else:
             route_skipped_reason = "wait requested without incomplete sub-agents"
-    elif decision["decision"] == "continue" and host_chat_message and not executed:
+    elif decision["decision"] == "continue" and host_chat_message and not main_route_blocked_by_actions:
         if previous_host_rounds < max_rounds:
             append_message(
                 root,
