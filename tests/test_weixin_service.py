@@ -203,6 +203,39 @@ class WeixinServiceTests(unittest.TestCase):
         self.assertEqual(saved_updates["get_updates_buf"], "buf-2")
         self.assertEqual(saved_context_token, "ctx-1")
 
+    def test_fetch_updates_stores_recent_received_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            weixin.save_account(
+                root,
+                {
+                    "account_id": "bot-1",
+                    "token": "mock-token",
+                    "base_url": "https://example.test",
+                    "user_id": "user-1@im.wechat",
+                },
+            )
+            with mock.patch(
+                "aha_cli.services.weixin._api_post_json",
+                return_value={
+                    "get_updates_buf": "buf-4",
+                    "msgs": [
+                        {"msg_id": "msg-1", "from_user_id": "user-1@im.wechat", "item_list": [{"type": 1, "text_item": {"text": "one"}}]},
+                        {"msg_id": "msg-2", "from_user_id": "user-1@im.wechat", "item_list": [{"type": 1, "text_item": {"text": "two"}}]},
+                        {"msg_id": "msg-3", "from_user_id": "user-1@im.wechat", "item_list": [{"type": 1, "text_item": {"text": "three"}}]},
+                        {"msg_id": "msg-4", "from_user_id": "user-1@im.wechat", "item_list": [{"type": 1, "text_item": {"text": "four"}}]},
+                    ],
+                },
+            ):
+                payload = weixin.fetch_updates(root)
+            saved_updates = weixin._read_json(weixin.updates_path(root))
+            status = weixin.status_snapshot(root, "run-001", poll=False)
+
+        self.assertEqual(payload["message_count"], 4)
+        self.assertEqual([item["text"] for item in payload["recent_messages"]], ["four", "three", "two"])
+        self.assertEqual([item["text"] for item in saved_updates["recent_messages"]], ["two", "three", "four"])
+        self.assertEqual([item["text"] for item in status["received_messages"]], ["four", "three", "two"])
+
     def test_send_test_notification_includes_saved_context_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

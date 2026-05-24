@@ -180,3 +180,35 @@ class WebSystemRoutesTests(unittest.TestCase):
         )
         self.assertTrue(any(event["type"] == "weixin_pairing_reset" for event in events))
         self.assertTrue(any(event["type"] == "weixin_notifications_updated" for event in events))
+
+    def test_weixin_status_fetches_recent_received_messages_when_paired(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Weixin received", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                status_payload = {"ok": True, "paired": True, "pairing": None, "received_messages": []}
+                updates_payload = {
+                    "ok": True,
+                    "message_count": 2,
+                    "recent_messages": [
+                        {"from_user_id": "user-1@im.wechat", "text": "second", "received_at": "2026-05-25T00:00:02+00:00"},
+                        {"from_user_id": "user-1@im.wechat", "text": "first", "received_at": "2026-05-25T00:00:01+00:00"},
+                    ],
+                }
+                with (
+                    mock.patch("aha_cli.web.system_routes.weixin_status_snapshot", return_value=status_payload),
+                    mock.patch("aha_cli.web.system_routes.recent_received_messages", return_value=[]) as recent_messages,
+                    mock.patch("aha_cli.web.system_routes.fetch_updates", return_value=updates_payload) as fetch_updates,
+                    mock.patch("aha_cli.web.system_routes.notification_status", return_value={"enabled": False}),
+                ):
+                    status = system_route_response(root, run_id, "GET", "/api/weixin", parse_qs(""))
+
+        self.assertTrue(status and status.startswith(b"HTTP/1.1 200 OK"))
+        body = json_response_body(status)
+        self.assertEqual(body["received_message_count"], 2)
+        self.assertEqual([item["text"] for item in body["received_messages"]], ["second", "first"])
+        recent_messages.assert_called_once_with(root)
+        fetch_updates.assert_called_once_with(root)

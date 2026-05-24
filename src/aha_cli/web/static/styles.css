@@ -265,6 +265,56 @@ header > div:first-child h1 {
   font-size: 12px;
   line-height: 1.5;
 }
+.weixin-received {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.weixin-received-head,
+.weixin-received-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.weixin-received-head strong {
+  color: #344054;
+  font-size: 12px;
+}
+.weixin-received-head span,
+.weixin-received-empty,
+.weixin-received-meta {
+  color: #667085;
+  font-size: 12px;
+}
+.weixin-received-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.weixin-received-list li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid #f2f4f7;
+}
+.weixin-received-list li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.weixin-received-list p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .weixin-console-note {
   padding: 10px 12px;
   border: 1px solid #bfdbfe;

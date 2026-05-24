@@ -10,7 +10,15 @@ import time
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.backend_runtime import backend_status
-from aha_cli.services.weixin import WeixinError, reset_pairing, send_test_notification, start_pairing, status_snapshot as weixin_status_snapshot
+from aha_cli.services.weixin import (
+    WeixinError,
+    fetch_updates,
+    recent_received_messages,
+    reset_pairing,
+    send_test_notification,
+    start_pairing,
+    status_snapshot as weixin_status_snapshot,
+)
 from aha_cli.services.weixin_notifications import notification_status, set_notifications_enabled
 from aha_cli.store.filesystem import append_event
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page
@@ -254,6 +262,15 @@ def system_route_response(
     if method in {"GET", "HEAD"} and path == "/api/weixin":
         run_id = require_api_run_id(root, default_run_id, query)
         payload = weixin_status_snapshot(root, run_id)
+        payload["received_messages"] = recent_received_messages(root)
+        payload["received_message_count"] = 0
+        if method == "GET" and payload.get("paired"):
+            try:
+                updates = fetch_updates(root)
+                payload["received_messages"] = updates.get("recent_messages") or payload["received_messages"]
+                payload["received_message_count"] = updates.get("message_count") or 0
+            except WeixinError as exc:
+                payload["receive_error"] = str(exc)
         payload["notifications"] = notification_status(root, run_id)
         return head_or_json(method, payload, request_headers=headers)
     if method == "POST" and path == "/api/weixin/pair":

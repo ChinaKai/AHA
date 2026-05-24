@@ -5003,6 +5003,26 @@ function renderWeixinConsole() {
   const pairButtonDisabled = weixinState.loading || displayPaired;
   const canSendTest = paired && !weixinState.sending && !weixinState.loading;
   const notificationToggleDisabled = !paired || weixinState.loading || weixinState.togglingNotifications;
+  const receivedMessages = Array.isArray(payload.received_messages) ? payload.received_messages.slice(0, 3) : [];
+  const receivedList = receivedMessages.length ? `
+    <ol class="weixin-received-list">
+      ${receivedMessages.map(message => {
+        const text = String(message?.text || "").trim() || "(非文本消息)";
+        const from = String(message?.from_user_id || "").trim() || "unknown";
+        const receivedAt = String(message?.received_at || "").trim();
+        const time = receivedAt ? formatLocalTimestamp(receivedAt, receivedAt) : "";
+        return `
+          <li>
+            <div class="weixin-received-meta">
+              <span>${escapeHtml(from)}</span>
+              ${time ? `<time>${escapeHtml(time)}</time>` : ""}
+            </div>
+            <p>${escapeHtml(text)}</p>
+          </li>
+        `;
+      }).join("")}
+    </ol>
+  ` : `<div class="weixin-received-empty">${paired ? "暂无接收消息" : "配对后显示最近接收消息"}</div>`;
   return `
     <div class="weixin-console">
       <div class="weixin-console-head">
@@ -5019,6 +5039,7 @@ function renderWeixinConsole() {
       </div>
       ${weixinState.loading ? '<div class="weixin-console-note">正在连接微信服务...</div>' : ""}
       ${weixinState.error ? `<div class="weixin-console-note error">${escapeHtml(weixinState.error)}</div>` : ""}
+      ${payload.receive_error ? `<div class="weixin-console-note error">接收消息失败：${escapeHtml(payload.receive_error)}</div>` : ""}
       ${weixinState.notice ? `<div class="weixin-console-note success">${escapeHtml(weixinState.notice)}</div>` : ""}
       ${qrSrc && status !== "paired" ? `
         <div class="weixin-qr">
@@ -5036,6 +5057,13 @@ function renderWeixinConsole() {
           <strong>通道</strong>
           <code>${paired ? "可发送" : "等待配对"}</code>
         </section>
+      </div>
+      <div class="weixin-received">
+        <div class="weixin-received-head">
+          <strong>最近接收消息</strong>
+          <span>最多 3 条</span>
+        </div>
+        ${receivedList}
       </div>
       <div class="weixin-notifications">
         <label class="checkbox-line">

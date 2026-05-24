@@ -22,6 +22,8 @@ QR_POLL_TIMEOUT_SECONDS = 6
 MESSAGE_TYPE_BOT = 2
 MESSAGE_STATE_FINISH = 2
 MESSAGE_ITEM_TEXT = 1
+RECENT_RECEIVED_MESSAGE_LIMIT = 3
+RECENT_RECEIVED_TEXT_LIMIT = 240
 
 
 class WeixinError(RuntimeError):
@@ -413,6 +415,68 @@ def load_context_token(root: Path, user_id: str) -> str:
     return token if isinstance(token, str) else ""
 
 
+def _message_text(msg: dict) -> str:
+    texts: list[str] = []
+    item_list = msg.get("item_list") if isinstance(msg.get("item_list"), list) else []
+    for item in item_list:
+        if not isinstance(item, dict):
+            continue
+        text_item = item.get("text_item") if isinstance(item.get("text_item"), dict) else {}
+        text = str(text_item.get("text") or item.get("text") or "").strip()
+        if text:
+            texts.append(text)
+    fallback = str(msg.get("text") or msg.get("content") or "").strip()
+    text = "\n".join(texts) or fallback
+    return _truncate_text(text, RECENT_RECEIVED_TEXT_LIMIT)
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    stripped = str(text or "").strip()
+    return stripped if len(stripped) <= limit else stripped[: limit - 1].rstrip() + "…"
+
+
+def _public_received_message(msg: dict, received_at: str) -> dict:
+    raw_timestamp = str(msg.get("create_time") or msg.get("createTime") or msg.get("timestamp") or msg.get("time") or "")
+    return {
+        "from_user_id": str(msg.get("from_user_id") or msg.get("fromUserId") or ""),
+        "message_id": str(msg.get("msg_id") or msg.get("message_id") or msg.get("client_id") or ""),
+        "raw_timestamp": raw_timestamp,
+        "received_at": received_at,
+        "text": _message_text(msg),
+    }
+
+
+def _received_message_key(message: dict) -> str:
+    message_id = str(message.get("message_id") or "").strip()
+    if message_id:
+        return f"id:{message_id}"
+    return "body:{from_user_id}:{raw_timestamp}:{text}".format(
+        from_user_id=message.get("from_user_id") or "",
+        raw_timestamp=message.get("raw_timestamp") or "",
+        text=message.get("text") or "",
+    )
+
+
+def _merge_recent_received_messages(existing: object, incoming: list[dict]) -> list[dict]:
+    existing_messages = [item for item in existing if isinstance(item, dict)] if isinstance(existing, list) else []
+    combined = [*existing_messages, *incoming]
+    deduped_reversed: list[dict] = []
+    seen: set[str] = set()
+    for message in reversed(combined):
+        key = _received_message_key(message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_reversed.append(message)
+    return list(reversed(deduped_reversed))[-RECENT_RECEIVED_MESSAGE_LIMIT:]
+
+
+def recent_received_messages(root: Path) -> list[dict]:
+    sync = _read_json(updates_path(root))
+    recent = sync.get("recent_messages") if isinstance(sync.get("recent_messages"), list) else []
+    return list(reversed(recent[-RECENT_RECEIVED_MESSAGE_LIMIT:]))
+
+
 def fetch_updates(root: Path) -> dict:
     account = load_account(root)
     token = str(account.get("token") or "")
@@ -431,11 +495,21 @@ def fetch_updates(root: Path) -> dict:
         if "timed out" not in str(exc).lower():
             raise
         resp = {"msgs": [], "get_updates_buf": sync.get("get_updates_buf") or ""}
-    if resp.get("get_updates_buf"):
-        _write_secret_json(updates_path(root), {"get_updates_buf": resp.get("get_updates_buf"), "updated_at": utc_now()})
+    now = utc_now()
     contexts = _read_json(contexts_path(root))
     changed = False
     messages = resp.get("msgs") if isinstance(resp.get("msgs"), list) else []
+    incoming_recent = [_public_received_message(msg, now) for msg in messages if isinstance(msg, dict)]
+    recent_messages = _merge_recent_received_messages(sync.get("recent_messages"), incoming_recent)
+    if resp.get("get_updates_buf") or incoming_recent:
+        _write_secret_json(
+            updates_path(root),
+            {
+                "get_updates_buf": resp.get("get_updates_buf") or sync.get("get_updates_buf") or "",
+                "recent_messages": recent_messages,
+                "updated_at": now,
+            },
+        )
     for msg in messages:
         if not isinstance(msg, dict):
             continue
@@ -446,7 +520,13 @@ def fetch_updates(root: Path) -> dict:
             changed = True
     if changed:
         _write_secret_json(contexts_path(root), contexts)
-    return {"ok": True, "messages": messages, "message_count": len(messages), "account": _public_account(account)}
+    return {
+        "ok": True,
+        "messages": messages,
+        "message_count": len(messages),
+        "recent_messages": list(reversed(recent_messages)),
+        "account": _public_account(account),
+    }
 
 
 def start_pairing(root: Path, run_id: str) -> dict:
@@ -565,6 +645,7 @@ def status_snapshot(root: Path, run_id: str, *, poll: bool = True) -> dict:
             if pairing.get(key) is not None
         } if pairing else None,
         "error": pairing_error,
+        "received_messages": recent_received_messages(root),
     }
 
 
