@@ -929,6 +929,31 @@ async function startWeixinPairing() {
   }
 }
 
+async function resetWeixinPairing() {
+  if (!currentRunId || weixinState.loading) return;
+  const confirmed = window.confirm("重置微信配对？\n\n当前账号、二维码、入站同步状态和微信通知开关都会清除。");
+  if (!confirmed) return;
+  weixinState.loading = true;
+  weixinState.error = "";
+  weixinState.notice = "";
+  renderWeixinConsolePopover();
+  try {
+    const payload = await fetchJson(apiUrl("/api/weixin/reset"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    }, "重置微信配对失败");
+    weixinState.status = payload;
+    weixinState.loaded = true;
+    weixinState.notice = "微信配对已重置";
+  } catch (err) {
+    weixinState.error = err?.message || String(err || "重置微信配对失败");
+  } finally {
+    weixinState.loading = false;
+    renderWeixinConsolePopover();
+  }
+}
+
 async function sendWeixinTestNotification() {
   if (!currentRunId || weixinState.sending) return;
   weixinState.sending = true;
@@ -1569,6 +1594,7 @@ function initSessionControl() {
     const action = actionEl?.getAttribute("data-weixin-action") || "";
     if (action === "pair") void startWeixinPairing();
     if (action === "refresh") void loadWeixinStatus();
+    if (action === "reset") void resetWeixinPairing();
     if (action === "test") void sendWeixinTestNotification();
   });
   weixinConsolePopoverEl?.addEventListener("input", event => {
@@ -4902,6 +4928,8 @@ function renderWeixinConsole() {
   const qrSrc = qrSvg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg)}` : "";
   const pairingActive = ["waiting", "scanned"].includes(status);
   const displayPaired = paired && !pairingActive;
+  const pairButtonLabel = pairingActive ? "重新生成二维码" : displayPaired ? "已配对" : "配对";
+  const pairButtonDisabled = weixinState.loading || displayPaired;
   const canSendTest = paired && !weixinState.sending && !weixinState.loading;
   const notificationToggleDisabled = !paired || weixinState.loading || weixinState.togglingNotifications;
   return `
@@ -4914,8 +4942,9 @@ function renderWeixinConsole() {
         <span class="status ${displayPaired ? "completed" : "session"}">${escapeHtml(statusText)}</span>
       </div>
       <div class="weixin-console-actions">
-        <button type="button" data-weixin-action="pair" ${weixinState.loading ? "disabled" : ""}>${status === "waiting" || status === "scanned" ? "重新生成二维码" : "配对"}</button>
+        <button type="button" data-weixin-action="pair" ${pairButtonDisabled ? "disabled" : ""}>${pairButtonLabel}</button>
         <button type="button" data-weixin-action="refresh" ${weixinState.loading ? "disabled" : ""}>刷新状态</button>
+        <button class="danger" type="button" data-weixin-action="reset" ${weixinState.loading ? "disabled" : ""}>重置</button>
       </div>
       ${weixinState.loading ? '<div class="weixin-console-note">正在连接微信服务...</div>' : ""}
       ${weixinState.error ? `<div class="weixin-console-note error">${escapeHtml(weixinState.error)}</div>` : ""}

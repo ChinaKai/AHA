@@ -223,6 +223,10 @@ header > div:first-child h1 {
   flex-wrap: wrap;
   gap: 8px;
 }
+.weixin-console-actions .danger {
+  border-color: #fecaca;
+  color: #991b1b;
+}
 .weixin-console-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

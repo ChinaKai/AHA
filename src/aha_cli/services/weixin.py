@@ -396,6 +396,17 @@ def save_account(root: Path, account: dict) -> None:
     _write_secret_json(account_path(root), normalized)
 
 
+def reset_pairing(root: Path, run_id: str) -> dict:
+    for path in (pairing_path(root), account_path(root), updates_path(root), contexts_path(root)):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise WeixinError(f"微信配对重置失败: {exc}") from exc
+    return status_snapshot(root, run_id, poll=False)
+
+
 def load_context_token(root: Path, user_id: str) -> str:
     contexts = _read_json(contexts_path(root))
     token = contexts.get(user_id)

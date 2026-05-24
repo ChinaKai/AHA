@@ -10,7 +10,7 @@ import time
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.backend_runtime import backend_status
-from aha_cli.services.weixin import WeixinError, send_test_notification, start_pairing, status_snapshot as weixin_status_snapshot
+from aha_cli.services.weixin import WeixinError, reset_pairing, send_test_notification, start_pairing, status_snapshot as weixin_status_snapshot
 from aha_cli.services.weixin_notifications import notification_status, set_notifications_enabled
 from aha_cli.store.filesystem import append_event
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page
@@ -264,6 +264,16 @@ def system_route_response(
             return json_response(payload)
         except WeixinError as exc:
             return json_response({"error": str(exc)}, "502 Bad Gateway")
+    if method == "POST" and path == "/api/weixin/reset":
+        run_id = require_api_run_id(root, default_run_id, query)
+        try:
+            payload = reset_pairing(root, run_id)
+            payload["notifications"] = set_notifications_enabled(root, run_id, False)
+            append_event(root, run_id, "weixin_pairing_reset", {"paired": payload.get("paired")})
+            append_event(root, run_id, "weixin_notifications_updated", {"enabled": False})
+            return json_response(payload)
+        except WeixinError as exc:
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
     if method == "POST" and path == "/api/weixin/test":
         payload = parse_json_body(body) if body.strip() else {}
         run_id = require_api_run_id(root, default_run_id, query, payload)

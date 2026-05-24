@@ -123,16 +123,23 @@ class WebSystemRoutesTests(unittest.TestCase):
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 status_payload = {"ok": True, "paired": False, "pairing": None}
                 pair_payload = {"ok": True, "paired": False, "pairing": {"status": "waiting", "qrcode_svg": "<svg/>"}}
+                reset_payload = {"ok": True, "paired": False, "pairing": None, "account": None, "error": ""}
                 sent_payload = {"ok": True, "sent": True, "message_id": "msg-1", "target": "user-1@im.wechat"}
                 notifications_payload = {"enabled": True, "ready": True, "sent_count": 0, "updated_at": "now", "last_sent_at": ""}
+                reset_notifications_payload = {"enabled": False, "ready": False, "sent_count": 0, "updated_at": "now", "last_sent_at": ""}
                 with (
                     mock.patch("aha_cli.web.system_routes.weixin_status_snapshot", return_value=status_payload) as status_snapshot,
                     mock.patch("aha_cli.web.system_routes.start_pairing", return_value=pair_payload) as start_pair,
+                    mock.patch("aha_cli.web.system_routes.reset_pairing", return_value=reset_payload) as reset_pair,
                     mock.patch("aha_cli.web.system_routes.send_test_notification", return_value=sent_payload) as send_test,
-                    mock.patch("aha_cli.web.system_routes.set_notifications_enabled", return_value=notifications_payload) as set_notifications,
+                    mock.patch(
+                        "aha_cli.web.system_routes.set_notifications_enabled",
+                        side_effect=[reset_notifications_payload, notifications_payload],
+                    ) as set_notifications,
                 ):
                     status = system_route_response(root, run_id, "GET", "/api/weixin", parse_qs(""))
                     pair = system_route_response(root, run_id, "POST", "/api/weixin/pair", parse_qs(""))
+                    reset = system_route_response(root, run_id, "POST", "/api/weixin/reset", parse_qs(""))
                     test = system_route_response(
                         root,
                         run_id,
@@ -153,15 +160,23 @@ class WebSystemRoutesTests(unittest.TestCase):
 
         self.assertTrue(status and status.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(pair and pair.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(reset and reset.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(test and test.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(notifications and notifications.startswith(b"HTTP/1.1 200 OK"))
         self.assertFalse(json_response_body(status)["paired"])
         self.assertFalse(json_response_body(status)["notifications"]["enabled"])
         self.assertEqual(json_response_body(pair)["pairing"]["status"], "waiting")
+        self.assertFalse(json_response_body(reset)["paired"])
+        self.assertFalse(json_response_body(reset)["notifications"]["enabled"])
         self.assertEqual(json_response_body(test)["message_id"], "msg-1")
         self.assertTrue(json_response_body(notifications)["notifications"]["enabled"])
         status_snapshot.assert_called_once_with(root, run_id)
         start_pair.assert_called_once_with(root, run_id)
+        reset_pair.assert_called_once_with(root, run_id)
         send_test.assert_called_once_with(root, run_id, "hello")
-        set_notifications.assert_called_once_with(root, run_id, True)
+        self.assertEqual(
+            set_notifications.call_args_list,
+            [mock.call(root, run_id, False), mock.call(root, run_id, True)],
+        )
+        self.assertTrue(any(event["type"] == "weixin_pairing_reset" for event in events))
         self.assertTrue(any(event["type"] == "weixin_notifications_updated" for event in events))

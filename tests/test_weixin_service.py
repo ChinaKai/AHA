@@ -110,6 +110,39 @@ class WeixinServiceTests(unittest.TestCase):
         self.assertEqual(payload["pairing"]["status"], "waiting")
         self.assertEqual(payload["error"], "")
 
+    def test_reset_pairing_clears_saved_weixin_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            weixin._write_secret_json(
+                weixin.pairing_path(root),
+                {
+                    "status": "waiting",
+                    "qrcode": "qr-1",
+                    "qrcode_payload": "https://example.test/login",
+                },
+            )
+            weixin.save_account(
+                root,
+                {
+                    "account_id": "bot-1",
+                    "token": "mock-token",
+                    "base_url": "https://example.test",
+                    "user_id": "user-1@im.wechat",
+                },
+            )
+            weixin._write_secret_json(weixin.updates_path(root), {"get_updates_buf": "buf-1"})
+            weixin._write_secret_json(weixin.contexts_path(root), {"user-1@im.wechat": "ctx-1"})
+
+            payload = weixin.reset_pairing(root, "run-001")
+
+            self.assertFalse(weixin.pairing_path(root).exists())
+            self.assertFalse(weixin.account_path(root).exists())
+            self.assertFalse(weixin.updates_path(root).exists())
+            self.assertFalse(weixin.contexts_path(root).exists())
+            self.assertFalse(payload["paired"])
+            self.assertIsNone(payload["account"])
+            self.assertIsNone(payload["pairing"])
+
     def test_send_test_notification_posts_to_logged_in_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
