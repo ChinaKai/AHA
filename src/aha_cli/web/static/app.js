@@ -28,7 +28,8 @@ let runArchiveError = false;
 let offset = -1;
 let lastEventId = "";
 let statusData = null;
-let selectedTaskId = String(queryParams.get("selected_task_id") || queryParams.get("task_id") || "").trim() || null;
+const initialSelectedTaskId = String(queryParams.get("selected_task_id") || queryParams.get("task_id") || "").trim();
+let selectedTaskId = initialSelectedTaskId || null;
 let activeTab = "conversation";
 let backendModels = new Map();
 let backendCommands = new Map();
@@ -619,7 +620,10 @@ function applyRunListData(payload = {}) {
     currentRunId = "";
     syncRunUrl();
   }
-  if (currentRunId) restoreEventCursorFromStorage();
+  if (currentRunId) {
+    if (!initialSelectedTaskId) selectedTaskId = readStoredSelectedTaskId() || selectedTaskId;
+    restoreEventCursorFromStorage();
+  }
 }
 
 function applyWorkspaceData(workspaces = []) {

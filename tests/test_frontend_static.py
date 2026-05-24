@@ -250,9 +250,12 @@ class FrontendStaticTests(unittest.TestCase):
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('queryParams.get("selected_task_id")', script)
+        self.assertIn("const initialSelectedTaskId", script)
+        self.assertIn("let selectedTaskId = initialSelectedTaskId || null;", script)
         self.assertIn("function selectedTaskStorageKey", script)
         self.assertIn("function readStoredSelectedTaskId", script)
         self.assertIn("function writeStoredSelectedTaskId", script)
+        self.assertIn("if (!initialSelectedTaskId) selectedTaskId = readStoredSelectedTaskId() || selectedTaskId;", script)
         self.assertIn("selectedTaskId = readStoredSelectedTaskId() || null;", script)
         self.assertIn("writeStoredSelectedTaskId(selectedTaskId);", script)
         self.assertIn("writeStoredSelectedTaskId(taskId);", script)
