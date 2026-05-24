@@ -13,6 +13,7 @@ import zipfile
 from aha_cli.backends.claude import apply_claude_environment
 from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
+from aha_cli.services.context_pressure import context_pressure
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
 from aha_cli.store.filesystem import (
@@ -139,6 +140,22 @@ def _backend_activity(root: Path, run_id: str, target: str, task_id: str | None 
     }
 
 
+def _latest_agent_usage(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        if event.get("type") != "agent_usage":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if data.get("target") != target:
+            continue
+        if task_id and data.get("task_id") != task_id:
+            continue
+        if task_id is None and data.get("task_id"):
+            continue
+        usage = data.get("usage")
+        return usage if isinstance(usage, dict) else {}
+    return {}
+
+
 def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
     if "--task-id" not in parts:
         return task_id is None
@@ -215,10 +232,13 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         managed = bool(state.get("managed")) if state and state.get("pid") == pid else False
     activity = _backend_activity(root, run_id, target, task_id)
     status = "busy" if running and activity["busy"] else "running" if running else "stopped"
+    backend_name = _backend_name_from_state(state, discovered_backend or "unknown")
+    resolved_model = state.get("resolved_model") or state.get("model")
+    latest_usage = _latest_agent_usage(root, run_id, target, task_id)
     return {
         "target": target,
         "task_id": task_id,
-        "backend": _backend_name_from_state(state, discovered_backend or "unknown"),
+        "backend": backend_name,
         "status": status,
         "pid": pid if running else None,
         "last_pid": state_pid if not running else None,
@@ -230,6 +250,13 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "model": state.get("model"),
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
+        "latest_usage": latest_usage,
+        "context_pressure": context_pressure(
+            backend_name,
+            str(resolved_model) if resolved_model else None,
+            latest_usage,
+            cfg=load_config(root),
+        ),
         **activity,
     }
 

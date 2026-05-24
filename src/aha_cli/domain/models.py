@@ -22,6 +22,7 @@ def default_config() -> dict:
         "default_parallel": 4,
         "default_mode": "research",
         "workspace_roots": [],
+        "context_windows": {},
         "codex": {
             "bin": "codex",
             "model": None,
