@@ -3100,16 +3100,19 @@ function renderPromptMetricsPopover(taskId) {
   const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
   const hasMetrics = Boolean(metrics.metricsEvent || metrics.usageEvent || metrics.contextPressure || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
   const sessionSize = Number(metrics.backendSession?.size_bytes);
-  const summary = metrics.backendSession?.exists && Number.isFinite(sessionSize)
+  const contextPercent = contextPressurePercent(metrics.contextPressure);
+  const contextSummary = contextPercent || (metrics.contextPressure ? "ctx ?" : "");
+  const sessionSummary = metrics.backendSession?.exists && Number.isFinite(sessionSize)
     ? formatMetricBytes(sessionSize)
     : metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
+  const summary = contextSummary || "ctx ?";
   const top = metrics.largest?.name || "no components";
   const key = promptMetricsKey(taskId);
   const open = openPromptMetricsKey === key ? " open" : "";
   const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", metrics.sessionStatus?.className || "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
   const sessionLabel = metrics.sessionStatus?.label || "none";
   const label = hasMetrics
-    ? `Session ${sessionLabel}: ${summary}; AHA input ${formatMetricNumber(metrics.totalChars)} chars, top ${top}`
+    ? `Context ${summary}; Session ${sessionLabel}: ${sessionSummary}; AHA input ${formatMetricNumber(metrics.totalChars)} chars, top ${top}`
     : "Prompt metrics unavailable";
   return `
     <details class="${classes}" data-turn-metrics-key="${escapeHtml(key)}"${open}>
