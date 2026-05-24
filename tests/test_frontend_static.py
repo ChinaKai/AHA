@@ -133,6 +133,16 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("actions:", script)
         self.assertIn("host update", script)
 
+    def test_command_menu_floats_above_composer(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertRegex(styles, r"\.workspace\s*\{[^}]*position: relative;")
+        self.assertRegex(styles, r"\.command-menu\s*\{[^}]*position: absolute;[^}]*bottom: 62px;")
+        self.assertRegex(styles, r"\.command-menu\s*\{[^}]*max-height: min\(42vh, 280px\);[^}]*overflow: auto;")
+        self.assertIn("box-shadow: 0 -12px 28px rgba(15, 23, 42, 0.14);", styles)
+        self.assertIn("bottom: calc(var(--mobile-composer-offset) + var(--mobile-keyboard-inset));", styles)
+
     def test_frontend_has_weixin_console_entry(self) -> None:
         root = Path(__file__).resolve().parents[1]
         html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")
