@@ -14,7 +14,7 @@ from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.backends.claude import run_claude_exec
 from aha_cli.cli import main
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
-from aha_cli.store.filesystem import add_agent, append_event, update_agent_config
+from aha_cli.store.filesystem import add_agent, append_event, read_json, session_path, update_agent_config, write_json
 
 
 class BackendRuntimeTests(unittest.TestCase):
@@ -106,7 +106,11 @@ class BackendRuntimeTests(unittest.TestCase):
     def test_backend_status_reports_context_pressure_from_latest_prompt_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with mock.patch("pathlib.Path.cwd", return_value=root):
+            home = root / "home"
+            with (
+                mock.patch("pathlib.Path.cwd", return_value=root),
+                mock.patch("pathlib.Path.home", return_value=home),
+            ):
                 self.run_cli("init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("plan", "Context pressure", "--agents", "1")
                 self.assertEqual(code, 0)
@@ -120,6 +124,25 @@ class BackendRuntimeTests(unittest.TestCase):
                     mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
                 ):
                     start_backend(root / ".aha", run_id, "main", task_id="task-001")
+                session_file = session_path(root / ".aha", run_id, "task-001", "main")
+                session = read_json(session_file)
+                session["backend_session_id"] = "codex-session-123"
+                write_json(session_file, session)
+                codex_session = home / ".codex" / "sessions" / "2026" / "05" / "24" / "rollout-codex-session-123.jsonl"
+                codex_session.parent.mkdir(parents=True)
+                codex_session.write_text(
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "token_count",
+                                "info": {"model_context_window": 258400},
+                            },
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
                 append_event(
                     root / ".aha",
                     run_id,
@@ -134,18 +157,20 @@ class BackendRuntimeTests(unittest.TestCase):
                         "task_id": "task-001",
                         "target": "main",
                         "source": "codex-chat",
-                        "total": {"tokens": 892500, "chars": 1234, "bytes": 1234, "lines": 12},
+                        "total": {"tokens": 219640, "chars": 1234, "bytes": 1234, "lines": 12},
                     },
                 )
 
                 status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
 
         self.assertEqual(status["latest_usage"]["input_tokens"], 99999999)
-        self.assertEqual(status["latest_prompt_metrics"]["total"]["tokens"], 892500)
-        self.assertEqual(status["context_pressure"]["context_window"], 1_050_000)
+        self.assertEqual(status["latest_prompt_metrics"]["total"]["tokens"], 219640)
+        self.assertEqual(status["runtime_context_window"], 258400)
+        self.assertEqual(status["context_pressure"]["context_window"], 258400)
+        self.assertEqual(status["context_pressure"]["context_window_source"], "runtime")
         self.assertEqual(status["context_pressure"]["ratio"], 0.85)
         self.assertEqual(status["context_pressure"]["level"], "high")
-        self.assertEqual(status["context_pressure"]["prompt_tokens"], 892500)
+        self.assertEqual(status["context_pressure"]["prompt_tokens"], 219640)
 
     def test_backend_status_keeps_context_pressure_unknown_without_prompt_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

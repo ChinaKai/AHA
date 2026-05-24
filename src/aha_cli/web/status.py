@@ -299,6 +299,7 @@ def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected
             agent["backend_process_pid"] = state.get("pid")
             agent["backend_process_last_reply_at"] = state.get("last_reply_at")
             agent["backend_resolved_model"] = state.get("resolved_model")
+            agent["backend_runtime_context_window"] = state.get("runtime_context_window")
             agent["backend_context_pressure"] = state.get("context_pressure")
             agent["backend_latest_usage"] = state.get("latest_usage")
             agent["backend_latest_prompt_metrics"] = state.get("latest_prompt_metrics")

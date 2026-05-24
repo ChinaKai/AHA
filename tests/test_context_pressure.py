@@ -12,12 +12,42 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["backend"], "codex")
         self.assertEqual(pressure["prompt_tokens"], 735000)
         self.assertEqual(pressure["prompt_chars"], 1234)
-        self.assertEqual(pressure["context_window"], 1_050_000)
+        self.assertEqual(pressure["context_window"], 258_000)
         self.assertEqual(pressure["context_window_source"], "table")
         self.assertEqual(pressure["pressure_source"], "prompt_metrics.tokens")
-        self.assertEqual(pressure["ratio"], 0.7)
-        self.assertEqual(pressure["percent"], 70.0)
-        self.assertEqual(pressure["level"], "watch")
+        self.assertEqual(pressure["ratio"], 2.848837)
+        self.assertEqual(pressure["percent"], 284.88)
+        self.assertEqual(pressure["level"], "high")
+
+    def test_runtime_context_window_takes_priority_over_table(self) -> None:
+        pressure = context_pressure(
+            "codex-chat",
+            "gpt-5.5",
+            {"total": {"tokens": 129200}},
+            runtime_context_window=258400,
+            environ={},
+        )
+
+        self.assertEqual(pressure["context_window"], 258400)
+        self.assertEqual(pressure["context_window_source"], "runtime")
+        self.assertEqual(pressure["ratio"], 0.5)
+        self.assertEqual(pressure["percent"], 50.0)
+        self.assertEqual(pressure["level"], "ok")
+
+    def test_config_still_overrides_runtime_context_window(self) -> None:
+        pressure = context_pressure(
+            "codex-chat",
+            "gpt-5.5",
+            {"total": {"tokens": 500}},
+            runtime_context_window=258400,
+            cfg={"context_windows": {"codex": {"gpt-5.5": 1000}}},
+            environ={},
+        )
+
+        self.assertEqual(pressure["context_window"], 1000)
+        self.assertEqual(pressure["context_window_source"], "config")
+        self.assertEqual(pressure["percent"], 50.0)
+        self.assertEqual(pressure["level"], "ok")
 
     def test_prompt_chars_without_tokens_keeps_pressure_unknown(self) -> None:
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"chars": 120000, "bytes": 130000}})
@@ -25,7 +55,7 @@ class ContextPressureTests(unittest.TestCase):
         self.assertIsNone(pressure["prompt_tokens"])
         self.assertEqual(pressure["prompt_chars"], 120000)
         self.assertEqual(pressure["prompt_bytes"], 130000)
-        self.assertEqual(pressure["context_window"], 1_050_000)
+        self.assertEqual(pressure["context_window"], 258_000)
         self.assertIsNone(pressure["ratio"])
         self.assertIsNone(pressure["percent"])
         self.assertEqual(pressure["pressure_source"], "prompt_metrics.chars")
@@ -46,6 +76,7 @@ class ContextPressureTests(unittest.TestCase):
         window, source = context_window_for_model(
             "codex",
             "gpt-5.5",
+            runtime_context_window=258400,
             cfg={"context_windows": {"codex": {"gpt-5.5": 123456}}},
             environ={"AHA_CONTEXT_WINDOW_CODEX_GPT_5_5": "234567"},
         )

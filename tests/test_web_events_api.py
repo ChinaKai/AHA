@@ -314,7 +314,7 @@ class WebEventsApiTests(unittest.TestCase):
                         "task_id": "task-001",
                         "target": "main",
                         "source": "codex-chat",
-                        "total": {"tokens": 735000, "chars": 1234, "bytes": 1234, "lines": 12},
+                        "total": {"tokens": 180600, "chars": 1234, "bytes": 1234, "lines": 12},
                         "components": {"status_snapshot": {"chars": 1000, "bytes": 1000, "lines": 1}},
                     },
                 )
@@ -339,10 +339,11 @@ class WebEventsApiTests(unittest.TestCase):
         metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
         self.assertEqual(metrics["data"]["total"]["chars"], 1234)
         pressure = body["backend_session"]["context_pressure"]
-        self.assertEqual(pressure["context_window"], 1050000)
+        self.assertEqual(pressure["context_window"], 258000)
+        self.assertEqual(pressure["context_window_source"], "table")
         self.assertEqual(pressure["level"], "watch")
         self.assertEqual(pressure["percent"], 70.0)
-        self.assertEqual(pressure["prompt_tokens"], 735000)
+        self.assertEqual(pressure["prompt_tokens"], 180600)
         self.assertEqual(body["backend_session"]["latest_usage"]["input_tokens"], 99999999)
 
     def test_conversation_events_api_filters_categories_server_side(self) -> None:

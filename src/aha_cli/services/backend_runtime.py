@@ -24,10 +24,12 @@ from aha_cli.store.filesystem import (
     read_json,
     require_plan,
     run_dir,
+    session_path,
     write_json,
 )
 
 BACKEND_ACTIVITY_SCAN_LIMIT = 5000
+CODEX_CONTEXT_WINDOW_SCAN_LIMIT = 1000
 PROCESS_AGENT_BACKENDS = {"codex", "claude"}
 
 
@@ -171,6 +173,48 @@ def _latest_agent_prompt_metrics(root: Path, run_id: str, target: str, task_id: 
     return {}
 
 
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(str(value).replace("_", "").replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _codex_session_jsonl_path(session_id: str) -> Path | None:
+    safe_id = str(session_id or "").strip()
+    if not safe_id:
+        return None
+    candidates = list((Path.home() / ".codex" / "sessions").glob(f"**/*{safe_id}.jsonl"))
+    return candidates[0] if candidates else None
+
+
+def _codex_runtime_context_window(root: Path, run_id: str, target: str, task_id: str | None = None) -> int | None:
+    session_file = session_path(root, run_id, task_id, target)
+    if not session_file.exists():
+        return None
+    try:
+        session = read_json(session_file)
+    except (OSError, ValueError):
+        return None
+    path = _codex_session_jsonl_path(str(session.get("backend_session_id") or ""))
+    if not path:
+        return None
+    scanned = 0
+    for _offset, record in iter_jsonl_reverse(path) or ():
+        scanned += 1
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        window = _positive_int(payload.get("model_context_window"))
+        if not window:
+            info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+            window = _positive_int(info.get("model_context_window"))
+        if window:
+            return window
+        if scanned >= CODEX_CONTEXT_WINDOW_SCAN_LIMIT:
+            break
+    return None
+
+
 def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
     if "--task-id" not in parts:
         return task_id is None
@@ -251,6 +295,11 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     resolved_model = state.get("resolved_model") or state.get("model")
     latest_usage = _latest_agent_usage(root, run_id, target, task_id)
     latest_prompt_metrics = _latest_agent_prompt_metrics(root, run_id, target, task_id)
+    runtime_context_window = (
+        _codex_runtime_context_window(root, run_id, target, task_id)
+        if str(backend_name).removesuffix("-chat") == "codex"
+        else None
+    )
     return {
         "target": target,
         "task_id": task_id,
@@ -266,12 +315,14 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "model": state.get("model"),
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
+        "runtime_context_window": runtime_context_window,
         "latest_usage": latest_usage,
         "latest_prompt_metrics": latest_prompt_metrics,
         "context_pressure": context_pressure(
             backend_name,
             str(resolved_model) if resolved_model else None,
             latest_prompt_metrics,
+            runtime_context_window=runtime_context_window,
             cfg=load_config(root),
         ),
         **activity,

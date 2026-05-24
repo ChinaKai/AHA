@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 
 DEFAULT_CONTEXT_WINDOWS = {
-    ("codex", "gpt-5.5"): 1_050_000,
+    ("codex", "gpt-5.5"): 258_000,
 }
 
 
@@ -40,6 +40,7 @@ def context_window_for_model(
     backend: str,
     model: str | None,
     *,
+    runtime_context_window: int | None = None,
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> tuple[int | None, str]:
@@ -58,6 +59,10 @@ def context_window_for_model(
     if from_config:
         return from_config, "config"
 
+    from_runtime = _positive_int(runtime_context_window)
+    if from_runtime:
+        return from_runtime, "runtime"
+
     from_table = DEFAULT_CONTEXT_WINDOWS.get((normalized_backend, normalized_model))
     if from_table:
         return from_table, "table"
@@ -69,6 +74,7 @@ def context_pressure(
     model: str | None,
     prompt_metrics: Mapping[str, object] | None,
     *,
+    runtime_context_window: int | None = None,
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict:
@@ -84,7 +90,13 @@ def context_pressure(
     prompt_chars = _positive_int(total_metrics.get("chars"))
     prompt_bytes = _positive_int(total_metrics.get("bytes"))
     prompt_lines = _positive_int(total_metrics.get("lines"))
-    context_window, source = context_window_for_model(backend, model, cfg=cfg, environ=environ)
+    context_window, source = context_window_for_model(
+        backend,
+        model,
+        runtime_context_window=runtime_context_window,
+        cfg=cfg,
+        environ=environ,
+    )
     ratio = (prompt_tokens / context_window) if prompt_tokens is not None and context_window else None
     level = "unknown"
     if ratio is not None:
