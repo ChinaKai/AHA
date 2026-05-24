@@ -2680,8 +2680,8 @@ function formatMetricCountChars(count, chars, noun) {
   return `${formatMetricNumber(safeCount)} ${noun} · ${formatMetricNumber(safeChars)} chars`;
 }
 
-const BACKEND_SESSION_LARGE_BYTES = 5 * 1024 * 1024;
-const BACKEND_SESSION_LARGE_CHARS = 1000 * 1000;
+const BACKEND_SESSION_WATCH_BYTES = 5 * 1024 * 1024;
+const BACKEND_SESSION_COMPACT_BYTES = 8 * 1024 * 1024;
 
 function backendSessionStatus(backendSession, overflow = false) {
   const analysis = backendSession?.analysis || {};
@@ -2694,19 +2694,21 @@ function backendSessionStatus(backendSession, overflow = false) {
   if (analysis.error) return { label: "error", className: "session-error" };
   if (overflow) return { label: "overflow", className: "session-overflow" };
   const sessionSize = Number(backendSession.size_bytes || 0);
-  const payloadChars = Number(analysis.total_payload_text_chars || 0);
-  const promptChars = Number(analysis.aha_prompt_total_chars || 0);
-  const toolChars = Number(analysis.tool_output_chars || 0);
-  const assistantChars = Number(analysis.assistant_message_chars || 0);
-  const isLarge = (
-    sessionSize >= BACKEND_SESSION_LARGE_BYTES ||
-    payloadChars >= BACKEND_SESSION_LARGE_CHARS ||
-    promptChars >= BACKEND_SESSION_LARGE_CHARS ||
-    toolChars + assistantChars >= BACKEND_SESSION_LARGE_CHARS
-  );
-  return isLarge
-    ? { label: "large", className: "session-large" }
-    : { label: "active", className: "session-active" };
+  if (sessionSize >= BACKEND_SESSION_COMPACT_BYTES) return { label: "large", className: "session-large" };
+  if (sessionSize >= BACKEND_SESSION_WATCH_BYTES) return { label: "watch", className: "session-watch" };
+  return { label: "ok", className: "session-ok" };
+}
+
+function compactResetAdvice(sessionStatus) {
+  const level = sessionStatus?.label || "none";
+  if (level === "large" || level === "overflow") return "Compact reset recommended";
+  if (level === "watch") return "Watch session size";
+  if (level === "compacting" || level === "restarting" || level === "checking") return "Compact reset in progress";
+  if (level === "done") return "Compact reset complete";
+  if (level === "error") return "Check session file";
+  if (level === "missing") return "Session file missing";
+  if (level === "none") return "No backend session";
+  return "No reset needed";
 }
 
 function metricMapRows(counts, chars = null) {
@@ -2970,10 +2972,9 @@ function renderPromptMetricsPanel(taskId) {
   const sessionPromptMode = sessionAnalysis.latest_prompt_mode || data.prompt_mode || "";
   const sessionHistory = Array.isArray(backendSession?.history) ? backendSession.history : [];
   const compactSummary = backendSession?.compact_summary || null;
-  const sessionSummary = backendSession?.exists
-    ? sessionPromptCount
-      ? `${formatMetricCompact(sessionPromptChars)} AHA prompt`
-      : "no AHA prompt"
+  const compactAdviceText = compactResetAdvice(displayedSessionStatus);
+  const sessionSummary = backendSession?.exists && Number.isFinite(sessionSize)
+    ? formatMetricBytes(sessionSize)
     : backendSession?.id
       ? "session missing"
       : sessionHistory.length
@@ -2982,13 +2983,10 @@ function renderPromptMetricsPanel(taskId) {
   const sessionParts = backendSession?.exists
     ? [
         Number.isFinite(sessionSize) ? `file ${formatMetricBytes(sessionSize)}` : "",
-        sessionLineCount ? `${formatMetricNumber(sessionLineCount)} lines` : "",
-        formatMetricCountChars(sessionFullCount, sessionFullChars, "full"),
-        formatMetricCountChars(sessionDeltaCount, sessionDeltaChars, "delta"),
-        `mirrors ${formatMetricNumber(sessionMirrorChars)} chars`,
-        `tools ${formatMetricNumber(sessionToolChars)} chars`,
-        sessionPromptMode ? `latest ${sessionPromptMode}` : "",
-        sessionAnalysis.parse_errors ? `${formatMetricNumber(sessionAnalysis.parse_errors)} parse errors` : ""
+        compactAdviceText,
+        contextSummary,
+        usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} usage input` : "",
+        sessionPromptMode ? `latest ${sessionPromptMode}` : ""
       ].filter(Boolean)
     : [
         backendSession?.id ? "jsonl not found" : "no current session",
@@ -2996,7 +2994,7 @@ function renderPromptMetricsPanel(taskId) {
         compactSummary?.id ? `summary ${compactSummary.id}` : ""
       ].filter(Boolean);
   const sessionActionButton = backendSession?.id
-    ? `<button type="button" data-session-action="compact-reset"${compactState ? " disabled" : ""}>${escapeHtml(compactState?.buttonLabel || "Compact")}</button>`
+    ? `<button type="button" class="compact-reset-primary" data-session-action="compact-reset"${compactState ? " disabled" : ""}>${escapeHtml(compactState?.buttonLabel || "Compact & Reset")}</button>`
     : "";
   const ahaParts = [
     `${formatMetricNumber(totalChars)} chars`,
@@ -3022,57 +3020,13 @@ function renderPromptMetricsPanel(taskId) {
     : usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `
-    <section class="prompt-metrics ${overflow ? "has-overflow" : ""}">
-      <div class="prompt-metrics-section aha-metrics-section">
-        <div class="prompt-metrics-head">
-          <div>
-            <span>AHA Input</span>
-            <strong>${escapeHtml(ahaParts[0] || "0 chars")}</strong>
-            <code>${escapeHtml(topLabel)}</code>
-          </div>
-          <div class="prompt-metrics-head-actions">
-            <span class="status ${ahaInputStatus.className}">${escapeHtml(ahaInputStatus.label)}</span>
-          </div>
-        </div>
-        <div class="prompt-metric-kpis">
-          ${ahaParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
-        </div>
-        <div class="prompt-component-bars">
-          ${rows.map(row => `
-            <div class="prompt-component-row">
-              <span>${escapeHtml(row.name)}</span>
-              <div class="prompt-component-track" aria-hidden="true">
-                <i style="width: ${row.percent.toFixed(2)}%"></i>
-              </div>
-              <code>${escapeHtml(formatMetricNumber(row.chars))}</code>
-            </div>
-          `).join("")}
-        </div>
-        ${renderAhaInputBreakdown(data, rows)}
-      </div>
-      <div class="prompt-metrics-section backend-metrics-section">
-        <div class="prompt-metrics-head">
-          <div>
-            <span>Backend Usage</span>
-            <strong>${escapeHtml(backendSummary)}</strong>
-            <code>${escapeHtml(source || "waiting for backend usage")}</code>
-          </div>
-          <div class="prompt-metrics-head-actions">
-            <span class="status ${usageStatus.className}">${escapeHtml(usageStatus.label)}</span>
-            <span class="status ${contextStatus.className}">${escapeHtml(`ctx ${contextStatus.label}`)}</span>
-          </div>
-        </div>
-        <div class="prompt-metric-kpis">
-          ${(backendParts.length ? backendParts : [`usage ${usageStatus.label}`]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
-        </div>
-        ${renderUsageBreakdown(usage, usageStatus, source, contextPressure)}
-      </div>
-      <div class="prompt-metrics-section session-metrics-section">
+    <section class="prompt-metrics session-compact-metrics ${overflow ? "has-overflow" : ""}">
+      <div class="prompt-metrics-section session-metrics-section session-compact-summary">
         <div class="prompt-metrics-head">
           <div>
             <span>Backend Session</span>
             <strong>${escapeHtml(sessionSummary)}</strong>
-            <code>${escapeHtml(sessionLabel || "waiting for backend session")}</code>
+            <code>${escapeHtml(sessionLabel || compactAdviceText || "waiting for backend session")}</code>
           </div>
           <div class="prompt-metrics-head-actions">
             <span class="status ${displayedSessionStatus.className}">${escapeHtml(displayedSessionStatus.label)}</span>
@@ -3080,10 +3034,58 @@ function renderPromptMetricsPanel(taskId) {
           </div>
         </div>
         <div class="prompt-metric-kpis">
-          ${sessionParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+          ${(sessionParts.length ? sessionParts : [compactAdviceText]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
         </div>
-        ${backendSession?.exists ? renderSessionBreakdown(sessionAnalysis) : ""}
       </div>
+      <details class="metrics-breakdown compact-metrics-details" data-metrics-breakdown="compact">
+        <summary>Metrics details</summary>
+        <div class="compact-metrics-detail-grid">
+          <div class="session-breakdown-group">
+            <strong>AHA Input</strong>
+            <div class="prompt-metric-kpis">
+              ${ahaParts.map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+            </div>
+            <div class="prompt-component-bars">
+              ${rows.map(row => `
+                <div class="prompt-component-row">
+                  <span>${escapeHtml(row.name)}</span>
+                  <div class="prompt-component-track" aria-hidden="true">
+                    <i style="width: ${row.percent.toFixed(2)}%"></i>
+                  </div>
+                  <code>${escapeHtml(formatMetricNumber(row.chars))}</code>
+                </div>
+              `).join("")}
+            </div>
+            ${renderAhaInputBreakdown(data, rows)}
+          </div>
+          <div class="session-breakdown-group">
+            <strong>Backend Usage</strong>
+            <div class="prompt-metric-kpis">
+              ${(backendParts.length ? backendParts : [`usage ${usageStatus.label}`]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+            </div>
+            <div class="prompt-metric-kpis">
+              <code>${escapeHtml(backendSummary)}</code>
+              <code>${escapeHtml(source || "waiting for backend usage")}</code>
+              <code>${escapeHtml(`ctx ${contextStatus.label}`)}</code>
+            </div>
+            ${renderUsageBreakdown(usage, usageStatus, source, contextPressure)}
+          </div>
+          <div class="session-breakdown-group">
+            <strong>Backend Session</strong>
+            <div class="prompt-metric-kpis">
+              ${[
+                sessionLineCount ? `${formatMetricNumber(sessionLineCount)} lines` : "",
+                formatMetricCountChars(sessionFullCount, sessionFullChars, "full"),
+                formatMetricCountChars(sessionDeltaCount, sessionDeltaChars, "delta"),
+                `mirrors ${formatMetricNumber(sessionMirrorChars)} chars`,
+                `tools ${formatMetricNumber(sessionToolChars)} chars`,
+                sessionAnalysis.parse_errors ? `${formatMetricNumber(sessionAnalysis.parse_errors)} parse errors` : ""
+              ].filter(Boolean).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+            </div>
+            ${backendSession?.exists ? renderSessionBreakdown(sessionAnalysis) : ""}
+          </div>
+        </div>
+      </details>
     </section>
   `;
 }
@@ -3092,14 +3094,17 @@ function renderPromptMetricsPopover(taskId) {
   const metrics = promptMetricsState(taskId);
   const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
   const hasMetrics = Boolean(metrics.metricsEvent || metrics.usageEvent || metrics.contextPressure || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
-  const summary = metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
+  const sessionSize = Number(metrics.backendSession?.size_bytes);
+  const summary = metrics.backendSession?.exists && Number.isFinite(sessionSize)
+    ? formatMetricBytes(sessionSize)
+    : metrics.metricsEvent ? formatMetricCompact(metrics.totalChars) : "--";
   const top = metrics.largest?.name || "no components";
   const key = promptMetricsKey(taskId);
   const open = openPromptMetricsKey === key ? " open" : "";
   const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", metrics.sessionStatus?.className || "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
   const sessionLabel = metrics.sessionStatus?.label || "none";
   const label = hasMetrics
-    ? `AHA input: ${formatMetricNumber(metrics.totalChars)} chars, top ${top}; session ${sessionLabel}`
+    ? `Session ${sessionLabel}: ${summary}; AHA input ${formatMetricNumber(metrics.totalChars)} chars, top ${top}`
     : "Prompt metrics unavailable";
   return `
     <details class="${classes}" data-turn-metrics-key="${escapeHtml(key)}"${open}>
