@@ -30,6 +30,7 @@ def write_task_result(
     content: str,
     policy: str = "finalize",
     *,
+    final_context: dict | None = None,
     now_func: Callable[[], str] = utc_now,
     append_event_func: Callable[[Path, str, str, dict], dict] = default_append_event,
     render_overview_func: Callable[..., object] | None = None,
@@ -45,6 +46,8 @@ def write_task_result(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
         meta = {"task_id": task_id, "policy": policy, "updated_at": now}
+        if final_context:
+            meta["final_context"] = final_context
         if policy == "finalize":
             round_record = ensure_task_round_record(root, run_id, task, now_func=now_func)
             round_id = str(round_record["round_id"])

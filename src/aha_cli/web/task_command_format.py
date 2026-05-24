@@ -78,8 +78,12 @@ def format_task_journal_for_prompt(rounds: list[dict]) -> str:
     lines = ["Task journal (chronological ordered list):"]
     for index, item in enumerate(rounds[-50:], start=1):
         lines.append(f"{index}. {item.get('summary')}")
+        if item.get("journal_id"):
+            lines.append(f"   - journal_id: {item.get('journal_id')}")
         lines.append(f"   - round_id: {item.get('round_id')}")
         lines.append(f"   - trigger: {item.get('trigger')}")
+        if item.get("at"):
+            lines.append(f"   - at: {item.get('at')}")
         changed_files = item.get("changed_files") or []
         verification = item.get("verification") or []
         risks = item.get("risks") or []
@@ -92,17 +96,36 @@ def format_task_journal_for_prompt(rounds: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None) -> str:
+def format_finalization_context_for_prompt(context: dict | None) -> str:
+    context = context or {}
+    journal_ids = context.get("journal_ids") if isinstance(context.get("journal_ids"), list) else []
+    round_ids = context.get("round_ids") if isinstance(context.get("round_ids"), list) else []
+    return "\n".join(
+        [
+            "Final source range:",
+            f"- source: {context.get('source') or 'task_journal'}",
+            f"- from: {context.get('from_at') or '-'}",
+            f"- to: {context.get('to_at') or '-'}",
+            f"- journal_count: {context.get('journal_count', len(journal_ids))}",
+            f"- journal_ids: {', '.join(str(item) for item in journal_ids) if journal_ids else '-'}",
+            f"- round_ids: {', '.join(str(item) for item in round_ids) if round_ids else '-'}",
+        ]
+    )
+
+
+def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None, final_context: dict | None = None) -> str:
     return render_prompt_template(
         "finalization.md",
         task_id=task_id,
         title=title,
+        final_context=format_finalization_context_for_prompt(final_context),
         task_journal=format_task_journal_for_prompt(rounds or []),
     )
 
 
 __all__ = [
     "finalization_prompt",
+    "format_finalization_context_for_prompt",
     "format_agent_command",
     "format_aha_command",
     "format_task_journal_for_prompt",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -94,6 +95,14 @@ class FinalizationFlowTests(unittest.TestCase):
                     role="main",
                     result_policy="finalize",
                     original_command="/aha final",
+                    final_context={
+                        "source": "task_journal",
+                        "from_at": "2026-01-01T00:00:00+00:00",
+                        "to_at": "2026-01-01T00:01:00+00:00",
+                        "journal_count": 1,
+                        "journal_ids": ["journal-001"],
+                        "round_ids": ["round-001"],
+                    },
                 )
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "new final", None)):
@@ -101,6 +110,10 @@ class FinalizationFlowTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertIn("main -> aha: new final", output)
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["result"].strip(), "new final")
+                final_snapshot = task_final_snapshot(root, run_id, "task-001")
+                final_meta_path = run_dir(root, run_id) / final_snapshot["finals"][-1]["final_meta_path"]
+                final_meta = json.loads(final_meta_path.read_text(encoding="utf-8"))
+                self.assertEqual(final_meta["final_context"]["journal_ids"], ["journal-001"])
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "completed")
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["exit_code"], 0)
 
@@ -371,6 +384,7 @@ class FinalizationFlowTests(unittest.TestCase):
         self.assertIn("完成小修复", prompt)
         self.assertIn("Use the Task journal as the primary source", prompt)
         self.assertIn("chronological ordered list", prompt)
+        self.assertIn("Final source range:", prompt)
 
     def test_aha_checkpoint_records_task_round(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -101,6 +101,23 @@ def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> d
     return backend
 
 
+def finalization_context_for_task(task: dict, rounds: list[dict], requested_at: str) -> dict:
+    journal_ids = [str(item.get("journal_id")) for item in rounds if item.get("journal_id")]
+    round_ids: list[str] = []
+    for item in rounds:
+        round_id = str(item.get("round_id") or "")
+        if round_id and round_id not in round_ids:
+            round_ids.append(round_id)
+    return {
+        "source": "task_journal",
+        "from_at": task.get("created_at") or task.get("started_at") or "",
+        "to_at": requested_at,
+        "journal_count": len(rounds),
+        "journal_ids": journal_ids,
+        "round_ids": round_ids,
+    }
+
+
 def request_task_finalization(root: Path, run_id: str, task_id: str | None, command: str) -> str:
     if not task_id:
         return "No task is selected."
@@ -110,14 +127,16 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
         return f"Task not found: {task_id}"
     task = detail["task"]
     rounds = list_task_rounds(root, run_id, task_id)
-    mark_task_coordination(root, run_id, task_id, final_summary_requested_at=utc_now(), final_summary_completed_at="")
+    requested_at = utc_now()
+    final_context = finalization_context_for_task(task, rounds, requested_at)
+    mark_task_coordination(root, run_id, task_id, final_summary_requested_at=requested_at, final_summary_completed_at="")
     if task.get("status") not in TERMINAL_TASK_STATUSES:
         set_task_status(root, run_id, task_id, "running")
     append_message(
         root,
         run_id,
         "main",
-        finalization_prompt(task_id, str(task.get("title", "")), rounds),
+        finalization_prompt(task_id, str(task.get("title", "")), rounds, final_context),
         sender="aha",
         task_id=task_id,
         role="main",
@@ -126,8 +145,14 @@ def request_task_finalization(root: Path, run_id: str, task_id: str | None, comm
         command_namespace="aha",
         original_command=command,
         result_policy="finalize",
+        final_context=final_context,
     )
-    append_event(root, run_id, "task_final_requested", {"task_id": task_id, "target": "main", "policy": "finalize"})
+    append_event(
+        root,
+        run_id,
+        "task_final_requested",
+        {"task_id": task_id, "target": "main", "policy": "finalize", "journal_count": len(rounds), "requested_at": requested_at},
+    )
     return f"Finalization requested for {task_id}. Task-main will write the Final when it finishes."
 
 

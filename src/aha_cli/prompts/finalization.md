@@ -4,6 +4,8 @@ Task:
 - id: $task_id
 - title: $title
 
+$final_context
+
 $task_journal
 
 Generate or update the task Final now.
@@ -11,6 +13,7 @@ Generate or update the task Final now.
 Requirements:
 - Return concise Markdown only.
 - Use the Task journal as the primary source when it has entries.
+- Summarize only the Final source range above.
 - Preserve meaningful task rounds under `## 任务轮次` as a chronological ordered list (`1.`, `2.`, ...).
 - For each round, include result plus verification, files, notes, or risks when available.
 - Summarize the stable outcome of this task, not the whole noisy chat transcript.

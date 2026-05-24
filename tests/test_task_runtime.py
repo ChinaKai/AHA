@@ -76,6 +76,10 @@ class TaskRuntimeTests(unittest.TestCase):
         start.assert_called_once()
         self.assertEqual(messages[-1]["result_policy"], "finalize")
         self.assertEqual(messages[-1]["original_command"], "/aha final")
+        self.assertEqual(messages[-1]["final_context"]["source"], "task_journal")
+        self.assertEqual(messages[-1]["final_context"]["journal_count"], 0)
+        self.assertEqual(messages[-1]["final_context"]["to_at"], detail["task"]["coordination"]["final_summary_requested_at"])
+        self.assertIn("Final source range:", messages[-1]["message"])
         self.assertEqual(detail["task"]["status"], "running")
         self.assertTrue(detail["task"]["coordination"]["final_summary_requested_at"])
 

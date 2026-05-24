@@ -416,7 +416,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     if manages_task_status:
                         final_status = status_from_agent_result(exit_code, reply)
                         if writes_task_final and agent_id == "main":
-                            write_task_result(root, run_id, item_task_id, reply.strip())
+                            final_context = item.get("final_context") if isinstance(item.get("final_context"), dict) else None
+                            write_task_result(root, run_id, item_task_id, reply.strip(), final_context=final_context)
                             mark_task_coordination(root, run_id, item_task_id, final_summary_completed_at=utc_now())
                             set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                             set_task_status(root, run_id, item_task_id, final_status, exit_code)

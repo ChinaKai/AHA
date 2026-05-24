@@ -86,6 +86,8 @@ class TaskCommandFormatTests(unittest.TestCase):
         journal = format_task_journal_for_prompt(
             [
                 {
+                    "journal_id": "journal-001",
+                    "at": "2026-01-01T00:00:00+00:00",
                     "round_id": "round-001",
                     "trigger": "main_turn",
                     "summary": "完成小修复",
@@ -100,10 +102,14 @@ class TaskCommandFormatTests(unittest.TestCase):
 
         self.assertIn("Task journal (chronological ordered list):", journal)
         self.assertIn("1. 完成小修复", journal)
+        self.assertIn("journal_id: journal-001", journal)
+        self.assertIn("at: 2026-01-01T00:00:00+00:00", journal)
         self.assertIn("files: src/app.py", journal)
         self.assertIn("verification: unit tests", journal)
         self.assertIn("risks: manual smoke pending", journal)
+        self.assertIn("Final source range:", prompt)
         self.assertIn("Use the Task journal as the primary source", prompt)
+        self.assertIn("Summarize only the Final source range above", prompt)
         self.assertIn("完成小修复", prompt)
         self.assertIn("1. (empty)", empty_journal)
 

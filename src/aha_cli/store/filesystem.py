@@ -184,6 +184,7 @@ def append_message(
     agent_id: str | None = None,
     display_sender: str | None = None,
     display_target: str | None = None,
+    final_context: dict | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -216,6 +217,8 @@ def append_message(
         payload["display_sender"] = display_sender
     if display_target:
         payload["display_target"] = display_target
+    if final_context:
+        payload["final_context"] = final_context
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)
@@ -765,13 +768,21 @@ def set_task_status(
     )
 
 
-def write_task_result(root: Path, run_id: str, task_id: str, content: str, policy: str = "finalize") -> Path:
+def write_task_result(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    content: str,
+    policy: str = "finalize",
+    final_context: dict | None = None,
+) -> Path:
     return _write_task_result(
         root,
         run_id,
         task_id,
         content,
         policy,
+        final_context=final_context,
         now_func=utc_now,
         append_event_func=append_event,
         render_overview_func=render_task_overview_result_if_needed,
