@@ -195,6 +195,10 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(".weixin-notifications", styles)
         self.assertIn(".weixin-received", styles)
         self.assertIn(".weixin-received-list", styles)
+        self.assertIn(".weixin-received-meta span", styles)
+        self.assertIn(".weixin-received-meta time", styles)
+        self.assertIn("overflow-wrap: anywhere;", styles)
+        self.assertIn("min-width: 0;", styles)
         self.assertIn(".weixin-qr", styles)
         self.assertIn(".weixin-test", styles)
 

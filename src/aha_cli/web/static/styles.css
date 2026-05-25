@@ -273,12 +273,24 @@ header > div:first-child h1 {
   border-radius: 8px;
   background: #ffffff;
 }
-.weixin-received-head,
-.weixin-received-meta {
+.weixin-received-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+.weixin-received-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.weixin-received-meta span,
+.weixin-received-meta time {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.weixin-received-meta time {
+  color: #98a2b3;
 }
 .weixin-received-head strong {
   color: #344054;
