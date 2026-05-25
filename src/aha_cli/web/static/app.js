@@ -2955,8 +2955,17 @@ function renderPromptMetricsPanel(taskId) {
   const source = data.source || eventData(overflowEvent || {}).source || "backend";
   const usage = eventData(usageEvent || {}).usage || {};
   const contextStatus = contextPressureStatus(contextPressure);
-  const contextSummary = contextPressureSummary(contextPressure);
+  const contextPercent = contextPressurePercent(contextPressure);
+  const contextHeadline = contextPercent ? `${contextPercent} context` : "context unknown";
   const contextInputTokens = contextPressure?.input_tokens ?? contextPressure?.prompt_tokens;
+  const contextWindowTokens = contextPressure?.context_window;
+  const contextUsedTotalLabel = contextInputTokens != null && contextWindowTokens != null
+    ? `used ${formatMetricNumber(contextInputTokens)} / total ${formatMetricNumber(contextWindowTokens)} tokens`
+    : contextInputTokens != null
+      ? `used ${formatMetricNumber(contextInputTokens)} tokens`
+      : contextWindowTokens != null
+        ? `total ${formatMetricNumber(contextWindowTokens)} tokens`
+        : "";
   const sessionSize = Number(backendSession?.size_bytes);
   const sessionAnalysis = backendSession?.analysis || {};
   const sessionAhaCounts = sessionAnalysis.aha_prompt_counts || {};
@@ -2973,16 +2982,15 @@ function renderPromptMetricsPanel(taskId) {
   const compactAdviceText = compactResetAdvice(displayedSessionStatus);
   const contextLabel = contextPressure
     ? [
+        contextUsedTotalLabel,
         contextPressure.model ? `model ${contextPressure.model}` : "",
-        contextInputTokens != null ? `input ${formatMetricNumber(contextInputTokens)}` : "",
-        contextPressure.context_window != null ? `window ${formatMetricNumber(contextPressure.context_window)}` : "",
         contextPressure.context_window_source ? `window source ${contextPressure.context_window_source}` : ""
       ].filter(Boolean).join(" · ")
     : "waiting for context pressure";
   const contextParts = [
     `level ${contextStatus.label}`,
-    contextInputTokens != null ? `${formatMetricNumber(contextInputTokens)} input tokens` : "",
-    contextPressure?.context_window != null ? `${formatMetricNumber(contextPressure.context_window)} context window` : "",
+    contextInputTokens != null ? `used ${formatMetricNumber(contextInputTokens)} tokens` : "",
+    contextWindowTokens != null ? `total window ${formatMetricNumber(contextWindowTokens)} tokens` : "",
     contextPressure?.pressure_source ? `source ${contextPressure.pressure_source}` : "",
     backendSession?.exists && Number.isFinite(sessionSize) ? `session ${formatMetricBytes(sessionSize)}` : "",
     compactAdviceText
@@ -3004,7 +3012,7 @@ function renderPromptMetricsPanel(taskId) {
     usage.reasoning_output_tokens != null ? `reasoning ${formatMetricNumber(usage.reasoning_output_tokens)}` : "",
     usage.total_cost_usd != null ? `$${Number(usage.total_cost_usd || 0).toFixed(4)}` : "",
     usage.num_turns != null ? `${formatMetricNumber(usage.num_turns)} turns` : "",
-    contextSummary
+    contextPressureSummary(contextPressure)
   ].filter(Boolean);
   const backendParts = [
     ...usageParts,
@@ -3019,7 +3027,7 @@ function renderPromptMetricsPanel(taskId) {
         <div class="prompt-metrics-head">
           <div>
             <span>Context Pressure</span>
-            <strong>${escapeHtml(contextSummary)}</strong>
+            <strong>${escapeHtml(contextHeadline)}</strong>
             <code>${escapeHtml(contextLabel || "waiting for context pressure")}</code>
           </div>
           <div class="prompt-metrics-head-actions">

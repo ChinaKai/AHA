@@ -890,6 +890,11 @@ button, input, select, textarea { font: inherit; }
   font-size: 18px;
   line-height: 1.2;
 }
+.context-metrics-section .prompt-metrics-head > div:first-child > strong {
+  font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
 .prompt-metrics.empty-metrics code,
 .prompt-metrics-head > div:first-child > code,
 .prompt-metric-kpis code,
@@ -936,6 +941,10 @@ button, input, select, textarea { font: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.context-metrics-section .prompt-metrics-head > div:first-child > code {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .prompt-metric-kpis {
   display: flex;
