@@ -2959,13 +2959,13 @@ function renderPromptMetricsPanel(taskId) {
   const contextHeadline = contextPercent ? `${contextPercent} context` : "context unknown";
   const contextInputTokens = contextPressure?.input_tokens ?? contextPressure?.prompt_tokens;
   const contextWindowTokens = contextPressure?.context_window;
-  const contextUsedTotalLabel = contextInputTokens != null && contextWindowTokens != null
-    ? `used ${formatMetricNumber(contextInputTokens)} / total ${formatMetricNumber(contextWindowTokens)} tokens`
+  const contextWindowUsedLabel = contextInputTokens != null ? `window used ${formatMetricCompact(contextInputTokens)}` : "";
+  const contextWindowTotalLabel = contextWindowTokens != null ? `window total ${formatMetricCompact(contextWindowTokens)}` : "";
+  const contextWindowUsedTotalLabel = contextInputTokens != null && contextWindowTokens != null
+    ? `window used ${formatMetricCompact(contextInputTokens)} / total ${formatMetricCompact(contextWindowTokens)}`
     : contextInputTokens != null
-      ? `used ${formatMetricNumber(contextInputTokens)} tokens`
-      : contextWindowTokens != null
-        ? `total ${formatMetricNumber(contextWindowTokens)} tokens`
-        : "";
+      ? contextWindowUsedLabel
+      : contextWindowTotalLabel;
   const sessionSize = Number(backendSession?.size_bytes);
   const sessionAnalysis = backendSession?.analysis || {};
   const sessionAhaCounts = sessionAnalysis.aha_prompt_counts || {};
@@ -2982,15 +2982,15 @@ function renderPromptMetricsPanel(taskId) {
   const compactAdviceText = compactResetAdvice(displayedSessionStatus);
   const contextLabel = contextPressure
     ? [
-        contextUsedTotalLabel,
+        contextWindowUsedTotalLabel,
         contextPressure.model ? `model ${contextPressure.model}` : "",
         contextPressure.context_window_source ? `window source ${contextPressure.context_window_source}` : ""
       ].filter(Boolean).join(" · ")
     : "waiting for context pressure";
   const contextParts = [
     `level ${contextStatus.label}`,
-    contextInputTokens != null ? `used ${formatMetricNumber(contextInputTokens)} tokens` : "",
-    contextWindowTokens != null ? `total window ${formatMetricNumber(contextWindowTokens)} tokens` : "",
+    contextWindowUsedLabel,
+    contextWindowTotalLabel,
     contextPressure?.pressure_source ? `source ${contextPressure.pressure_source}` : "",
     backendSession?.exists && Number.isFinite(sessionSize) ? `session ${formatMetricBytes(sessionSize)}` : "",
     compactAdviceText
