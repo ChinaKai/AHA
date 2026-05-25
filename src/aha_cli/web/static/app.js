@@ -2956,12 +2956,8 @@ function renderPromptMetricsPanel(taskId) {
   const usage = eventData(usageEvent || {}).usage || {};
   const contextStatus = contextPressureStatus(contextPressure);
   const contextSummary = contextPressureSummary(contextPressure);
+  const contextInputTokens = contextPressure?.input_tokens ?? contextPressure?.prompt_tokens;
   const sessionSize = Number(backendSession?.size_bytes);
-  const sessionLabel = backendSession?.exists && Number.isFinite(sessionSize)
-    ? `${backendSession.backend || "backend"} jsonl · ${formatMetricBytes(sessionSize)}`
-    : backendSession?.id
-      ? `${backendSession.backend || "backend"} jsonl · missing`
-      : "";
   const sessionAnalysis = backendSession?.analysis || {};
   const sessionAhaCounts = sessionAnalysis.aha_prompt_counts || {};
   const sessionAhaChars = sessionAnalysis.aha_prompt_chars || {};
@@ -2974,30 +2970,23 @@ function renderPromptMetricsPanel(taskId) {
   const sessionMirrorChars = Number(sessionAnalysis.event_msg_prompt_mirror_total_chars || 0);
   const sessionToolChars = Number(sessionAnalysis.tool_output_chars || 0);
   const sessionLineCount = Number(sessionAnalysis.line_count || 0);
-  const sessionPromptMode = sessionAnalysis.latest_prompt_mode || data.prompt_mode || "";
-  const sessionHistory = Array.isArray(backendSession?.history) ? backendSession.history : [];
-  const compactSummary = backendSession?.compact_summary || null;
   const compactAdviceText = compactResetAdvice(displayedSessionStatus);
-  const sessionSummary = backendSession?.exists && Number.isFinite(sessionSize)
-    ? formatMetricBytes(sessionSize)
-    : backendSession?.id
-      ? "session missing"
-      : sessionHistory.length
-        ? `${formatMetricNumber(sessionHistory.length)} archived`
-        : "no session";
-  const sessionParts = backendSession?.exists
+  const contextLabel = contextPressure
     ? [
-        Number.isFinite(sessionSize) ? `file ${formatMetricBytes(sessionSize)}` : "",
-        compactAdviceText,
-        contextSummary,
-        usage.input_tokens != null ? `${formatMetricNumber(usage.input_tokens)} usage input` : "",
-        sessionPromptMode ? `latest ${sessionPromptMode}` : ""
-      ].filter(Boolean)
-    : [
-        backendSession?.id ? "jsonl not found" : "no current session",
-        sessionHistory.length ? `${formatMetricNumber(sessionHistory.length)} archived sessions` : "",
-        compactSummary?.id ? `summary ${compactSummary.id}` : ""
-      ].filter(Boolean);
+        contextPressure.model ? `model ${contextPressure.model}` : "",
+        contextInputTokens != null ? `input ${formatMetricNumber(contextInputTokens)}` : "",
+        contextPressure.context_window != null ? `window ${formatMetricNumber(contextPressure.context_window)}` : "",
+        contextPressure.context_window_source ? `window source ${contextPressure.context_window_source}` : ""
+      ].filter(Boolean).join(" · ")
+    : "waiting for context pressure";
+  const contextParts = [
+    `level ${contextStatus.label}`,
+    contextInputTokens != null ? `${formatMetricNumber(contextInputTokens)} input tokens` : "",
+    contextPressure?.context_window != null ? `${formatMetricNumber(contextPressure.context_window)} context window` : "",
+    contextPressure?.pressure_source ? `source ${contextPressure.pressure_source}` : "",
+    backendSession?.exists && Number.isFinite(sessionSize) ? `session ${formatMetricBytes(sessionSize)}` : "",
+    compactAdviceText
+  ].filter(Boolean);
   const sessionActionButton = backendSession?.id
     ? `<button type="button" class="compact-reset-primary" data-session-action="compact-reset"${compactState ? " disabled" : ""}>${escapeHtml(compactState?.buttonLabel || "Compact & Reset")}</button>`
     : "";
@@ -3026,20 +3015,20 @@ function renderPromptMetricsPanel(taskId) {
   const topLabel = largest ? `${largest.name} · ${formatMetricNumber(largest.chars)} chars` : "no components";
   return `
     <section class="prompt-metrics session-compact-metrics ${overflow ? "has-overflow" : ""}">
-      <div class="prompt-metrics-section session-metrics-section session-compact-summary">
+      <div class="prompt-metrics-section session-metrics-section context-metrics-section session-compact-summary">
         <div class="prompt-metrics-head">
           <div>
-            <span>Backend Session</span>
-            <strong>${escapeHtml(sessionSummary)}</strong>
-            <code>${escapeHtml(sessionLabel || compactAdviceText || "waiting for backend session")}</code>
+            <span>Context Pressure</span>
+            <strong>${escapeHtml(contextSummary)}</strong>
+            <code>${escapeHtml(contextLabel || "waiting for context pressure")}</code>
           </div>
           <div class="prompt-metrics-head-actions">
-            <span class="status ${displayedSessionStatus.className}">${escapeHtml(displayedSessionStatus.label)}</span>
+            <span class="status ${contextStatus.className}">${escapeHtml(contextStatus.label)}</span>
             ${sessionActionButton}
           </div>
         </div>
         <div class="prompt-metric-kpis">
-          ${(sessionParts.length ? sessionParts : [compactAdviceText]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+          ${(contextParts.length ? contextParts : ["context unknown"]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
         </div>
       </div>
       <details class="metrics-breakdown compact-metrics-details" data-metrics-breakdown="compact">

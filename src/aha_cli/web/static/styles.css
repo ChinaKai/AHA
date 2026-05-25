@@ -852,6 +852,10 @@ button, input, select, textarea { font: inherit; }
   border-left-color: #0f766e;
   background: #f8fffd;
 }
+.context-metrics-section {
+  border-left-color: #2563eb;
+  background: #f8fbff;
+}
 .session-compact-summary {
   border-left-width: 4px;
 }
