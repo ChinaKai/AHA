@@ -402,7 +402,35 @@ class CliCoreTests(unittest.TestCase):
         self.assertNotIn("AHA-Agent:", message)
         self.assertNotIn("AHA-Scope:", message)
         self.assertTrue(validate_commit_message("update stuff\n\nGenerated-by: AHA Codex GPT-5.5\n"))
-        self.assertTrue(validate_commit_message("fix(web): old metadata\n\nAHA-Task: task-001\nAHA-Agent: main\n"))
+        self.assertIn(
+            "commit body must include exactly one Generated-by trailer",
+            validate_commit_message("fix(web): missing generator\n"),
+        )
+        self.assertEqual(validate_commit_message("fix(web): alternate generator\n\nGenerated-by: AHA Codex GPT-5.4\n"), [])
+        self.assertIn(
+            "commit body Generated-by value must be exactly: AHA Codex GPT-5.5",
+            validate_commit_message(
+                "fix(web): wrong generator\n\nGenerated-by: AHA Codex GPT-5.4\n",
+                expected_generated_by="AHA Codex GPT-5.5",
+            ),
+        )
+        self.assertIn(
+            "commit body must include exactly one Generated-by trailer",
+            validate_commit_message(
+                "fix(web): duplicate generator\n\n"
+                "Generated-by: AHA Codex GPT-5.5\n"
+                "Generated-by: AHA Codex GPT-5.5\n"
+            ),
+        )
+        self.assertIn(
+            "commit body should not include AHA task/agent/scope trailers; keep that tracking in the AHA journal",
+            validate_commit_message(
+                "fix(web): old metadata\n\n"
+                "Generated-by: AHA Codex GPT-5.5\n"
+                "AHA-Task: task-001\n"
+                "AHA-Agent: main\n"
+            ),
+        )
 
         code, output = self.run_cli(
             "commit",
@@ -419,6 +447,19 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("Generated-by: AHA Codex GPT-5.5", output)
         self.assertNotIn("AHA-Task:", output)
         self.assertNotIn("AHA-Agent:", output)
+        with mock.patch.dict(os.environ, {"AHA_BACKEND": "codex", "AHA_MODEL": "gpt-5.4"}, clear=False):
+            code, dynamic_output = self.run_cli(
+                "commit",
+                "--type",
+                "fix",
+                "--scope",
+                "web",
+                "--summary",
+                "use task generator",
+                "--dry-run",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Generated-by: AHA Codex GPT-5.4", dynamic_output)
         code, legacy_output = self.run_cli(
             "commit",
             "--type",
@@ -444,8 +485,10 @@ class CliCoreTests(unittest.TestCase):
             message_file = Path(tmp) / "COMMIT_EDITMSG"
             message_file.write_text(message, encoding="utf-8")
             code, output = self.run_cli("commit-check", str(message_file))
-        self.assertEqual(code, 0)
+            self.assertEqual(code, 0)
+            expected_code, _ = self.run_cli("commit-check", "--generated-by", "AHA Codex GPT-5.4", str(message_file))
         self.assertIn("Commit message OK", output)
+        self.assertEqual(expected_code, 1)
 
     def test_task_dashboard_and_metadata_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -497,6 +540,16 @@ class CliCoreTests(unittest.TestCase):
             help_run = subprocess.run([str(artifact), "--help"], capture_output=True, text=True, timeout=10)
             self.assertEqual(help_run.returncode, 0, help_run.stderr)
             self.assertIn("Agent-help-agent", help_run.stdout)
+
+            bad_check = subprocess.run(
+                [str(artifact), "commit-check", "--generated-by", "AHA Codex GPT-5.5", "-"],
+                input="fix(web): wrong generator\n\nGenerated-by: AHA Codex GPT-5.4\n",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(bad_check.returncode, 1, bad_check.stderr)
+            self.assertIn("Generated-by value must be exactly", bad_check.stderr)
 
             aha_home = root / ".aha"
             workspace = root / "workspace"

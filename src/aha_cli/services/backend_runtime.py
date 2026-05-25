@@ -13,6 +13,7 @@ import zipfile
 from aha_cli.backends.claude import apply_claude_environment
 from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
+from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.context_pressure import context_pressure
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
@@ -517,7 +518,11 @@ def _backend_proxy_env(root: Path, run_id: str, target: str, task_id: str | None
     return proxy_env_for_agent(agent, task)
 
 
-def _backend_process_env(proxy_env: dict[str, str] | None = None, claude_config: dict | None = None) -> dict[str, str]:
+def _backend_process_env(
+    proxy_env: dict[str, str] | None = None,
+    claude_config: dict | None = None,
+    aha_env: dict[str, str] | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     pythonpath = env.get("PYTHONPATH", "")
     if pythonpath:
@@ -529,6 +534,8 @@ def _backend_process_env(proxy_env: dict[str, str] | None = None, claude_config:
     _add_user_backend_paths(env)
     apply_claude_environment(env, claude_config)
     apply_proxy_environment(env, proxy_env)
+    if aha_env:
+        env.update({key: value for key, value in aha_env.items() if value})
     return env
 
 
@@ -605,11 +612,21 @@ def start_backend(
         log_file = log_path.open("ab")
         proxy_env = _backend_proxy_env(root, run_id, target, task_id)
         claude_config = load_config(root).get("claude", {}) if backend == "claude" else None
+        aha_env = {
+            "AHA_ROOT": str(root),
+            "AHA_RUN_ID": run_id,
+            "AHA_AGENT_ID": target,
+            "AHA_BACKEND": backend,
+            "AHA_MODEL": resolved_model or "",
+            "AHA_GENERATED_BY": generated_by_for_backend_model(backend, resolved_model),
+        }
+        if task_id:
+            aha_env["AHA_TASK_ID"] = task_id
         try:
             process = subprocess.Popen(
                 command,
                 cwd=root,
-                env=_backend_process_env(proxy_env, claude_config),
+                env=_backend_process_env(proxy_env, claude_config, aha_env),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,

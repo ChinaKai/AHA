@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
+from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import proxy_env_for_agent
 from aha_cli.store.filesystem import append_event_to_file, ensure_session, load_config, save_session, task_snapshot
@@ -31,6 +32,10 @@ def run_claude_task(args) -> int:
     inbox_file = Path(os.environ.get("AHA_INBOX_FILE", ""))
     events_file = Path(os.environ["AHA_EVENTS_FILE"])
     permission_mode = args.permission_mode or claude_permission_mode(mode, args.sandbox)
+    os.environ["AHA_AGENT_ID"] = "main"
+    os.environ["AHA_BACKEND"] = "claude"
+    os.environ["AHA_MODEL"] = args.model or ""
+    os.environ["AHA_GENERATED_BY"] = generated_by_for_backend_model("claude", args.model)
     cfg = load_config(root)
     session = ensure_session(root, run_id, task_id, "main", "claude")
     task = task_snapshot(root, run_id, task_id)["task"]

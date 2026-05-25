@@ -17,7 +17,7 @@ from aha_cli.cli_parser import MAX_WATCH_EVENTS_LIMIT, build_parser as build_cli
 from aha_cli.domain.models import default_config
 from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
 from aha_cli.services.claude_runner import run_claude_task
-from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
+from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
@@ -510,7 +510,42 @@ def cmd_package(args: argparse.Namespace) -> int:
     raise SystemExit(f"Unknown package command: {args.package_cmd}")
 
 
+def _generated_by_from_task_context(root: Path, run_id: str, task_id: str, agent_id: str) -> str | None:
+    try:
+        detail = task_snapshot(root, run_id, task_id)
+    except (FileNotFoundError, KeyError, SystemExit):
+        return None
+    task = detail.get("task", {})
+    agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), {})
+    session = next((item for item in detail.get("sessions", []) if item.get("agent_id") == agent_id), {})
+    backend = session.get("backend") or agent.get("backend") or task.get("preferred_backend")
+    model = session.get("resolved_model") or session.get("model") or agent.get("model") or task.get("preferred_model")
+    if not backend:
+        return None
+    return generated_by_for_backend_model(str(backend), str(model) if model is not None else None)
+
+
+def _generated_by_from_runtime(args: argparse.Namespace) -> str | None:
+    explicit = str(getattr(args, "generated_by", None) or "").strip()
+    if explicit:
+        return explicit
+    env_generated_by = os.environ.get("AHA_GENERATED_BY", "").strip()
+    if env_generated_by:
+        return env_generated_by
+    env_backend = os.environ.get("AHA_BACKEND", "").strip()
+    if env_backend:
+        return generated_by_for_backend_model(env_backend, os.environ.get("AHA_MODEL"))
+    env_root = os.environ.get("AHA_ROOT", "").strip()
+    run_id = os.environ.get("AHA_RUN_ID", "").strip()
+    task_id = (str(getattr(args, "task_id", None) or "").strip() or os.environ.get("AHA_TASK_ID", "").strip())
+    agent_id = (str(getattr(args, "agent", None) or "").strip() or os.environ.get("AHA_AGENT_ID", "").strip() or "main")
+    if env_root and run_id and task_id:
+        return _generated_by_from_task_context(Path(env_root).expanduser().resolve(), run_id, task_id, agent_id)
+    return None
+
+
 def cmd_commit(args: argparse.Namespace) -> int:
+    generated_by = _generated_by_from_runtime(args) or DEFAULT_GENERATED_BY
     try:
         message = format_commit_message(
             args.type,
@@ -519,7 +554,7 @@ def cmd_commit(args: argparse.Namespace) -> int:
             args.agent,
             scope=args.scope,
             aha_scope=args.aha_scope,
-            generated_by=args.generated_by,
+            generated_by=generated_by,
         )
     except ValueError as exc:
         print(f"Commit message error: {exc}", file=sys.stderr)
@@ -553,7 +588,7 @@ def cmd_commit_check(args: argparse.Namespace) -> int:
         message = sys.stdin.read()
     else:
         message = Path(args.message_file).read_text(encoding="utf-8")
-    errors = validate_commit_message(message)
+    errors = validate_commit_message(message, expected_generated_by=_generated_by_from_runtime(args))
     if errors:
         for error in errors:
             print(f"commit message error: {error}", file=sys.stderr)

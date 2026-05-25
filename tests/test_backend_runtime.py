@@ -75,6 +75,13 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertIn("--home", command)
         self.assertEqual(command[command.index("--home") + 1], str(root / ".aha"))
         self.assertTrue(Path(env["PYTHONPATH"].split(os.pathsep)[0]).is_absolute())
+        self.assertEqual(env["AHA_ROOT"], str(root / ".aha"))
+        self.assertEqual(env["AHA_RUN_ID"], run_id)
+        self.assertEqual(env["AHA_TASK_ID"], "task-001")
+        self.assertEqual(env["AHA_AGENT_ID"], "main")
+        self.assertEqual(env["AHA_BACKEND"], "codex")
+        self.assertEqual(env["AHA_MODEL"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(env["AHA_GENERATED_BY"], "AHA Codex GPT-5.5")
 
     def test_start_codex_backend_resolves_default_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

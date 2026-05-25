@@ -395,7 +395,17 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                         f"- {round_item.get('round_id')} [{round_item.get('trigger')}] {round_item.get('summary')}"
                     )
                 journal_context = "\n".join(journal_lines)
-            commit_policy = commit_message_policy_prompt(task_id, target).rstrip()
+            commit_policy = commit_message_policy_prompt(
+                task_id,
+                target,
+                backend=(session or {}).get("backend") or (agent or {}).get("backend") or task.get("preferred_backend"),
+                model=(
+                    (session or {}).get("resolved_model")
+                    or (session or {}).get("model")
+                    or (agent or {}).get("model")
+                    or task.get("preferred_model")
+                ),
+            ).rstrip()
             visible_agents = agents_visible_to_prompt(detail["task"], target)
             components.update(
                 {

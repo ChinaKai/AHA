@@ -36,11 +36,14 @@ def build_onebin(
         staging = Path(tmp) / "app"
         staging.mkdir()
         shutil.copytree(package_dir, staging / "aha_cli", ignore=_ignore_build_artifacts)
+        (staging / "__main__.py").write_text(
+            "from aha_cli.cli import main\n\nraise SystemExit(main())\n",
+            encoding="utf-8",
+        )
         zipapp.create_archive(
             staging,
             target=target,
             interpreter=interpreter,
-            main="aha_cli.cli:main",
             compressed=compressed,
         )
 

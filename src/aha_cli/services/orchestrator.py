@@ -74,7 +74,12 @@ def task_assignment_prompt(task: dict) -> str:
         preferred_sub_backend=task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex",
         sandbox=task.get("preferred_sandbox") or "process default",
         approval=task.get("preferred_approval") or "process default",
-        commit_policy=commit_message_policy_prompt(str(task.get("id") or "<task-id>"), "<agent-id>").rstrip(),
+        commit_policy=commit_message_policy_prompt(
+            str(task.get("id") or "<task-id>"),
+            "<agent-id>",
+            backend=task.get("preferred_backend"),
+            model=task.get("preferred_model"),
+        ).rstrip(),
     )
 
 
