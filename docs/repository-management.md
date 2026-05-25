@@ -179,17 +179,14 @@ describe a code path changed in the same commit.
 
 ## Commit Policy
 
-Use `aha commit` with Conventional Commit metadata and AHA trailers:
+Use `aha commit` with a Conventional Commit subject and the AHA generator trailer:
 
 ```bash
 aha commit \
   --type refactor \
   --scope store \
   --summary "extract task snapshot views" \
-  --task-id task-043 \
-  --agent main \
-  --aha-scope store-snapshots \
   --add src/aha_cli/store
 ```
 
-Prefer one focused commit per ownership boundary.
+Task, agent, and scope tracking stays in the AHA journal instead of the Git commit body. Prefer one focused commit per ownership boundary.

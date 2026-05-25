@@ -274,7 +274,9 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("route it to that sub-agent with `route_to_agent`", assignment_prompt)
         self.assertIn("Never ask a sub-agent to commit files outside its assignment", assignment_prompt)
         self.assertIn("Commit message policy:", assignment_prompt)
-        self.assertIn("AHA-Task: task-001", assignment_prompt)
+        self.assertIn("Generated-by: AHA Codex GPT-5.5", assignment_prompt)
+        self.assertIn("Keep task, agent, and scope tracking in the AHA journal", assignment_prompt)
+        self.assertNotIn("AHA-Task: task-001", assignment_prompt)
         self.assertIn("return ONLY one JSON object", assignment_prompt)
         self.assertIn('"actions"', assignment_prompt)
         self.assertIn("Completed, stopped, failed, interrupted, or blocked", assignment_prompt)
@@ -312,8 +314,10 @@ class CliCoreTests(unittest.TestCase):
                 self.assertNotIn("Return a JSON action `route_to_agent`", main_prompt)
                 self.assertIn("route commit work to the sub-agent that owns the changed scope", main_prompt)
                 self.assertIn("Commit message policy:", main_prompt)
-                self.assertIn("AHA-Task: task-001", main_prompt)
-                self.assertIn("AHA-Agent: main", main_prompt)
+                self.assertIn("Generated-by: AHA Codex GPT-5.5", main_prompt)
+                self.assertIn("Keep task, agent, and scope tracking in the AHA journal", main_prompt)
+                self.assertNotIn("AHA-Task: task-001", main_prompt)
+                self.assertNotIn("AHA-Agent: main", main_prompt)
                 self.assertIn("aha commit --type <type>", main_prompt)
                 self.assertIn("UI routing changes", main_prompt)
                 self.assertIn("Completed, stopped, failed, interrupted, or blocked", main_prompt)
@@ -334,8 +338,9 @@ class CliCoreTests(unittest.TestCase):
 
                 self.assertIn("commit only files covered by your `assignment` / `created_reason`", sub_prompt)
                 self.assertIn("report back to `task-main`", sub_prompt)
-                self.assertIn("AHA-Task: task-001", sub_prompt)
-                self.assertIn("AHA-Agent: sub-001", sub_prompt)
+                self.assertIn("Generated-by: AHA Codex GPT-5.5", sub_prompt)
+                self.assertNotIn("AHA-Task: task-001", sub_prompt)
+                self.assertNotIn("AHA-Agent: sub-001", sub_prompt)
 
     def test_task_add_collaboration_modes_map_to_sub_agent_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,14 +393,16 @@ class CliCoreTests(unittest.TestCase):
         self.assertEqual(task["max_sub_agents"], 0)
 
     def test_commit_policy_formats_validates_and_prints_dry_run_messages(self) -> None:
-        message = format_commit_message("feat", "add lazy loading", "task-001", "main", scope="web", aha_scope="lazy-log")
+        message = format_commit_message("feat", "add lazy loading", scope="web")
 
         self.assertEqual(validate_commit_message(message), [])
         self.assertIn("feat(web): add lazy loading", message)
-        self.assertIn("AHA-Task: task-001", message)
-        self.assertIn("AHA-Agent: main", message)
-        self.assertIn("AHA-Scope: lazy-log", message)
-        self.assertTrue(validate_commit_message("update stuff\n\nAHA-Task: task-001\n"))
+        self.assertIn("Generated-by: AHA Codex GPT-5.5", message)
+        self.assertNotIn("AHA-Task:", message)
+        self.assertNotIn("AHA-Agent:", message)
+        self.assertNotIn("AHA-Scope:", message)
+        self.assertTrue(validate_commit_message("update stuff\n\nGenerated-by: AHA Codex GPT-5.5\n"))
+        self.assertTrue(validate_commit_message("fix(web): old metadata\n\nAHA-Task: task-001\nAHA-Agent: main\n"))
 
         code, output = self.run_cli(
             "commit",
@@ -405,6 +412,21 @@ class CliCoreTests(unittest.TestCase):
             "web",
             "--summary",
             "keep logs scroll stable",
+            "--dry-run",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("fix(web): keep logs scroll stable", output)
+        self.assertIn("Generated-by: AHA Codex GPT-5.5", output)
+        self.assertNotIn("AHA-Task:", output)
+        self.assertNotIn("AHA-Agent:", output)
+        code, legacy_output = self.run_cli(
+            "commit",
+            "--type",
+            "fix",
+            "--scope",
+            "web",
+            "--summary",
+            "accept legacy metadata flags",
             "--task-id",
             "task-005",
             "--agent",
@@ -414,9 +436,10 @@ class CliCoreTests(unittest.TestCase):
             "--dry-run",
         )
         self.assertEqual(code, 0)
-        self.assertIn("fix(web): keep logs scroll stable", output)
-        self.assertIn("AHA-Task: task-005", output)
-        self.assertIn("AHA-Agent: main", output)
+        self.assertIn("Generated-by: AHA Codex GPT-5.5", legacy_output)
+        self.assertNotIn("AHA-Task:", legacy_output)
+        self.assertNotIn("AHA-Agent:", legacy_output)
+        self.assertNotIn("AHA-Scope:", legacy_output)
         with tempfile.TemporaryDirectory() as tmp:
             message_file = Path(tmp) / "COMMIT_EDITMSG"
             message_file.write_text(message, encoding="utf-8")

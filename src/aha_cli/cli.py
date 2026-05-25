@@ -519,6 +519,7 @@ def cmd_commit(args: argparse.Namespace) -> int:
             args.agent,
             scope=args.scope,
             aha_scope=args.aha_scope,
+            generated_by=args.generated_by,
         )
     except ValueError as exc:
         print(f"Commit message error: {exc}", file=sys.stderr)

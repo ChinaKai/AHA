@@ -69,7 +69,7 @@ aha ui <run-id>
 aha run export <run-id> --output run.tar.gz --no-logs
 aha run import run.tar.gz --run-id restored-demo
 aha package onebin --output dist/aha
-aha commit --type feat --scope web --summary "add lazy loading" --task-id task-001 --agent main --aha-scope web-lazy-loading
+aha commit --type feat --scope web --summary "add lazy loading"
 aha commit-check .git/COMMIT_EDITMSG
 aha collect <run-id>
 aha merge <run-id>
@@ -408,26 +408,21 @@ main agent makes final decisions and merges output.
 
 ## Commit Message Policy
 
-AHA commits use a Conventional Commit subject plus AHA trailers:
+AHA commits use a Conventional Commit subject plus a compact generator trailer:
 
 ```text
 feat(web): add lazy loading for logs
 
-AHA-Task: task-005
-AHA-Agent: main
-AHA-Scope: complete-lazy-log-loading
+Generated-by: AHA Codex GPT-5.5
 ```
 
-Prefer `aha commit` over raw `git commit` so the metadata is generated consistently:
+Prefer `aha commit` over raw `git commit` so the message is generated consistently. Task, agent, and scope tracking stays in the AHA journal instead of the Git commit body:
 
 ```bash
 aha commit \
   --type feat \
   --scope web \
   --summary "add lazy loading for logs" \
-  --task-id task-005 \
-  --agent main \
-  --aha-scope complete-lazy-log-loading \
   --add README.md src/aha_cli
 ```
 

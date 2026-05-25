@@ -4,7 +4,7 @@ import argparse
 from collections.abc import Callable, Mapping
 
 from aha_cli.backends.registry import agent_backend_names, backend_names
-from aha_cli.services.commit_policy import CONVENTIONAL_TYPES
+from aha_cli.services.commit_policy import CONVENTIONAL_TYPES, DEFAULT_GENERATED_BY
 from aha_cli.services.prompt_templates import render_prompt_template
 
 WATCH_EVENTS_LIMIT = 500
@@ -163,9 +163,10 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     commit_p.add_argument("--type", choices=CONVENTIONAL_TYPES, required=True)
     commit_p.add_argument("--scope", default=None)
     commit_p.add_argument("--summary", required=True)
-    commit_p.add_argument("--task-id", required=True)
-    commit_p.add_argument("--agent", required=True)
-    commit_p.add_argument("--aha-scope", default=None)
+    commit_p.add_argument("--generated-by", default=DEFAULT_GENERATED_BY)
+    commit_p.add_argument("--task-id", default=None, help="Deprecated; task tracking stays in the AHA journal")
+    commit_p.add_argument("--agent", default=None, help="Deprecated; agent tracking stays in the AHA journal")
+    commit_p.add_argument("--aha-scope", default=None, help="Deprecated; scope tracking stays in the AHA journal")
     commit_p.add_argument("--add", nargs="+", action="append", default=[], help="Path(s) to stage before committing; repeatable")
     commit_p.add_argument("--dry-run", action="store_true", help="Print the generated commit message without committing")
     commit_p.set_defaults(func=handlers["commit"])
