@@ -33,8 +33,9 @@ AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_STUB_DECISION = "ask_user"
 COLLABORATION_GUIDANCE = {
     "auto": (
-        "Auto: prefer spawning sub-agents whenever the work has independent exploration, "
-        "implementation, or verification tracks. Stay solo only for simple or tightly coupled tasks."
+        "Auto: the agent owns the efficiency decision. Prefer spawning sub-agents when independent "
+        "exploration, implementation, or verification tracks reduce the critical path. Stay solo "
+        "for simple or tightly coupled tasks, and never split work just to use more agents."
     ),
     "solo": "Solo: do not spawn sub-agents. Handle the work directly as task-main.",
     "pair": (

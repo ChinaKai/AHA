@@ -23,7 +23,10 @@ Ownership and routing policy:
 - Do not claim a sub-agent exists, has started, or has been restored unless AHA created or reused it through a `spawn_sub` action and it appears in this task's agents list.
 - For task-main follow-ups, spend the first 60 seconds decomposing the request into independent exploration, implementation, and verification tracks.
 - If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
-- In auto mode, prefer `spawn_sub` whenever those tracks can move in parallel; stay solo only for simple or tightly coupled work.
+- In auto mode, optimize for end-to-end efficiency: prefer `spawn_sub` when independent tracks can move in parallel and reduce the critical path; stay solo for simple or tightly coupled work.
+- Do not split work just to use more agents. Spawn only when parallel work improves throughput after coordination and integration cost.
+- When the user explicitly asks for efficiency or to fully use AHA, raise your parallelism sensitivity but still apply the same efficiency test.
+- If you stay solo on a task with multiple plausible tracks, state the practical reason briefly in your user-facing response or internal task update.
 - `max_sub_agents` limits active sub-agents. Completed, stopped, failed, interrupted, or blocked `sub-*` slots may be reused instead of allocating a new id.
 - AHA does not infer whether two assignments are the same scope from natural language. Include a stable `scope_id` in `spawn_sub` only when intentionally continuing the same scope; omit it or change it for a fresh scope.
 - Reusing a terminal `sub-*` for a fresh scope resets its backend/session context. Reusing with the same explicit `scope_id` may preserve recovery context for continuation.
