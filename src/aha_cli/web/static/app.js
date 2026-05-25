@@ -5008,15 +5008,11 @@ function renderWeixinConsole() {
     <ol class="weixin-received-list">
       ${receivedMessages.map(message => {
         const text = String(message?.text || "").trim() || "(非文本消息)";
-        const from = String(message?.from_user_id || "").trim() || "unknown";
         const receivedAt = String(message?.received_at || "").trim();
         const time = receivedAt ? formatLocalTimestamp(receivedAt, receivedAt) : "";
         return `
           <li>
-            <div class="weixin-received-meta">
-              <span>${escapeHtml(from)}</span>
-              ${time ? `<time>${escapeHtml(time)}</time>` : ""}
-            </div>
+            ${time ? `<div class="weixin-received-meta"><time>${escapeHtml(time)}</time></div>` : ""}
             <p>${escapeHtml(text)}</p>
           </li>
         `;

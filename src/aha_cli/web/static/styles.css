@@ -284,7 +284,6 @@ header > div:first-child h1 {
   gap: 2px;
   min-width: 0;
 }
-.weixin-received-meta span,
 .weixin-received-meta time {
   min-width: 0;
   overflow-wrap: anywhere;
