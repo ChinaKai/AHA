@@ -115,6 +115,10 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("agent-section", styles)
         self.assertIn("supervision-agents", styles)
         self.assertIn("agent-card.host-agent", styles)
+        self.assertIn("overflow-x: hidden;", styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", styles)
+        self.assertIn(".agent-permissions select", styles)
+        self.assertIn("width: 100%;", styles)
         self.assertIn("timeline-card.from-supervision", styles)
 
     def test_frontend_renders_host_work_log_in_host_view(self) -> None:
