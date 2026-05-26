@@ -127,6 +127,10 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('const plainEnter = event.key === "Enter" && !event.shiftKey', script)
         self.assertIn("const plainEnterSubmits = plainEnter && !composerPlainEnterCreatesNewline();", script)
         self.assertIn("requestComposerSubmit();", script)
+        self.assertIn("function requestComposerSubmitFromPointer(event)", script)
+        self.assertIn("composerPointerSubmitUntil = Date.now() + 500;", script)
+        self.assertIn("if (composerSubmitInFlight) return;", script)
+        self.assertIn('sendFormEl.querySelector("button.send")?.addEventListener("pointerdown"', script)
         self.assertIn(".composer textarea#message", styles)
         self.assertIn("max-height: 160px;", styles)
 

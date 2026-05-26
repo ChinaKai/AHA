@@ -46,6 +46,8 @@ let taskContextEditingUntil = 0;
 let eventTailInitialized = false;
 let pendingMessageId = 0;
 let pendingSendInFlight = false;
+let composerSubmitInFlight = false;
+let composerPointerSubmitUntil = 0;
 let eventSocket = null;
 let eventSocketState = "idle";
 let eventSocketFailureCount = 0;
@@ -1523,6 +1525,17 @@ function requestComposerSubmit() {
   }
 }
 
+function requestComposerSubmitFromPointer(event) {
+  if (!messageEl.value.trim()) return false;
+  const pointerType = String(event.pointerType || "");
+  const touchLike = pointerType === "touch" || pointerType === "pen" || composerPlainEnterCreatesNewline();
+  if (!touchLike) return false;
+  event.preventDefault();
+  composerPointerSubmitUntil = Date.now() + 500;
+  requestComposerSubmit();
+  return true;
+}
+
 function syncMessageInputHeight() {
   if (!(messageEl instanceof HTMLTextAreaElement)) return;
   messageEl.style.height = "auto";
@@ -1682,7 +1695,14 @@ function initMobileSheets() {
 }
 
 function initMobileActionPanel() {
+  mobileActionsToggleEl?.addEventListener("pointerdown", event => {
+    requestComposerSubmitFromPointer(event);
+  });
   mobileActionsToggleEl?.addEventListener("click", event => {
+    if (Date.now() < composerPointerSubmitUntil) {
+      event.preventDefault();
+      return;
+    }
     if (messageEl.value.trim()) {
       event.preventDefault();
       requestComposerSubmit();
@@ -5559,9 +5579,11 @@ taskFormEl?.addEventListener("submit", async event => {
 
 sendFormEl.addEventListener("submit", async event => {
   event.preventDefault();
+  if (composerSubmitInFlight) return;
   const task = selectedTask();
   const message = messageEl.value.trim();
   if (!task || !message) return;
+  composerSubmitInFlight = true;
   const agentId = agentTargetEl.value || "main";
   const isAha = isAhaCommand(message);
   realtimeDebug("composer.submit", { task_id: task.id, target: agentId, is_aha: isAha, backend_active: selectedBackendActive() });
@@ -5592,7 +5614,13 @@ sendFormEl.addEventListener("submit", async event => {
   } catch (err) {
     realtimeDebug("composer.error", { error: err?.message || String(err) });
     alert(err.message || String(err));
+  } finally {
+    composerSubmitInFlight = false;
   }
+});
+
+sendFormEl.querySelector("button.send")?.addEventListener("pointerdown", event => {
+  requestComposerSubmitFromPointer(event);
 });
 
 messageEl.addEventListener("input", () => {
