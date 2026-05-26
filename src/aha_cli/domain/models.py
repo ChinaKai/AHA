@@ -22,6 +22,7 @@ def default_config() -> dict:
         "default_parallel": 4,
         "default_mode": "research",
         "workspace_roots": [],
+        "webgame_workspace": None,
         "context_windows": {},
         "codex": {
             "bin": "codex",

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from aha_cli.services.run_archive import RunArchiveError
 from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
+from aha_cli.web.game_routes import game_route_response
 from aha_cli.web.http_utils import http_response, json_response, read_http_request, static_response
 from aha_cli.web.run_api import ApiRunNotFound, require_api_run_id, workspace_options
 from aha_cli.web.run_routes import handle_run_workspace_route
@@ -69,6 +70,8 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
                 writer.write(static_response(static_name, method, headers))
         else:
             response = handle_run_workspace_route(root, run_id, method, path, query, headers, body)
+            if response is None:
+                response = game_route_response(root, run_id, method, path)
             if response is None:
                 response = system_route_response(root, run_id, method, path, query, body, headers)
             if response is None:

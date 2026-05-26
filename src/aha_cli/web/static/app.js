@@ -129,6 +129,8 @@ const runArchiveStateEl = document.getElementById("run-archive-state");
 const webRestartEl = document.getElementById("web-restart");
 const weixinConsoleEl = document.getElementById("weixin-console");
 const weixinConsolePopoverEl = document.getElementById("weixin-console-popover");
+const playConsoleEl = document.getElementById("play-console");
+const playConsolePopoverEl = document.getElementById("play-console-popover");
 const webRestartStateEl = document.getElementById("web-restart-state");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
@@ -209,7 +211,14 @@ const conversationFiltersEl = document.getElementById("conversation-filters");
 const commandMenuEl = document.getElementById("command-menu");
 let commandSelection = 0;
 let weixinConsoleOpen = false;
+let playConsoleOpen = false;
 let weixinPollTimer = null;
+const playConsoleState = {
+  loaded: false,
+  loading: false,
+  error: "",
+  games: []
+};
 const weixinState = {
   loaded: false,
   loading: false,
@@ -802,10 +811,14 @@ function renderSessionMenu() {
   if (runImportFileEl) runImportFileEl.disabled = runActionInFlight;
   if (webRestartEl) webRestartEl.disabled = webRestartInFlight || !hasRun;
   if (weixinConsoleEl) weixinConsoleEl.disabled = runActionInFlight || !hasRun;
+  if (playConsoleEl) playConsoleEl.disabled = runActionInFlight || !hasRun;
   if (!hasRun || runActionInFlight) {
     setWeixinConsoleOpen(false);
+    setPlayConsoleOpen(false);
   } else if (weixinConsoleOpen && weixinConsolePopoverEl) {
     renderWeixinConsolePopover();
+  } else if (playConsoleOpen && playConsolePopoverEl) {
+    renderPlayConsolePopover();
   }
   renderRunArchiveState();
   renderSessionSummary();
@@ -833,12 +846,16 @@ function setSessionMenu(open) {
   sessionMenuOpen = Boolean(open);
   sessionMenuEl?.classList.toggle("hidden", !sessionMenuOpen);
   sessionToggleEl?.setAttribute("aria-expanded", String(sessionMenuOpen));
-  if (!sessionMenuOpen) setWeixinConsoleOpen(false);
+  if (!sessionMenuOpen) {
+    setWeixinConsoleOpen(false);
+    setPlayConsoleOpen(false);
+  }
 }
 
 function setWeixinConsoleOpen(open) {
   weixinConsoleOpen = Boolean(open && currentRunId && weixinConsolePopoverEl);
   if (!weixinConsolePopoverEl) return;
+  if (weixinConsoleOpen) setPlayConsoleOpen(false);
   sessionMenuEl?.classList.toggle("weixin-open", weixinConsoleOpen);
   if (weixinConsoleOpen) {
     renderWeixinConsolePopover();
@@ -850,6 +867,95 @@ function setWeixinConsoleOpen(open) {
     weixinConsolePopoverEl.innerHTML = "";
   }
   weixinConsoleEl?.setAttribute("aria-expanded", String(weixinConsoleOpen));
+}
+
+function renderPlayConsole() {
+  const games = Array.isArray(playConsoleState.games) ? playConsoleState.games : [];
+  const content = (() => {
+    if (playConsoleState.loading && !playConsoleState.loaded) {
+      return `<p class="play-console-empty">正在加载小游戏...</p>`;
+    }
+    if (playConsoleState.error) {
+      return `<p class="play-console-error">${escapeHtml(playConsoleState.error)}</p>`;
+    }
+    if (!games.length) {
+      return `<p class="play-console-empty">暂无可用小游戏。</p>`;
+    }
+    return games.map(game => {
+      const title = game?.title || game?.id || "未命名游戏";
+      const description = game?.description || game?.id || "";
+      const href = game?.href || (game?.id ? `/games/${encodeURIComponent(game.id)}/` : "");
+      if (!game?.available || !href) {
+        return `
+          <div class="play-game-card unavailable" aria-disabled="true">
+            <div>
+              <strong>${escapeHtml(title)}</strong>
+              <p>${escapeHtml(description || "入口文件不可用")}</p>
+            </div>
+            <span>不可用</span>
+          </div>
+        `;
+      }
+      return `
+        <a class="play-game-card" href="${escapeHtml(href)}" target="_blank" rel="noopener">
+          <div>
+            <strong>${escapeHtml(title)}</strong>
+            <p>${escapeHtml(description || "来自 webgame_workspace")}</p>
+          </div>
+          <span>在线玩</span>
+        </a>
+      `;
+    }).join("");
+  })();
+  return `
+    <div class="play-console">
+      <div class="play-console-head">
+        <div>
+          <h3>玩了个玩</h3>
+          <p>小游戏来自 webgame_workspace，点击后动态加载。</p>
+        </div>
+      </div>
+      <div class="play-game-list">${content}</div>
+    </div>
+  `;
+}
+
+function renderPlayConsolePopover() {
+  if (!playConsolePopoverEl) return;
+  playConsolePopoverEl.innerHTML = renderPlayConsole();
+}
+
+function setPlayConsoleOpen(open) {
+  playConsoleOpen = Boolean(open && currentRunId && playConsolePopoverEl);
+  if (!playConsolePopoverEl) return;
+  if (playConsoleOpen) setWeixinConsoleOpen(false);
+  sessionMenuEl?.classList.toggle("play-open", playConsoleOpen);
+  if (playConsoleOpen) {
+    renderPlayConsolePopover();
+    playConsolePopoverEl.hidden = false;
+    void loadPlayGames({ silent: playConsoleState.loaded });
+  } else {
+    playConsolePopoverEl.hidden = true;
+    playConsolePopoverEl.innerHTML = "";
+  }
+  playConsoleEl?.setAttribute("aria-expanded", String(playConsoleOpen));
+}
+
+async function loadPlayGames(options = {}) {
+  if (!currentRunId || playConsoleState.loading) return;
+  playConsoleState.loading = true;
+  if (!options.silent) renderPlayConsolePopover();
+  try {
+    const payload = await fetchJson(apiUrl("/api/games"), {}, "加载小游戏失败");
+    playConsoleState.games = Array.isArray(payload.games) ? payload.games : [];
+    playConsoleState.loaded = true;
+    playConsoleState.error = "";
+  } catch (err) {
+    playConsoleState.error = err?.message || String(err || "加载小游戏失败");
+  } finally {
+    playConsoleState.loading = false;
+    if (playConsoleOpen) renderPlayConsolePopover();
+  }
 }
 
 function closeWeixinConsoleForOutsideEvent(event) {
@@ -1603,7 +1709,13 @@ function initSessionControl() {
     if (runActionInFlight || !currentRunId) return;
     setWeixinConsoleOpen(!weixinConsoleOpen);
   });
+  playConsoleEl?.addEventListener("click", event => {
+    event.stopPropagation();
+    if (runActionInFlight || !currentRunId) return;
+    setPlayConsoleOpen(!playConsoleOpen);
+  });
   weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
+  playConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
   weixinConsolePopoverEl?.addEventListener("click", event => {
     const target = event.target instanceof Element ? event.target : null;
     const actionEl = target?.closest("[data-weixin-action]");
@@ -1644,12 +1756,16 @@ function initSessionControl() {
     if (weixinConsoleOpen && !weixinConsoleEl?.contains(target) && !weixinConsolePopoverEl?.contains(target)) {
       setWeixinConsoleOpen(false);
     }
+    if (playConsoleOpen && !playConsoleEl?.contains(target) && !playConsolePopoverEl?.contains(target)) {
+      setPlayConsoleOpen(false);
+    }
   });
   document.addEventListener("pointerdown", closeWeixinConsoleForOutsideEvent, true);
   document.addEventListener("keydown", event => {
     if (event.key === "Escape") {
       setSessionMenu(false);
       setWeixinConsoleOpen(false);
+      setPlayConsoleOpen(false);
     }
   });
   renderSessionMenu();

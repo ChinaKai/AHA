@@ -89,6 +89,26 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('action === "hide" && !confirm(`Hide ${taskId} from the task list?\\n\\nYou can restore hidden tasks later.`)', script)
         self.assertIn('(action === "final" || action === "complete") && !confirm(`Ask task-main to generate the Final for ${taskId}?`)', script)
 
+    def test_frontend_has_play_console_entry(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        static_root = root / "src" / "aha_cli" / "web" / "static"
+        html = (static_root / "index.html").read_text(encoding="utf-8")
+        script = (static_root / "app.js").read_text(encoding="utf-8")
+        styles = (static_root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="play-console"', html)
+        self.assertIn('id="play-console-popover"', html)
+        self.assertIn("玩了个玩", html)
+        self.assertIn("function renderPlayConsole()", script)
+        self.assertIn('apiUrl("/api/games")', script)
+        self.assertIn("playConsoleState", script)
+        self.assertIn("webgame_workspace", script)
+        self.assertNotIn('href="/games/cailegecai/"', script)
+        self.assertNotIn("task-056", script)
+        self.assertIn("setPlayConsoleOpen", script)
+        self.assertIn(".play-console-popover", styles)
+        self.assertIn(".play-game-card", styles)
+
     def test_frontend_composer_supports_multiline_input(self) -> None:
         root = Path(__file__).resolve().parents[1]
         static_root = root / "src" / "aha_cli" / "web" / "static"
