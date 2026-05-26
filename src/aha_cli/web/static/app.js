@@ -66,8 +66,11 @@ const seenRealtimeEvents = new Set();
 const pendingMessages = [];
 const interruptedContexts = new Set();
 const conversationPageLimit = 30;
+const CONVERSATION_SESSION_REFRESH_FALLBACK_MS = Math.max(5000, pollInterval * 5);
 const logPageLimit = 200;
 const conversationStates = new Map();
+const conversationSessionRefreshes = new Map();
+const conversationSessionRefreshAt = new Map();
 const expandedMessageKeys = new Set();
 const copyTextByKey = new Map();
 const finalDetails = new Map();
@@ -110,6 +113,11 @@ const turnEventTypes = new Set([
   "agent_thread",
   "agent_finished",
   "agent_status_changed"
+]);
+const backendSessionRefreshEventTypes = new Set([
+  "agent_prompt_metrics",
+  "agent_usage",
+  "agent_context_overflow"
 ]);
 
 const runIdEl = document.getElementById("run-id");
@@ -4014,6 +4022,7 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
     const events = assignConversationKeys([...(payload.events || []), ...(payload.turn_events || [])], payload.before_offset || 0);
     state.events = older ? mergeConversationEvents(state.events, events, true) : mergeConversationEvents(events, state.events, false);
     if (payload.backend_session) state.backendSession = payload.backend_session;
+    conversationSessionRefreshAt.set(conversationKey(taskId, target), Date.now());
     state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
     state.hasMore = Boolean(payload.has_more);
     state.initialized = true;
@@ -4076,6 +4085,55 @@ async function ensureConversationLoaded() {
   await loadConversationPage(selectedTaskId, backendTarget(), false);
 }
 
+function isCurrentConversationTarget(taskId, target) {
+  return activeTab === "conversation" && selectedTaskId === taskId && backendTarget() === target;
+}
+
+function refreshConversationBackendSession(taskId, target, options = {}) {
+  if (!taskId || !target) return null;
+  const key = conversationKey(taskId, target);
+  const existing = conversationSessionRefreshes.get(key);
+  if (existing) {
+    if (options.render) {
+      existing.then(() => {
+        if (isCurrentConversationTarget(taskId, target)) renderPanelForRealtime();
+      });
+    }
+    return existing;
+  }
+  const refresh = loadConversationPage(taskId, target, false, true)
+    .then(state => {
+      conversationSessionRefreshAt.set(key, Date.now());
+      if (options.render && isCurrentConversationTarget(taskId, target)) renderPanelForRealtime();
+      return state;
+    })
+    .catch(err => {
+      if (options.showError && options.render && isCurrentConversationTarget(taskId, target)) {
+        panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+      } else {
+        console.warn(`Failed to refresh conversation backend session (${options.reason || "refresh"})`, err);
+      }
+      return null;
+    })
+    .finally(() => {
+      if (conversationSessionRefreshes.get(key) === refresh) conversationSessionRefreshes.delete(key);
+    });
+  conversationSessionRefreshes.set(key, refresh);
+  return refresh;
+}
+
+function maybeRefreshConversationBackendSessionFallback() {
+  if (activeTab !== "conversation" || !selectedTaskId) return null;
+  const taskId = selectedTaskId;
+  const target = backendTarget();
+  const key = conversationKey(taskId, target);
+  const state = conversationStates.get(key);
+  if (!state?.initialized || state.loading) return null;
+  const lastRefreshAt = conversationSessionRefreshAt.get(key) || 0;
+  if (Date.now() - lastRefreshAt < CONVERSATION_SESSION_REFRESH_FALLBACK_MS) return null;
+  return refreshConversationBackendSession(taskId, target, { reason: "fallback" });
+}
+
 async function loadOlderConversation() {
   if (activeTab !== "conversation" || !selectedTaskId) return;
   const state = conversationState(selectedTaskId, backendTarget());
@@ -4123,11 +4181,17 @@ function invalidateRealtimeTaskDetails(events) {
   events.forEach(event => {
     const taskId = eventTaskId(event);
     if (finalDetailInvalidatingEvents.has(event.type) && taskId) finalTaskIds.add(taskId);
+    if (backendSessionRefreshEventTypes.has(event.type) && taskId) {
+      const target = backendTarget();
+      if (isCurrentConversationTarget(taskId, target) && eventMatchesAgent(event, target)) {
+        sessionRefreshes.set(conversationKey(taskId, target), { taskId, target, reason: "metrics-event" });
+      }
+    }
     if (event.type === "backend_session_compact_reset" && taskId) {
       const data = eventData(event);
       const target = String(data.agent_id || data.target || "main");
       if (target && invalidateConversationBackendSession(taskId, target)) {
-        sessionRefreshes.set(conversationKey(taskId, target), { taskId, target });
+        sessionRefreshes.set(conversationKey(taskId, target), { taskId, target, reason: "compact-reset" });
       }
     }
   });
@@ -4139,13 +4203,9 @@ function invalidateRealtimeTaskDetails(events) {
         panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
       });
   }
-  for (const { taskId, target } of sessionRefreshes.values()) {
+  for (const { taskId, target, reason } of sessionRefreshes.values()) {
     if (activeTab !== "conversation" || selectedTaskId !== taskId || backendTarget() !== target) continue;
-    loadConversationPage(taskId, target, false, true)
-      .then(() => renderPanelForRealtime())
-      .catch(err => {
-        panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
-      });
+    refreshConversationBackendSession(taskId, target, { render: true, showError: reason === "compact-reset", reason });
   }
 }
 
@@ -6021,6 +6081,7 @@ async function tick() {
     await loadStatus();
     renderPanelForRealtime();
     await Promise.all([ensureConversationLoaded(), loadBackendStatus()]);
+    await maybeRefreshConversationBackendSessionFallback();
     const autoFlushResponse = await maybeAutoFlushPending();
     if (autoFlushResponse) {
       await loadStatus({ forceAgents: true });
