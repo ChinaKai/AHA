@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import json
 from pathlib import Path
 
@@ -18,6 +20,7 @@ ALLOWED_MESSAGE_ROUTES = {
 }
 MAX_MESSAGE_CHARS = 1800
 MESSAGE_PREVIEW_CHARS = 1200
+MESSAGE_DEDUPE_WINDOW_SECONDS = 300
 
 
 def notification_state_path(root: Path, run_id: str) -> Path:
@@ -32,9 +35,17 @@ def load_notification_state(root: Path, run_id: str) -> dict:
     sent = state.get("sent")
     if not isinstance(sent, dict):
         sent = {}
+    event_keys = state.get("event_keys")
+    if not isinstance(event_keys, dict):
+        event_keys = {}
+    message_fingerprints = state.get("message_fingerprints")
+    if not isinstance(message_fingerprints, dict):
+        message_fingerprints = {}
     return {
         "enabled": bool(state.get("enabled")),
         "sent": sent,
+        "event_keys": event_keys,
+        "message_fingerprints": message_fingerprints,
         "updated_at": str(state.get("updated_at") or ""),
         "last_sent_at": str(state.get("last_sent_at") or ""),
     }
@@ -106,6 +117,30 @@ def _compact_text(text: object, limit: int = MESSAGE_PREVIEW_CHARS) -> str:
     return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _parse_timestamp(value: object) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _within_message_dedupe_window(sent_at: object, now: str) -> bool:
+    previous = _parse_timestamp(sent_at)
+    current = _parse_timestamp(now)
+    if previous is None or current is None:
+        return False
+    return (current - previous).total_seconds() < MESSAGE_DEDUPE_WINDOW_SECONDS
+
+
+def _prune_message_fingerprints(fingerprints: dict, now: str) -> dict:
+    return {str(key): str(value) for key, value in fingerprints.items() if _within_message_dedupe_window(value, now)}
+
+
 def _message_endpoint(data: dict, *keys: str) -> str:
     for key in keys:
         value = str(data.get(key) or "").strip()
@@ -122,6 +157,14 @@ def _message_route(data: dict) -> tuple[str, str]:
 
 def _message_text(data: dict) -> str:
     return str(data.get("message") or data.get("text") or "").strip()
+
+
+def _message_fingerprint(data: dict) -> str:
+    sender, _target = _message_route(data)
+    task_id = str(data.get("task_id") or "")
+    normalized = _compact_text(_message_text(data), limit=MAX_MESSAGE_CHARS)
+    digest = hashlib.sha256(f"{task_id}\0{sender}\0{normalized}".encode("utf-8")).hexdigest()
+    return f"message_fingerprint:{digest}"
 
 
 def _message_notification(root: Path, run_id: str, data: dict) -> str:
@@ -152,6 +195,7 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
 
 def notify_event(root: Path, run_id: str, event: dict) -> dict:
     event_type = str(event.get("type") or "")
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if event_type not in NOTIFICATION_EVENT_TYPES:
         return {"ok": True, "sent": False, "reason": "ignored_event"}
     state = load_notification_state(root, run_id)
@@ -161,18 +205,39 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
     if not account.get("token") or not account.get("user_id"):
         return {"ok": True, "sent": False, "reason": "not_paired"}
     key = _event_key(root, run_id, event)
-    if key in state["sent"]:
+    if key in state["sent"] or key in state["event_keys"]:
         return {"ok": True, "sent": False, "reason": "duplicate", "key": key}
     message = _truncate(notification_message_for_event(root, run_id, event))
     if not message:
         return {"ok": True, "sent": False, "reason": "empty_message", "key": key}
-    sent = send_test_notification(root, run_id, message)
     now = utc_now()
+    fingerprint = ""
+    if event_type == "message":
+        fingerprint = _message_fingerprint(data)
+        state["message_fingerprints"] = _prune_message_fingerprints(state["message_fingerprints"], now)
+        if fingerprint in state["message_fingerprints"]:
+            state["event_keys"][key] = {
+                "event_type": event_type,
+                "event_id": event.get("event_id"),
+                "handled_at": now,
+                "skipped_reason": "duplicate_message",
+            }
+            write_json(notification_state_path(root, run_id), state)
+            return {"ok": True, "sent": False, "reason": "duplicate_message", "key": key, "fingerprint": fingerprint}
+    sent = send_test_notification(root, run_id, message)
+    if fingerprint:
+        state["message_fingerprints"][fingerprint] = now
     state["sent"][key] = {
         "event_type": event_type,
         "event_id": event.get("event_id"),
         "sent_at": now,
         "message_id": sent.get("message_id"),
+        "fingerprint": fingerprint,
+    }
+    state["event_keys"][key] = {
+        "event_type": event_type,
+        "event_id": event.get("event_id"),
+        "handled_at": now,
     }
     state["last_sent_at"] = now
     state["updated_at"] = now

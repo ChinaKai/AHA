@@ -84,6 +84,123 @@ class WeixinNotificationsTests(unittest.TestCase):
         self.assertEqual(second["reason"], "duplicate")
         send.assert_called_once()
 
+    def test_notify_message_dedupes_same_sender_and_body_across_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.create_run(root)
+            weixin_notifications.set_notifications_enabled(root, run_id, True)
+            browser_event = {
+                "event_id": 123,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "same update"},
+            }
+            host_event = {
+                "event_id": 124,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "host", "message": "same update"},
+            }
+            with (
+                mock.patch("aha_cli.services.weixin_notifications.load_account", return_value={"token": "mock-token", "user_id": "user-1@im.wechat"}),
+                mock.patch("aha_cli.services.weixin_notifications.utc_now", return_value="2026-05-26T00:00:00+00:00"),
+                mock.patch("aha_cli.services.weixin_notifications.send_test_notification", return_value={"message_id": "msg-1"}) as send,
+            ):
+                first = weixin_notifications.notify_event(root, run_id, browser_event)
+                second = weixin_notifications.notify_event(root, run_id, host_event)
+
+        self.assertTrue(first["sent"])
+        self.assertFalse(second["sent"])
+        self.assertEqual(second["reason"], "duplicate_message")
+        self.assertEqual(send.call_count, 1)
+
+    def test_notify_message_sends_different_bodies_for_same_sender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.create_run(root)
+            weixin_notifications.set_notifications_enabled(root, run_id, True)
+            first_event = {
+                "event_id": 123,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "first update"},
+            }
+            second_event = {
+                "event_id": 124,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "host", "message": "second update"},
+            }
+            with (
+                mock.patch("aha_cli.services.weixin_notifications.load_account", return_value={"token": "mock-token", "user_id": "user-1@im.wechat"}),
+                mock.patch("aha_cli.services.weixin_notifications.utc_now", return_value="2026-05-26T00:00:00+00:00"),
+                mock.patch("aha_cli.services.weixin_notifications.send_test_notification", return_value={"message_id": "msg-1"}) as send,
+            ):
+                first = weixin_notifications.notify_event(root, run_id, first_event)
+                second = weixin_notifications.notify_event(root, run_id, second_event)
+
+        self.assertTrue(first["sent"])
+        self.assertTrue(second["sent"])
+        self.assertEqual(send.call_count, 2)
+
+    def test_notify_message_allows_same_body_after_dedupe_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.create_run(root)
+            weixin_notifications.set_notifications_enabled(root, run_id, True)
+            first_event = {
+                "event_id": 123,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "repeat later"},
+            }
+            second_event = {
+                "event_id": 124,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "host", "message": "repeat later"},
+            }
+            with (
+                mock.patch("aha_cli.services.weixin_notifications.load_account", return_value={"token": "mock-token", "user_id": "user-1@im.wechat"}),
+                mock.patch(
+                    "aha_cli.services.weixin_notifications.utc_now",
+                    side_effect=["2026-05-26T00:00:00+00:00", "2026-05-26T00:05:01+00:00"],
+                ),
+                mock.patch("aha_cli.services.weixin_notifications.send_test_notification", return_value={"message_id": "msg-1"}) as send,
+            ):
+                first = weixin_notifications.notify_event(root, run_id, first_event)
+                second = weixin_notifications.notify_event(root, run_id, second_event)
+
+        self.assertTrue(first["sent"])
+        self.assertTrue(second["sent"])
+        self.assertEqual(send.call_count, 2)
+
+    def test_notify_message_records_suppressed_event_id_as_handled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.create_run(root)
+            weixin_notifications.set_notifications_enabled(root, run_id, True)
+            first_event = {
+                "event_id": 123,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "same update"},
+            }
+            suppressed_event = {
+                "event_id": 124,
+                "type": "message",
+                "data": {"task_id": "task-001", "sender": "main", "target": "host", "message": "same update"},
+            }
+            with (
+                mock.patch("aha_cli.services.weixin_notifications.load_account", return_value={"token": "mock-token", "user_id": "user-1@im.wechat"}),
+                mock.patch(
+                    "aha_cli.services.weixin_notifications.utc_now",
+                    side_effect=["2026-05-26T00:00:00+00:00", "2026-05-26T00:00:01+00:00", "2026-05-26T00:05:02+00:00"],
+                ),
+                mock.patch("aha_cli.services.weixin_notifications.send_test_notification", return_value={"message_id": "msg-1"}) as send,
+            ):
+                first = weixin_notifications.notify_event(root, run_id, first_event)
+                second = weixin_notifications.notify_event(root, run_id, suppressed_event)
+                third = weixin_notifications.notify_event(root, run_id, suppressed_event)
+
+        self.assertTrue(first["sent"])
+        self.assertEqual(second["reason"], "duplicate_message")
+        self.assertEqual(third["reason"], "duplicate")
+        self.assertEqual(send.call_count, 1)
+
     def test_notify_message_uses_display_route_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
