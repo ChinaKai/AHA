@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from aha_cli.services.run_archive import RunArchiveError
+from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
 from aha_cli.web.http_utils import http_response, json_response, read_http_request, static_response
 from aha_cli.web.run_api import ApiRunNotFound, require_api_run_id, workspace_options
@@ -30,6 +32,8 @@ from aha_cli.web.task_actions import (
     request_task_finalization_with_backend,
 )
 from aha_cli.web.task_routes import route_task_agent_request, task_final_view_snapshot
+
+WEIXIN_KEEPALIVE_INTERVAL_SECONDS = 30
 
 
 def task_agent_response(route_result: dict, method: str) -> bytes | None:
@@ -94,13 +98,42 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             pass
 
 
+async def weixin_keepalive_loop(root: Path, interval_seconds: int = WEIXIN_KEEPALIVE_INTERVAL_SECONDS) -> None:
+    notified_account_token = ""
+    while True:
+        try:
+            account = load_account(root)
+            account_token = str(account.get("token") or "")
+            if account_token:
+                if account_token != notified_account_token:
+                    try:
+                        await asyncio.to_thread(notify_channel_start, root)
+                        notified_account_token = account_token
+                    except WeixinError:
+                        pass
+                await asyncio.to_thread(fetch_updates, root)
+        except asyncio.CancelledError:
+            raise
+        except WeixinError:
+            pass
+        await asyncio.sleep(max(1, interval_seconds))
+
+
 async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_interval_ms: int) -> None:
     server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w), host, port)
+    weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root))
     addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
     if run_id:
         print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
     else:
         print(f"AHA dashboard for {root}: http://{host}:{port}")
     print(f"Listening on {addresses}")
-    async with server:
-        await server.serve_forever()
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        weixin_keepalive.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await weixin_keepalive
+        with contextlib.suppress(WeixinError):
+            await asyncio.to_thread(notify_channel_stop, root)

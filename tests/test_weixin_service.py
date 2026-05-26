@@ -132,6 +132,7 @@ class WeixinServiceTests(unittest.TestCase):
             )
             weixin._write_secret_json(weixin.updates_path(root), {"get_updates_buf": "buf-1"})
             weixin._write_secret_json(weixin.contexts_path(root), {"user-1@im.wechat": "ctx-1"})
+            weixin._write_secret_json(weixin.context_state_path(root), {"user-1@im.wechat": {"updated_at": "2026-05-26T00:00:00+00:00"}})
 
             payload = weixin.reset_pairing(root, "run-001")
 
@@ -139,11 +140,12 @@ class WeixinServiceTests(unittest.TestCase):
             self.assertFalse(weixin.account_path(root).exists())
             self.assertFalse(weixin.updates_path(root).exists())
             self.assertFalse(weixin.contexts_path(root).exists())
+            self.assertFalse(weixin.context_state_path(root).exists())
             self.assertFalse(payload["paired"])
             self.assertIsNone(payload["account"])
             self.assertIsNone(payload["pairing"])
 
-    def test_send_test_notification_posts_to_logged_in_user(self) -> None:
+    def test_send_test_notification_requires_context_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             weixin.save_account(
@@ -155,18 +157,13 @@ class WeixinServiceTests(unittest.TestCase):
                     "user_id": "user-1@im.wechat",
                 },
             )
-            with mock.patch("aha_cli.services.weixin._api_post_json", side_effect=[{"msgs": [], "get_updates_buf": "buf-1"}, {}]) as post_json:
-                payload = weixin.send_test_notification(root, "run-001", "hello")
+            with mock.patch("aha_cli.services.weixin._api_post_json", return_value={"msgs": [], "get_updates_buf": "buf-1"}) as post_json:
+                with self.assertRaisesRegex(weixin.WeixinError, "context_token"):
+                    weixin.send_test_notification(root, "run-001", "hello")
             saved_updates = weixin._read_json(weixin.updates_path(root))
 
-        self.assertTrue(payload["sent"])
-        self.assertEqual(payload["target"], "user-1@im.wechat")
-        self.assertEqual(post_json.call_args_list[0].args[:3], ("https://example.test", "ilink/bot/getupdates", "mock-token"))
-        args = post_json.call_args_list[1].args
-        self.assertEqual(args[:3], ("https://example.test", "ilink/bot/sendmessage", "mock-token"))
-        self.assertEqual(args[3]["msg"]["to_user_id"], "user-1@im.wechat")
-        self.assertNotIn("context_token", args[3]["msg"])
-        self.assertEqual(args[3]["msg"]["item_list"][0]["text_item"]["text"], "hello")
+        self.assertEqual(post_json.call_count, 1)
+        self.assertEqual(post_json.call_args.args[:3], ("https://example.test", "ilink/bot/getupdates", "mock-token"))
         self.assertEqual(saved_updates["get_updates_buf"], "buf-1")
 
     def test_fetch_updates_saves_context_token(self) -> None:
@@ -197,11 +194,35 @@ class WeixinServiceTests(unittest.TestCase):
                 payload = weixin.fetch_updates(root)
             saved_updates = weixin._read_json(weixin.updates_path(root))
             saved_context_token = weixin.load_context_token(root, "user-1@im.wechat")
+            send_context = weixin.send_context_snapshot(root, "user-1@im.wechat")
 
         self.assertEqual(payload["message_count"], 1)
         self.assertEqual(post_json.call_args.args[3], {"get_updates_buf": ""})
         self.assertEqual(saved_updates["get_updates_buf"], "buf-2")
         self.assertEqual(saved_context_token, "ctx-1")
+        self.assertEqual(send_context["state"], "fresh")
+        self.assertTrue(send_context["fresh"])
+
+    def test_notify_channel_start_and_stop_call_upstream(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            weixin.save_account(
+                root,
+                {
+                    "account_id": "bot-1",
+                    "token": "mock-token",
+                    "base_url": "https://example.test",
+                    "user_id": "user-1@im.wechat",
+                },
+            )
+            with mock.patch("aha_cli.services.weixin._api_post_json", return_value={}) as post_json:
+                start = weixin.notify_channel_start(root)
+                stop = weixin.notify_channel_stop(root)
+
+        self.assertTrue(start["ok"])
+        self.assertTrue(stop["ok"])
+        self.assertEqual(post_json.call_args_list[0].args[:3], ("https://example.test", "ilink/bot/msg/notifystart", "mock-token"))
+        self.assertEqual(post_json.call_args_list[1].args[:3], ("https://example.test", "ilink/bot/msg/notifystop", "mock-token"))
 
     def test_fetch_updates_stores_recent_received_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,6 +284,54 @@ class WeixinServiceTests(unittest.TestCase):
         send_args = post_json.call_args_list[1].args
         self.assertEqual(send_args[1], "ilink/bot/sendmessage")
         self.assertEqual(send_args[3]["msg"]["context_token"], "ctx-2")
+
+    def test_send_test_notification_rejects_stale_context_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            weixin.save_account(
+                root,
+                {
+                    "account_id": "bot-1",
+                    "token": "mock-token",
+                    "base_url": "https://example.test",
+                    "user_id": "user-1@im.wechat",
+                },
+            )
+            weixin._write_secret_json(weixin.contexts_path(root), {"user-1@im.wechat": "ctx-old"})
+            weixin._write_secret_json(weixin.context_state_path(root), {"user-1@im.wechat": {"updated_at": "2026-05-26T00:00:00+00:00"}})
+            with (
+                mock.patch("aha_cli.services.weixin.utc_now", return_value="2026-05-26T00:31:00+00:00"),
+                mock.patch("aha_cli.services.weixin._api_post_json", return_value={"msgs": [], "get_updates_buf": "buf-1"}) as post_json,
+            ):
+                with self.assertRaisesRegex(weixin.WeixinError, "超过 30 分钟"):
+                    weixin.send_test_notification(root, "run-001", "hello")
+
+        self.assertEqual(post_json.call_count, 1)
+
+    def test_send_test_notification_reports_api_error_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            weixin.save_account(
+                root,
+                {
+                    "account_id": "bot-1",
+                    "token": "mock-token",
+                    "base_url": "https://example.test",
+                    "user_id": "user-1@im.wechat",
+                },
+            )
+            with mock.patch(
+                "aha_cli.services.weixin._api_post_json",
+                side_effect=[
+                    {
+                        "get_updates_buf": "buf-3",
+                        "msgs": [{"from_user_id": "user-1@im.wechat", "context_token": "ctx-2"}],
+                    },
+                    {"ret": -14, "errmsg": "session timeout"},
+                ],
+            ):
+                with self.assertRaisesRegex(weixin.WeixinError, "ret=-14"):
+                    weixin.send_test_notification(root, "run-001", "hello")
 
 
 if __name__ == "__main__":

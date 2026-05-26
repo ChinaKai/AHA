@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import json
 from pathlib import Path
 import secrets
+import threading
 import time
 from urllib.parse import quote, urljoin
 import urllib.request
@@ -18,12 +20,15 @@ ILINK_BOT_TYPE = "3"
 LOGIN_TTL_SECONDS = 8 * 60
 API_TIMEOUT_SECONDS = 15
 QR_POLL_TIMEOUT_SECONDS = 6
+CONTEXT_TOKEN_STALE_SECONDS = 30 * 60
 
 MESSAGE_TYPE_BOT = 2
 MESSAGE_STATE_FINISH = 2
 MESSAGE_ITEM_TEXT = 1
 RECENT_RECEIVED_MESSAGE_LIMIT = 3
 RECENT_RECEIVED_TEXT_LIMIT = 240
+
+_updates_lock = threading.Lock()
 
 
 class WeixinError(RuntimeError):
@@ -48,6 +53,10 @@ def updates_path(root: Path) -> Path:
 
 def contexts_path(root: Path) -> Path:
     return weixin_dir(root) / "contexts.json"
+
+
+def context_state_path(root: Path) -> Path:
+    return weixin_dir(root) / "context_state.json"
 
 
 def _read_json(path: Path) -> dict:
@@ -121,6 +130,14 @@ def _api_get_json(base_url: str, endpoint: str, *, timeout: int = API_TIMEOUT_SE
 
 def _api_post_json(base_url: str, endpoint: str, token: str, body: dict, *, timeout: int = API_TIMEOUT_SECONDS) -> dict:
     return _request_json(_api_url(base_url, endpoint), method="POST", token=token, body=body, timeout=timeout)
+
+
+def _raise_for_api_error(resp: dict, label: str) -> None:
+    ret = resp.get("ret")
+    errcode = resp.get("errcode")
+    if ret not in (None, 0) or errcode not in (None, 0):
+        errmsg = str(resp.get("errmsg") or resp.get("message") or "").strip()
+        raise WeixinError(f"{label}失败: ret={ret} errcode={errcode} {errmsg}".rstrip())
 
 
 QR_L_PARAMS = {
@@ -398,8 +415,38 @@ def save_account(root: Path, account: dict) -> None:
     _write_secret_json(account_path(root), normalized)
 
 
+def notify_channel_start(root: Path) -> dict:
+    account = load_account(root)
+    token = str(account.get("token") or "")
+    if not token:
+        raise WeixinError("微信尚未配对，不能通知通道启动")
+    resp = _api_post_json(
+        str(account.get("base_url") or DEFAULT_BASE_URL),
+        "ilink/bot/msg/notifystart",
+        token,
+        {},
+    )
+    _raise_for_api_error(resp, "微信通道启动通知")
+    return {"ok": True}
+
+
+def notify_channel_stop(root: Path) -> dict:
+    account = load_account(root)
+    token = str(account.get("token") or "")
+    if not token:
+        raise WeixinError("微信尚未配对，不能通知通道停止")
+    resp = _api_post_json(
+        str(account.get("base_url") or DEFAULT_BASE_URL),
+        "ilink/bot/msg/notifystop",
+        token,
+        {},
+    )
+    _raise_for_api_error(resp, "微信通道停止通知")
+    return {"ok": True}
+
+
 def reset_pairing(root: Path, run_id: str) -> dict:
-    for path in (pairing_path(root), account_path(root), updates_path(root), contexts_path(root)):
+    for path in (pairing_path(root), account_path(root), updates_path(root), contexts_path(root), context_state_path(root)):
         try:
             path.unlink()
         except FileNotFoundError:
@@ -413,6 +460,79 @@ def load_context_token(root: Path, user_id: str) -> str:
     contexts = _read_json(contexts_path(root))
     token = contexts.get(user_id)
     return token if isinstance(token, str) else ""
+
+
+def _parse_utc_timestamp(value: object) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _file_updated_at(path: Path) -> str:
+    try:
+        return dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc).isoformat()
+    except OSError:
+        return ""
+
+
+def _context_updated_at(root: Path, user_id: str) -> str:
+    state = _read_json(context_state_path(root))
+    entry = state.get(user_id) if isinstance(state.get(user_id), dict) else {}
+    updated_at = str(entry.get("updated_at") or "")
+    if updated_at:
+        return updated_at
+    return _file_updated_at(contexts_path(root)) if load_context_token(root, user_id) else ""
+
+
+def send_context_snapshot(root: Path, user_id: str | None = None) -> dict:
+    account = load_account(root)
+    target = str(user_id or account.get("user_id") or "")
+    if not target:
+        return {
+            "state": "not_paired",
+            "has_context_token": False,
+            "fresh": False,
+            "updated_at": "",
+            "age_seconds": None,
+            "stale_after_seconds": CONTEXT_TOKEN_STALE_SECONDS,
+            "requires_user_message": True,
+        }
+    token = load_context_token(root, target)
+    if not token:
+        return {
+            "state": "missing",
+            "has_context_token": False,
+            "fresh": False,
+            "updated_at": "",
+            "age_seconds": None,
+            "stale_after_seconds": CONTEXT_TOKEN_STALE_SECONDS,
+            "requires_user_message": True,
+        }
+    updated_at = _context_updated_at(root, target)
+    updated = _parse_utc_timestamp(updated_at)
+    now = _parse_utc_timestamp(utc_now()) or dt.datetime.now(dt.timezone.utc)
+    age_seconds = int(max(0, (now - updated).total_seconds())) if updated else None
+    if age_seconds is None:
+        state = "unknown"
+        fresh = False
+    else:
+        fresh = age_seconds <= CONTEXT_TOKEN_STALE_SECONDS
+        state = "fresh" if fresh else "stale"
+    return {
+        "state": state,
+        "has_context_token": True,
+        "fresh": fresh,
+        "updated_at": updated_at,
+        "age_seconds": age_seconds,
+        "stale_after_seconds": CONTEXT_TOKEN_STALE_SECONDS,
+        "requires_user_message": state in {"missing", "stale"},
+    }
 
 
 def _message_text(msg: dict) -> str:
@@ -478,55 +598,66 @@ def recent_received_messages(root: Path) -> list[dict]:
 
 
 def fetch_updates(root: Path) -> dict:
-    account = load_account(root)
-    token = str(account.get("token") or "")
-    if not token:
-        raise WeixinError("微信尚未配对，不能接收入站消息")
-    sync = _read_json(updates_path(root))
-    try:
-        resp = _api_post_json(
-            str(account.get("base_url") or DEFAULT_BASE_URL),
-            "ilink/bot/getupdates",
-            token,
-            {"get_updates_buf": sync.get("get_updates_buf") or ""},
-            timeout=QR_POLL_TIMEOUT_SECONDS,
-        )
-    except WeixinError as exc:
-        if "timed out" not in str(exc).lower():
-            raise
-        resp = {"msgs": [], "get_updates_buf": sync.get("get_updates_buf") or ""}
-    now = utc_now()
-    contexts = _read_json(contexts_path(root))
-    changed = False
-    messages = resp.get("msgs") if isinstance(resp.get("msgs"), list) else []
-    incoming_recent = [_public_received_message(msg, now) for msg in messages if isinstance(msg, dict)]
-    recent_messages = _merge_recent_received_messages(sync.get("recent_messages"), incoming_recent)
-    if resp.get("get_updates_buf") or incoming_recent:
+    with _updates_lock:
+        account = load_account(root)
+        token = str(account.get("token") or "")
+        if not token:
+            raise WeixinError("微信尚未配对，不能接收入站消息")
+        sync = _read_json(updates_path(root))
+        try:
+            resp = _api_post_json(
+                str(account.get("base_url") or DEFAULT_BASE_URL),
+                "ilink/bot/getupdates",
+                token,
+                {"get_updates_buf": sync.get("get_updates_buf") or ""},
+                timeout=QR_POLL_TIMEOUT_SECONDS,
+            )
+        except WeixinError as exc:
+            if "timed out" not in str(exc).lower():
+                raise
+            resp = {"msgs": [], "get_updates_buf": sync.get("get_updates_buf") or ""}
+        now = utc_now()
+        contexts = _read_json(contexts_path(root))
+        context_state = _read_json(context_state_path(root))
+        changed = False
+        context_state_changed = False
+        messages = resp.get("msgs") if isinstance(resp.get("msgs"), list) else []
+        incoming_recent = [_public_received_message(msg, now) for msg in messages if isinstance(msg, dict)]
+        recent_messages = _merge_recent_received_messages(sync.get("recent_messages"), incoming_recent)
         _write_secret_json(
             updates_path(root),
             {
                 "get_updates_buf": resp.get("get_updates_buf") or sync.get("get_updates_buf") or "",
                 "recent_messages": recent_messages,
+                "last_poll_at": now,
+                "last_success_at": now,
                 "updated_at": now,
             },
         )
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        user_id = str(msg.get("from_user_id") or "")
-        context_token = str(msg.get("context_token") or "")
-        if user_id and context_token and contexts.get(user_id) != context_token:
-            contexts[user_id] = context_token
-            changed = True
-    if changed:
-        _write_secret_json(contexts_path(root), contexts)
-    return {
-        "ok": True,
-        "messages": messages,
-        "message_count": len(messages),
-        "recent_messages": list(reversed(recent_messages)),
-        "account": _public_account(account),
-    }
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            user_id = str(msg.get("from_user_id") or "")
+            context_token = str(msg.get("context_token") or "")
+            if user_id and context_token:
+                if contexts.get(user_id) != context_token:
+                    contexts[user_id] = context_token
+                    changed = True
+                entry = context_state.get(user_id) if isinstance(context_state.get(user_id), dict) else {}
+                if entry.get("updated_at") != now:
+                    context_state[user_id] = {"updated_at": now}
+                    context_state_changed = True
+        if changed:
+            _write_secret_json(contexts_path(root), contexts)
+        if context_state_changed:
+            _write_secret_json(context_state_path(root), context_state)
+        return {
+            "ok": True,
+            "messages": messages,
+            "message_count": len(messages),
+            "recent_messages": list(reversed(recent_messages)),
+            "account": _public_account(account),
+        }
 
 
 def start_pairing(root: Path, run_id: str) -> dict:
@@ -624,11 +755,13 @@ def status_snapshot(root: Path, run_id: str, *, poll: bool = True) -> dict:
     paired = bool(account.get("token")) or pairing.get("status") == "paired"
     if pairing.get("status") == "paired":
         account = load_account(root)
+    target = str(account.get("user_id") or "") if account else ""
     return {
         "ok": True,
         "run_id": run_id,
         "paired": paired,
         "account": _public_account(account) if account else None,
+        "send_context": send_context_snapshot(root, target) if target else send_context_snapshot(root, ""),
         "pairing": {
             key: pairing.get(key)
             for key in (
@@ -656,7 +789,13 @@ def send_test_notification(root: Path, run_id: str, message: str | None = None) 
     if not token or not target:
         raise WeixinError("微信尚未配对，不能发送测试通知")
     fetch_updates(root)
+    send_context = send_context_snapshot(root, target)
     context_token = load_context_token(root, target)
+    if not context_token:
+        raise WeixinError("微信会话缺少 context_token，请先从微信向 AHA 发一条消息刷新会话")
+    if send_context.get("state") == "stale":
+        stale_minutes = int(CONTEXT_TOKEN_STALE_SECONDS / 60)
+        raise WeixinError(f"微信会话已超过 {stale_minutes} 分钟未刷新，请先从微信向 AHA 发一条消息")
     text = str(message or "").strip() or f"AHA 微信通知测试\nRun: {run_id}"
     client_id = f"aha:{int(time.time())}-{secrets.token_hex(4)}"
     msg = {
@@ -669,16 +808,18 @@ def send_test_notification(root: Path, run_id: str, message: str | None = None) 
     }
     if context_token:
         msg["context_token"] = context_token
-    _api_post_json(
+    resp = _api_post_json(
         str(account.get("base_url") or DEFAULT_BASE_URL),
         "ilink/bot/sendmessage",
         token,
         {"msg": msg},
     )
+    _raise_for_api_error(resp, "微信发送")
     return {
         "ok": True,
         "sent": True,
         "message_id": client_id,
         "target": target,
+        "send_context": send_context,
         "account": _public_account(account),
     }

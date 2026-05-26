@@ -269,11 +269,19 @@ header > div:first-child h1 {
   font-size: 12px;
   line-height: 1.5;
 }
+.weixin-console-grid small {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
+}
 .weixin-console-grid code.weixin-account-id {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.weixin-console-grid code.weixin-session-state.warning {
+  color: #991b1b;
 }
 .weixin-notifications {
   display: grid;

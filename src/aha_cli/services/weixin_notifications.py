@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.weixin import load_account, send_test_notification
+from aha_cli.services.weixin import load_account, send_context_snapshot, send_test_notification
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import plan_path, run_dir
 
@@ -54,9 +54,11 @@ def load_notification_state(root: Path, run_id: str) -> dict:
 def notification_status(root: Path, run_id: str) -> dict:
     state = load_notification_state(root, run_id)
     account = load_account(root)
+    send_context = send_context_snapshot(root, str(account.get("user_id") or ""))
     return {
         "enabled": state["enabled"],
-        "ready": bool(account.get("token") and account.get("user_id")),
+        "ready": bool(account.get("token") and account.get("user_id") and send_context.get("fresh")),
+        "send_context": send_context,
         "sent_count": len(state["sent"]),
         "updated_at": state["updated_at"],
         "last_sent_at": state["last_sent_at"],

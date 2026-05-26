@@ -4988,6 +4988,33 @@ function renderWeixinConsole() {
   const status = weixinPairingStatus();
   const notifications = payload.notifications || {};
   const notificationsEnabled = Boolean(notifications.enabled);
+  const sendContext = payload.send_context || {};
+  const contextState = String(sendContext.state || "");
+  const contextAgeSeconds = Number(sendContext.age_seconds);
+  const contextAgeText = Number.isFinite(contextAgeSeconds) ? formatDuration(contextAgeSeconds * 1000) : "";
+  const contextUpdatedAt = String(sendContext.updated_at || "").trim();
+  const contextStatusText = !paired ? "等待配对" : ({
+    fresh: "会话可回复",
+    stale: "需微信发消息",
+    missing: "需微信发消息",
+    unknown: "会话状态未知",
+    not_paired: "等待配对"
+  }[contextState] || "已配对");
+  const contextDetail = (() => {
+    if (!paired) return "配对后检测会话状态";
+    if (contextState === "fresh") {
+      return contextUpdatedAt
+        ? `最近刷新 ${formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt)} · ${contextAgeText}`
+        : "最近会话可用";
+    }
+    if (contextState === "stale") {
+      return contextUpdatedAt
+        ? `上次刷新 ${formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt)} · ${contextAgeText}`
+        : "会话已过期";
+    }
+    if (contextState === "missing") return "从微信发任意消息后刷新";
+    return "刷新状态后重试";
+  })();
   const statusText = {
     idle: "未配对",
     waiting: "等待扫码",
@@ -5051,7 +5078,8 @@ function renderWeixinConsole() {
         </section>
         <section>
           <strong>通道</strong>
-          <code>${paired ? "可发送" : "等待配对"}</code>
+          <code class="weixin-session-state ${sendContext.requires_user_message ? "warning" : ""}">${escapeHtml(contextStatusText)}</code>
+          <small>${escapeHtml(contextDetail)}</small>
         </section>
       </div>
       <div class="weixin-received">
