@@ -67,6 +67,10 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["collaboration_mode"], "team")
         self.assertEqual(body["task"]["delegation_policy"], "auto")
         self.assertEqual(body["task"]["max_sub_agents"], 2)
+        self.assertEqual(body["task"]["preferred_sandbox"], "danger-full-access")
+        self.assertEqual(body["task"]["agents"][0]["sandbox"], "danger-full-access")
+        self.assertEqual(body["task"]["supervision"]["max_rounds"], 99)
+        self.assertFalse(any(body["task"]["supervision"]["ask_user_gates"].values()))
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
@@ -112,7 +116,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 9)
         self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["real_ui_validation"])
         self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["commit_merge_delete"])
-        self.assertTrue(body["task"]["supervision"]["ask_user_gates"]["scope_change"])
+        self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["scope_change"])
         self.assertEqual(task["supervision"], body["task"]["supervision"])
         self.assertTrue(any(agent["id"] == "host" and agent["role"] == "host" and agent["backend"] == "codex" for agent in task["agents"]))
 
@@ -155,7 +159,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 7)
         self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["scope_change"])
         self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["product_preference"])
-        self.assertTrue(body["task"]["supervision"]["ask_user_gates"]["commit_merge_delete"])
+        self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["commit_merge_delete"])
         self.assertNotIn("allowed_actions", body["task"]["supervision"])
         self.assertEqual(updated["supervision"], body["task"]["supervision"])
 

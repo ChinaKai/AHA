@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aha_cli.domain.models import TASK_SUPERVISION_ASK_USER_GATES, utc_now
+from aha_cli.domain.models import DEFAULT_TASK_SUPERVISION_MAX_ROUNDS, TASK_SUPERVISION_ASK_USER_GATES, utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, start_backend
 from aha_cli.services.chat_offsets import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import (
@@ -161,7 +161,7 @@ def supervision_ask_user_gate_notes(supervision: dict) -> list[str]:
     raw_gates = supervision.get("ask_user_gates") if isinstance(supervision.get("ask_user_gates"), dict) else {}
     notes: list[str] = []
     for key in TASK_SUPERVISION_ASK_USER_GATES:
-        enabled = bool(raw_gates.get(key, True))
+        enabled = bool(raw_gates.get(key, False))
         mode = "ask_user required" if enabled else "host may decide"
         notes.append(f"- {key}: {mode} ({ASK_USER_GATE_LABELS[key]})")
     return notes
@@ -485,9 +485,9 @@ def apply_supervision_host_decision(
     waiting_for_subagents = False
     route_skipped_reason = ""
     try:
-        max_rounds = max(1, int(supervision.get("max_rounds") or 5))
+        max_rounds = max(1, int(supervision.get("max_rounds") or DEFAULT_TASK_SUPERVISION_MAX_ROUNDS))
     except (TypeError, ValueError):
-        max_rounds = 5
+        max_rounds = DEFAULT_TASK_SUPERVISION_MAX_ROUNDS
     previous_host_rounds = supervision_host_decision_count(root, run_id, task_id, host_agent_id)
     if decision["decision"] == "wait":
         waiting_for_subagents = task_has_incomplete_sub_agents(task)

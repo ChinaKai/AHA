@@ -59,10 +59,12 @@ TASK_COLLABORATION_DEFAULTS = {
     "pair": ("auto", 1),
     "team": ("auto", 2),
 }
+DEFAULT_TASK_SANDBOX = "danger-full-access"
+DEFAULT_TASK_SUPERVISION_MAX_ROUNDS = 99
 
 
 def default_task_supervision_ask_user_gates() -> dict:
-    return {key: True for key in TASK_SUPERVISION_ASK_USER_GATES}
+    return {key: False for key in TASK_SUPERVISION_ASK_USER_GATES}
 
 
 def normalize_bool(value: object, default: bool = False) -> bool:
@@ -140,7 +142,7 @@ def default_task_supervision() -> dict:
         "host_agent_id": None,
         "real_agent_enabled": False,
         "channel": "main_only",
-        "max_rounds": 5,
+        "max_rounds": DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
         "ask_user_gates": default_task_supervision_ask_user_gates(),
     }
 
@@ -161,7 +163,7 @@ def normalize_task_supervision(value: object | None = None) -> dict:
         gates = default_task_supervision_ask_user_gates()
         for key in TASK_SUPERVISION_ASK_USER_GATES:
             if key in raw_gates:
-                gates[key] = normalize_bool(raw_gates.get(key), default=True)
+                gates[key] = normalize_bool(raw_gates.get(key), default=False)
         supervision["ask_user_gates"] = gates
     try:
         supervision["max_rounds"] = max(1, min(100, int(raw.get("max_rounds") or supervision["max_rounds"])))

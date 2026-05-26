@@ -75,6 +75,7 @@ const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interrupted"]);
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
+const defaultTaskSupervisionMaxRounds = 99;
 const defaultHttpProxy = "http://127.0.0.1:7890";
 const defaultHttpsProxy = defaultHttpProxy;
 const defaultNoProxy = "localhost,127.0.0.1,::1";
@@ -1959,7 +1960,7 @@ const supervisionAskUserGateDefs = [
 ];
 
 function defaultAskUserGates() {
-  return Object.fromEntries(supervisionAskUserGateDefs.map(([key]) => [key, true]));
+  return Object.fromEntries(supervisionAskUserGateDefs.map(([key]) => [key, false]));
 }
 
 function normalizeAskUserGates(value) {
@@ -1998,7 +1999,7 @@ function taskSupervisionPolicy(task) {
     mode: policy.mode === "assisted" ? "assisted" : "manual",
     host_backend: policy.host_backend || "stub",
     real_agent_enabled: Boolean(policy.real_agent_enabled),
-    max_rounds: Number(policy.max_rounds || 5),
+    max_rounds: Number(policy.max_rounds || defaultTaskSupervisionMaxRounds),
     ask_user_gates: normalizeAskUserGates(policy.ask_user_gates)
   };
 }
@@ -2037,7 +2038,7 @@ function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGat
     mode: assisted ? "assisted" : "manual",
     host_backend: codexHost ? "codex" : (claudeHost ? "claude" : "stub"),
     real_agent_enabled: codexHost || claudeHost,
-    max_rounds: Number(maxRoundsValue || "5"),
+    max_rounds: Number(maxRoundsValue || defaultTaskSupervisionMaxRounds),
     ask_user_gates: normalizeAskUserGates(askUserGates)
   };
 }
@@ -2119,7 +2120,7 @@ function renderTaskSupervisionEditor() {
   });
   if (!task) {
     if (selectedTaskSupervisionModeEl) selectedTaskSupervisionModeEl.value = "manual";
-    if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = "5";
+    if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = String(defaultTaskSupervisionMaxRounds);
     renderAskUserGateControls(selectedTaskSupervisionAskUserGatesEl, defaultAskUserGates());
     if (taskSupervisionStateEl) taskSupervisionStateEl.textContent = "Select a task to edit supervision.";
     syncTaskSupervisionModeFields();
@@ -2128,7 +2129,7 @@ function renderTaskSupervisionEditor() {
   }
   const policy = taskSupervisionPolicy(task);
   if (selectedTaskSupervisionModeEl) selectedTaskSupervisionModeEl.value = taskSupervisionModeValue(policy);
-  if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = String(policy.max_rounds || 5);
+  if (selectedTaskSupervisionMaxRoundsEl) selectedTaskSupervisionMaxRoundsEl.value = String(policy.max_rounds || defaultTaskSupervisionMaxRounds);
   renderAskUserGateControls(selectedTaskSupervisionAskUserGatesEl, policy.ask_user_gates);
   syncTaskSupervisionModeFields();
   if (taskSupervisionStateEl) taskSupervisionStateEl.textContent = taskSupervisionSummary(task);
@@ -4288,7 +4289,7 @@ async function saveTaskSupervisionConfig() {
   const selectedMode = selectedTaskSupervisionModeEl?.value || "manual";
   const supervision = taskSupervisionPayloadFromMode(
     selectedMode,
-    selectedTaskSupervisionMaxRoundsEl?.value || "5",
+    selectedTaskSupervisionMaxRoundsEl?.value || defaultTaskSupervisionMaxRounds,
     readAskUserGateControls(selectedTaskSupervisionAskUserGatesEl)
   );
   await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/supervision`), {
@@ -5230,7 +5231,7 @@ taskFormEl?.addEventListener("submit", async event => {
   const maxSubAgents = collaborationModeMaxSubAgents(collaborationMode);
   const supervision = taskSupervisionPayloadFromMode(
     taskSupervisionModeEl?.value || "manual",
-    taskSupervisionMaxRoundsEl?.value || "5",
+    taskSupervisionMaxRoundsEl?.value || defaultTaskSupervisionMaxRounds,
     readAskUserGateControls(taskSupervisionAskUserGatesEl)
   );
   setCreateProxyDefaultsFromInputs();

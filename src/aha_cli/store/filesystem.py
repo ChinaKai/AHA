@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.domain.models import (
+    DEFAULT_TASK_SANDBOX,
     default_tasks,
     make_agent,
     make_task,
@@ -376,6 +377,7 @@ def add_task(
         https_proxy = normalize_proxy_value(https_proxy)
         no_proxy = normalize_proxy_value(no_proxy) or (DEFAULT_NO_PROXY if (http_proxy or https_proxy) else None)
         proxy_enabled = bool(proxy_enabled or http_proxy or https_proxy)
+        sandbox = sandbox or DEFAULT_TASK_SANDBOX
         task = make_task(
             next_task_id(plan["tasks"]),
             title,
