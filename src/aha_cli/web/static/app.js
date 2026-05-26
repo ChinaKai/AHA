@@ -1527,13 +1527,16 @@ function requestComposerSubmit() {
 
 function requestComposerSubmitFromPointer(event) {
   if (!messageEl.value.trim()) return false;
-  const pointerType = String(event.pointerType || "");
-  const touchLike = pointerType === "touch" || pointerType === "pen" || composerPlainEnterCreatesNewline();
-  if (!touchLike) return false;
   event.preventDefault();
   composerPointerSubmitUntil = Date.now() + 500;
   requestComposerSubmit();
   return true;
+}
+
+function setComposerSubmitBusy(busy) {
+  const sendButton = sendFormEl.querySelector("button.send");
+  if (sendButton) sendButton.disabled = busy;
+  if (mobileActionsToggleEl) mobileActionsToggleEl.disabled = busy;
 }
 
 function syncMessageInputHeight() {
@@ -5584,9 +5587,16 @@ sendFormEl.addEventListener("submit", async event => {
   const message = messageEl.value.trim();
   if (!task || !message) return;
   composerSubmitInFlight = true;
+  const originalMessage = messageEl.value;
   const agentId = agentTargetEl.value || "main";
   const isAha = isAhaCommand(message);
   realtimeDebug("composer.submit", { task_id: task.id, target: agentId, is_aha: isAha, backend_active: selectedBackendActive() });
+  messageEl.value = "";
+  syncMessageInputHeight();
+  syncMobileComposerAction();
+  commandMenuEl.classList.add("hidden");
+  closeMobileActionPanel();
+  setComposerSubmitBusy(true);
   try {
     let response = null;
     if (selectedBackendActive() && !isAha) {
@@ -5599,11 +5609,6 @@ sendFormEl.addEventListener("submit", async event => {
     } else {
       response = await flushPendingMessages(task, agentId, message);
     }
-    messageEl.value = "";
-    syncMessageInputHeight();
-    syncMobileComposerAction();
-    commandMenuEl.classList.add("hidden");
-    closeMobileActionPanel();
     const accepted = await catchUpRealtimeEvents();
     realtimeDebug("composer.catchup_complete", { accepted_count: accepted.length });
     await loadStatus({ forceAgents: Boolean(response?.interrupt) });
@@ -5613,8 +5618,14 @@ sendFormEl.addEventListener("submit", async event => {
     renderPanel();
   } catch (err) {
     realtimeDebug("composer.error", { error: err?.message || String(err) });
+    if (!messageEl.value.trim()) {
+      messageEl.value = originalMessage;
+      syncMessageInputHeight();
+      syncMobileComposerAction();
+    }
     alert(err.message || String(err));
   } finally {
+    setComposerSubmitBusy(false);
     composerSubmitInFlight = false;
   }
 });
