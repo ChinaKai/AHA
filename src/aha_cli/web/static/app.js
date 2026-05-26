@@ -115,9 +115,13 @@ const turnEventTypes = new Set([
   "agent_status_changed"
 ]);
 const backendSessionRefreshEventTypes = new Set([
+  "agent_started",
   "agent_prompt_metrics",
   "agent_usage",
-  "agent_context_overflow"
+  "agent_context_overflow",
+  "backend_started",
+  "backend_session_reset",
+  "backend_session_compact_reset"
 ]);
 
 const runIdEl = document.getElementById("run-id");
@@ -2926,7 +2930,8 @@ function contextPressureStatus(pressure) {
 }
 
 function contextPressurePercent(pressure) {
-  const percent = Number(pressure?.percent);
+  if (pressure?.percent == null || pressure?.percent === "") return "";
+  const percent = Number(pressure.percent);
   return Number.isFinite(percent) ? `${percent.toFixed(percent >= 10 ? 1 : 2)}%` : "";
 }
 
@@ -4167,6 +4172,15 @@ function invalidateConversationBackendSession(taskId, target) {
   return true;
 }
 
+function queueConversationBackendSessionRefresh(sessionRefreshes, taskId, target, reason, options = {}) {
+  if (!taskId || !target) return;
+  const key = conversationKey(taskId, target);
+  if (options.invalidate) invalidateConversationBackendSession(taskId, target);
+  if (isCurrentConversationTarget(taskId, target) || conversationStates.has(key)) {
+    sessionRefreshes.set(key, { taskId, target, reason });
+  }
+}
+
 const finalDetailInvalidatingEvents = new Set([
   "task_result_written",
   "task_journal_rendered",
@@ -4184,15 +4198,21 @@ function invalidateRealtimeTaskDetails(events) {
     if (backendSessionRefreshEventTypes.has(event.type) && taskId) {
       const target = backendTarget();
       if (isCurrentConversationTarget(taskId, target) && eventMatchesAgent(event, target)) {
-        sessionRefreshes.set(conversationKey(taskId, target), { taskId, target, reason: "metrics-event" });
+        const reason = event.type === "agent_prompt_metrics" || event.type === "agent_usage" || event.type === "agent_context_overflow"
+          ? "metrics-event"
+          : "session-lifecycle";
+        queueConversationBackendSessionRefresh(sessionRefreshes, taskId, target, reason);
       }
+    }
+    if (event.type === "backend_session_reset" && taskId) {
+      const data = eventData(event);
+      const target = String(data.agent_id || data.target || "main");
+      queueConversationBackendSessionRefresh(sessionRefreshes, taskId, target, "session-reset", { invalidate: true });
     }
     if (event.type === "backend_session_compact_reset" && taskId) {
       const data = eventData(event);
       const target = String(data.agent_id || data.target || "main");
-      if (target && invalidateConversationBackendSession(taskId, target)) {
-        sessionRefreshes.set(conversationKey(taskId, target), { taskId, target, reason: "compact-reset" });
-      }
+      queueConversationBackendSessionRefresh(sessionRefreshes, taskId, target, "compact-reset", { invalidate: true });
     }
   });
   finalTaskIds.forEach(taskId => finalDetails.delete(taskId));
