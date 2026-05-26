@@ -197,6 +197,85 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertEqual([event["data"]["message"] for event in main_page["events"]], ["main reply", "next step"])
         self.assertEqual([event["data"]["message"] for event in host_page["events"]], ["main reply", "next step"])
 
+    def test_conversation_events_page_dedupes_main_browser_mirror_before_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "host",
+                    "from_agent": "main",
+                    "to_agent": "host",
+                    "display_sender": "main",
+                    "display_target": "host",
+                    "message": "same reply",
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {"task_id": "task-001", "sender": "main", "target": "browser", "from_agent": "main", "to_agent": "browser", "message": "same reply"},
+            )
+
+            page = conversation_events_page(root, run_id, "task-001", "main", limit=1, categories={"chat"})
+
+        self.assertEqual(page["count"], 1)
+        self.assertEqual(page["events"][0]["data"]["display_target"], "host")
+        self.assertEqual(page["events"][0]["data"]["message"], "same reply")
+
+    def test_conversation_events_page_keeps_main_browser_without_host_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(
+                root,
+                run_id,
+                "message",
+                {"task_id": "task-001", "sender": "main", "target": "browser", "from_agent": "main", "to_agent": "browser", "message": "browser only"},
+            )
+
+            page = conversation_events_page(root, run_id, "task-001", "main", limit=1, categories={"chat"})
+
+        self.assertEqual(page["count"], 1)
+        self.assertEqual(page["events"][0]["data"]["target"], "browser")
+        self.assertEqual(page["events"][0]["data"]["message"], "browser only")
+
+    def test_conversation_events_page_keeps_main_browser_when_body_differs_from_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "host",
+                    "from_agent": "main",
+                    "to_agent": "host",
+                    "display_sender": "main",
+                    "display_target": "host",
+                    "message": "host copy",
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {"task_id": "task-001", "sender": "main", "target": "browser", "from_agent": "main", "to_agent": "browser", "message": "browser copy"},
+            )
+
+            page = conversation_events_page(root, run_id, "task-001", "main", limit=2, categories={"chat"})
+
+        self.assertEqual([event["data"]["message"] for event in page["events"]], ["host copy", "browser copy"])
+
     def test_conversation_events_api_hides_action_envelope_agent_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

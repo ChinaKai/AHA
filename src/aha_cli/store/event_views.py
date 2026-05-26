@@ -153,6 +153,70 @@ def conversation_event_category(event_type: str) -> str:
     return "runtime"
 
 
+def _message_endpoint(data: dict, *keys: str) -> str:
+    for key in keys:
+        value = str(data.get(key) or "").strip()
+        if value:
+            return value.lower()
+    return ""
+
+
+def _message_body_key(data: dict) -> str:
+    return " ".join(str(data.get("message") or "").split())
+
+
+def _main_host_mirror_key(event: dict) -> tuple[str, str, str] | None:
+    if event.get("type") != "message":
+        return None
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender = _message_endpoint(data, "display_sender", "sender", "from_agent")
+    target = _message_endpoint(data, "display_target", "to_agent", "target")
+    body = _message_body_key(data)
+    if sender == "main" and target == "host" and body:
+        return (str(data.get("task_id") or ""), sender, body)
+    return None
+
+
+def _main_browser_mirror_key(event: dict) -> tuple[str, str, str] | None:
+    if event.get("type") != "message":
+        return None
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender = _message_endpoint(data, "display_sender", "sender", "from_agent")
+    target = _message_endpoint(data, "display_target", "to_agent", "target")
+    body = _message_body_key(data)
+    if sender == "main" and target == "browser" and body:
+        return (str(data.get("task_id") or ""), sender, body)
+    return None
+
+
+def _category_allowed(event_type: str, categories: set[str] | None) -> bool:
+    return categories is None or conversation_event_category(event_type) in categories
+
+
+def _conversation_event_matches(event: dict, task_id: str, target: str, categories: set[str] | None) -> bool:
+    event_type = str(event.get("type") or "")
+    return (
+        _category_allowed(event_type, categories)
+        and event_type in TIMELINE_EVENT_TYPES
+        and event_task_id(event) == task_id
+        and (target or "main") in event_agent_refs(event)
+    )
+
+
+def _main_host_mirror_keys(root: Path, run_id: str, task_id: str, target: str, before: int, categories: set[str] | None) -> set[tuple[str, str, str]]:
+    if (target or "main") != "main" or not _category_allowed("message", categories):
+        return set()
+    path = event_path(root, run_id)
+    keys: set[tuple[str, str, str]] = set()
+    for _offset, event in iter_jsonl_reverse(path, before=before) or ():
+        if not _conversation_event_matches(event, task_id, target, categories):
+            continue
+        key = _main_host_mirror_key(event)
+        if key:
+            keys.add(key)
+    return keys
+
+
 def conversation_events_page(
     root: Path,
     run_id: str,
@@ -167,16 +231,13 @@ def conversation_events_page(
     end_offset = after_offset if before is None else max(0, min(before, after_offset))
     safe_limit = max(1, min(limit, 200))
     allowed_categories = categories
+    main_host_mirror_keys = _main_host_mirror_keys(root, run_id, task_id, target or "main", end_offset, allowed_categories)
     matches: list[dict] = []
     for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
         event_type = str(event.get("type") or "")
-        if allowed_categories is not None and conversation_event_category(event_type) not in allowed_categories:
-            continue
-        if (
-            event_type in TIMELINE_EVENT_TYPES
-            and event_task_id(event) == task_id
-            and (target or "main") in event_agent_refs(event)
-        ):
+        if _conversation_event_matches(event, task_id, target or "main", allowed_categories):
+            if _main_browser_mirror_key(event) in main_host_mirror_keys:
+                continue
             item = dict(event)
             item["_cursor"] = offset
             matches.append(item)
