@@ -39,6 +39,22 @@ main {
   overflow: hidden;
 }
 h1 { margin: 0; font-size: 20px; }
+.brand-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(52vw, 520px);
+}
+.brand-logo {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+.brand-short {
+  flex: 0 0 auto;
+}
 header > div:first-child {
   min-width: 0;
 }
@@ -48,14 +64,14 @@ header > div:first-child h1 {
   white-space: nowrap;
 }
 .header-workspace-dir {
-  display: inline;
+  display: inline-block;
   min-width: 0;
-  max-width: none;
-  overflow: visible;
+  max-width: min(34vw, 360px);
+  overflow: hidden;
   color: #667085;
   font-size: 14px;
   font-weight: 600;
-  text-overflow: clip;
+  text-overflow: ellipsis;
   vertical-align: baseline;
   white-space: nowrap;
 }
@@ -2518,8 +2534,14 @@ body.empty-run .panel {
   header > div:first-child .meta {
     display: none;
   }
-  .brand-full {
-    display: none;
+  .brand-title {
+    max-width: none;
+    gap: 7px;
+  }
+  .brand-logo {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
   }
   h1 {
     overflow: hidden;

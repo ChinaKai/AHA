@@ -83,6 +83,7 @@ def static_response(name: str, method: str, request_headers: dict[str, str] | No
         ".html": "text/html; charset=utf-8",
         ".css": "text/css; charset=utf-8",
         ".js": "application/javascript; charset=utf-8",
+        ".svg": "image/svg+xml",
     }.get(suffix, "application/octet-stream")
     return http_response("200 OK", b"" if method == "HEAD" else body, content_type, request_headers=request_headers)
 

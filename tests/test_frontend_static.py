@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+from aha_cli.web.http_utils import static_response
+
 
 class FrontendStaticTests(unittest.TestCase):
     def test_frontend_prefers_websocket_with_cursor_and_polling_fallback(self) -> None:
@@ -52,6 +54,33 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("bootstrap-panel", styles)
         self.assertIn("bootstrap-proxy", styles)
         self.assertIn("collaboration-help", styles)
+
+    def test_frontend_has_aha_logo_and_favicon(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        static_root = root / "src" / "aha_cli" / "web" / "static"
+        html = (static_root / "index.html").read_text(encoding="utf-8")
+        styles = (static_root / "styles.css").read_text(encoding="utf-8")
+        logo = (static_root / "aha-logo.svg").read_text(encoding="utf-8")
+        favicon = (static_root / "aha-favicon.svg").read_text(encoding="utf-8")
+        logo_response = static_response("aha-logo.svg", "GET")
+        favicon_response = static_response("aha-favicon.svg", "GET")
+
+        self.assertIn("<title>AHA Dashboard</title>", html)
+        self.assertIn('<link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">', html)
+        self.assertIn('class="brand-title"', html)
+        self.assertIn('class="brand-logo" src="/static/aha-logo.svg"', html)
+        self.assertNotIn('class="brand-full"', html)
+        self.assertNotIn("<span class=\"brand-full\"> Dashboard</span>", html)
+        self.assertIn(".brand-title", styles)
+        self.assertIn(".brand-logo", styles)
+        self.assertIn(".brand-short", styles)
+        self.assertIn("max-width: min(34vw, 360px);", styles)
+        self.assertIn("<title>AHA</title>", logo)
+        self.assertIn("<title>AHA</title>", favicon)
+        self.assertIn('viewBox="0 0 64 64"', logo)
+        self.assertIn('viewBox="0 0 64 64"', favicon)
+        self.assertIn(b"Content-Type: image/svg+xml", logo_response)
+        self.assertIn(b"Content-Type: image/svg+xml", favicon_response)
 
     def test_frontend_uses_modal_for_task_create(self) -> None:
         root = Path(__file__).resolve().parents[1]
