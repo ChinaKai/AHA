@@ -42,6 +42,7 @@ let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
 let taskProxyEditingUntil = 0;
 let taskSupervisionEditingUntil = 0;
+let taskContextEditingUntil = 0;
 let eventTailInitialized = false;
 let pendingMessageId = 0;
 let pendingSendInFlight = false;
@@ -76,6 +77,7 @@ const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interr
 const sandboxOptions = ["workspace-write", "read-only", "danger-full-access"];
 const approvalOptions = ["never", "on-failure", "on-request", "untrusted"];
 const defaultTaskSupervisionMaxRounds = 99;
+const defaultTaskContextThresholdPercent = 75;
 const defaultHttpProxy = "http://127.0.0.1:7890";
 const defaultHttpsProxy = defaultHttpProxy;
 const defaultNoProxy = "localhost,127.0.0.1,::1";
@@ -202,6 +204,12 @@ const selectedTaskSupervisionMaxRoundsEl = document.getElementById("selected-tas
 const selectedTaskSupervisionAskUserFieldEl = document.getElementById("selected-task-supervision-ask-user-field");
 const selectedTaskSupervisionAskUserGatesEl = document.getElementById("selected-task-supervision-ask-user-gates");
 const taskSupervisionStateEl = document.getElementById("task-supervision-state");
+const taskContextEditorEl = document.getElementById("task-context-editor");
+const taskContextFormEl = document.getElementById("task-context-form");
+const selectedTaskContextAutoCompactEnabledEl = document.getElementById("selected-task-context-auto-compact-enabled");
+const selectedTaskContextThresholdFieldEl = document.getElementById("selected-task-context-threshold-field");
+const selectedTaskContextThresholdEl = document.getElementById("selected-task-context-threshold");
+const taskContextStateEl = document.getElementById("task-context-state");
 const taskCreateConfirmDialogEl = document.getElementById("task-create-confirm");
 const taskCreateConfirmDetailsEl = document.getElementById("task-create-confirm-details");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
@@ -2157,6 +2165,30 @@ function taskSupervisionSummary(task) {
   return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds} | ask user ${askCount}/${supervisionAskUserGateDefs.length}`;
 }
 
+function taskContextManagementPolicy(task) {
+  const policy = task?.context_management && typeof task.context_management === "object" ? task.context_management : {};
+  const rawThreshold = Number(policy.auto_compact_threshold_percent ?? defaultTaskContextThresholdPercent);
+  const threshold = Number.isFinite(rawThreshold)
+    ? Math.max(1, Math.min(99, Math.round(rawThreshold)))
+    : defaultTaskContextThresholdPercent;
+  return {
+    auto_compact_enabled: Boolean(policy.auto_compact_enabled),
+    auto_compact_threshold_percent: threshold
+  };
+}
+
+function taskContextBadge(task) {
+  const policy = taskContextManagementPolicy(task);
+  return policy.auto_compact_enabled
+    ? `<span class="status context-auto-on">ctx auto ${escapeHtml(policy.auto_compact_threshold_percent)}%</span>`
+    : '<span class="status context-auto-off">ctx auto off</span>';
+}
+
+function taskContextSummary(task) {
+  const policy = taskContextManagementPolicy(task);
+  return policy.auto_compact_enabled ? `auto at ${policy.auto_compact_threshold_percent}%` : "auto off";
+}
+
 function taskAgentCount(task) {
   const value = Number(task?.agent_count);
   if (Number.isFinite(value)) return value;
@@ -2269,6 +2301,33 @@ function renderTaskSupervisionEditor() {
   applyDisabledState();
 }
 
+function renderTaskContextEditor() {
+  if (!taskContextEditorEl || !taskContextFormEl) return;
+  const task = selectedTask();
+  const disabled = !task;
+  taskContextFormEl.querySelectorAll("input, button").forEach(item => {
+    item.disabled = disabled;
+  });
+  if (!task) {
+    if (selectedTaskContextAutoCompactEnabledEl) selectedTaskContextAutoCompactEnabledEl.checked = false;
+    if (selectedTaskContextThresholdEl) selectedTaskContextThresholdEl.value = String(defaultTaskContextThresholdPercent);
+    if (taskContextStateEl) taskContextStateEl.textContent = "Select a task to edit context management.";
+    syncTaskContextFields();
+    return;
+  }
+  const policy = taskContextManagementPolicy(task);
+  if (selectedTaskContextAutoCompactEnabledEl) selectedTaskContextAutoCompactEnabledEl.checked = policy.auto_compact_enabled;
+  if (selectedTaskContextThresholdEl) selectedTaskContextThresholdEl.value = String(policy.auto_compact_threshold_percent);
+  syncTaskContextFields();
+  if (taskContextStateEl) taskContextStateEl.textContent = taskContextSummary(task);
+}
+
+function syncTaskContextFields() {
+  const enabled = Boolean(selectedTaskContextAutoCompactEnabledEl?.checked);
+  selectedTaskContextThresholdFieldEl?.classList.toggle("hidden", !enabled);
+  if (selectedTaskContextThresholdFieldEl) selectedTaskContextThresholdFieldEl.hidden = !enabled;
+}
+
 function syncTaskSupervisionModeFields() {
   syncSupervisionModeFields(selectedTaskSupervisionModeEl, selectedTaskSupervisionMaxRoundsFieldEl, selectedTaskSupervisionAskUserFieldEl);
 }
@@ -2377,6 +2436,10 @@ function markTaskSupervisionEditing(durationMs = 10000) {
   taskSupervisionEditingUntil = Date.now() + durationMs;
 }
 
+function markTaskContextEditing(durationMs = 10000) {
+  taskContextEditingUntil = Date.now() + durationMs;
+}
+
 function isTaskProxyEditing() {
   const active = document.activeElement;
   return (
@@ -2390,6 +2453,14 @@ function isTaskSupervisionEditing() {
   return (
     Date.now() < taskSupervisionEditingUntil ||
     (active instanceof Element && Boolean(taskSupervisionFormEl?.contains(active)))
+  );
+}
+
+function isTaskContextEditing() {
+  const active = document.activeElement;
+  return (
+    Date.now() < taskContextEditingUntil ||
+    (active instanceof Element && Boolean(taskContextFormEl?.contains(active)))
   );
 }
 
@@ -2437,6 +2508,7 @@ const timelineEventTypes = new Set([
   "task_round_summary_requested",
   "task_proxy_config_updated",
   "task_supervision_config_updated",
+  "task_context_management_config_updated",
   "main_reported_to_host",
   "host_decision",
   "main_applied_decision",
@@ -3722,6 +3794,9 @@ function applyStatusData(options = {}) {
   if (options.forceTaskSupervision || !isTaskSupervisionEditing()) {
     renderTaskSupervisionEditor();
   }
+  if (options.forceTaskContext || !isTaskContextEditing()) {
+    renderTaskContextEditor();
+  }
   if (options.forceAgents || !isAgentsPanelEditing()) {
     renderAgents();
   } else {
@@ -4326,17 +4401,17 @@ function renderTaskList() {
     item.innerHTML = `
       <div class="task-row">
         <strong>${escapeHtml(task.id)}</strong>
-        <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}${taskSupervisionBadge(task)}</span>
+        <span class="task-statuses">${taskStatusBadges(task)}${taskProxyBadge(task)}${taskSupervisionBadge(task)}${taskContextBadge(task)}</span>
       </div>
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="meta truncate">${escapeHtml(taskAgentCount(task))} agent(s) | collaboration ${escapeHtml(taskCollaborationSummary(task))} | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
+      <div class="meta truncate">${escapeHtml(taskAgentCount(task))} agent(s) | collaboration ${escapeHtml(taskCollaborationSummary(task))} | default ${escapeHtml(task.preferred_backend || "-")} | proxy ${escapeHtml(taskProxySummary(task))} | supervision ${escapeHtml(taskSupervisionSummary(task))} | context ${escapeHtml(taskContextSummary(task))} | ${escapeHtml(pathName(task.workspace_path))}${taskTimingLabel(task.id, task) ? ` | ${escapeHtml(taskTimingLabel(task.id, task))}` : ""}</div>
       <div class="task-actions">
         <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
         <button class="task-action" type="button" data-action="${task.hidden ? "restore" : "hide"}">${task.hidden ? "Restore" : "Hide"}</button>
         <button class="task-action danger" type="button" data-action="delete">Delete</button>
       </div>
     `;
-    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ncollaboration=${taskCollaborationSummary(task)}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nsupervision=${taskSupervisionSummary(task)}\nworkspace=${task.workspace_path || "-"}`;
+    item.title = `${task.title}${task.description ? `\n\n${task.description}` : ""}\ncollaboration=${taskCollaborationSummary(task)}\ndefault backend=${task.preferred_backend || "-"}\nproxy=${taskProxySummary(task)}\nsupervision=${taskSupervisionSummary(task)}\ncontext=${taskContextSummary(task)}\nworkspace=${task.workspace_path || "-"}`;
     item.addEventListener("click", async event => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("button")) return;
@@ -4356,6 +4431,7 @@ async function selectTask(taskId) {
   }
   taskProxyEditingUntil = 0;
   taskSupervisionEditingUntil = 0;
+  taskContextEditingUntil = 0;
   conversationAutoFollow = true;
   if (activeTab === "logs") logState(taskId).autoFollow = true;
   closeMobileSheets();
@@ -4364,6 +4440,7 @@ async function selectTask(taskId) {
   renderSelectedHeader();
   renderTaskProxyEditor();
   renderTaskSupervisionEditor();
+  renderTaskContextEditor();
   renderAgents();
   await Promise.all([loadBackendStatus(), ensureActiveTabData()]);
   renderPendingMessages();
@@ -4435,12 +4512,35 @@ async function saveTaskSupervisionConfig() {
   await loadStatus({ forceTaskSupervision: true });
 }
 
+async function saveTaskContextConfig() {
+  const task = selectedTask();
+  if (!task) return;
+  const enabled = Boolean(selectedTaskContextAutoCompactEnabledEl?.checked);
+  const rawThreshold = Number(selectedTaskContextThresholdEl?.value || defaultTaskContextThresholdPercent);
+  const threshold = Number.isFinite(rawThreshold)
+    ? Math.max(1, Math.min(99, Math.round(rawThreshold)))
+    : defaultTaskContextThresholdPercent;
+  if (selectedTaskContextThresholdEl) selectedTaskContextThresholdEl.value = String(threshold);
+  await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/context-management`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(runScopedPayload({
+      auto_compact_enabled: enabled,
+      auto_compact_threshold_percent: threshold
+    }))
+  }, "Failed to update task context management");
+  taskContextEditingUntil = 0;
+  await loadStatus({ forceTaskContext: true });
+}
+
 function renderSelectedHeader() {
   const task = selectedTask();
   if (!task) {
     renderHeaderWorkspace(null);
     renderMobileTaskSummary(null);
     renderTaskProxyEditor();
+    renderTaskSupervisionEditor();
+    renderTaskContextEditor();
     selectedIdEl.textContent = "";
     selectedTitleEl.textContent = "No tasks";
     selectedTaskMetaEl.textContent = "";
@@ -4453,7 +4553,7 @@ function renderSelectedHeader() {
   renderMobileTaskSummary(task);
   selectedIdEl.textContent = task.id;
   selectedTitleEl.textContent = task.title;
-  selectedTaskMetaEl.textContent = `collaboration ${taskCollaborationSummary(task)} | supervision ${taskSupervisionSummary(task)}`;
+  selectedTaskMetaEl.textContent = `collaboration ${taskCollaborationSummary(task)} | supervision ${taskSupervisionSummary(task)} | context ${taskContextSummary(task)}`;
   selectedTaskMetaEl.hidden = false;
   const displayStatus = task.hidden ? "hidden" : taskDisplayStatus(task);
   selectedStatusEl.textContent = displayStatus;
@@ -4906,6 +5006,7 @@ function renderTimelineEvent(event) {
   if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
   if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy updated", `default=${data.proxy_enabled ? "on" : "off"} http=${data.http_proxy_configured ? "set" : "-"} https=${data.https_proxy_configured ? "set" : "-"} no_proxy=${data.no_proxy_configured ? "set" : "-"}`, "session", ts);
   if (event.type === "task_supervision_config_updated") return renderTimelineStatus("task supervision updated", `${data.mode || "-"} via ${data.host_backend || "stub"} max_rounds=${data.max_rounds || "-"}`, "session", ts);
+  if (event.type === "task_context_management_config_updated") return renderTimelineStatus("task context updated", `${data.auto_compact_enabled ? "auto on" : "auto off"} threshold=${data.auto_compact_threshold_percent || defaultTaskContextThresholdPercent}%`, "session", ts);
   if (event.type === "main_reported_to_host") return renderTimelineStatus("main reported to host", `${data.host_backend || "stub"} ${data.channel || "main_only"} reply=${data.reply_chars || 0} chars`, "session", ts);
   if (event.type === "host_decision") return renderTimelineStatus("host decision", data.decision || "-", "session", ts);
   if (event.type === "main_applied_decision") return renderTimelineStatus("main applied host decision", `${data.decision || "-"} effect=${data.effect || "noop"}`, data.applied ? "running" : "session", ts);
@@ -5706,6 +5807,21 @@ taskSupervisionFormEl?.addEventListener("submit", async event => {
     alert(err?.message || String(err));
   }
 });
+taskContextFormEl?.addEventListener("pointerdown", () => markTaskContextEditing());
+taskContextFormEl?.addEventListener("focusin", () => markTaskContextEditing());
+taskContextFormEl?.addEventListener("input", () => markTaskContextEditing());
+taskContextFormEl?.addEventListener("change", () => {
+  markTaskContextEditing();
+  syncTaskContextFields();
+});
+taskContextFormEl?.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await saveTaskContextConfig();
+  } catch (err) {
+    alert(err?.message || String(err));
+  }
+});
 [selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl].forEach(input => {
   input?.addEventListener("input", () => {
     const configured = Boolean(selectedTaskHttpProxyEl?.value.trim() || selectedTaskHttpsProxyEl?.value.trim());
@@ -5744,6 +5860,7 @@ showHiddenEl.addEventListener("change", () => {
   renderSelectedHeader();
   renderTaskProxyEditor();
   renderTaskSupervisionEditor();
+  renderTaskContextEditor();
   renderAgents();
   renderConversationFilters();
   renderPanel();
@@ -5770,6 +5887,7 @@ renderAskUserGateControls(taskSupervisionAskUserGatesEl, defaultAskUserGates());
 syncCollaborationFields();
 syncNewRunCollaborationHelp();
 syncCreateTaskSupervisionModeFields();
+syncTaskContextFields();
 initDesktopSidebars();
 initMobileViewport();
 initMobileSheets();

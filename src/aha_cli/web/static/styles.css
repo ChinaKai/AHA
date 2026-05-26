@@ -742,13 +742,15 @@ button, input, select, textarea { font: inherit; }
   margin: 0;
 }
 .task-proxy-editor,
-.task-supervision-editor {
+.task-supervision-editor,
+.task-context-editor {
   border: 1px solid #e4e7ec;
   border-radius: 6px;
   background: #ffffff;
 }
 .task-proxy-editor > summary,
-.task-supervision-editor > summary {
+.task-supervision-editor > summary,
+.task-context-editor > summary {
   padding: 7px 9px;
   cursor: pointer;
   color: #475467;
@@ -757,34 +759,40 @@ button, input, select, textarea { font: inherit; }
   list-style: none;
 }
 .task-proxy-editor > summary::-webkit-details-marker,
-.task-supervision-editor > summary::-webkit-details-marker {
+.task-supervision-editor > summary::-webkit-details-marker,
+.task-context-editor > summary::-webkit-details-marker {
   display: none;
 }
 .task-proxy-editor > summary::after,
-.task-supervision-editor > summary::after {
+.task-supervision-editor > summary::after,
+.task-context-editor > summary::after {
   content: "+";
   float: right;
   color: #667085;
 }
 .task-proxy-editor[open] > summary::after,
-.task-supervision-editor[open] > summary::after {
+.task-supervision-editor[open] > summary::after,
+.task-context-editor[open] > summary::after {
   content: "-";
 }
 .proxy-form,
-.supervision-form {
+.supervision-form,
+.context-form {
   display: grid;
   gap: 7px;
   padding: 0 9px 9px;
 }
 .proxy-form input,
 .supervision-form input,
-.supervision-form select {
+.supervision-form select,
+.context-form input {
   min-height: 32px;
   padding: 0 8px;
   font-size: 12px;
 }
 .proxy-form button,
-.supervision-form button {
+.supervision-form button,
+.context-form button {
   min-height: 32px;
   font-size: 12px;
 }
@@ -1181,6 +1189,16 @@ button, input, select, textarea { font: inherit; }
   color: #b91c1c;
 }
 .status.context-unknown {
+  border: 1px solid #d0d5dd;
+  background: #f9fafb;
+  color: #667085;
+}
+.status.context-auto-on {
+  border: 1px solid #bae6fd;
+  background: #e0f2fe;
+  color: #075985;
+}
+.status.context-auto-off {
   border: 1px solid #d0d5dd;
   background: #f9fafb;
   color: #667085;

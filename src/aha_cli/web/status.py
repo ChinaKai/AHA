@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import time
 
-from aha_cli.domain.models import utc_now
+from aha_cli.domain.models import normalize_task_context_management, utc_now
 from aha_cli.services.backend_runtime import backend_status
+from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -16,6 +17,8 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_runtime,
 )
+from aha_cli.store.io import read_json
+from aha_cli.store.paths import session_path
 
 BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
 TASK_OUTCOME_SCAN_LIMIT = 10000
@@ -274,6 +277,47 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     return True
 
 
+def backend_session_has_active_id(root: Path, run_id: str, task_id: str, agent_id: str) -> bool:
+    path = session_path(root, run_id, task_id, agent_id)
+    if not path.exists():
+        return False
+    try:
+        session = read_json(path)
+    except (OSError, ValueError):
+        return False
+    return bool(session.get("backend_session_id"))
+
+
+def auto_compact_agent_context_if_needed(root: Path, run_id: str, task: dict, agent: dict, backend_state: dict) -> bool:
+    task_id = str(task.get("id") or "")
+    agent_id = str(agent.get("id") or "main")
+    if not task_id or not agent_id:
+        return False
+    policy = normalize_task_context_management(task.get("context_management"))
+    if not policy.get("auto_compact_enabled"):
+        return False
+    if str(backend_state.get("status") or "stopped").lower() != "stopped":
+        return False
+    if str(agent.get("status") or "").lower() == "running":
+        return False
+    pressure = backend_state.get("context_pressure") if isinstance(backend_state.get("context_pressure"), dict) else {}
+    try:
+        percent = float(pressure.get("percent"))
+    except (TypeError, ValueError):
+        return False
+    threshold = int(policy.get("auto_compact_threshold_percent") or 75)
+    if percent < threshold or not backend_session_has_active_id(root, run_id, task_id, agent_id):
+        return False
+    try:
+        compact_reset_backend_session(root, run_id, task_id, agent_id, reason="large", restart=False)
+    except (KeyError, ValueError):
+        return False
+    invalidate_backend_status_cache(root, run_id, agent_id, task_id)
+    backend_state.clear()
+    backend_state.update(backend_status(root, run_id, agent_id, task_id=task_id))
+    return True
+
+
 def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
     snapshot = status_snapshot(root, run_id)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
@@ -295,6 +339,7 @@ def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected
                 backend_cache[key] = cached_backend_status(root, run_id, target, task_id=task_id)
             state = backend_cache[key]
             recover_stale_running_agent(root, run_id, task, agent, state)
+            auto_compact_agent_context_if_needed(root, run_id, task, agent, state)
             agent["backend_process_status"] = state.get("status") or "stopped"
             agent["backend_process_pid"] = state.get("pid")
             agent["backend_process_last_reply_at"] = state.get("last_reply_at")
@@ -327,5 +372,6 @@ __all__ = [
     "consume_agent_recovery_context",
     "merge_recovery_context_message",
     "recover_stale_running_agent",
+    "auto_compact_agent_context_if_needed",
     "web_status_snapshot",
 ]

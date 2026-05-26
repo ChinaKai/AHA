@@ -9,6 +9,7 @@ from aha_cli.domain.models import (
     make_task,
     make_task_round,
     next_task_id,
+    normalize_task_context_management,
     normalize_task_supervision,
     task_prompt,
     utc_now,
@@ -631,6 +632,41 @@ def update_task_supervision_config(
             "real_agent_enabled": task["supervision"].get("real_agent_enabled"),
             "max_rounds": task["supervision"].get("max_rounds"),
             "ask_user_gates": task["supervision"].get("ask_user_gates"),
+        },
+    )
+    return task
+
+
+def update_task_context_management_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    auto_compact_enabled: object = UNSET,
+    auto_compact_threshold_percent: object = UNSET,
+) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        context_management = normalize_task_context_management(task.get("context_management"))
+        if auto_compact_enabled is not UNSET:
+            context_management["auto_compact_enabled"] = bool(auto_compact_enabled)
+        if auto_compact_threshold_percent is not UNSET:
+            context_management["auto_compact_threshold_percent"] = auto_compact_threshold_percent
+        task["context_management"] = normalize_task_context_management(context_management)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "task_context_management_config_updated",
+        {
+            "task_id": task_id,
+            "auto_compact_enabled": task["context_management"].get("auto_compact_enabled"),
+            "auto_compact_threshold_percent": task["context_management"].get("auto_compact_threshold_percent"),
         },
     )
     return task

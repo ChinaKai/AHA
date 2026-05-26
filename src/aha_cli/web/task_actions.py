@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from aha_cli.domain.models import DEFAULT_TASK_SUPERVISION_MAX_ROUNDS, TASK_SUPERVISION_ASK_USER_GATES
+from aha_cli.domain.models import (
+    DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT,
+    DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
+    TASK_SUPERVISION_ASK_USER_GATES,
+)
 from aha_cli.services.backend_runtime import backend_status, start_backend, stop_backend
 from aha_cli.web.http_utils import parse_optional_bool
 from aha_cli.web.task_commands import (
@@ -77,6 +81,19 @@ def parse_task_supervision_fields(payload: dict) -> dict[str, object]:
     return update
 
 
+def parse_task_context_management_fields(payload: dict) -> dict[str, object]:
+    update: dict[str, object] = {}
+    if "auto_compact_enabled" in payload:
+        update["auto_compact_enabled"] = parse_optional_bool(payload.get("auto_compact_enabled"), "auto_compact_enabled")
+    elif "enabled" in payload:
+        update["auto_compact_enabled"] = parse_optional_bool(payload.get("enabled"), "enabled")
+    if "auto_compact_threshold_percent" in payload:
+        update["auto_compact_threshold_percent"] = max(1, min(99, int(payload.get("auto_compact_threshold_percent") or DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT)))
+    elif "threshold_percent" in payload:
+        update["auto_compact_threshold_percent"] = max(1, min(99, int(payload.get("threshold_percent") or DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT)))
+    return update
+
+
 __all__ = [
     "backend_status",
     "compact_reset_selected_agent",
@@ -92,6 +109,7 @@ __all__ = [
     "is_task_supervision_host_target",
     "message_backend_autostart_config",
     "parse_task_proxy_fields",
+    "parse_task_context_management_fields",
     "parse_task_supervision_fields",
     "prepare_task_main_autostart",
     "realtime_debug_log",

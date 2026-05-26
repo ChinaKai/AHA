@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from aha_cli.domain.models import normalize_task_supervision
+from aha_cli.domain.models import normalize_task_context_management, normalize_task_supervision
 from aha_cli.store.events import event_stream_position as default_event_stream_position
 from aha_cli.store.io import read_json, text_tail_page
 from aha_cli.store.journal import latest_final_artifact
@@ -66,6 +66,7 @@ def status_snapshot(
                 "delegation_policy": task.get("delegation_policy", "auto"),
                 "max_sub_agents": task.get("max_sub_agents", 3),
                 "supervision": normalize_task_supervision(task.get("supervision")),
+                "context_management": normalize_task_context_management(task.get("context_management")),
                 "status": task["status"],
                 "exit_code": task["exit_code"],
                 "started_at": task["started_at"],

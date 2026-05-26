@@ -62,6 +62,7 @@ TASK_COLLABORATION_DEFAULTS = {
 }
 DEFAULT_TASK_SANDBOX = "danger-full-access"
 DEFAULT_TASK_SUPERVISION_MAX_ROUNDS = 99
+DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT = 75
 
 
 def default_task_supervision_ask_user_gates() -> dict:
@@ -183,6 +184,29 @@ def normalize_task_supervision(value: object | None = None) -> dict:
     return supervision
 
 
+def default_task_context_management() -> dict:
+    return {
+        "auto_compact_enabled": False,
+        "auto_compact_threshold_percent": DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT,
+    }
+
+
+def normalize_task_context_management(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    context = default_task_context_management()
+    if "auto_compact_enabled" in raw:
+        context["auto_compact_enabled"] = normalize_bool(raw.get("auto_compact_enabled"))
+    elif "enabled" in raw:
+        context["auto_compact_enabled"] = normalize_bool(raw.get("enabled"))
+    raw_threshold = raw.get("auto_compact_threshold_percent", raw.get("threshold_percent"))
+    if raw_threshold is not None:
+        try:
+            context["auto_compact_threshold_percent"] = max(1, min(99, int(raw_threshold)))
+        except (TypeError, ValueError):
+            pass
+    return context
+
+
 def default_tasks(goal: str, agents: int, mode: str) -> list[str]:
     research = [
         "Map the relevant files, concepts, and terminology for the goal.",
@@ -262,6 +286,7 @@ def make_task(
     preferred_sub_model: str | None = None,
     description: str | None = None,
     supervision: dict | None = None,
+    context_management: dict | None = None,
 ) -> dict:
     resolved_collaboration_mode, resolved_delegation_policy, resolved_max_sub_agents = resolve_task_collaboration(
         collaboration_mode,
@@ -288,6 +313,7 @@ def make_task(
         "delegation_policy": resolved_delegation_policy,
         "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
+        "context_management": normalize_task_context_management(context_management),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
         "output_file": f"results/{task_id}.md",
@@ -469,6 +495,7 @@ def enrich_plan(plan: dict, backend: str = "codex") -> dict:
         task["delegation_policy"] = delegation_policy
         task["max_sub_agents"] = max_sub_agents
         task["supervision"] = normalize_task_supervision(task.get("supervision"))
+        task["context_management"] = normalize_task_context_management(task.get("context_management"))
         ensure_task_agents(task, backend)
     plan.setdefault("main_agent", make_agent("main", "run-main", backend, status="active"))
     return plan

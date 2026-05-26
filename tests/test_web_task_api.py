@@ -71,6 +71,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["agents"][0]["sandbox"], "danger-full-access")
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 99)
         self.assertFalse(any(body["task"]["supervision"]["ask_user_gates"].values()))
+        self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
+        self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
@@ -454,6 +456,36 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["preferred_proxy_enabled"])
         self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
+
+    def test_task_context_management_api_updates_existing_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Context management API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/context-management",
+                        method="POST",
+                        payload={
+                            "auto_compact_enabled": True,
+                            "auto_compact_threshold_percent": 82,
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                snapshot = status_snapshot(root, run_id)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["task"]["context_management"]["auto_compact_enabled"])
+        self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 82)
+        self.assertEqual(snapshot["tasks"][0]["context_management"], body["task"]["context_management"])
 
 
 if __name__ == "__main__":

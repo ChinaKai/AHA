@@ -24,6 +24,7 @@ from aha_cli.store.filesystem import (
     task_log_page,
     task_snapshot,
     update_agent_config,
+    update_task_context_management_config,
     update_task_proxy_config,
     update_task_supervision_config,
 )
@@ -31,6 +32,7 @@ from aha_cli.web.http_utils import parse_json_body, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.task_actions import (
     handle_send_payload,
+    parse_task_context_management_fields,
     parse_task_proxy_fields,
     parse_task_supervision_fields,
     request_task_finalization_with_backend,
@@ -128,6 +130,8 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             task = delete_task(root, run_id, task_id)
         elif action == "proxy":
             task = update_task_proxy_config(root, run_id, task_id, **parse_task_proxy_fields(parse_json_body(body)))
+        elif action == "context-management":
+            task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(parse_json_body(body)))
         elif action == "supervision":
             task = update_task_supervision_config(root, run_id, task_id, **parse_task_supervision_fields(parse_json_body(body)))
         elif action == "session/compact-reset":
@@ -316,7 +320,9 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
     if not task_id:
         return route_result({"error": "task_id is required"}, "400 Bad Request")
     try:
-        if "supervision" in payload and isinstance(payload.get("supervision"), dict):
+        if "context_management" in payload and isinstance(payload.get("context_management"), dict):
+            task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(payload["context_management"]))
+        elif "supervision" in payload and isinstance(payload.get("supervision"), dict):
             task = update_task_supervision_config(root, run_id, task_id, **parse_task_supervision_fields(payload["supervision"]))
         else:
             task = update_task_proxy_config(root, run_id, task_id, **parse_task_proxy_fields(payload))

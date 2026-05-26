@@ -20,8 +20,10 @@ from aha_cli.store.filesystem import (
     set_agent_status,
     set_task_status,
     status_snapshot,
+    update_task_context_management_config,
     update_agent_runtime,
 )
+from aha_cli.store.sessions import ensure_session, save_session
 from aha_cli.web.server import handle_send_payload, recover_stale_running_agent, web_status_snapshot
 from aha_cli.web.status import cached_backend_status
 
@@ -75,6 +77,45 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(agents["main"]["backend_latest_prompt_metrics"]["total"]["chars"], 1234)
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
+
+    def test_web_status_snapshot_auto_compacts_stopped_agent_above_task_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Auto context compact", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_context_management_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    auto_compact_enabled=True,
+                    auto_compact_threshold_percent=75,
+                )
+                session = ensure_session(root, run_id, "task-001", "main", "codex", model="gpt-5.5")
+                session["backend_session_id"] = "codex-session-high-context"
+                save_session(root, session)
+
+                backend_states = [
+                    {"status": "stopped", "pid": None, "context_pressure": {"level": "watch", "percent": 80.0}},
+                    {"status": "stopped", "pid": None, "context_pressure": {"level": "unknown", "percent": None}},
+                ]
+
+                def fake_backend_status(_root: Path, _run_id: str, target: str = "main", task_id: str | None = None) -> dict:
+                    state = backend_states.pop(0) if backend_states else {"status": "stopped", "pid": None, "context_pressure": {}}
+                    return {"target": target, "task_id": task_id, **state}
+
+                with (
+                    mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status),
+                    mock.patch("aha_cli.web.status.compact_reset_backend_session", return_value={"ok": True}) as compact_reset,
+                ):
+                    snapshot = web_status_snapshot(root, run_id)
+
+        compact_reset.assert_called_once_with(root, run_id, "task-001", "main", reason="large", restart=False)
+        agent = snapshot["tasks"][0]["agents"][0]
+        self.assertEqual(agent["backend_process_status"], "stopped")
+        self.assertEqual(agent["backend_context_pressure"]["level"], "unknown")
 
     def test_web_status_snapshot_lite_skips_nonselected_idle_backend_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

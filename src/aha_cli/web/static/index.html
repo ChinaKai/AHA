@@ -133,6 +133,21 @@
             <div id="task-supervision-state" class="meta"></div>
           </form>
         </details>
+        <details id="task-context-editor" class="task-context-editor">
+          <summary>Context management</summary>
+          <form id="task-context-form" class="context-form">
+            <label class="checkbox-line">
+              <input id="selected-task-context-auto-compact-enabled" type="checkbox">
+              <span>Agent context 自动整理</span>
+            </label>
+            <label id="selected-task-context-threshold-field" class="field-label" hidden>
+              <span>触发百分比</span>
+              <input id="selected-task-context-threshold" type="number" min="1" max="99" value="75">
+            </label>
+            <button type="submit">Save Context</button>
+            <div id="task-context-state" class="meta"></div>
+          </form>
+        </details>
       </div>
       <div id="tasks" class="task-list"></div>
     </aside>
