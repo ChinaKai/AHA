@@ -1847,8 +1847,14 @@ function agentInputWaitBlocked(agent) {
   return !reason || reason === "subagents" || reason === "host";
 }
 
+function taskHostInputBlocked(task) {
+  const host = (task?.agents || []).find(agent => isSupervisionAgent(agent));
+  const status = agentLifecycleStatus(host);
+  return status === "pending" || status === "running" || status === "waiting";
+}
+
 function selectedAgentInputBlocked() {
-  return selectedBackendActive() || agentInputWaitBlocked(selectedAgent());
+  return selectedBackendActive() || agentInputWaitBlocked(selectedAgent()) || taskHostInputBlocked(selectedTask());
 }
 
 function selectedTaskRealtimeActive() {
@@ -1968,7 +1974,9 @@ async function sendBackendMessage(task, agentId, message) {
       ok: Boolean(response?.ok),
       handled_by: response?.handled_by || "",
       backend_started: Boolean(response?.backend),
-      interrupted: Boolean(response?.interrupt?.interrupted)
+      interrupted: Boolean(response?.interrupt?.interrupted),
+      deferred: Boolean(response?.deferred),
+      reason: response?.reason || ""
     });
     return response;
   } catch (err) {
@@ -1990,6 +1998,11 @@ async function flushPendingMessages(task, agentId, currentMessage = "", options 
   try {
     const message = items.length || interrupted ? mergedPendingPrompt(items, currentMessage, interrupted) : currentMessage;
     const response = await sendBackendMessage(task, target, message);
+    if (response?.deferred) {
+      if (currentMessage) addPendingMessage(currentMessage, task, target);
+      renderPendingMessages();
+      return response;
+    }
     clearPendingForContext(task.id, target);
     interruptedContexts.delete(key);
     renderPendingMessages();

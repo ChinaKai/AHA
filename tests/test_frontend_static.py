@@ -496,10 +496,14 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn("function agentInputWaitBlocked(agent)", script)
         self.assertIn('reason === "subagents" || reason === "host"', script)
+        self.assertIn("function taskHostInputBlocked(task)", script)
+        self.assertIn('return status === "pending" || status === "running" || status === "waiting";', script)
         self.assertIn("function selectedAgentInputBlocked()", script)
-        self.assertIn("return selectedBackendActive() || agentInputWaitBlocked(selectedAgent());", script)
+        self.assertIn("return selectedBackendActive() || agentInputWaitBlocked(selectedAgent()) || taskHostInputBlocked(selectedTask());", script)
         self.assertIn("if (!task || selectedAgentInputBlocked()) return null;", script)
         self.assertIn("if (selectedAgentInputBlocked() && !isAha)", script)
+        self.assertIn("if (response?.deferred)", script)
+        self.assertIn("if (currentMessage) addPendingMessage(currentMessage, task, target);", script)
         self.assertIn("Agent 忙碌或等待中收到的消息会先暂存", script)
 
     def test_frontend_adjusts_mobile_viewport_for_keyboard(self) -> None:

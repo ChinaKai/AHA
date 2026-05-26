@@ -335,7 +335,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             set_agent_status(root, run_id, item_task_id, "main", "pending")
                             set_task_status(root, run_id, item_task_id, "running")
                         elif host_result.get("waiting"):
-                            set_agent_status(root, run_id, item_task_id, "main", "waiting")
+                            set_agent_status(root, run_id, item_task_id, "main", "waiting", waiting_reason="subagents")
                             set_task_status(root, run_id, item_task_id, "running")
                         elif host_result.get("routed_to_browser"):
                             set_task_status(root, run_id, item_task_id, "awaiting_user", exit_code)
@@ -371,29 +371,54 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         from_agent=args.sender,
                         to_agent=reply_target,
                     )
-                    if agent_id == "main" and manages_task_status and not writes_task_final and not is_agent_command:
-                        apply_supervision_stub(
-                            root,
-                            run_id,
-                            item_task_id,
-                            source_agent=agent_id,
-                            reply_text=display_reply,
-                        )
-                        host_result = apply_supervision_real_host(
-                            root,
-                            run_id,
-                            item_task_id,
-                            source_agent=agent_id,
-                            reply_text=display_reply,
-                            source_message=item,
-                            cfg=cfg,
-                            run=run,
-                        )
-                        if host_result:
-                            executed.extend(host_result.get("executed", []))
-                            supervision_routed_to_main = bool(host_result.get("routed_to_main"))
-                            supervision_waiting_for_host = bool(host_result.get("routed_to_host"))
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
+                    defer_supervision_for_subagents = False
+                    if agent_id == "main" and manages_task_status and not writes_task_final and not is_agent_command:
+                        try:
+                            supervision_detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
+                        except KeyError:
+                            supervision_detail = None
+                        defer_supervision_for_subagents = bool(
+                            delegating_actions
+                            or (
+                                supervision_detail is not None
+                                and task_has_incomplete_sub_agents(supervision_detail["task"])
+                            )
+                        )
+                        if defer_supervision_for_subagents:
+                            append_event(
+                                root,
+                                run_id,
+                                "supervision_deferred",
+                                {
+                                    "task_id": item_task_id,
+                                    "target": agent_id,
+                                    "reason": "subagents",
+                                    "delegating_actions": [action.get("type") for action in delegating_actions],
+                                },
+                            )
+                        else:
+                            apply_supervision_stub(
+                                root,
+                                run_id,
+                                item_task_id,
+                                source_agent=agent_id,
+                                reply_text=display_reply,
+                            )
+                            host_result = apply_supervision_real_host(
+                                root,
+                                run_id,
+                                item_task_id,
+                                source_agent=agent_id,
+                                reply_text=display_reply,
+                                source_message=item,
+                                cfg=cfg,
+                                run=run,
+                            )
+                            if host_result:
+                                executed.extend(host_result.get("executed", []))
+                                supervision_routed_to_main = bool(host_result.get("routed_to_main"))
+                                supervision_waiting_for_host = bool(host_result.get("routed_to_host"))
                     if (
                         agent_id == "main"
                         and item_task_id
@@ -462,10 +487,21 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                     },
                                 )
                                 mark_task_coordination(root, run_id, item_task_id, round_summary_completed_at=utc_now())
-                                set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
-                                set_task_status(root, run_id, item_task_id, "awaiting_user")
+                                if supervision_waiting_for_host:
+                                    set_agent_status(
+                                        root,
+                                        run_id,
+                                        item_task_id,
+                                        agent_id,
+                                        "waiting",
+                                        waiting_reason="host",
+                                    )
+                                    set_task_status(root, run_id, item_task_id, "running")
+                                else:
+                                    set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
+                                    set_task_status(root, run_id, item_task_id, "awaiting_user")
                             elif delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
-                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting")
+                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", waiting_reason="subagents")
                                 set_task_status(root, run_id, item_task_id, "running")
                             elif supervision_routed_to_main:
                                 set_agent_status(root, run_id, item_task_id, agent_id, "pending")
@@ -493,7 +529,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             detail = task_snapshot(root, run_id, item_task_id)
                             if exit_code == 0 and task_has_incomplete_sub_agents(detail["task"]):
                                 empty_reply_waiting_for_subagents = True
-                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", exit_code)
+                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", exit_code, waiting_reason="subagents")
                                 set_task_status(root, run_id, item_task_id, "running")
                                 append_event(
                                     root,

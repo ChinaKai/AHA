@@ -531,6 +531,7 @@ def apply_supervision_real_host(
         display_sender="main",
         display_target=host_agent_id,
     )
+    set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="host")
     set_task_status(root, run_id, task_id, "running")
     set_agent_status(root, run_id, task_id, host_agent_id, "pending")
     host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or host_backend)

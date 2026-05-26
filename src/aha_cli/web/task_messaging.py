@@ -8,6 +8,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.store.filesystem import (
+    append_event,
     append_message,
     inbox_path,
     run_dir,
@@ -128,6 +129,37 @@ def task_locked_for_messages(root: Path, run_id: str, task_id: str | None) -> st
     return status if status in TERMINAL_TASK_STATUSES else None
 
 
+def task_host_review_message_blocker(root: Path, run_id: str, task_id: str | None, target_id: str) -> str | None:
+    if not task_id:
+        return None
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return None
+    if is_task_supervision_host_target(task, target_id):
+        return None
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    if (
+        supervision.get("mode") != "assisted"
+        or not supervision.get("real_agent_enabled")
+        or supervision.get("host_backend") == "stub"
+    ):
+        return None
+    host_agent_id = str(supervision.get("host_agent_id") or "host")
+    agents = task.get("agents") if isinstance(task.get("agents"), list) else []
+    host = next((agent for agent in agents if agent.get("id") == host_agent_id or agent.get("role") == "host"), None)
+    host_status = str((host or {}).get("status") or "").lower()
+    if host_status in {"pending", "running", "waiting"}:
+        return "host_review"
+    main = next((agent for agent in agents if agent.get("id") == "main"), None)
+    if (
+        str((main or {}).get("status") or "").lower() == "waiting"
+        and str((main or {}).get("waiting_reason") or "").lower() == "host"
+    ):
+        return "host_review"
+    return None
+
+
 def handle_send_payload(
     root: Path,
     run_id: str,
@@ -192,6 +224,24 @@ def handle_send_payload(
         raise ValueError(f"task {task_id} is {locked_status}; use /aha reopen before sending follow-up messages")
 
     supervision_host_message = is_supervision_host_message(root, run_id, task_id, target_id)
+    host_review_blocker = task_host_review_message_blocker(root, run_id, task_id, target_id)
+    if host_review_blocker:
+        append_event(
+            root,
+            run_id,
+            "message_deferred",
+            {"task_id": task_id, "target": target_id, "reason": host_review_blocker},
+        )
+        debug_logger(
+            "api.send",
+            _root=root,
+            phase="deferred",
+            run_id=run_id,
+            task_id=task_id or "",
+            target=target_id,
+            reason=host_review_blocker,
+        )
+        return {"ok": True, "deferred": True, "reason": host_review_blocker}
     autostart = message_backend_autostart_config(root, run_id, task_id, target_id)
     if autostart and task_id:
         ensure_chat_offset_before_message(root, run_id, task_id, target_id)
@@ -251,5 +301,6 @@ __all__ = [
     "message_backend_autostart_config",
     "realtime_debug_log",
     "save_chat_offset_after_message",
+    "task_host_review_message_blocker",
     "task_locked_for_messages",
 ]

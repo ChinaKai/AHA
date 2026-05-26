@@ -355,6 +355,159 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertTrue(applied[-1]["data"]["routed_to_main"])
         self.assertEqual(task["status"], "running")
 
+    def test_main_spawn_sub_defers_supervision_until_round_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Spawn before host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "并行处理", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "检查一个独立范围",
+                                "backend": "codex",
+                                "reason": "parallel check",
+                            }
+                        ],
+                        "response": "已交给 sub 检查。",
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_sub,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        start_sub.assert_called_once()
+        start_host.assert_not_called()
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(main["status"], "waiting")
+        self.assertEqual(main["waiting_reason"], "subagents")
+        self.assertFalse(any(row["type"] == "main_reported_to_host" for row in rows))
+        self.assertTrue(any(row["type"] == "supervision_deferred" and row["data"].get("reason") == "subagents" for row in rows))
+
+    def test_main_route_to_sub_defers_supervision_until_round_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Route before host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                append_message(root, run_id, "main", "让 sub 继续", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "route_to_agent",
+                                "agent_id": sub["id"],
+                                "message": "继续检查你负责的范围",
+                                "reason": "sub owns this scope",
+                            }
+                        ],
+                        "response": "已转给 sub 继续。",
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_sub,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        start_sub.assert_called_once()
+        start_host.assert_not_called()
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main["status"], "waiting")
+        self.assertEqual(main["waiting_reason"], "subagents")
+        self.assertFalse(any(row["type"] == "main_reported_to_host" for row in rows))
+        self.assertTrue(any(row["type"] == "supervision_deferred" for row in rows))
+
+    def test_round_summary_keeps_main_waiting_for_real_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Round summary host wait", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_task_status(root, run_id, "task-001", "running")
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "Produce a concise user-facing round summary now.",
+                    sender="aha",
+                    task_id="task-001",
+                    role="main",
+                    reply_target="browser",
+                    coordination="subagents_complete",
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "round summary", None)),
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 0)
+        start_host.assert_called_once()
+        self.assertEqual(task["status"], "running")
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        host = next(agent for agent in task["agents"] if agent["role"] == "host")
+        self.assertEqual(main["status"], "waiting")
+        self.assertEqual(main["waiting_reason"], "host")
+        self.assertEqual(host["status"], "pending")
+        self.assertTrue(any(row["type"] == "main_reported_to_host" for row in rows))
+
     def test_supervision_host_backend_switch_resets_backend_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

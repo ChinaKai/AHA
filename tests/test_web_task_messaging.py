@@ -11,6 +11,7 @@ from aha_cli.cli import main
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
     complete_task,
+    event_path,
     inbox_path,
     iter_jsonl_from,
     run_dir,
@@ -149,6 +150,97 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["handled_by"], "aha")
         self.assertEqual(messages, [])
+
+    def test_send_to_main_defers_while_supervision_host_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host review pending", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+                set_agent_status(root, run_id, "task-001", "host", "pending")
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_messaging.start_backend") as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "message": "should stay pending",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["deferred"])
+        self.assertEqual(result["reason"], "host_review")
+        self.assertEqual(messages, [])
+        start_backend.assert_not_called()
+        self.assertTrue(any(row["type"] == "message_deferred" and row["data"].get("reason") == "host_review" for row in rows))
+
+    def test_send_to_main_defers_while_main_waits_for_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Main host wait", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+                set_agent_status(root, run_id, "task-001", "host", "completed", 0)
+
+                with mock.patch("aha_cli.web.task_messaging.start_backend") as start_backend:
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "message": "should stay pending",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(result["deferred"])
+        self.assertEqual(messages, [])
+        start_backend.assert_not_called()
 
 
 if __name__ == "__main__":
