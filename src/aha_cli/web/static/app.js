@@ -1429,6 +1429,12 @@ function mobileViewportMatches() {
   return window.matchMedia("(max-width: 640px)").matches;
 }
 
+function composerPlainEnterCreatesNewline() {
+  const coarsePointer = Boolean(window.matchMedia?.("(pointer: coarse)")?.matches);
+  const touchPoints = Number(navigator.maxTouchPoints || 0) > 0;
+  return mobileViewportMatches() || coarsePointer || touchPoints;
+}
+
 function isKeyboardTextControl(element) {
   if (!(element instanceof HTMLElement)) return false;
   if (element.isContentEditable) return true;
@@ -5382,9 +5388,10 @@ messageEl.addEventListener("focus", () => {
   renderCommandMenu();
 });
 messageEl.addEventListener("keydown", event => {
+  if (event.isComposing || event.keyCode === 229) return;
   const commands = matchingSlashCommands();
   const plainEnter = event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-  const plainEnterSubmits = plainEnter && !mobileViewportMatches();
+  const plainEnterSubmits = plainEnter && !composerPlainEnterCreatesNewline();
   if (commands.length && event.key === "ArrowDown") {
     event.preventDefault();
     commandSelection = (commandSelection + 1) % commands.length;
