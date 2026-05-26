@@ -89,6 +89,21 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('action === "hide" && !confirm(`Hide ${taskId} from the task list?\\n\\nYou can restore hidden tasks later.`)', script)
         self.assertIn('(action === "final" || action === "complete") && !confirm(`Ask task-main to generate the Final for ${taskId}?`)', script)
 
+    def test_frontend_composer_supports_multiline_input(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        static_root = root / "src" / "aha_cli" / "web" / "static"
+        html = (static_root / "index.html").read_text(encoding="utf-8")
+        script = (static_root / "app.js").read_text(encoding="utf-8")
+        styles = (static_root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('<textarea id="message" rows="1"', html)
+        self.assertNotIn('<input id="message"', html)
+        self.assertIn("function syncMessageInputHeight()", script)
+        self.assertIn('const plainEnter = event.key === "Enter" && !event.shiftKey', script)
+        self.assertIn("requestComposerSubmit();", script)
+        self.assertIn(".composer textarea#message", styles)
+        self.assertIn("max-height: 160px;", styles)
+
     def test_frontend_uses_modal_for_task_create(self) -> None:
         root = Path(__file__).resolve().parents[1]
         html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")

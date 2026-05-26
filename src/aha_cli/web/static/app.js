@@ -1401,6 +1401,20 @@ function syncMobileActionPanel() {
   });
 }
 
+function requestComposerSubmit() {
+  if (sendFormEl.requestSubmit) {
+    sendFormEl.requestSubmit();
+  } else {
+    sendFormEl.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+  }
+}
+
+function syncMessageInputHeight() {
+  if (!(messageEl instanceof HTMLTextAreaElement)) return;
+  messageEl.style.height = "auto";
+  messageEl.style.height = `${Math.min(messageEl.scrollHeight, 160)}px`;
+}
+
 function syncMobileComposerAction() {
   if (!mobileActionsToggleEl) return;
   const hasMessage = Boolean(messageEl.value.trim());
@@ -1551,11 +1565,7 @@ function initMobileActionPanel() {
   mobileActionsToggleEl?.addEventListener("click", event => {
     if (messageEl.value.trim()) {
       event.preventDefault();
-      if (sendFormEl.requestSubmit) {
-        sendFormEl.requestSubmit();
-      } else {
-        sendFormEl.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
-      }
+      requestComposerSubmit();
       return;
     }
     setMobileActionPanel(Boolean(mobileActionPanelEl?.hidden));
@@ -5345,6 +5355,7 @@ sendFormEl.addEventListener("submit", async event => {
       response = await flushPendingMessages(task, agentId, message);
     }
     messageEl.value = "";
+    syncMessageInputHeight();
     syncMobileComposerAction();
     commandMenuEl.classList.add("hidden");
     closeMobileActionPanel();
@@ -5363,6 +5374,7 @@ sendFormEl.addEventListener("submit", async event => {
 
 messageEl.addEventListener("input", () => {
   commandSelection = 0;
+  syncMessageInputHeight();
   syncMobileComposerAction();
   renderCommandMenu();
 });
@@ -5371,26 +5383,32 @@ messageEl.addEventListener("focus", () => {
 });
 messageEl.addEventListener("keydown", event => {
   const commands = matchingSlashCommands();
-  if (!commands.length) return;
-  if (event.key === "ArrowDown") {
+  const plainEnter = event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+  if (commands.length && event.key === "ArrowDown") {
     event.preventDefault();
     commandSelection = (commandSelection + 1) % commands.length;
     renderCommandMenu();
-  } else if (event.key === "ArrowUp") {
+  } else if (commands.length && event.key === "ArrowUp") {
     event.preventDefault();
     commandSelection = (commandSelection + commands.length - 1) % commands.length;
     renderCommandMenu();
-  } else if (event.key === "Tab") {
+  } else if (commands.length && event.key === "Tab") {
     event.preventDefault();
     applySlashCommand(commandSelection);
-  } else if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+  } else if (commands.length && plainEnter) {
     const command = commands[commandSelection];
     if (command && messageEl.value.trim() !== command.insert.trim()) {
       event.preventDefault();
       applySlashCommand(commandSelection);
+    } else {
+      event.preventDefault();
+      requestComposerSubmit();
     }
-  } else if (event.key === "Escape") {
+  } else if (commands.length && event.key === "Escape") {
     commandMenuEl.classList.add("hidden");
+  } else if (plainEnter) {
+    event.preventDefault();
+    requestComposerSubmit();
   }
 });
 commandMenuEl.addEventListener("mousedown", event => {
