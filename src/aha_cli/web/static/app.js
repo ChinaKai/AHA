@@ -5226,8 +5226,9 @@ function renderTurnTimer(taskId) {
     timing.startedAt ? `started ${formatClock(timing.startedAt)}` : "",
     timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : ""
   ].filter(Boolean).join(" | ");
+  const visualStatus = timing.running && !["waiting", "busy"].includes(timing.status) ? "running" : timing.status;
   return `
-    <div class="turn-timer ${escapeHtml(timing.status)}">
+    <div class="turn-timer ${escapeHtml(visualStatus)}">
       <span class="activity-dot"></span>
       <strong>${escapeHtml(title)}</strong>
       <code>${escapeHtml(details)}</code>

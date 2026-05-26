@@ -1781,7 +1781,8 @@ button, input, select, textarea { font: inherit; }
 .turn-timer.blocked { border-left-color: #d97706; }
 .turn-timer.interrupted { border-left-color: #d97706; }
 .turn-timer.running .activity-dot,
-.turn-timer.waiting .activity-dot {
+.turn-timer.waiting .activity-dot,
+.turn-timer.pending .activity-dot {
   background: #16a34a;
   box-shadow: 0 0 0 4px #dcfce7;
 }
