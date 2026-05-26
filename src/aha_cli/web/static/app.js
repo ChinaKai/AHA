@@ -4078,6 +4078,14 @@ function appendRealtimeConversationEvents(events) {
   }
 }
 
+function invalidateConversationBackendSession(taskId, target) {
+  const state = conversationStates.get(conversationKey(taskId, target));
+  if (!state) return false;
+  state.backendSession = null;
+  state.initialized = false;
+  return true;
+}
+
 const finalDetailInvalidatingEvents = new Set([
   "task_result_written",
   "task_journal_rendered",
@@ -4088,15 +4096,30 @@ const finalDetailInvalidatingEvents = new Set([
 
 function invalidateRealtimeTaskDetails(events) {
   const finalTaskIds = new Set();
+  const sessionRefreshes = new Map();
   events.forEach(event => {
-    if (!finalDetailInvalidatingEvents.has(event.type)) return;
     const taskId = eventTaskId(event);
-    if (taskId) finalTaskIds.add(taskId);
+    if (finalDetailInvalidatingEvents.has(event.type) && taskId) finalTaskIds.add(taskId);
+    if (event.type === "backend_session_compact_reset" && taskId) {
+      const data = eventData(event);
+      const target = String(data.agent_id || data.target || "main");
+      if (target && invalidateConversationBackendSession(taskId, target)) {
+        sessionRefreshes.set(conversationKey(taskId, target), { taskId, target });
+      }
+    }
   });
   finalTaskIds.forEach(taskId => finalDetails.delete(taskId));
   if (activeTab === "final" && selectedTaskId && finalTaskIds.has(selectedTaskId)) {
     loadFinalDetail(selectedTaskId, true)
       .then(() => renderPanel())
+      .catch(err => {
+        panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
+      });
+  }
+  for (const { taskId, target } of sessionRefreshes.values()) {
+    if (activeTab !== "conversation" || selectedTaskId !== taskId || backendTarget() !== target) continue;
+    loadConversationPage(taskId, target, false, true)
+      .then(() => renderPanelForRealtime())
       .catch(err => {
         panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`;
       });
