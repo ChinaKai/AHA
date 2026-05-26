@@ -1780,17 +1780,14 @@ button, input, select, textarea { font: inherit; }
 .turn-timer.failed { border-left-color: #dc2626; }
 .turn-timer.blocked { border-left-color: #d97706; }
 .turn-timer.interrupted { border-left-color: #d97706; }
-.turn-timer.running .activity-dot {
-  background: #2563eb;
-  box-shadow: 0 0 0 4px #dbeafe;
+.turn-timer.running .activity-dot,
+.turn-timer.waiting .activity-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 4px #dcfce7;
 }
 .turn-timer.completed .activity-dot { background: #16a34a; }
 .turn-timer.idle .activity-dot { background: #98a2b3; }
 .turn-timer.busy .activity-dot {
-  background: #d97706;
-  box-shadow: 0 0 0 4px #fef3c7;
-}
-.turn-timer.waiting .activity-dot {
   background: #d97706;
   box-shadow: 0 0 0 4px #fef3c7;
 }
