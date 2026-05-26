@@ -4240,6 +4240,7 @@ async function selectTask(taskId) {
 
 async function updateTaskVisibility(taskId, action) {
   if (action === "delete" && !confirm(`Delete ${taskId} from the task list?`)) return;
+  if (action === "hide" && !confirm(`Hide ${taskId} from the task list?\n\nYou can restore hidden tasks later.`)) return;
   if ((action === "final" || action === "complete") && !confirm(`Ask task-main to generate the Final for ${taskId}?`)) return;
   taskActionInFlight = true;
   try {

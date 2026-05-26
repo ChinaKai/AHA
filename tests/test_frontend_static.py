@@ -82,6 +82,13 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(b"Content-Type: image/svg+xml", logo_response)
         self.assertIn(b"Content-Type: image/svg+xml", favicon_response)
 
+    def test_frontend_confirms_task_final_and_hide(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('action === "hide" && !confirm(`Hide ${taskId} from the task list?\\n\\nYou can restore hidden tasks later.`)', script)
+        self.assertIn('(action === "final" || action === "complete") && !confirm(`Ask task-main to generate the Final for ${taskId}?`)', script)
+
     def test_frontend_uses_modal_for_task_create(self) -> None:
         root = Path(__file__).resolve().parents[1]
         html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")
