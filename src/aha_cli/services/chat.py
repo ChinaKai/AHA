@@ -471,7 +471,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 set_agent_status(root, run_id, item_task_id, agent_id, "pending")
                                 set_task_status(root, run_id, item_task_id, "running")
                             elif supervision_waiting_for_host:
-                                set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
+                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", waiting_reason="host")
                                 set_task_status(root, run_id, item_task_id, "running")
                             else:
                                 set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)

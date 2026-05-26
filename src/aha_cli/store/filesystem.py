@@ -679,6 +679,7 @@ def set_agent_status(
     agent_id: str,
     status: str,
     exit_code: int | None = None,
+    waiting_reason: str | None = None,
 ) -> dict:
     return _set_agent_status(
         root,
@@ -687,6 +688,7 @@ def set_agent_status(
         agent_id,
         status,
         exit_code,
+        waiting_reason=waiting_reason,
         now_func=utc_now,
         append_event_func=append_event,
     )

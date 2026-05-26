@@ -286,6 +286,7 @@ def set_agent_status(
     status: str,
     exit_code: int | None = None,
     *,
+    waiting_reason: str | None = None,
     now_func: Callable[[], str] = utc_now,
     append_event_func: Callable[[Path, str, str, dict], dict] = default_append_event,
 ) -> dict:
@@ -295,9 +296,14 @@ def set_agent_status(
         task = _find_task(plan, task_id)
         agent = _find_agent(task, agent_id)
         previous_status = agent.get("status")
+        previous_waiting_reason = agent.get("waiting_reason")
         agent["status"] = status
+        if status == "waiting" and waiting_reason:
+            agent["waiting_reason"] = str(waiting_reason)
+        else:
+            agent.pop("waiting_reason", None)
         agent["last_active_at"] = now
-        if previous_status != status or not agent.get("status_started_at"):
+        if previous_status != status or previous_waiting_reason != agent.get("waiting_reason") or not agent.get("status_started_at"):
             agent["status_started_at"] = now
         if status == "running":
             agent["started_at"] = now
@@ -313,7 +319,14 @@ def set_agent_status(
         root,
         run_id,
         "agent_status_changed",
-        {"task_id": task_id, "agent_id": agent_id, "status": status, "exit_code": exit_code, "status_started_at": agent.get("status_started_at")},
+        {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "status": status,
+            "waiting_reason": agent.get("waiting_reason") or "",
+            "exit_code": exit_code,
+            "status_started_at": agent.get("status_started_at"),
+        },
     )
     return agent
 

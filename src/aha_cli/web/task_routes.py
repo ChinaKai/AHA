@@ -18,6 +18,7 @@ from aha_cli.store.filesystem import (
     require_plan,
     resolve_workspace_path,
     run_dir,
+    set_agent_status,
     set_task_hidden,
     task_context_snapshot,
     task_final_snapshot,
@@ -172,6 +173,8 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
                 if host_result:
                     steward_payload = {**steward_payload, "applied": bool(host_result.get("routed_to_host")), "semantic_host": host_result}
                     append_event(root, run_id, "steward_semantic_review_routed", {"task_id": task_id, "routed_to_host": bool(host_result.get("routed_to_host"))})
+                    if host_result.get("routed_to_host"):
+                        set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="host")
                 else:
                     append_event(root, run_id, "steward_semantic_review_skipped", {"task_id": task_id, "reason": "real supervision host is not configured"})
                     steward_payload = {**steward_payload, "semantic_host": {"routed_to_host": False, "reason": "real supervision host is not configured"}}

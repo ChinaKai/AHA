@@ -434,6 +434,16 @@ def supervision_host_decision_count(root: Path, run_id: str, task_id: str, host_
     return count
 
 
+def clear_main_host_wait(root: Path, run_id: str, task_id: str) -> None:
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return
+    main_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == "main"), None)
+    if main_agent and main_agent.get("status") == "waiting" and main_agent.get("waiting_reason") == "host":
+        set_agent_status(root, run_id, task_id, "main", "completed")
+
+
 def supervision_host_notes(root: Path, run_id: str, task_id: str, host_agent_id: str, limit: int = 8) -> list[str]:
     path = run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl"
     notes: list[str] = []
@@ -624,7 +634,7 @@ def apply_supervision_host_decision(
         waiting_for_subagents = task_has_incomplete_sub_agents(task)
         if waiting_for_subagents:
             set_task_status(root, run_id, task_id, "running")
-            set_agent_status(root, run_id, task_id, "main", "waiting")
+            set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="subagents")
         else:
             route_skipped_reason = "wait requested without incomplete sub-agents"
     elif decision["decision"] == "continue" and host_chat_message and not main_route_blocked_by_actions:
@@ -746,6 +756,8 @@ def apply_supervision_host_decision(
             "reason": decision["reason"],
         },
     )
+    if not routed_to_main and not waiting_for_subagents:
+        clear_main_host_wait(root, run_id, task_id)
     return event_payload | {
         "executed": executed,
         "routed_to_main": routed_to_main,

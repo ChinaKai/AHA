@@ -248,6 +248,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
                     code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                task_after_main = status_snapshot(root, run_id)["tasks"][0]
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)) as host_run,
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
@@ -274,12 +275,18 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(host_code, 0)
         self.assertIn("main -> browser: 托管回复", output)
+        main_after_main = next(agent for agent in task_after_main["agents"] if agent["id"] == "main")
+        self.assertEqual(main_after_main["status"], "waiting")
+        self.assertEqual(main_after_main["waiting_reason"], "host")
         start_host.assert_called_once()
         self.assertEqual(start_host.call_args.args[2], "host")
         self.assertEqual(host_run.call_args.kwargs["permission_mode"], "plan")
         self.assertIn("后续如果要继续，优先用列表格式。", host_run.call_args.args[0])
         self.assertIn("托管回复", host_run.call_args.args[0])
         host = next(agent for agent in task["agents"] if agent["role"] == "host")
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main["status"], "pending")
+        self.assertNotIn("waiting_reason", main)
         self.assertEqual(host["backend"], "claude")
         self.assertEqual(host["sandbox"], "read-only")
         start_main.assert_called_once()
@@ -603,6 +610,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                task_after_main = status_snapshot(root, run_id)["tasks"][0]
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
@@ -626,6 +634,12 @@ class SupervisionFlowTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(host_code, 0)
+        main_after_main = next(agent for agent in task_after_main["agents"] if agent["id"] == "main")
+        self.assertEqual(main_after_main["status"], "waiting")
+        self.assertEqual(main_after_main["waiting_reason"], "host")
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main["status"], "completed")
+        self.assertNotIn("waiting_reason", main)
         start_host.assert_called_once()
         start_main.assert_not_called()
         main_host_messages = [

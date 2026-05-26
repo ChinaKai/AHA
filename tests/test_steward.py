@@ -335,10 +335,14 @@ class StewardTests(unittest.TestCase):
             body = json_response_body(response)
             host_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host"), 0)
             rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+            task = body["task"]
 
         self.assertTrue(body["steward"]["applied"])
         self.assertTrue(body["steward"]["semantic_review"])
         self.assertTrue(body["steward"]["semantic_host"]["routed_to_host"])
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main["status"], "waiting")
+        self.assertEqual(main["waiting_reason"], "host")
         start_host.assert_called_once()
         self.assertTrue(
             any(

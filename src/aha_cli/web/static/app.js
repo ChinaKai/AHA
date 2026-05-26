@@ -2015,8 +2015,18 @@ function agentLifecycleStatus(agent) {
   return String(agent?.status || "pending").toLowerCase();
 }
 
+function agentWaitingReason(agent) {
+  return agentLifecycleStatus(agent) === "waiting" ? String(agent?.waiting_reason || "").toLowerCase() : "";
+}
+
+function agentLifecycleDisplay(agent) {
+  const status = agentLifecycleStatus(agent);
+  const reason = agentWaitingReason(agent);
+  return reason ? `${status}:${reason}` : status;
+}
+
 function agentLifecycleLabel(agent) {
-  return agentLifecycleStatus(agent).toUpperCase();
+  return agentLifecycleDisplay(agent).toUpperCase();
 }
 
 function agentStatusTiming(agent) {
@@ -2031,6 +2041,7 @@ function agentStatusTiming(agent) {
   const endAt = terminal ? (finishedAt || startedAt) : Date.now();
   return {
     status,
+    waitingReason: agentWaitingReason(agent),
     startedAt,
     finishedAt,
     elapsedMs: endAt - startedAt,
@@ -2041,7 +2052,8 @@ function agentStatusTiming(agent) {
 function agentStatusTimingText(agent) {
   const timing = agentStatusTiming(agent);
   if (!timing) return "";
-  return `${timing.status} · ${formatDuration(timing.elapsedMs)}`;
+  const status = timing.waitingReason ? `${timing.status}:${timing.waitingReason}` : timing.status;
+  return `${status} · ${formatDuration(timing.elapsedMs)}`;
 }
 
 function taskCurrentStatus(task) {
@@ -3674,6 +3686,7 @@ function latestTurnTiming(taskId) {
       : waiting?.running || agentStatus === "waiting"
         ? "waiting"
         : agentStatus || "running";
+    const waitingReason = status === "waiting" ? agentWaitingReason(agent) || (waiting?.running ? "subagents" : "") : "";
     const endAt = finalCompletedAt || Date.now();
     return {
       startedAt: logicalStartedAt,
@@ -3681,6 +3694,7 @@ function latestTurnTiming(taskId) {
       elapsedMs: endAt - logicalStartedAt,
       running: !finalCompletedAt,
       status,
+      waitingReason,
       target,
       sender: eventData(logicalStartedEvent).sender || "-"
     };
@@ -3710,12 +3724,14 @@ function latestTurnTiming(taskId) {
   const finishedData = eventData(terminalStatusEvent || agentFinishedEvent || {});
   const exitCode = finishedData.exit_code;
   const status = running ? latestStatus || "running" : finishedData.status || agent?.status || (exitCode === 0 ? "completed" : "failed");
+  const waitingReason = status === "waiting" ? (eventData(latestStatusEvent || {}).waiting_reason || agentWaitingReason(agent) || "") : "";
   return {
     startedAt,
     finishedAt: running ? null : finishedAt,
     elapsedMs: endAt - startedAt,
     running,
     status,
+    waitingReason,
     target: eventData(startedEvent).target || "main",
     sender: eventData(startedEvent).sender || "-"
   };
@@ -4646,6 +4662,7 @@ function renderAgents() {
     const processStatus = agentBackendProcessStatus(agent);
     const rawProcessStatus = agent.backend_process_status || processStatus;
     const lifecycleStatus = agentLifecycleStatus(agent);
+    const lifecycleDisplay = agentLifecycleDisplay(agent);
     const lifecycleTiming = agentStatusTiming(agent);
     const lifecycleTimingText = agentStatusTimingText(agent);
     const lastReply = formatLocalTimestamp(agent.backend_process_last_reply_at, agent.backend_process_last_reply_at || "");
@@ -4667,7 +4684,7 @@ function renderAgents() {
       `sandbox=${sandbox}`,
       `approval=${approval}`,
       `proxy=${proxyEnabled ? "on" : "off"} (${taskProxySummary(task)})`,
-      lifecycleTimingText ? `status=${lifecycleTimingText}` : `status=${lifecycleStatus}`,
+      lifecycleTimingText ? `status=${lifecycleTimingText}` : `status=${lifecycleDisplay}`,
       lifecycleTiming?.startedAt ? `status_started=${formatClock(lifecycleTiming.startedAt)}` : "",
       lifecycleTiming?.finishedAt ? `status_finished=${formatClock(lifecycleTiming.finishedAt)}` : "",
       processDetail,
@@ -4679,7 +4696,7 @@ function renderAgents() {
         <strong>${escapeHtml(agent.id)}</strong>
         <span class="agent-process ${escapeHtml(processStatus)}" title="backend process status">${escapeHtml(agentBackendProcessLabel(agent))}</span>
       </div>
-      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleStatus)} | ${escapeHtml(roleLabel)} | ${escapeHtml(agent.backend)} | ${escapeHtml(resolvedModel)}</div>
+      <div class="meta truncate">status=${escapeHtml(lifecycleTimingText || lifecycleDisplay)} | ${escapeHtml(roleLabel)} | ${escapeHtml(agent.backend)} | ${escapeHtml(resolvedModel)}</div>
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
       <div class="meta truncate">proxy=${escapeHtml(proxyEnabled ? "on" : "off")} | task proxy=${escapeHtml(taskProxySummary(task))}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | ${escapeHtml(contextPressure)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
@@ -5025,7 +5042,10 @@ function renderTimelineEvent(event) {
   if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", ts);
   if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "running", ts);
   if (event.type === "agent_interrupted") return renderTimelineStatus("agent interrupted", data.agent_id || data.target || "main", "interrupted", ts);
-  if (event.type === "agent_status_changed") return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}`, data.status || "session", ts);
+  if (event.type === "agent_status_changed") {
+    const waitingReason = data.waiting_reason ? ` waiting=${data.waiting_reason}` : "";
+    return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}${waitingReason}`, data.status || "session", ts);
+  }
   if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
   if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy updated", `default=${data.proxy_enabled ? "on" : "off"} http=${data.http_proxy_configured ? "set" : "-"} https=${data.https_proxy_configured ? "set" : "-"} no_proxy=${data.no_proxy_configured ? "set" : "-"}`, "session", ts);
   if (event.type === "task_supervision_config_updated") return renderTimelineStatus("task supervision updated", `${data.mode || "-"} via ${data.host_backend || "stub"} max_rounds=${data.max_rounds || "-"}`, "session", ts);
@@ -5059,11 +5079,14 @@ function renderTurnTimer(taskId) {
     elapsedMs: 0,
     running: false,
     status: "idle",
+    waitingReason: "",
     target,
     sender: "-"
   };
   const title = timing.running
-    ? (timing.status === "waiting" ? "Agent is waiting" : "Agent is working")
+    ? (timing.status === "waiting"
+      ? (timing.waitingReason === "host" ? "Agent is waiting for host" : "Agent is waiting")
+      : "Agent is working")
     : timing.status === "idle"
       ? "Agent is idle"
       : `Agent turn ${timing.status}`;
@@ -5071,8 +5094,9 @@ function renderTurnTimer(taskId) {
   const details = [
     label ? `${label} ${formatDuration(timing.elapsedMs)}` : "",
     `status ${timing.status}`,
+    timing.waitingReason ? `waiting ${timing.waitingReason}` : "",
     `target ${timing.target}`,
-    agent ? `agent ${agentLifecycleStatus(agent)}` : "",
+    agent ? `agent ${agentLifecycleDisplay(agent)}` : "",
     timing.startedAt ? `started ${formatClock(timing.startedAt)}` : "",
     timing.finishedAt ? `finished ${formatClock(timing.finishedAt)}` : ""
   ].filter(Boolean).join(" | ");
