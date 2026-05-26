@@ -7,10 +7,17 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.weixin import load_account, send_test_notification
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import plan_path, run_dir
-from aha_cli.store.rounds import list_task_rounds
 
-NOTIFICATION_EVENT_TYPES = {"task_status_changed", "task_round_recorded"}
+NOTIFICATION_EVENT_TYPES = {"message"}
+ALLOWED_MESSAGE_ROUTES = {
+    ("browser", "main"),
+    ("main", "browser"),
+    ("main", "host"),
+    ("host", "main"),
+    ("host", "browser"),
+}
 MAX_MESSAGE_CHARS = 1800
+MESSAGE_PREVIEW_CHARS = 1200
 
 
 def notification_state_path(root: Path, run_id: str) -> Path:
@@ -77,35 +84,13 @@ def _event_key(root: Path, run_id: str, event: dict) -> str:
     event_type = str(event.get("type") or "")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     task_id = str(data.get("task_id") or "")
-    if event_type == "task_status_changed":
-        task = _task_by_id(root, run_id, task_id)
-        return ":".join(
-            [
-                "task_status",
-                task_id,
-                str(task.get("current_round_id") or ""),
-                str(data.get("status") or ""),
-                str(data.get("exit_code") if data.get("exit_code") is not None else ""),
-            ]
-        )
-    if event_type == "task_round_recorded":
-        return ":".join(["task_round", task_id, str(data.get("round_id") or ""), str(data.get("journal_id") or "")])
+    if event_type == "message":
+        event_id = event.get("event_id")
+        if event_id not in (None, ""):
+            return f"message_event:{event_id}"
+        sender, target = _message_route(data)
+        return ":".join(["message", task_id, sender, target, _compact_text(_message_text(data), 80)])
     return f"{event_type}:{event.get('event_id') or ''}"
-
-
-def _latest_round_entry(root: Path, run_id: str, task_id: str, journal_id: str) -> dict:
-    for entry in reversed(list_task_rounds(root, run_id, task_id)):
-        if not journal_id or str(entry.get("journal_id") or "") == journal_id:
-            return entry
-    return {}
-
-
-def _compact_lines(values: list[str], limit: int = 3) -> str:
-    lines = [str(item).strip() for item in values if str(item).strip()]
-    if not lines:
-        return "-"
-    suffix = f"；另有 {len(lines) - limit} 项" if len(lines) > limit else ""
-    return "；".join(lines[:limit]) + suffix
 
 
 def _truncate(text: str, limit: int = MAX_MESSAGE_CHARS) -> str:
@@ -114,56 +99,54 @@ def _truncate(text: str, limit: int = MAX_MESSAGE_CHARS) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
-def _status_message(root: Path, run_id: str, data: dict) -> str:
-    task_id = str(data.get("task_id") or "")
-    task = _task_by_id(root, run_id, task_id)
-    status = str(data.get("status") or "-")
-    title = str(task.get("title") or task_id)
-    heading = "AHA 等待你处理" if status == "awaiting_user" else "AHA 任务状态变更"
-    lines = [
-        heading,
-        f"Run: {_run_label(root, run_id)}",
-        f"Task: {title} ({task_id})",
-        f"Status: {status}",
-    ]
-    if data.get("exit_code") is not None:
-        lines.append(f"Exit: {data.get('exit_code')}")
-    if status == "awaiting_user":
-        lines.append("请打开 AHA Web 查看并回复。")
-    return "\n".join(lines)
+def _compact_text(text: object, limit: int = MESSAGE_PREVIEW_CHARS) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
-def _round_message(root: Path, run_id: str, data: dict) -> str:
+def _message_endpoint(data: dict, *keys: str) -> str:
+    for key in keys:
+        value = str(data.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _message_route(data: dict) -> tuple[str, str]:
+    sender = _message_endpoint(data, "display_sender", "sender", "from_agent").lower()
+    target = _message_endpoint(data, "display_target", "to_agent", "target").lower()
+    return sender, target
+
+
+def _message_text(data: dict) -> str:
+    return str(data.get("message") or data.get("text") or "").strip()
+
+
+def _message_notification(root: Path, run_id: str, data: dict) -> str:
+    sender, target = _message_route(data)
+    if (sender, target) not in ALLOWED_MESSAGE_ROUTES:
+        return ""
     task_id = str(data.get("task_id") or "")
     task = _task_by_id(root, run_id, task_id)
-    entry = _latest_round_entry(root, run_id, task_id, str(data.get("journal_id") or ""))
     title = str(task.get("title") or task_id)
+    message = _compact_text(_message_text(data)) or "-"
     lines = [
-        "AHA 完成摘要",
+        "AHA 消息通知",
         f"Run: {_run_label(root, run_id)}",
         f"Task: {title} ({task_id})",
-        f"Round: {data.get('round_id') or entry.get('round_id') or '-'}",
-        f"Summary: {entry.get('summary') or '-'}",
+        f"Route: {sender} -> {target}",
+        f"内容: {message}",
     ]
-    changed_files = entry.get("changed_files") if isinstance(entry.get("changed_files"), list) else []
-    verification = entry.get("verification") if isinstance(entry.get("verification"), list) else []
-    risks = entry.get("risks") if isinstance(entry.get("risks"), list) else []
-    if changed_files:
-        lines.append(f"Files: {_compact_lines(changed_files)}")
-    if verification:
-        lines.append(f"Verification: {_compact_lines(verification)}")
-    if risks:
-        lines.append(f"Risks: {_compact_lines(risks)}")
     return "\n".join(lines)
 
 
 def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     event_type = str(event.get("type") or "")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    if event_type == "task_status_changed":
-        return _status_message(root, run_id, data)
-    if event_type == "task_round_recorded":
-        return _round_message(root, run_id, data)
+    if event_type == "message":
+        return _message_notification(root, run_id, data)
     return ""
 
 
