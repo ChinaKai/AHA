@@ -1841,11 +1841,21 @@ function selectedBackendActive() {
   return status === "busy";
 }
 
+function agentInputWaitBlocked(agent) {
+  if (agentLifecycleStatus(agent) !== "waiting") return false;
+  const reason = agentWaitingReason(agent);
+  return !reason || reason === "subagents" || reason === "host";
+}
+
+function selectedAgentInputBlocked() {
+  return selectedBackendActive() || agentInputWaitBlocked(selectedAgent());
+}
+
 function selectedTaskRealtimeActive() {
   const task = selectedTask();
   if (!task) return false;
   const turn = latestTurnTiming(task.id);
-  return selectedBackendActive() || taskActivityStatus(task) !== "idle" || Boolean(turn?.running);
+  return selectedAgentInputBlocked() || taskActivityStatus(task) !== "idle" || Boolean(turn?.running);
 }
 
 function pendingForContext(taskId = selectedTaskId, target = backendTarget()) {
@@ -1867,7 +1877,7 @@ function renderPendingMessages() {
   }
   const note = interrupted
     ? '<div class="pending-note">上一轮已中断。确认 pending 后点 Send，会合并发送下一轮。</div>'
-    : '<div class="pending-note">Agent working 中的消息会先暂存，当前轮结束后自动合并发送。</div>';
+    : '<div class="pending-note">Agent 忙碌或等待中收到的消息会先暂存，当前轮可继续后自动合并发送。</div>';
   const list = items.map((item, index) => `
     <div class="pending-message" data-pending-id="${escapeHtml(item.id)}">
       <div>
@@ -1991,7 +2001,7 @@ async function flushPendingMessages(task, agentId, currentMessage = "", options 
 
 async function maybeAutoFlushPending() {
   const task = selectedTask();
-  if (!task || selectedBackendActive()) return null;
+  if (!task || selectedAgentInputBlocked()) return null;
   const agentId = backendTarget();
   if (!pendingForContext(task.id, agentId).length) return null;
   const response = await flushPendingMessages(task, agentId, "", { auto: true });
@@ -5637,7 +5647,7 @@ sendFormEl.addEventListener("submit", async event => {
   const originalMessage = messageEl.value;
   const agentId = agentTargetEl.value || "main";
   const isAha = isAhaCommand(message);
-  realtimeDebug("composer.submit", { task_id: task.id, target: agentId, is_aha: isAha, backend_active: selectedBackendActive() });
+  realtimeDebug("composer.submit", { task_id: task.id, target: agentId, is_aha: isAha, backend_active: selectedBackendActive(), input_blocked: selectedAgentInputBlocked() });
   messageEl.value = "";
   syncMessageInputHeight();
   syncMobileComposerAction();
@@ -5646,7 +5656,7 @@ sendFormEl.addEventListener("submit", async event => {
   setComposerSubmitBusy(true);
   try {
     let response = null;
-    if (selectedBackendActive() && !isAha) {
+    if (selectedAgentInputBlocked() && !isAha) {
       addPendingMessage(message, task, agentId);
     } else if (isAha) {
       response = await sendBackendMessage(task, agentId, message);

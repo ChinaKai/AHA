@@ -490,6 +490,18 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("applyBackendData(payload.backends || [])", script)
         self.assertNotIn("Promise.all([loadBackends(), loadWorkspaces()])", script)
 
+    def test_frontend_pending_messages_wait_for_agent_blockers(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function agentInputWaitBlocked(agent)", script)
+        self.assertIn('reason === "subagents" || reason === "host"', script)
+        self.assertIn("function selectedAgentInputBlocked()", script)
+        self.assertIn("return selectedBackendActive() || agentInputWaitBlocked(selectedAgent());", script)
+        self.assertIn("if (!task || selectedAgentInputBlocked()) return null;", script)
+        self.assertIn("if (selectedAgentInputBlocked() && !isAha)", script)
+        self.assertIn("Agent 忙碌或等待中收到的消息会先暂存", script)
+
     def test_frontend_adjusts_mobile_viewport_for_keyboard(self) -> None:
         root = Path(__file__).resolve().parents[1]
         html = (root / "src" / "aha_cli" / "web" / "static" / "index.html").read_text(encoding="utf-8")
