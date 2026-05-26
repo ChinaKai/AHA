@@ -97,9 +97,11 @@ class FrontendStaticTests(unittest.TestCase):
         styles = (static_root / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn('<textarea id="message" rows="1"', html)
+        self.assertIn('enterkeyhint="enter"', html)
         self.assertNotIn('<input id="message"', html)
         self.assertIn("function syncMessageInputHeight()", script)
         self.assertIn('const plainEnter = event.key === "Enter" && !event.shiftKey', script)
+        self.assertIn("const plainEnterSubmits = plainEnter && !mobileViewportMatches();", script)
         self.assertIn("requestComposerSubmit();", script)
         self.assertIn(".composer textarea#message", styles)
         self.assertIn("max-height: 160px;", styles)

@@ -5384,6 +5384,7 @@ messageEl.addEventListener("focus", () => {
 messageEl.addEventListener("keydown", event => {
   const commands = matchingSlashCommands();
   const plainEnter = event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+  const plainEnterSubmits = plainEnter && !mobileViewportMatches();
   if (commands.length && event.key === "ArrowDown") {
     event.preventDefault();
     commandSelection = (commandSelection + 1) % commands.length;
@@ -5395,7 +5396,7 @@ messageEl.addEventListener("keydown", event => {
   } else if (commands.length && event.key === "Tab") {
     event.preventDefault();
     applySlashCommand(commandSelection);
-  } else if (commands.length && plainEnter) {
+  } else if (commands.length && plainEnterSubmits) {
     const command = commands[commandSelection];
     if (command && messageEl.value.trim() !== command.insert.trim()) {
       event.preventDefault();
@@ -5406,7 +5407,7 @@ messageEl.addEventListener("keydown", event => {
     }
   } else if (commands.length && event.key === "Escape") {
     commandMenuEl.classList.add("hidden");
-  } else if (plainEnter) {
+  } else if (plainEnterSubmits) {
     event.preventDefault();
     requestComposerSubmit();
   }
