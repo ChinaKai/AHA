@@ -101,7 +101,10 @@ def _semantic_review_already_queued(messages: list[dict]) -> bool:
         if (
             item.get("from") == "main"
             and item.get("to") not in {"browser", "main"}
-            and str(item.get("message") or "").strip() == latest_main_reply_text
+            and (
+                str(item.get("message") or "").strip() == latest_main_reply_text
+                or f"main_latest_reply:\n{latest_main_reply_text}" in str(item.get("message") or "")
+            )
         ):
             return True
     return False

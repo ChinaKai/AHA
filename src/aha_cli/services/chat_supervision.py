@@ -191,7 +191,8 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
     return (
         "AHA host instructions:\n"
         f"{DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT}"
-        "The current message from main is task-main's latest user-facing reply.\n"
+        "The current message from main is either task-main's raw reply to your prior instruction or a supervision exchange containing a fresh browser request.\n"
+        "When it is a supervision exchange, use browser_latest_request and main_latest_reply together.\n"
         "Talk to task-main as the next browser control message: direct, natural, and focused on the next step.\n"
         "Your response field is inserted as the next user message to task-main.\n"
         "Do not mention host, agent, supervision, proxy, decision, JSON, or delegated control-plane mechanics.\n"
@@ -200,7 +201,7 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "When main is wrong, incomplete, drifting, or under-verified, say what must happen next instead of echoing the report.\n"
         "Use continue only when task-main should do more concrete work.\n"
         "Use wait when task-main or sub-agents are already working and your only next message would be an acknowledgement like OK, waiting, or report when ready.\n"
-        "Use stop only when task-main's latest reply completes the user's request and read-only evidence confirms no concrete implementation, verification, commit, routing, or cleanup follow-up remains.\n"
+        "Use stop only when task-main's latest reply completes the evaluated exchange and read-only evidence confirms no concrete implementation, verification, commit, routing, or cleanup follow-up remains.\n"
         "For implementation/config/UI tasks, do not stop on a proposal, explanation, recommendation, or desired final shape unless the repository state already matches it.\n"
         "If main says the UI/code should or best would behave a certain way, inspect whether it already does; if not, use continue and tell task-main exactly what to change or verify.\n"
         "If prior host notes, task journal risks, or current diffs mention an unresolved follow-up that matches the user's concern, prefer continue over stop.\n"
@@ -214,11 +215,11 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "Never say you will change files, patch code, commit, run commands, or otherwise perform the work yourself.\n"
         "For executable work, instruct task-main to do it; phrase response as a browser instruction to main, not as the host taking ownership.\n"
         "Inspect context only. Do not modify files or execute state-changing commands.\n"
-        "Decide what task-main should do next after its latest user-facing reply.\n\n"
+        "Decide what task-main should do next after its latest reply in the evaluated exchange.\n\n"
         "Return only one JSON object with this shape:\n"
         '{"decision":"continue","reason":"short runtime reason","response":"natural message for main","actions":[]}\n\n'
         "Allowed decision values: ask_user, continue, wait, stop, route_to_agent, spawn_sub, record_task_update.\n"
-        "For continue, the response field is what main sees in Chat. For ask_user or stop, the response field is what the user sees in Chat. For wait, response is recorded only in Runtime and is not routed.\n"
+        "For continue, the response field is what main sees in Chat. For ask_user or stop, the response field is what the user sees in Chat. For a stop decision after a browser_main_reply exchange, leave response empty when main's reply already tells the user everything. For wait, response is recorded only in Runtime and is not routed.\n"
         "Do not include decision/reason labels in response.\n"
         "Use actions only when main should execute concrete AHA actions; otherwise return an empty list.\n\n"
         f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
@@ -234,7 +235,120 @@ def supervision_host_prompt(
     host_notes: list[str] | None = None,
     handoff_notes: list[str] | None = None,
 ) -> str:
-    return f"{supervision_host_context(task, host_notes, handoff_notes)}\n\nMain latest reply:\n{main_reply}\n"
+    exchange = (
+        "Supervision exchange to evaluate:\n"
+        "- source: unknown\n"
+        "- browser_latest_request:\n(none)\n\n"
+        f"- main_latest_reply:\n{main_reply}"
+    )
+    return f"{supervision_host_context(task, host_notes, handoff_notes)}\n\n{exchange}\n"
+
+
+def _message_endpoint(item: dict | None, *keys: str) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in keys:
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _source_message_is_from_host(item: dict | None, host_agent_id: str) -> bool:
+    return bool(
+        isinstance(item, dict)
+        and host_agent_id
+        and (
+            _message_endpoint(item, "display_sender") == host_agent_id
+            or _message_endpoint(item, "from_agent") == host_agent_id
+            or _message_endpoint(item, "agent_id") == host_agent_id
+        )
+    )
+
+
+def _source_message_is_direct_browser_main(item: dict | None, host_agent_id: str) -> bool:
+    if not isinstance(item, dict):
+        return False
+    target = _message_endpoint(item, "to_agent", "target")
+    sender = _message_endpoint(item, "display_sender", "from_agent", "sender")
+    return target == "main" and sender == "browser" and not _source_message_is_from_host(item, host_agent_id)
+
+
+def latest_browser_main_request(root: Path, run_id: str, task_id: str, host_agent_id: str, source_message: dict | None) -> str:
+    if _source_message_is_direct_browser_main(source_message, host_agent_id):
+        return str(source_message.get("message") or "").strip()
+    path = run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl"
+    for _offset, item in iter_jsonl_reverse(path) or ():
+        if _source_message_is_direct_browser_main(item, host_agent_id):
+            message = str(item.get("message") or "").strip()
+            if message:
+                return message
+    return ""
+
+
+def supervision_exchange_message(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    host_agent_id: str,
+    source_message: dict | None,
+    main_reply: str,
+) -> tuple[str, str]:
+    source_is_host = _source_message_is_from_host(source_message, host_agent_id)
+    source = "host_main_reply" if source_is_host else "browser_main_reply"
+    if source_is_host:
+        return main_reply, source
+    browser_request = latest_browser_main_request(root, run_id, task_id, host_agent_id, source_message)
+    exchange = (
+        "Supervision exchange to evaluate:\n"
+        f"- source: {source}\n"
+        f"- browser_latest_request:\n{browser_request or '(none)'}\n\n"
+        f"- main_latest_reply:\n{main_reply}"
+    )
+    return exchange, source
+
+
+def parse_supervision_exchange_message(message: str) -> dict:
+    text = str(message or "")
+    if not text.startswith("Supervision exchange to evaluate:\n"):
+        return {}
+    source = ""
+    for line in text.splitlines():
+        if line.startswith("- source: "):
+            source = line.removeprefix("- source: ").strip()
+            break
+
+    def field_value(name: str, next_name: str | None = None) -> str:
+        marker = f"- {name}:\n"
+        start = text.find(marker)
+        if start < 0:
+            return ""
+        start += len(marker)
+        end = len(text)
+        if next_name:
+            next_marker = f"\n\n- {next_name}:\n"
+            next_start = text.find(next_marker, start)
+            if next_start >= 0:
+                end = next_start
+        return text[start:end].strip()
+
+    return {
+        "source": source,
+        "browser_latest_request": field_value("browser_latest_request", "main_latest_reply"),
+        "main_latest_reply": field_value("main_latest_reply"),
+    }
+
+
+def latest_supervision_exchange_for_host(root: Path, run_id: str, task_id: str, host_agent_id: str) -> dict:
+    path = run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl"
+    for _offset, item in iter_jsonl_reverse(path) or ():
+        if item.get("sender") == "main" and (item.get("target") == host_agent_id or item.get("to_agent") == host_agent_id):
+            exchange = parse_supervision_exchange_message(str(item.get("message") or ""))
+            if exchange:
+                return exchange
+            return {}
+    return {}
 
 
 def parse_supervision_host_decision(reply: str) -> dict:
@@ -340,6 +454,7 @@ def apply_supervision_real_host(
     *,
     source_agent: str,
     reply_text: str,
+    source_message: dict | None = None,
     cfg: dict,
     run: Path,
 ) -> dict | None:
@@ -367,6 +482,14 @@ def apply_supervision_real_host(
         supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else supervision
         host_agent_id = str(host_agent.get("id") or "host")
         host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or host_backend)
+    host_message, exchange_source = supervision_exchange_message(
+        root,
+        run_id,
+        task_id,
+        host_agent_id=host_agent_id,
+        source_message=source_message,
+        main_reply=reply_text,
+    )
     append_event(
         root,
         run_id,
@@ -377,6 +500,7 @@ def apply_supervision_real_host(
             "host_agent_id": host_agent_id,
             "channel": supervision.get("channel") or "main_only",
             "reply_chars": len(reply_text),
+            "exchange_source": exchange_source,
         },
     )
     offset_file = chat_offset_path(run, host_agent_id, task_id)
@@ -387,7 +511,7 @@ def apply_supervision_real_host(
         root,
         run_id,
         host_agent_id,
-        reply_text,
+        host_message,
         sender="main",
         task_id=task_id,
         role="host",
@@ -484,6 +608,13 @@ def apply_supervision_host_decision(
     routed_to_browser = False
     waiting_for_subagents = False
     route_skipped_reason = ""
+    latest_exchange = latest_supervision_exchange_for_host(root, run_id, task_id, host_agent_id)
+    duplicate_browser_stop = (
+        decision["decision"] == "stop"
+        and latest_exchange.get("source") == "browser_main_reply"
+        and host_chat_message.strip()
+        and host_chat_message.strip() == str(latest_exchange.get("main_latest_reply") or "").strip()
+    )
     try:
         max_rounds = max(1, int(supervision.get("max_rounds") or DEFAULT_TASK_SUPERVISION_MAX_ROUNDS))
     except (TypeError, ValueError):
@@ -540,7 +671,7 @@ def apply_supervision_host_decision(
             routed_to_main = True
         else:
             route_skipped_reason = "max_rounds reached"
-    elif decision["decision"] in {"ask_user", "stop"} and host_chat_message:
+    elif decision["decision"] in {"ask_user", "stop"} and host_chat_message and not duplicate_browser_stop:
         append_message(
             root,
             run_id,
@@ -556,6 +687,8 @@ def apply_supervision_host_decision(
             display_target="browser",
         )
         routed_to_browser = True
+    elif duplicate_browser_stop:
+        route_skipped_reason = "stop response duplicates main browser reply"
     event_payload = {
         "task_id": task_id,
         "host_backend": host_backend,
@@ -584,7 +717,7 @@ def apply_supervision_host_decision(
             if decision["decision"] == "ask_user" and routed_to_browser
             else (
                 "stopped"
-                if decision["decision"] == "stop" and routed_to_browser
+                if decision["decision"] == "stop"
                 else (
                     "actions_executed"
                     if executed
@@ -600,7 +733,11 @@ def apply_supervision_host_decision(
         {
             "task_id": task_id,
             "decision": decision["decision"],
-            "applied": routed_to_main or routed_to_browser or bool(executed) or waiting_for_subagents or decision["decision"] == "ask_user",
+            "applied": routed_to_main
+            or routed_to_browser
+            or bool(executed)
+            or waiting_for_subagents
+            or decision["decision"] in {"ask_user", "stop"},
             "effect": effect,
             "executed_action_count": len(executed),
             "routed_to_main": routed_to_main,
@@ -625,7 +762,11 @@ __all__ = [
     "low_information_supervision_response",
     "parse_supervision_host_decision",
     "SUPERVISION_FAILURE_FALLBACK_STATUS",
+    "latest_browser_main_request",
+    "latest_supervision_exchange_for_host",
+    "parse_supervision_exchange_message",
     "prompt_event_visible_to_target",
+    "supervision_exchange_message",
     "supervision_host_context",
     "supervision_host_handoff_notes",
     "supervision_host_notes",

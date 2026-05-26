@@ -9,7 +9,7 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import apply_supervision_host_decision, chat_prompt
-from aha_cli.services.chat_supervision import supervision_host_context
+from aha_cli.services.chat_supervision import supervision_exchange_message, supervision_host_context
 from aha_cli.services.messages import format_event
 from aha_cli.store.filesystem import (
     add_agent,
@@ -96,6 +96,89 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertIn("commit/merge/delete", context)
         self.assertIn("Recent steward handoffs", context)
         self.assertIn("needs semantic decision", context)
+        self.assertIn("raw reply to your prior instruction", context)
+        self.assertIn("browser_latest_request", context)
+        self.assertIn("main_latest_reply", context)
+
+    def test_supervision_exchange_sends_raw_main_reply_for_host_routed_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host exchange", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "原始用户问题",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                )
+                host_instruction = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "继续检查未提交改动。",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                    display_sender="host",
+                    display_target="main",
+                    agent_id="host",
+                )
+
+                exchange, source = supervision_exchange_message(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    source_message=host_instruction,
+                    main_reply="已检查，只有本任务改动。",
+                )
+
+        self.assertEqual(source, "host_main_reply")
+        self.assertEqual(exchange, "已检查，只有本任务改动。")
+
+    def test_supervision_exchange_includes_browser_request_for_browser_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Browser exchange", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                browser_message = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "新的用户问题",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                )
+
+                exchange, source = supervision_exchange_message(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    source_message=browser_message,
+                    main_reply="main 的回答",
+                )
+
+        self.assertEqual(source, "browser_main_reply")
+        self.assertIn("browser_latest_request:\n新的用户问题", exchange)
+        self.assertIn("main_latest_reply:\nmain 的回答", exchange)
+        self.assertNotIn("host_latest_instruction", exchange)
 
     def test_codex_chat_records_supervision_stub_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -200,16 +283,20 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertEqual(host["backend"], "claude")
         self.assertEqual(host["sandbox"], "read-only")
         start_main.assert_called_once()
-        self.assertTrue(any(row.get("message") == "托管回复" for row in host_inbox_messages))
+        self.assertTrue(any("main_latest_reply:\n托管回复" in row.get("message", "") for row in host_inbox_messages))
+        self.assertTrue(any("source: browser_main_reply" in row.get("message", "") for row in host_inbox_messages))
+        self.assertTrue(any("browser_latest_request:\n托管测试" in row.get("message", "") for row in host_inbox_messages))
         display_messages = [
             row["data"]
             for row in rows
             if row["type"] == "message" and row["data"].get("display_sender")
         ]
         self.assertEqual(
-            [(row["display_sender"], row["display_target"], row["message"]) for row in display_messages],
-            [("main", "host", "托管回复"), ("host", "main", "先按阻塞项排优先级。")],
+            [(row["display_sender"], row["display_target"]) for row in display_messages],
+            [("main", "host"), ("host", "main")],
         )
+        self.assertIn("main_latest_reply:\n托管回复", display_messages[0]["message"])
+        self.assertEqual(display_messages[1]["message"], "先按阻塞项排优先级。")
         self.assertFalse(any((row["data"].get("conversation") == "supervision") for row in rows if row["type"] == "message"))
         self.assertFalse(any("AHA 启动托管 host" in row["data"].get("message", "") for row in rows if row["type"] == "message"))
         self.assertFalse(any("host 正在判断" in row["data"].get("message", "") for row in rows if row["type"] == "message"))
@@ -219,7 +306,7 @@ class SupervisionFlowTests(unittest.TestCase):
             if row["type"] == "message"
             and row["data"].get("sender") == "main"
             and row["data"].get("target") == "host"
-            and row["data"].get("message") == "托管回复"
+            and "main_latest_reply:\n托管回复" in row["data"].get("message", "")
         ]
         self.assertEqual(len(main_host_messages), 1)
         self.assertEqual(main_host_messages[0]["from_agent"], "main")
@@ -547,7 +634,7 @@ class SupervisionFlowTests(unittest.TestCase):
             if row["type"] == "message"
             and row["data"].get("sender") == "main"
             and row["data"].get("target") == "host"
-            and row["data"].get("message") == "托管回复"
+            and "main_latest_reply:\n托管回复" in row["data"].get("message", "")
         ]
         self.assertEqual(len(main_host_messages), 1)
         self.assertEqual(main_host_messages[0]["display_sender"], "main")
@@ -770,6 +857,60 @@ class SupervisionFlowTests(unittest.TestCase):
         host_decisions = [row for row in rows if row["type"] == "host_decision"]
         self.assertEqual(host_decisions[-1]["data"]["host_round"], 1)
         self.assertTrue(host_decisions[-1]["data"]["routed_to_main"])
+
+    def test_supervision_stop_does_not_duplicate_main_browser_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "No duplicate stop", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(root, run_id, "main", "直接回复测试即可", sender="browser", task_id="task-001", role="main")
+                append_message(root, run_id, "browser", "测试", sender="main", task_id="task-001", role="main", from_agent="main", to_agent="browser")
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "Supervision exchange to evaluate:\n"
+                    "- source: browser_main_reply\n"
+                    "- browser_latest_request:\n直接回复测试即可\n\n"
+                    "- main_latest_reply:\n测试",
+                    sender="main",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="main",
+                    to_agent="host",
+                    agent_id="host",
+                    display_sender="main",
+                    display_target="host",
+                )
+
+                result = apply_supervision_host_decision(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    host_reply='{"decision":"stop","reason":"done","response":"测试","actions":[]}',
+                    exit_code=0,
+                )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+
+        self.assertFalse(result["routed_to_browser"])
+        self.assertFalse(
+            any(row["type"] == "message" and row["data"].get("sender") == "host" and row["data"].get("message") == "测试" for row in rows)
+        )
+        applied = [row for row in rows if row["type"] == "main_applied_decision"]
+        self.assertEqual(applied[-1]["data"]["effect"], "stopped")
 
     def test_codex_chat_routes_claude_supervision_stop_to_browser(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

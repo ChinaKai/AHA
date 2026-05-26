@@ -340,7 +340,14 @@ class StewardTests(unittest.TestCase):
         self.assertTrue(body["steward"]["semantic_review"])
         self.assertTrue(body["steward"]["semantic_host"]["routed_to_host"])
         start_host.assert_called_once()
-        self.assertTrue(any(row.get("sender") == "main" and row.get("target") == "host" and row.get("message") == "我再看看。" for row in host_messages))
+        self.assertTrue(
+            any(
+                row.get("sender") == "main"
+                and row.get("target") == "host"
+                and "main_latest_reply:\n我再看看。" in row.get("message", "")
+                for row in host_messages
+            )
+        )
         self.assertTrue(any(row["type"] == "main_reported_to_host" for row in rows))
         self.assertTrue(any(row["type"] == "steward_semantic_review_routed" for row in rows))
 

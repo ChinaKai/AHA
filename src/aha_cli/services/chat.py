@@ -385,6 +385,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             item_task_id,
                             source_agent=agent_id,
                             reply_text=display_reply,
+                            source_message=item,
                             cfg=cfg,
                             run=run,
                         )
