@@ -2721,6 +2721,18 @@ function conversationBackendSession(taskId, target = backendTarget()) {
   return state?.backendSession || null;
 }
 
+function contextPressureHasPercent(pressure) {
+  if (pressure?.percent == null || pressure?.percent === "") return false;
+  return Number.isFinite(Number(pressure.percent));
+}
+
+function backendSessionWithPreviousContextPressure(nextSession, previousSession) {
+  if (!nextSession) return previousSession || null;
+  if (contextPressureHasPercent(nextSession.context_pressure)) return nextSession;
+  if (!contextPressureHasPercent(previousSession?.context_pressure)) return nextSession;
+  return { ...nextSession, context_pressure: previousSession.context_pressure };
+}
+
 function normalizedMessageEndpoint(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -4026,7 +4038,9 @@ async function loadConversationPage(taskId = selectedTaskId, target = backendTar
     const payload = await readJsonResponse(res, "Failed to load conversation");
     const events = assignConversationKeys([...(payload.events || []), ...(payload.turn_events || [])], payload.before_offset || 0);
     state.events = older ? mergeConversationEvents(state.events, events, true) : mergeConversationEvents(events, state.events, false);
-    if (payload.backend_session) state.backendSession = payload.backend_session;
+    if (payload.backend_session) {
+      state.backendSession = backendSessionWithPreviousContextPressure(payload.backend_session, state.backendSession);
+    }
     conversationSessionRefreshAt.set(conversationKey(taskId, target), Date.now());
     state.beforeOffset = payload.next_before_offset ?? payload.before ?? null;
     state.hasMore = Boolean(payload.has_more);
@@ -4167,7 +4181,6 @@ function appendRealtimeConversationEvents(events) {
 function invalidateConversationBackendSession(taskId, target) {
   const state = conversationStates.get(conversationKey(taskId, target));
   if (!state) return false;
-  state.backendSession = null;
   state.initialized = false;
   return true;
 }
