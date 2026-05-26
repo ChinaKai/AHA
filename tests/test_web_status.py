@@ -9,6 +9,7 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
+from aha_cli.store.event_views import conversation_events_page
 from aha_cli.store.filesystem import (
     add_agent,
     complete_task,
@@ -108,14 +109,21 @@ class WebStatusTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status),
-                    mock.patch("aha_cli.web.status.compact_reset_backend_session", return_value={"ok": True}) as compact_reset,
+                    mock.patch(
+                        "aha_cli.web.status.compact_reset_backend_session",
+                        return_value={"ok": True, "summary_path": "tasks/task-001/compacts/main.md"},
+                    ) as compact_reset,
                 ):
                     snapshot = web_status_snapshot(root, run_id)
+                    conversation = conversation_events_page(root, run_id, "task-001", "main", categories={"chat"})
 
         compact_reset.assert_called_once_with(root, run_id, "task-001", "main", reason="large", restart=False)
         agent = snapshot["tasks"][0]["agents"][0]
         self.assertEqual(agent["backend_process_status"], "stopped")
         self.assertEqual(agent["backend_context_pressure"]["level"], "unknown")
+        messages = [event["data"]["message"] for event in conversation["events"] if event["type"] == "message"]
+        self.assertTrue(any("AHA 已自动整理 `main` 的 agent context" in message for message in messages))
+        self.assertTrue(any("tasks/task-001/compacts/main.md" in message for message in messages))
 
     def test_web_status_snapshot_lite_skips_nonselected_idle_backend_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

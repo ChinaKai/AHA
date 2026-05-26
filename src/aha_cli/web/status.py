@@ -309,9 +309,27 @@ def auto_compact_agent_context_if_needed(root: Path, run_id: str, task: dict, ag
     if percent < threshold or not backend_session_has_active_id(root, run_id, task_id, agent_id):
         return False
     try:
-        compact_reset_backend_session(root, run_id, task_id, agent_id, reason="large", restart=False)
+        compact_result = compact_reset_backend_session(root, run_id, task_id, agent_id, reason="large", restart=False)
     except (KeyError, ValueError):
         return False
+    append_message(
+        root,
+        run_id,
+        "browser",
+        (
+            f"AHA 已自动整理 `{agent_id}` 的 agent context："
+            f"context {percent:.2f}% >= {threshold}%，已 compact/reset backend session。"
+            f"Summary: `{compact_result.get('summary_path') or '-'}`"
+        ),
+        sender="aha",
+        task_id=task_id,
+        role=str(agent.get("role") or ""),
+        from_agent="aha",
+        to_agent=agent_id,
+        coordination="auto_context_compact",
+        display_sender="AHA",
+        display_target=agent_id,
+    )
     invalidate_backend_status_cache(root, run_id, agent_id, task_id)
     backend_state.clear()
     backend_state.update(backend_status(root, run_id, agent_id, task_id=task_id))
