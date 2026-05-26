@@ -82,15 +82,6 @@ def _task_by_id(root: Path, run_id: str, task_id: str) -> dict:
     return {"id": task_id, "title": task_id}
 
 
-def _run_label(root: Path, run_id: str) -> str:
-    try:
-        plan = read_json(plan_path(root, run_id))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        plan = {}
-    goal = str(plan.get("goal") or "").strip()
-    return f"{goal} ({run_id})" if goal else run_id
-
-
 def _event_key(root: Path, run_id: str, event: dict) -> str:
     event_type = str(event.get("type") or "")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
@@ -176,8 +167,6 @@ def _message_notification(root: Path, run_id: str, data: dict) -> str:
     title = str(task.get("title") or task_id)
     message = _compact_text(_message_text(data)) or "-"
     lines = [
-        "AHA 消息通知",
-        f"Run: {_run_label(root, run_id)}",
         f"Task: {title} ({task_id})",
         f"Route: {sender} -> {target}",
         f"内容: {message}",

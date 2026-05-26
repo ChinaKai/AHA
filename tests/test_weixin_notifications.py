@@ -57,11 +57,16 @@ class WeixinNotificationsTests(unittest.TestCase):
                 self.assertTrue(result["sent"])
                 send.assert_called_once()
                 message = send.call_args.args[2]
-                self.assertIn("AHA 消息通知", message)
-                self.assertIn("Run: Notify goal", message)
-                self.assertIn("Notify task (task-001)", message)
-                self.assertIn(f"Route: {sender} -> {target}", message)
-                self.assertIn(f"内容: {sender} to {target}", message)
+                self.assertNotIn("AHA 消息通知", message)
+                self.assertNotIn("Run:", message)
+                self.assertEqual(
+                    message.splitlines(),
+                    [
+                        "Task: Notify task (task-001)",
+                        f"Route: {sender} -> {target}",
+                        f"内容: {sender} to {target}",
+                    ],
+                )
 
     def test_notify_message_dedupes_same_event_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
