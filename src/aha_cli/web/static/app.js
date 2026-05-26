@@ -839,6 +839,7 @@ function setSessionMenu(open) {
 function setWeixinConsoleOpen(open) {
   weixinConsoleOpen = Boolean(open && currentRunId && weixinConsolePopoverEl);
   if (!weixinConsolePopoverEl) return;
+  sessionMenuEl?.classList.toggle("weixin-open", weixinConsoleOpen);
   if (weixinConsoleOpen) {
     renderWeixinConsolePopover();
     weixinConsolePopoverEl.hidden = false;
@@ -4982,6 +4983,7 @@ function renderWeixinConsole() {
   const payload = weixinState.status || {};
   const pairing = payload.pairing || {};
   const account = payload.account || {};
+  const accountId = String(account.user_id || pairing.user_id || "未配对");
   const paired = Boolean(payload.paired);
   const status = weixinPairingStatus();
   const notifications = payload.notifications || {};
@@ -5045,7 +5047,7 @@ function renderWeixinConsole() {
       <div class="weixin-console-grid">
         <section>
           <strong>账号</strong>
-          <code>${escapeHtml(account.user_id || pairing.user_id || "未配对")}</code>
+          <code class="weixin-account-id" title="${escapeHtml(accountId)}">${escapeHtml(accountId)}</code>
         </section>
         <section>
           <strong>通道</strong>

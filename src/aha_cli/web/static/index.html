@@ -22,6 +22,7 @@
           <span>Run 操作台</span>
           <button id="session-refresh" type="button">刷新</button>
         </div>
+        <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
         <select id="run-select"></select>
         <form id="run-create-form" class="session-create">
           <input id="new-run-goal" placeholder="新 Run goal">
@@ -53,7 +54,6 @@
         <div class="web-service-actions">
           <button id="web-restart" type="button">重启 Web</button>
           <button id="weixin-console" type="button" aria-controls="weixin-console-popover" aria-expanded="false">微信操作台</button>
-          <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
           <code>0.0.0.0:8766</code>
         </div>
         <div id="web-restart-state" class="meta"></div>
