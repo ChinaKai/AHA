@@ -150,6 +150,7 @@ const playConsoleEl = document.getElementById("play-console");
 const playConsolePopoverEl = document.getElementById("play-console-popover");
 const webRestartStateEl = document.getElementById("web-restart-state");
 const sessionDetailTextEl = document.getElementById("session-detail-text");
+const appVersionEl = document.getElementById("app-version");
 const headerWorkspaceDirEl = document.getElementById("header-workspace-dir");
 const mobileTaskSummaryEl = document.getElementById("mobile-task-summary");
 const mobileTaskTitleEl = document.getElementById("mobile-task-title");
@@ -759,7 +760,16 @@ function refreshRealtimeIndicator() {
   if (runStateEl && (statusData || currentRunId)) renderSessionSummary();
 }
 
+function renderAppVersion() {
+  if (!appVersionEl) return;
+  const version = String(statusData?.aha_version || bootstrapData?.aha_version || "").trim();
+  appVersionEl.textContent = version ? `v${version}` : "";
+  appVersionEl.title = version ? `AHA version ${version}` : "";
+  document.title = version ? `AHA v${version}` : "AHA Dashboard";
+}
+
 function renderSessionSummary() {
+  renderAppVersion();
   const run = currentRunSummary() || fallbackCurrentRun();
   const runId = currentRunId || runIdOf(run);
   if (!run && !statusData) {
@@ -5453,6 +5463,7 @@ function renderFirstRunState(force = false) {
   backendStatusData = null;
   if (eventSocket) closeEventWebSocket();
   renderSessionMenu();
+  renderSessionSummary();
   if (summaryEl) summaryEl.textContent = "No runs yet";
   renderTaskList();
   renderSelectedHeader();

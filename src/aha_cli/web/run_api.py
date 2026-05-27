@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backends
+from aha_cli.services.app_version import aha_version
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import (
     config_path,
@@ -118,6 +119,7 @@ def runs_payload(root: Path, default_run_id: str) -> dict:
 def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
     return {
         "aha_home": str(root),
+        "aha_version": aha_version(root),
         "initialized": config_path(root).exists(),
         "default_workspace_path": str(cwd or Path.cwd()),
         "default_run_id": default_api_run_id(root, default_run_id),

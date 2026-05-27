@@ -26,11 +26,13 @@ class WebRunApiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
             root.mkdir()
-            response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
+            with mock.patch("aha_cli.web.run_api.aha_version", return_value="20260527.057e500"):
+                response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
             body = json_response_body(response)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(body["aha_home"], str(root))
+        self.assertEqual(body["aha_version"], "20260527.057e500")
         self.assertFalse(body["initialized"])
         self.assertIn("default_workspace_path", body)
         self.assertEqual(body["default_run_id"], "")

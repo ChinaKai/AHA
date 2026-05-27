@@ -31,7 +31,8 @@ class WebSystemRoutesTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
-                status = system_route_response(root, run_id, "GET", "/api/status", parse_qs("lite=1&task_id=task-001"))
+                with mock.patch("aha_cli.web.status.aha_version", return_value="20260527.057e500"):
+                    status = system_route_response(root, run_id, "GET", "/api/status", parse_qs("lite=1&task_id=task-001"))
                 backends = system_route_response(root, run_id, "HEAD", "/api/backends", {})
                 models = system_route_response(root, run_id, "GET", "/api/models", parse_qs("backend=codex"))
                 invalid_models = system_route_response(root, run_id, "GET", "/api/models", parse_qs("backend=nope"))
@@ -40,6 +41,7 @@ class WebSystemRoutesTests(unittest.TestCase):
 
         self.assertTrue(status and status.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(json_response_body(status)["run_id"], run_id)
+        self.assertEqual(json_response_body(status)["aha_version"], "20260527.057e500")
         self.assertTrue(backends and backends.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(backends.split(b"\r\n\r\n", 1)[1], b"")
         self.assertTrue(models and models.startswith(b"HTTP/1.1 200 OK"))

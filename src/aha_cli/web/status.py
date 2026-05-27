@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 
 from aha_cli.domain.models import utc_now
+from aha_cli.services.app_version import aha_version
 from aha_cli.services.backend_runtime import backend_status
 from aha_cli.store.filesystem import (
     append_event,
@@ -276,6 +277,7 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
 
 def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
     snapshot = status_snapshot(root, run_id)
+    snapshot["aha_version"] = aha_version(root)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
     outcomes = task_outcome_snapshots(root, run_id, task_ids)
     backend_cache: dict[tuple[str | None, str], dict] = {}

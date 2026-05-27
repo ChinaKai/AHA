@@ -55,6 +55,16 @@ h1 { margin: 0; font-size: 20px; }
 .brand-short {
   flex: 0 0 auto;
 }
+.app-version {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.app-version:empty {
+  display: none;
+}
 header > div:first-child {
   min-width: 0;
 }
@@ -2691,6 +2701,10 @@ body.empty-run .panel {
   .brand-title {
     max-width: none;
     gap: 7px;
+  }
+  .brand-short,
+  .app-version {
+    display: none;
   }
   .brand-logo {
     width: 24px;

@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import tempfile
@@ -11,6 +12,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import zipfile
 from unittest import mock
 
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
@@ -536,6 +538,9 @@ class CliCoreTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertTrue(artifact.is_file())
             self.assertTrue(os.access(artifact, os.X_OK))
+            with zipfile.ZipFile(artifact) as archive:
+                build_version = archive.read("aha_cli/_build_version.py").decode("utf-8")
+            self.assertRegex(build_version, r"BUILD_VERSION = '\d{8}\.[0-9a-f]{7}'")
 
             help_run = subprocess.run([str(artifact), "--help"], capture_output=True, text=True, timeout=10)
             self.assertEqual(help_run.returncode, 0, help_run.stderr)
