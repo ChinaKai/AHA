@@ -34,6 +34,9 @@ class FrontendStaticTests(unittest.TestCase):
         styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn("/api/bootstrap", script)
+        self.assertIn('fetchJson(apiUrl("/api/tasks", params)', script)
+        self.assertIn('apiUrl("/api/agents/runtime"', script)
+        self.assertIn("agentsRuntimeCache", script)
         self.assertIn("renderFirstRunState", script)
         self.assertIn("data-bootstrap-run-form", script)
         self.assertIn("createRunFromBootstrapForm", script)
@@ -77,7 +80,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("if (response.ok) {\n        window.location.reload();", script)
         self.assertIn("function applyBootstrapPayload", script)
         self.assertIn("await loadStatus({ forceAgents: true });", refresh_block)
-        self.assertIn("await loadBackendStatus();", refresh_block)
+        self.assertNotIn("await loadBackendStatus();", refresh_block)
         self.assertIn("function resetEventWebSocketReconnectState", script)
         self.assertIn("eventSocketFailureCount = 0;", script)
         self.assertIn("eventSocketReconnectAt = 0;", script)

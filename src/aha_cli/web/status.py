@@ -14,6 +14,7 @@ from aha_cli.store.filesystem import (
     set_agent_status,
     set_task_status,
     status_snapshot,
+    status_snapshot_projection,
     task_snapshot,
     update_agent_runtime,
 )
@@ -57,6 +58,12 @@ def task_activity_status(task: dict) -> str:
     }
     if "busy" in process_statuses:
         return "busy"
+    agent_statuses = {
+        str(agent.get("status") or "").lower()
+        for agent in task.get("agents", [])
+    }
+    if "running" in agent_statuses:
+        return "running"
     if str(task.get("status") or "").lower() == "running":
         return "running"
     return "idle"
@@ -275,47 +282,159 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     return True
 
 
-def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
-    snapshot = status_snapshot(root, run_id)
+def decorate_task_status(task: dict, outcomes: dict[str, dict] | None = None) -> None:
+    raw_task_id = str(task.get("id") or "")
+    agents = task.get("agents", [])
+    task["agent_count"] = task.get("agent_count", len(agents))
+    current_status = str(task.get("status") or "pending")
+    outcome = (
+        current_status
+        if current_status in TERMINAL_TASK_STATUSES
+        else (outcomes or {}).get(raw_task_id, {}).get("status")
+    )
+    display_status = current_status if current_status in {"running", "awaiting_user"} else outcome or current_status
+    task["current_status"] = current_status
+    task["outcome_status"] = outcome
+    task["activity_status"] = task_activity_status(task)
+    task["display_status"] = display_status
+
+
+def web_tasks_snapshot(
+    root: Path,
+    run_id: str,
+    *,
+    lite: bool = False,
+    selected_task_id: str | None = None,
+    include_outcomes: bool = False,
+) -> dict:
+    snapshot = status_snapshot_projection(root, run_id)
     snapshot["aha_version"] = aha_version(root)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
-    outcomes = task_outcome_snapshots(root, run_id, task_ids)
+    outcomes = task_outcome_snapshots(root, run_id, task_ids) if include_outcomes else {}
+    for task in snapshot.get("tasks", []):
+        raw_task_id = str(task.get("id") or "")
+        decorate_task_status(task, outcomes)
+        if lite and (not selected_task_id or raw_task_id != selected_task_id):
+            task["agents"] = []
+    return snapshot
+
+
+def backend_runtime_payload(state: dict, *, task_id: str | None, agent_id: str) -> dict:
+    return {
+        "id": agent_id,
+        "target": state.get("target") or agent_id,
+        "task_id": state.get("task_id") or task_id,
+        "status": state.get("status") or "stopped",
+        "pid": state.get("pid"),
+        "last_reply_at": state.get("last_reply_at"),
+        "resolved_model": state.get("resolved_model"),
+        "runtime_context_window": state.get("runtime_context_window"),
+        "runtime_context_usage": state.get("runtime_context_usage"),
+        "context_pressure": state.get("context_pressure"),
+        "latest_usage": state.get("latest_usage"),
+        "latest_prompt_metrics": state.get("latest_prompt_metrics"),
+    }
+
+
+def apply_backend_runtime(agent: dict, state: dict) -> None:
+    agent["backend_process_status"] = state.get("status") or "stopped"
+    agent["backend_process_pid"] = state.get("pid")
+    agent["backend_process_last_reply_at"] = state.get("last_reply_at")
+    agent["backend_resolved_model"] = state.get("resolved_model")
+    agent["backend_runtime_context_window"] = state.get("runtime_context_window")
+    agent["backend_runtime_context_usage"] = state.get("runtime_context_usage")
+    agent["backend_context_pressure"] = state.get("context_pressure")
+    agent["backend_latest_usage"] = state.get("latest_usage")
+    agent["backend_latest_prompt_metrics"] = state.get("latest_prompt_metrics")
+
+
+def attach_backend_runtime(
+    root: Path,
+    run_id: str,
+    snapshot: dict,
+    *,
+    recover_stale: bool = False,
+) -> dict:
     backend_cache: dict[tuple[str | None, str], dict] = {}
     for task in snapshot.get("tasks", []):
         raw_task_id = str(task.get("id") or "")
         task_id = raw_task_id or None
-        include_all_agent_details = not lite or (selected_task_id is not None and raw_task_id == selected_task_id)
         agents = task.get("agents", [])
-        task["agent_count"] = len(agents)
         for agent in agents:
             target = str(agent.get("id") or "main")
-            agent_status = str(agent.get("status") or "").lower()
-            if lite and not include_all_agent_details and agent_status != "running":
-                continue
             key = (task_id, target)
             if key not in backend_cache:
                 backend_cache[key] = cached_backend_status(root, run_id, target, task_id=task_id)
             state = backend_cache[key]
-            recover_stale_running_agent(root, run_id, task, agent, state)
-            agent["backend_process_status"] = state.get("status") or "stopped"
-            agent["backend_process_pid"] = state.get("pid")
-            agent["backend_process_last_reply_at"] = state.get("last_reply_at")
-            agent["backend_resolved_model"] = state.get("resolved_model")
-            agent["backend_runtime_context_window"] = state.get("runtime_context_window")
-            agent["backend_runtime_context_usage"] = state.get("runtime_context_usage")
-            agent["backend_context_pressure"] = state.get("context_pressure")
-            agent["backend_latest_usage"] = state.get("latest_usage")
-            agent["backend_latest_prompt_metrics"] = state.get("latest_prompt_metrics")
-        current_status = str(task.get("status") or "pending")
-        outcome = current_status if current_status in TERMINAL_TASK_STATUSES else outcomes.get(raw_task_id, {}).get("status")
-        display_status = current_status if current_status in {"running", "awaiting_user"} else outcome or current_status
-        task["current_status"] = current_status
-        task["outcome_status"] = outcome
+            if recover_stale:
+                recover_stale_running_agent(root, run_id, task, agent, state)
+            apply_backend_runtime(agent, state)
         task["activity_status"] = task_activity_status(task)
-        task["display_status"] = display_status
-        if lite and (not selected_task_id or raw_task_id != selected_task_id):
-            task["agents"] = []
     return snapshot
+
+
+def web_agents_runtime_snapshot(root: Path, run_id: str, task_id: str) -> dict:
+    snapshot = status_snapshot(root, run_id)
+    task = next((item for item in snapshot.get("tasks", []) if str(item.get("id") or "") == task_id), None)
+    if task is None:
+        raise KeyError(task_id)
+    runtime_agents = []
+    activity_task = {"status": task.get("status"), "agents": []}
+    for agent in task.get("agents", []):
+        agent_id = str(agent.get("id") or "main")
+        state = cached_backend_status(root, run_id, agent_id, task_id=task_id)
+        payload = backend_runtime_payload(state, task_id=task_id, agent_id=agent_id)
+        runtime_agents.append(payload)
+        activity_agent = dict(agent)
+        apply_backend_runtime(activity_agent, payload)
+        activity_task["agents"].append(activity_agent)
+    return {
+        "run_id": run_id,
+        "task_id": task_id,
+        "agent_count": len(task.get("agents", [])),
+        "activity_status": task_activity_status(activity_task),
+        "agents": runtime_agents,
+    }
+
+
+def recover_stale_running_agents(
+    root: Path,
+    run_id: str,
+    *,
+    task_id: str | None = None,
+    target: str | None = None,
+) -> dict:
+    snapshot = status_snapshot(root, run_id)
+    checked = 0
+    recovered: list[dict] = []
+    for task in snapshot.get("tasks", []):
+        current_task_id = str(task.get("id") or "")
+        if task_id and current_task_id != task_id:
+            continue
+        for agent in task.get("agents", []):
+            agent_id = str(agent.get("id") or "main")
+            if target and agent_id != target:
+                continue
+            if str(agent.get("status") or "") != "running":
+                continue
+            checked += 1
+            state = cached_backend_status(root, run_id, agent_id, task_id=current_task_id or None)
+            if recover_stale_running_agent(root, run_id, task, agent, state):
+                invalidate_backend_status_cache(root, run_id, agent_id, current_task_id)
+                recovered.append({"task_id": current_task_id, "agent_id": agent_id})
+    return {
+        "run_id": run_id,
+        "task_id": task_id,
+        "target": target,
+        "checked": checked,
+        "recovered_count": len(recovered),
+        "recovered": recovered,
+    }
+
+
+def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
+    snapshot = web_tasks_snapshot(root, run_id, lite=lite, selected_task_id=selected_task_id, include_outcomes=True)
+    return attach_backend_runtime(root, run_id, snapshot, recover_stale=False)
 
 __all__ = [
     "task_outcome_snapshots",
@@ -329,5 +448,12 @@ __all__ = [
     "consume_agent_recovery_context",
     "merge_recovery_context_message",
     "recover_stale_running_agent",
+    "recover_stale_running_agents",
+    "decorate_task_status",
+    "backend_runtime_payload",
+    "apply_backend_runtime",
+    "web_tasks_snapshot",
+    "web_agents_runtime_snapshot",
+    "attach_backend_runtime",
     "web_status_snapshot",
 ]

@@ -32,21 +32,36 @@ class WebSystemRoutesTests(unittest.TestCase):
 
                 with mock.patch("aha_cli.web.status.aha_version", return_value="20260527.057e500"):
                     status = system_route_response(root, run_id, "GET", "/api/status", parse_qs("lite=1&task_id=task-001"))
+                    tasks = system_route_response(root, run_id, "GET", "/api/tasks", parse_qs("lite=1&task_id=task-001"))
                 backends = system_route_response(root, run_id, "HEAD", "/api/backends", {})
                 models = system_route_response(root, run_id, "GET", "/api/models", parse_qs("backend=codex"))
                 invalid_models = system_route_response(root, run_id, "GET", "/api/models", parse_qs("backend=nope"))
-                with mock.patch("aha_cli.web.system_routes.backend_status", return_value={"status": "running", "pid": 123}):
+                with mock.patch("aha_cli.web.system_routes.cached_backend_status", return_value={"status": "running", "pid": 123}):
                     backend = system_route_response(root, run_id, "GET", "/api/backend", parse_qs("target=main&task_id=task-001"))
+                with mock.patch(
+                    "aha_cli.web.system_routes.web_agents_runtime_snapshot",
+                    return_value={"task_id": "task-001", "agents": [{"id": "main", "status": "running", "resolved_model": "gpt-5.5"}]},
+                ):
+                    runtime = system_route_response(root, run_id, "GET", "/api/agents/runtime", parse_qs("task_id=task-001"))
+                with mock.patch("aha_cli.web.system_routes.recover_stale_running_agents", return_value={"recovered_count": 0}):
+                    recovery = system_route_response(root, run_id, "POST", "/api/agents/recover-stale", parse_qs("task_id=task-001"), b"{}")
 
         self.assertTrue(status and status.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(json_response_body(status)["run_id"], run_id)
         self.assertEqual(json_response_body(status)["aha_version"], "20260527.057e500")
+        self.assertTrue(tasks and tasks.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(tasks)["run_id"], run_id)
+        self.assertNotIn("backend_process_status", json_response_body(tasks)["tasks"][0]["agents"][0])
         self.assertTrue(backends and backends.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(backends.split(b"\r\n\r\n", 1)[1], b"")
         self.assertTrue(models and models.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(json_response_body(models)["backend"], "codex")
         self.assertTrue(invalid_models and invalid_models.startswith(b"HTTP/1.1 400 Bad Request"))
         self.assertEqual(json_response_body(backend)["pid"], 123)
+        self.assertTrue(runtime and runtime.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(runtime)["agents"][0]["resolved_model"], "gpt-5.5")
+        self.assertTrue(recovery and recovery.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(json_response_body(recovery)["ok"])
 
     def test_system_routes_return_events_and_conversation_views(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

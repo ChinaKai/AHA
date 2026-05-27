@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
-from aha_cli.services.backend_runtime import backend_status
 from aha_cli.services.weixin import (
     WeixinError,
     fetch_updates,
@@ -19,7 +18,13 @@ from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, e
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.session_debug import realtime_debug_log
-from aha_cli.web.status import web_status_snapshot
+from aha_cli.web.status import (
+    cached_backend_status,
+    recover_stale_running_agents,
+    web_agents_runtime_snapshot,
+    web_status_snapshot,
+    web_tasks_snapshot,
+)
 
 WEB_RESTART_EXIT_CODE = 75
 _web_restart_requested = False
@@ -190,6 +195,10 @@ def system_route_response(
         run_id = require_api_run_id(root, default_run_id, query)
         payload = web_status_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))
         return head_or_json(method, payload, request_headers=headers)
+    if method in {"GET", "HEAD"} and path == "/api/tasks":
+        run_id = require_api_run_id(root, default_run_id, query)
+        payload = web_tasks_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))
+        return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/backends":
         return head_or_json(method, {"backends": agent_backends()})
     if method in {"GET", "HEAD"} and path == "/api/models":
@@ -201,7 +210,23 @@ def system_route_response(
         run_id = require_api_run_id(root, default_run_id, query)
         target = query.get("target", ["main"])[0] or "main"
         task_id = query.get("task_id", [""])[0] or None
-        return head_or_json(method, backend_status(root, run_id, target, task_id=task_id))
+        return head_or_json(method, cached_backend_status(root, run_id, target, task_id=task_id))
+    if method in {"GET", "HEAD"} and path == "/api/agents/runtime":
+        run_id = require_api_run_id(root, default_run_id, query)
+        task_id = selected_task_id(query)
+        if not task_id:
+            return json_response({"error": "task_id required"}, "400 Bad Request")
+        try:
+            return head_or_json(method, web_agents_runtime_snapshot(root, run_id, task_id))
+        except KeyError:
+            return json_response({"error": f"task not found: {task_id}"}, "404 Not Found")
+    if method == "POST" and path == "/api/agents/recover-stale":
+        payload = parse_json_body(body) if body.strip() else {}
+        run_id = require_api_run_id(root, default_run_id, query, payload)
+        task_id = str(payload.get("task_id") or query.get("task_id", [""])[0] or "").strip() or None
+        target = str(payload.get("target") or query.get("target", [""])[0] or "").strip() or None
+        recovery = recover_stale_running_agents(root, run_id, task_id=task_id, target=target)
+        return json_response({"ok": True, **recovery})
     if method == "POST" and path == "/api/debug/realtime":
         payload = parse_json_body(body)
         run_id = require_api_run_id(root, default_run_id, query, payload)

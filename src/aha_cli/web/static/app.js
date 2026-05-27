@@ -38,6 +38,7 @@ let tickInFlight = false;
 let tickFailureCount = 0;
 let tickBackoffUntil = 0;
 let backendStatusData = null;
+let agentsRuntimeCache = new Map();
 let conversationAutoFollow = true;
 let agentsPanelEditingUntil = 0;
 let taskProxyEditingUntil = 0;
@@ -1150,7 +1151,7 @@ async function refreshRunScopedView() {
     return;
   }
   await loadStatus({ forceAgents: true });
-  await Promise.all([ensureConversationLoaded(), loadBackendStatus()]);
+  await ensureConversationLoaded();
   await syncRealtimeEvents();
   renderPanel({ preserveContextScroll: true });
 }
@@ -1372,11 +1373,6 @@ async function refreshAfterWebRestart() {
     await loadStatus({ forceAgents: true });
   } catch (err) {
     console.warn("Failed to refresh status after web restart", err);
-  }
-  try {
-    await loadBackendStatus();
-  } catch (err) {
-    console.warn("Failed to refresh backend status after web restart", err);
   }
   renderPanelForRealtime();
 }
@@ -3642,7 +3638,6 @@ function sleep(ms) {
 async function refreshCompactResetStatus(taskId, agentId) {
   await catchUpRealtimeEvents();
   await loadStatus({ forceAgents: true });
-  await loadBackendStatus();
   await loadConversationPage(taskId, agentId, false, true);
 }
 
@@ -4083,28 +4078,107 @@ async function loadStatus(options = {}) {
   const params = { lite: "1" };
   const requestedSelectedTaskId = selectedTaskId;
   if (selectedTaskId) params.selected_task_id = selectedTaskId;
-  statusData = await fetchJson(apiUrl("/api/status", params), {}, "Failed to load status");
+  statusData = await fetchJson(apiUrl("/api/tasks", params), {}, "Failed to load tasks");
+  applyCachedAgentsRuntime();
   applyStatusData(options);
-  if (options.ensureSelectedAgents !== false && !requestedSelectedTaskId && selectedTaskNeedsAgentDetails()) {
+  const needsAgentDetails = selectedTaskNeedsAgentDetails();
+  if (options.ensureSelectedAgents !== false && !requestedSelectedTaskId && needsAgentDetails) {
     loadStatus({ ...options, forceAgents: true, ensureSelectedAgents: false })
-      .then(() => loadBackendStatus())
       .then(() => renderPanelForRealtime())
       .catch(err => console.warn("Failed to load selected task agent details", err));
+  } else if (options.refreshRuntime !== false) {
+    await loadAgentsRuntime();
   }
   return statusData;
 }
 
-async function loadBackendStatus() {
-  if (!currentRunId) {
-    backendStatusData = null;
-    renderBackendStatus();
+function agentRuntimeCacheKey(taskId, agentId, runId = currentRunId) {
+  return `${runId || ""}:${taskId || ""}:${agentId || "main"}`;
+}
+
+function normalizeBackendRuntimeState(state) {
+  if (!state) return null;
+  const taskId = String(state.task_id || selectedTaskId || "");
+  const target = String(state.target || state.id || backendTarget() || "main");
+  return { ...state, task_id: taskId, target, id: String(state.id || target) };
+}
+
+function refreshTaskActivityFromAgents(task) {
+  const agents = task?.agents || [];
+  if (agents.some(agent => agentBackendProcessStatus(agent) === "busy")) {
+    task.activity_status = "busy";
+  } else if (taskCurrentStatus(task) === "running" || agents.some(agent => agentLifecycleStatus(agent) === "running")) {
+    task.activity_status = "running";
+  } else {
+    task.activity_status = "idle";
+  }
+}
+
+function applyBackendRuntimeStateToAgent(agent, state) {
+  agent.backend_process_status = state.status || "stopped";
+  agent.backend_process_pid = state.pid ?? null;
+  agent.backend_process_last_reply_at = state.last_reply_at || "";
+  agent.backend_resolved_model = state.resolved_model || agent.model || "";
+  agent.backend_runtime_context_window = state.runtime_context_window ?? null;
+  agent.backend_runtime_context_usage = state.runtime_context_usage || {};
+  agent.backend_context_pressure = state.context_pressure || {};
+  agent.backend_latest_usage = state.latest_usage || {};
+  agent.backend_latest_prompt_metrics = state.latest_prompt_metrics || {};
+}
+
+function mergeBackendStatusIntoAgent(state) {
+  const normalized = normalizeBackendRuntimeState(state);
+  if (!normalized || !statusData) return;
+  const taskId = normalized.task_id;
+  const target = normalized.target;
+  agentsRuntimeCache.set(agentRuntimeCacheKey(taskId, target), normalized);
+  const task = (statusData.tasks || []).find(item => String(item.id || "") === taskId);
+  if (!task) return;
+  const agent = (task.agents || []).find(item => String(item.id || "") === target);
+  if (!agent) return;
+  applyBackendRuntimeStateToAgent(agent, normalized);
+  refreshTaskActivityFromAgents(task);
+  if (taskId === selectedTaskId && target === backendTarget()) backendStatusData = normalized;
+}
+
+function applyCachedAgentsRuntime() {
+  if (!statusData) return;
+  for (const task of statusData.tasks || []) {
+    for (const agent of task.agents || []) {
+      const cached = agentsRuntimeCache.get(agentRuntimeCacheKey(task.id, agent.id, statusData.run_id || currentRunId));
+      if (cached) applyBackendRuntimeStateToAgent(agent, cached);
+    }
+    refreshTaskActivityFromAgents(task);
+  }
+}
+
+function mergeAgentsRuntime(payload) {
+  for (const state of payload?.agents || []) {
+    mergeBackendStatusIntoAgent(state);
+  }
+  const selectedRuntime = (payload?.agents || []).find(state => String(state.target || state.id || "") === backendTarget());
+  if (selectedRuntime) backendStatusData = normalizeBackendRuntimeState(selectedRuntime);
+}
+
+async function loadAgentsRuntime(options = {}) {
+  if (!currentRunId || !selectedTaskId || selectedTaskNeedsAgentDetails()) {
     return null;
   }
-  const params = new URLSearchParams({ target: backendTarget() });
-  if (selectedTaskId) params.set("task_id", selectedTaskId);
-  backendStatusData = await fetchJson(apiUrl("/api/backend", params), {}, "Failed to load backend status");
+  const payload = await fetchJson(
+    apiUrl("/api/agents/runtime", { task_id: selectedTaskId }),
+    {},
+    "Failed to load agents runtime"
+  );
+  mergeAgentsRuntime(payload);
   renderBackendStatus();
-  return backendStatusData;
+  if (options.renderAgents !== false) {
+    if (!isAgentsPanelEditing()) {
+      renderAgents();
+    } else {
+      renderSelectedAgentInfo();
+    }
+  }
+  return payload;
 }
 
 async function loadFinalDetail(taskId, force = false) {
@@ -4816,7 +4890,7 @@ async function selectTask(taskId) {
   renderTaskSupervisionEditor();
   renderTaskContextEditor();
   renderAgents();
-  await Promise.all([loadBackendStatus(), ensureActiveTabData()]);
+  await Promise.all([loadAgentsRuntime(), ensureActiveTabData()]);
   renderPendingMessages();
   renderPanel();
 }
@@ -5999,7 +6073,6 @@ sendFormEl.addEventListener("submit", async event => {
     const accepted = await catchUpRealtimeEvents();
     realtimeDebug("composer.catchup_complete", { accepted_count: accepted.length });
     await loadStatus({ forceAgents: Boolean(response?.interrupt) });
-    await loadBackendStatus();
     conversationAutoFollow = true;
     renderPendingMessages();
     renderPanel();
@@ -6088,7 +6161,6 @@ backendStatusEl.addEventListener("click", async event => {
     const accepted = await catchUpRealtimeEvents();
     realtimeDebug("interrupt.catchup_complete", { accepted_count: accepted.length });
     await loadStatus({ forceAgents: true });
-    await loadBackendStatus();
     renderPendingMessages();
     renderPanel();
   } catch (err) {
@@ -6272,7 +6344,7 @@ taskContextFormEl?.addEventListener("submit", async event => {
 agentTargetEl.addEventListener("change", async () => {
   syncAgentCards();
   renderSelectedAgentInfo();
-  await loadBackendStatus();
+  await loadAgentsRuntime();
   conversationAutoFollow = true;
   renderConversationFilters();
   await ensureConversationLoaded();
@@ -6347,12 +6419,11 @@ async function tick() {
   try {
     await loadStatus();
     renderPanelForRealtime();
-    await Promise.all([ensureConversationLoaded(), loadBackendStatus()]);
+    await ensureConversationLoaded();
     await maybeRefreshConversationBackendSessionFallback();
     const autoFlushResponse = await maybeAutoFlushPending();
     if (autoFlushResponse) {
       await loadStatus({ forceAgents: true });
-      await loadBackendStatus();
     }
     await syncRealtimeEvents({ allowStalePoll: selectedTaskRealtimeActive() });
     tickFailureCount = 0;

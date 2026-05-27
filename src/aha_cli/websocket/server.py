@@ -10,7 +10,8 @@ from urllib.parse import parse_qs, urlparse
 
 from aha_cli.constants import WS_GUID
 from aha_cli.domain.models import utc_now
-from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position, run_dir, status_snapshot_projection
+from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position, run_dir
+from aha_cli.web.status import web_tasks_snapshot
 
 WS_EVENTS_LIMIT = 500
 WS_HEARTBEAT_INTERVAL = 5.0
@@ -158,7 +159,7 @@ async def _send_status(root: Path, run_id: str, writer: asyncio.StreamWriter, st
         json.dumps(
             {
                 "type": "status",
-                "data": status_snapshot_projection(
+                "data": web_tasks_snapshot(
                     root,
                     run_id,
                     lite=bool(options.get("lite")),

@@ -27,7 +27,12 @@ from aha_cli.store.filesystem import (
 from aha_cli.store.sessions import ensure_session, save_session
 from aha_cli.web import status as web_status_module
 from aha_cli.web.server import handle_send_payload, recover_stale_running_agent, web_status_snapshot
-from aha_cli.web.status import cached_backend_status
+from aha_cli.web.status import (
+    cached_backend_status,
+    recover_stale_running_agents,
+    web_agents_runtime_snapshot,
+    web_tasks_snapshot,
+)
 
 
 class WebStatusTests(unittest.TestCase):
@@ -138,7 +143,89 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(snapshot_without_selection["tasks"][0]["agent_count"], 2)
         self.assertEqual(snapshot_without_selection["tasks"][0]["agents"], [])
 
-    def test_web_status_snapshot_recovers_stale_running_agent_after_backend_loss(self) -> None:
+    def test_web_tasks_snapshot_skips_backend_status_and_outcome_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Light task status", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with (
+                    mock.patch("aha_cli.web.status.backend_status") as backend_status_mock,
+                    mock.patch("aha_cli.web.status.iter_jsonl_reverse") as reverse_events_mock,
+                ):
+                    snapshot = web_tasks_snapshot(root, run_id, lite=True, selected_task_id="task-001")
+
+        backend_status_mock.assert_not_called()
+        reverse_events_mock.assert_not_called()
+        task = snapshot["tasks"][0]
+        self.assertEqual(task["current_status"], "running")
+        self.assertEqual(task["activity_status"], "running")
+        self.assertEqual(task["display_status"], "running")
+        self.assertNotIn("backend_process_status", task["agents"][0])
+
+    def test_web_status_snapshot_does_not_recover_stale_running_agent_without_explicit_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "No implicit repair", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                    snapshot = web_status_snapshot(root, run_id)
+                persisted = task_snapshot(root, run_id, "task-001")["task"]
+                event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+        self.assertEqual(snapshot["tasks"][0]["agents"][0]["backend_process_status"], "stopped")
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["agents"][0]["status"], "running")
+        self.assertNotIn("agent_status_recovered", event_log)
+
+    def test_web_agents_runtime_snapshot_returns_all_task_agents_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Batch runtime", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                host = add_agent(root, run_id, "task-001", backend="claude", role="host")
+
+                def fake_backend_status(_root: Path, _run_id: str, target: str = "main", task_id: str | None = None) -> dict:
+                    return {
+                        "target": target,
+                        "task_id": task_id,
+                        "status": "busy" if target == "main" else "running",
+                        "pid": 1000 + len(target),
+                        "resolved_model": "gpt-5.5" if target == "main" else "claude-sonnet",
+                        "runtime_context_window": 200000,
+                        "runtime_context_usage": {"input_tokens": len(target)},
+                        "context_pressure": {"level": "ok"},
+                        "latest_usage": {"input_tokens": 42},
+                        "latest_prompt_metrics": {"total": {"chars": 99}},
+                    }
+
+                with mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status):
+                    runtime = web_agents_runtime_snapshot(root, run_id, "task-001")
+
+        agents = {agent["id"]: agent for agent in runtime["agents"]}
+        self.assertEqual(runtime["agent_count"], 3)
+        self.assertEqual(runtime["activity_status"], "busy")
+        self.assertEqual(set(agents), {"main", sub["id"], host["id"]})
+        self.assertEqual(agents["main"]["resolved_model"], "gpt-5.5")
+        self.assertEqual(agents[sub["id"]]["status"], "running")
+        self.assertEqual(agents[host["id"]]["context_pressure"]["level"], "ok")
+
+    def test_explicit_recovery_marks_stale_running_agent_after_backend_loss(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -150,10 +237,12 @@ class WebStatusTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", "main", "running")
 
                 with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                    recovery = recover_stale_running_agents(root, run_id)
                     snapshot = web_status_snapshot(root, run_id)
                 persisted = task_snapshot(root, run_id, "task-001")["task"]
                 event_log = event_path(root, run_id).read_text(encoding="utf-8")
 
+        self.assertEqual(recovery["recovered_count"], 1)
         task = snapshot["tasks"][0]
         agent = task["agents"][0]
         self.assertEqual(task["status"], "awaiting_user")
@@ -167,7 +256,7 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(persisted["agents"][0]["status"], "interrupted")
         self.assertIn("agent_status_recovered", event_log)
 
-    def test_web_status_snapshot_rechecks_stopped_cache_before_recovery(self) -> None:
+    def test_explicit_recovery_rechecks_stopped_cache_before_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -181,10 +270,12 @@ class WebStatusTests(unittest.TestCase):
                 with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
                     cached_backend_status(root, run_id, "main", "task-001")
                 with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "running", "pid": 4321}):
+                    recovery = recover_stale_running_agents(root, run_id)
                     snapshot = web_status_snapshot(root, run_id)
                 persisted = task_snapshot(root, run_id, "task-001")["task"]
                 event_log = event_path(root, run_id).read_text(encoding="utf-8")
 
+        self.assertEqual(recovery["recovered_count"], 0)
         task = snapshot["tasks"][0]
         agent = task["agents"][0]
         self.assertEqual(task["status"], "running")
@@ -237,7 +328,7 @@ class WebStatusTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", "main", "running")
 
                 with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
-                    web_status_snapshot(root, run_id)
+                    recover_stale_running_agents(root, run_id)
                 recovered = task_snapshot(root, run_id, "task-001")["task"]
                 self.assertIn("工作异常中断", recovered["agents"][0]["recovery_context"])
 
