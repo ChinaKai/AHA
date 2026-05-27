@@ -5,7 +5,8 @@ from aha_cli.domain.models import (
     DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
     TASK_SUPERVISION_ASK_USER_GATES,
 )
-from aha_cli.services.backend_runtime import backend_status, start_backend, stop_backend
+from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
+from aha_cli.services.backend_runtime import backend_status, stop_backend
 from aha_cli.web.http_utils import parse_optional_bool
 from aha_cli.web.task_commands import (
     compact_reset_selected_agent,

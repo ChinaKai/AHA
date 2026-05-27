@@ -447,7 +447,7 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("Generated-by: AHA Codex GPT-5.5", output)
         self.assertNotIn("AHA-Task:", output)
         self.assertNotIn("AHA-Agent:", output)
-        with mock.patch.dict(os.environ, {"AHA_BACKEND": "codex", "AHA_MODEL": "gpt-5.4"}, clear=False):
+        with mock.patch.dict(os.environ, {"AHA_BACKEND": "codex", "AHA_MODEL": "gpt-5.4", "AHA_GENERATED_BY": ""}, clear=False):
             code, dynamic_output = self.run_cli(
                 "commit",
                 "--type",
@@ -717,9 +717,8 @@ class CliCoreTests(unittest.TestCase):
             target="main",
             mode_instruction="reply",
             run_goal="goal",
-            status="status",
             sticky_context="context",
-            recent_events="events",
+            recent_conversation="conversation",
             sender="browser",
             ts="2026-01-01T00:00:00+00:00",
             message="hello",

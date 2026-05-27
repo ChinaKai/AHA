@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend
+from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
+from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
@@ -768,26 +769,84 @@ def sub_agents(task: dict) -> list[dict]:
     return [agent for agent in task.get("agents", []) if agent.get("role") == "sub"]
 
 
+def _agent_activity_at(agent: dict) -> str:
+    timestamps = [
+        str(value).strip()
+        for value in (
+            agent.get("last_active_at"),
+            agent.get("status_started_at"),
+            agent.get("started_at"),
+            agent.get("finished_at"),
+            agent.get("reused_at"),
+        )
+        if value
+    ]
+    return max(timestamps) if timestamps else ""
+
+
+def current_round_sub_agents(task: dict) -> list[dict]:
+    agents = sub_agents(task)
+    coordination = task.get("coordination") or {}
+    followup_started_at = str(coordination.get("followup_started_at") or "").strip()
+    if not followup_started_at:
+        return agents
+    return [agent for agent in agents if _agent_activity_at(agent) >= followup_started_at]
+
+
 def pending_sub_agents(task: dict) -> list[dict]:
     return [agent for agent in sub_agents(task) if agent.get("status") not in TERMINAL_AGENT_STATUSES]
 
 
+def pending_current_round_sub_agents(task: dict) -> list[dict]:
+    return [agent for agent in current_round_sub_agents(task) if agent.get("status") not in TERMINAL_AGENT_STATUSES]
+
+
 def task_has_incomplete_sub_agents(task: dict) -> bool:
-    return bool(pending_sub_agents(task))
+    return bool(pending_current_round_sub_agents(task))
 
 
 def waiting_for_subagents_message(task: dict) -> str:
-    pending = pending_sub_agents(task)
+    agents = current_round_sub_agents(task)
+    pending = pending_current_round_sub_agents(task)
     if not pending:
         return "所有子 agent 已完成，等待 task-main 做本轮汇总。"
     names = ", ".join(agent.get("id", "-") for agent in pending)
-    done = len(sub_agents(task)) - len(pending)
-    return f"等待子 agent 完成：{names}。当前进度 {done}/{len(sub_agents(task))}。"
+    done = len(agents) - len(pending)
+    return f"等待子 agent 完成：{names}。当前进度 {done}/{len(agents)}。"
+
+
+def start_task_main_backend_if_stopped(root: Path, run_id: str, task_id: str, task: dict) -> bool:
+    main_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == "main"), {})
+    backend = str(main_agent.get("backend") or task.get("preferred_backend") or "codex")
+    if backend not in PROCESS_AGENT_BACKENDS:
+        return False
+    state = backend_status(root, run_id, "main", task_id=task_id)
+    if state.get("status") != "stopped":
+        return False
+    start_backend(
+        root,
+        run_id,
+        "main",
+        backend=backend,
+        model=main_agent.get("model"),
+        sandbox=main_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+        approval=main_agent.get("approval") or task.get("preferred_approval") or "never",
+        from_start=False,
+        task_id=task_id,
+    )
+    append_event(
+        root,
+        run_id,
+        "main_backend_recovered",
+        {"task_id": task_id, "target": "main", "reason": "round_summary"},
+    )
+    return True
 
 
 def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> bool:
     task = task_snapshot(root, run_id, task_id)["task"]
-    agents = sub_agents(task)
+    agents = current_round_sub_agents(task)
+    pending_agents = pending_current_round_sub_agents(task)
     coordination = task.get("coordination") or {}
     if (
         coordination.get("final_summary_requested_at")
@@ -796,14 +855,16 @@ def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
         or coordination.get("round_summary_completed_at")
     ):
         return False
-    if not agents or pending_sub_agents(task):
+    if not agents:
+        return False
+    if pending_agents:
         append_event(
             root,
             run_id,
             "task_waiting_for_subagents",
             {
                 "task_id": task_id,
-                "pending": [agent.get("id") for agent in pending_sub_agents(task)],
+                "pending": [agent.get("id") for agent in pending_agents],
                 "completed": [agent.get("id") for agent in agents if agent.get("status") in TERMINAL_AGENT_STATUSES],
             },
         )
@@ -812,6 +873,7 @@ def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
         return False
     task = mark_task_coordination(root, run_id, task_id, round_summary_requested_at=utc_now())
     prompt = render_prompt_template("task_round_summary.md", task_id=task_id)
+    save_chat_offset(root, run_id, "main", task_id)
     append_message(
         root,
         run_id,
@@ -828,6 +890,7 @@ def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
     event_data = {"task_id": task_id, "target": "main", "reason": "subagents_complete", "policy": "round_summary"}
     append_event(root, run_id, "task_round_summary_requested", event_data)
     append_event(root, run_id, "task_final_requested", event_data)
+    start_task_main_backend_if_stopped(root, run_id, task_id, task)
     return True
 
 
@@ -923,6 +986,15 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
             )
             actions.append({"type": "agent_recovered", "task_id": task["id"], "agent_id": agent["id"]})
         fresh_task = task_snapshot(root, run_id, task["id"])["task"]
-        if not pending_sub_agents(fresh_task) and request_round_summary_if_ready(root, run_id, task["id"]):
+        if not pending_current_round_sub_agents(fresh_task) and request_round_summary_if_ready(root, run_id, task["id"]):
             actions.append({"type": "round_summary_requested", "task_id": task["id"]})
+            continue
+        coordination = fresh_task.get("coordination") or {}
+        if (
+            coordination.get("round_summary_requested_at")
+            and not coordination.get("round_summary_completed_at")
+            and not pending_sub_agents(fresh_task)
+            and start_task_main_backend_if_stopped(root, run_id, task["id"], fresh_task)
+        ):
+            actions.append({"type": "main_recovered", "task_id": task["id"]})
     return actions

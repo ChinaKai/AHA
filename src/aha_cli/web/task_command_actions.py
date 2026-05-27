@@ -65,6 +65,37 @@ def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
     return f"{task_id} reopened. Follow-up messages are allowed again."
 
 
+def _agent_by_id(task: dict, agent_id: str) -> dict:
+    return next((agent for agent in task.get("agents", []) if str(agent.get("id") or "") == agent_id), {})
+
+
+def _is_host_agent(task: dict, agent_id: str) -> bool:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    host_agent_id = str(supervision.get("host_agent_id") or "host")
+    agent = _agent_by_id(task, agent_id)
+    return agent_id == host_agent_id or str(agent.get("role") or "") == "host"
+
+
+def _main_waiting_for_host(task: dict) -> bool:
+    main_agent = _agent_by_id(task, "main")
+    return (
+        str(main_agent.get("status") or "").lower() == "waiting"
+        and str(main_agent.get("waiting_reason") or "").lower() == "host"
+    )
+
+
+def _can_logically_interrupt_stopped_host(task: dict, agent_id: str) -> bool:
+    if not _is_host_agent(task, agent_id):
+        return False
+    agent_status = str(_agent_by_id(task, agent_id).get("status") or "").lower()
+    return agent_status in {"pending", "running", "waiting"} or _main_waiting_for_host(task)
+
+
+def _clear_main_host_wait_if_needed(root: Path, run_id: str, task_id: str, task: dict, interrupted_agent_id: str) -> None:
+    if _is_host_agent(task, interrupted_agent_id) and _main_waiting_for_host(task):
+        set_agent_status(root, run_id, task_id, "main", "completed")
+
+
 def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, target: str) -> tuple[str, dict]:
     if not task_id:
         return "No task is selected.", {"interrupted": False, "reason": "no_task"}
@@ -77,7 +108,9 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
     if not any(str(agent.get("id") or "") == agent_id for agent in task.get("agents", [])):
         return f"Agent not found: {agent_id}", {"interrupted": False, "reason": "agent_not_found", "agent_id": agent_id}
     state = backend_status(root, run_id, agent_id, task_id=task_id)
-    if state.get("status") != "busy":
+    state_status = str(state.get("status") or "").lower()
+    logical_interrupt = state_status == "stopped" and _can_logically_interrupt_stopped_host(task, agent_id)
+    if state_status not in {"busy", "running"} and not logical_interrupt:
         return (
             f"No active turn to interrupt for {agent_id} on {task_id}.",
             {"interrupted": False, "reason": "not_busy", "agent_id": agent_id, "task_id": task_id, "backend": state},
@@ -87,6 +120,7 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
     inbox = inbox_path(root, run_id, agent_id)
     save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
     set_agent_status(root, run_id, task_id, agent_id, "interrupted")
+    _clear_main_host_wait_if_needed(root, run_id, task_id, task, agent_id)
     set_task_status(root, run_id, task_id, "awaiting_user")
     append_event(
         root,

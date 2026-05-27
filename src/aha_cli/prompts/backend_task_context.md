@@ -1,13 +1,14 @@
-Current task context:
+Current task constraints:
 - task_id: $task_id
 - title: $title
-- original request / historical background: $description
 - status: $status
 - role selected by user: $role
+- workspace: $workspace
 - collaboration_mode: $collaboration_mode
 - delegation_policy: $delegation_policy
 - max_sub_agents: $max_sub_agents
-- agents: $agents
+- current_agent: $current_agent
+- visible_agents: $agents
 $final_context
 $task_journal
 $compact_summary

@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend
+from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
+from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.store.filesystem import (
     append_event,

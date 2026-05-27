@@ -25,6 +25,7 @@ from aha_cli.store.filesystem import (
     update_agent_runtime,
 )
 from aha_cli.store.sessions import ensure_session, save_session
+from aha_cli.web import status as web_status_module
 from aha_cli.web.server import handle_send_payload, recover_stale_running_agent, web_status_snapshot
 from aha_cli.web.status import cached_backend_status
 
@@ -35,6 +36,9 @@ class WebStatusTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_status_exports_do_not_include_removed_auto_compact_hook(self) -> None:
+        self.assertNotIn("auto_compact_agent_context_if_needed", web_status_module.__all__)
 
     def test_web_status_snapshot_includes_agent_backend_process_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,7 +83,7 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(agents["sub-001"]["backend_process_status"], "stopped")
         self.assertIsNone(agents["sub-001"]["backend_process_pid"])
 
-    def test_web_status_snapshot_auto_compacts_stopped_agent_above_task_threshold(self) -> None:
+    def test_web_status_snapshot_does_not_auto_compact_stopped_agent_above_task_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -98,32 +102,19 @@ class WebStatusTests(unittest.TestCase):
                 session["backend_session_id"] = "codex-session-high-context"
                 save_session(root, session)
 
-                backend_states = [
-                    {"status": "stopped", "pid": None, "context_pressure": {"level": "watch", "percent": 80.0}},
-                    {"status": "stopped", "pid": None, "context_pressure": {"level": "unknown", "percent": None}},
-                ]
-
                 def fake_backend_status(_root: Path, _run_id: str, target: str = "main", task_id: str | None = None) -> dict:
-                    state = backend_states.pop(0) if backend_states else {"status": "stopped", "pid": None, "context_pressure": {}}
-                    return {"target": target, "task_id": task_id, **state}
+                    return {"target": target, "task_id": task_id, "status": "stopped", "pid": None, "context_pressure": {"level": "watch", "percent": 80.0}}
 
-                with (
-                    mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status),
-                    mock.patch(
-                        "aha_cli.web.status.compact_reset_backend_session",
-                        return_value={"ok": True, "summary_path": "tasks/task-001/compacts/main.md"},
-                    ) as compact_reset,
-                ):
+                with mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status):
                     snapshot = web_status_snapshot(root, run_id)
                     conversation = conversation_events_page(root, run_id, "task-001", "main", categories={"chat"})
 
-        compact_reset.assert_called_once_with(root, run_id, "task-001", "main", reason="large", restart=False)
         agent = snapshot["tasks"][0]["agents"][0]
         self.assertEqual(agent["backend_process_status"], "stopped")
-        self.assertEqual(agent["backend_context_pressure"]["level"], "unknown")
+        self.assertEqual(agent["backend_context_pressure"]["level"], "watch")
+        self.assertEqual(agent["backend_context_pressure"]["percent"], 80.0)
         messages = [event["data"]["message"] for event in conversation["events"] if event["type"] == "message"]
-        self.assertTrue(any("AHA 已自动整理 `main` 的 agent context" in message for message in messages))
-        self.assertTrue(any("tasks/task-001/compacts/main.md" in message for message in messages))
+        self.assertFalse(any("AHA 已自动整理 `main` 的 agent context" in message for message in messages))
 
     def test_web_status_snapshot_lite_skips_nonselected_idle_backend_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -540,7 +531,7 @@ class WebStatusTests(unittest.TestCase):
                 self.assertIsNotNone(detail["agents"][0]["finished_at"])
                 self.assertEqual(json.loads(offset_file.read_text(encoding="utf-8"))["offset"], inbox_path(root, run_id, "main").stat().st_size)
 
-    def test_aha_interrupt_ignores_idle_backend_listener(self) -> None:
+    def test_aha_interrupt_stops_idle_running_backend_listener(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -553,7 +544,7 @@ class WebStatusTests(unittest.TestCase):
 
                 with (
                     mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "running", "pid": 1234}),
-                    mock.patch("aha_cli.web.task_command_actions.stop_backend") as stop_backend,
+                    mock.patch("aha_cli.web.task_command_actions.stop_backend", return_value={"status": "stopped", "pid": None, "target": "main"}) as stop_backend,
                 ):
                     result = handle_send_payload(
                         root,
@@ -570,9 +561,8 @@ class WebStatusTests(unittest.TestCase):
                     )
 
                 self.assertTrue(result["ok"])
-                self.assertFalse(result["interrupt"]["interrupted"])
-                self.assertEqual(result["interrupt"]["reason"], "not_busy")
-                stop_backend.assert_not_called()
+                self.assertTrue(result["interrupt"]["interrupted"])
+                stop_backend.assert_called_once()
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 self.assertEqual(detail["status"], "awaiting_user")
-                self.assertEqual(detail["agents"][0]["status"], "completed")
+                self.assertEqual(detail["agents"][0]["status"], "interrupted")

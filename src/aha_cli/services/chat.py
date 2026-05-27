@@ -29,6 +29,7 @@ from aha_cli.services.orchestrator import (
     task_has_incomplete_sub_agents,
     waiting_for_subagents_message,
 )
+from aha_cli.services.prompt_artifacts import save_prompt_artifact
 from aha_cli.services.proxy import proxy_env_for_agent
 from aha_cli.store.filesystem import (
     append_event,
@@ -277,6 +278,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task)
                 prompt, prompt_metrics = chat_prompt_with_metrics(root, run_id, args.target, item, args.prompt_prefix)
+                try:
+                    prompt_metrics["prompt_ref"] = save_prompt_artifact(root, run_id, item_task_id, args.target, prompt)
+                except OSError as exc:
+                    prompt_metrics["prompt_ref_error"] = str(exc)
                 append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
                 if backend_name == "claude":
                     exit_code, reply, session = run_claude_exec(
@@ -552,7 +557,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 exit_after_message = bool(worker_task_id)
                     if not empty_reply_waiting_for_subagents:
                         append_event(root, run_id, "agent_error", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
-                if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset):
+                if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset, target=args.target):
                     exit_after_message = True
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if exit_after_message and worker_task_id:
@@ -565,7 +570,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
             if message_records:
                 offset = next_offset
                 save_chat_offset(offset_file, offset)
-            elif worker_backend_should_exit_after_turn(root, run_id, worker_task_id, worker_task_id, inbox, offset):
+            elif worker_backend_should_exit_after_turn(root, run_id, worker_task_id, worker_task_id, inbox, offset, target=args.target):
                 mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                 return 0
             if args.once:

@@ -18,6 +18,7 @@ from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
 CLAUDE_AUTH_ENV_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+CLAUDE_GLOBAL_READONLY_DIR = "/"
 CLAUDE_CONFIG_ENV_ALIASES = {
     "api_key": "ANTHROPIC_API_KEY",
     "auth_token": "ANTHROPIC_AUTH_TOKEN",
@@ -334,6 +335,8 @@ def build_claude_exec_command(
         cmd.extend(["--model", model])
     if permission_mode:
         cmd.extend(["--permission-mode", permission_mode])
+    if permission_mode == "plan":
+        cmd.extend(["--add-dir", CLAUDE_GLOBAL_READONLY_DIR])
     cmd.extend(["--disallowedTools", claude_disallowed_subagent_tools_arg()])
     if session_id:
         cmd.extend(["--resume", session_id])

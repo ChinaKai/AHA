@@ -1,4 +1,4 @@
-Current task delta:
+Current task constraints:
 - task_id: $task_id
 - title: $title
 - status: $status
@@ -7,6 +7,7 @@ Current task delta:
 - backend: $backend
 - workspace: $workspace
 - collaboration_mode: $collaboration_mode
+- delegation_policy: $delegation_policy
 - max_sub_agents: $max_sub_agents
 - sandbox: $sandbox
 - approval: $approval
@@ -14,7 +15,7 @@ Current task delta:
 - backend_session_id: $backend_session_id
 
 Sticky session note:
-- This backend session already contains prior AHA runtime contract, previous AHA prompts, tool outputs, and replies.
+- This backend session may already contain prior AHA runtime contract, previous AHA prompts, tool outputs, and replies.
 - Treat this prompt as a delta update; do not assume omitted history or policies were deleted.
 - Respect existing AHA sub-agent ownership and commit rules from the resumed session.
 - Use the current user message below as the new request.

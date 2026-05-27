@@ -21,7 +21,7 @@ from aha_cli.services.weixin import (
 )
 from aha_cli.services.weixin_notifications import notification_status, set_notifications_enabled
 from aha_cli.store.filesystem import append_event
-from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page
+from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page, prompt_artifact_view
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.session_debug import realtime_debug_log
@@ -204,6 +204,24 @@ def conversation_events_response(
     return head_or_json(method, response, request_headers=headers)
 
 
+def prompt_artifact_response(
+    root: Path,
+    run_id: str,
+    method: str,
+    query: dict[str, list[str]],
+    headers: dict[str, str] | None = None,
+) -> bytes:
+    ref = str(query.get("ref", [""])[0] or "").strip()
+    if not ref:
+        return json_response({"error": "ref required"}, "400 Bad Request")
+    try:
+        return head_or_json(method, prompt_artifact_view(root, run_id, ref), request_headers=headers)
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    except FileNotFoundError:
+        return json_response({"error": "prompt artifact not found"}, "404 Not Found")
+
+
 def system_route_response(
     root: Path,
     default_run_id: str,
@@ -245,6 +263,9 @@ def system_route_response(
     if method in {"GET", "HEAD"} and path == "/api/conversation-events":
         run_id = require_api_run_id(root, default_run_id, query)
         return conversation_events_response(root, run_id, method, query, headers)
+    if method in {"GET", "HEAD"} and path == "/api/prompt-artifact":
+        run_id = require_api_run_id(root, default_run_id, query)
+        return prompt_artifact_response(root, run_id, method, query, headers)
     if method == "POST" and path == "/api/web/restart":
         payload = parse_json_body(body) if body.strip() else {}
         run_id = require_api_run_id(root, default_run_id, query)

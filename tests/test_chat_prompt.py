@@ -181,7 +181,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("secret", prompt)
         self.assertNotIn("proxy.local:7890", prompt)
         self.assertNotIn("internal.local", prompt)
-        self.assertIn("'preferred_http_proxy': '<set>'", prompt)
+        self.assertNotIn("preferred_http_proxy", prompt)
 
     def test_chat_prompt_with_metrics_reports_sizes_without_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,8 +209,7 @@ class ChatPromptTests(unittest.TestCase):
         metrics_json = json.dumps(metrics, ensure_ascii=False)
         self.assertEqual(metrics["total"]["chars"], len(prompt))
         self.assertEqual(metrics["components"]["user_message"]["chars"], len("super-secret-user-text"))
-        self.assertGreater(metrics["components"]["status_snapshot"]["chars"], 0)
-        self.assertGreater(metrics["components"]["recent_events"]["chars"], 0)
+        self.assertGreater(metrics["components"]["recent_conversation"]["chars"], 0)
         self.assertGreater(metrics["components"]["task_context"]["chars"], 0)
         self.assertNotIn("super-secret-user-text", metrics_json)
         self.assertNotIn("old-event", metrics_json)
@@ -327,18 +326,27 @@ class ChatPromptTests(unittest.TestCase):
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)):
                     code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                metrics_events = [row for row in rows if row["type"] == "agent_prompt_metrics"]
+                self.assertEqual(len(metrics_events), 1)
+                metrics = metrics_events[0]["data"]
+                artifact_path = run_dir(root, run_id) / metrics["prompt_ref"]["path"]
+                artifact_text = artifact_path.read_text(encoding="utf-8")
+                metrics_json = json.dumps(metrics, ensure_ascii=False)
 
-        metrics_events = [row for row in rows if row["type"] == "agent_prompt_metrics"]
         self.assertEqual(code, 0)
-        self.assertEqual(len(metrics_events), 1)
-        metrics = metrics_events[0]["data"]
         self.assertEqual(metrics["source"], "codex-chat")
         self.assertEqual(metrics["task_id"], "task-001")
         self.assertGreater(metrics["total"]["chars"], 0)
-        self.assertGreater(metrics["components"]["status_snapshot"]["chars"], 0)
+        self.assertGreater(metrics["components"]["recent_conversation"]["chars"], 0)
         self.assertGreater(metrics["components"]["task_context"]["chars"], 0)
+        self.assertIn("prompt_ref", metrics)
+        self.assertTrue(metrics["prompt_ref"]["path"].startswith("tasks/task-001/prompts/main-"))
+        self.assertIn("User message from browser", artifact_text)
+        self.assertIn("measure prompt", artifact_text)
+        self.assertNotIn("User message from browser", metrics_json)
+        self.assertNotIn("measure prompt", metrics_json)
 
-    def test_chat_prompt_uses_recent_events_only(self) -> None:
+    def test_chat_prompt_uses_recent_conversation_chains_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -346,13 +354,91 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Recent prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                for index in range(30):
-                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": f"prompt-event-{index}"})
+                for index in range(5):
+                    append_event(
+                        root,
+                        run_id,
+                        "message",
+                        {"task_id": "task-001", "sender": "browser", "target": "main", "message": f"request-{index}"},
+                    )
+                    append_event(
+                        root,
+                        run_id,
+                        "message",
+                        {"task_id": "task-001", "sender": "main", "target": "browser", "message": f"reply-{index}"},
+                    )
+                append_event(root, run_id, "agent_status_changed", {"task_id": "task-001", "agent_id": "main", "status": "running"})
 
-                prompt = chat_prompt(root, run_id, "main", {"sender": "browser", "message": "status"}, "")
+                prompt = chat_prompt(
+                    root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "status", "task_id": "task-001", "role": "main"},
+                    "",
+                )
 
-        self.assertIn("prompt-event-29", prompt)
-        self.assertNotIn("prompt-event-0", prompt)
+        self.assertIn("request-4", prompt)
+        self.assertIn("reply-4", prompt)
+        self.assertIn("request-2", prompt)
+        self.assertNotIn("request-1", prompt)
+        self.assertNotIn("agent_status_changed", prompt)
+
+    def test_chat_prompt_filters_internal_supervision_conversation_and_caps_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recent prompt budget", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "target": "main", "message": "older request"})
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "main", "target": "browser", "message": "older reply"})
+                append_event(
+                    root,
+                    run_id,
+                    "message",
+                    {
+                        "task_id": "task-001",
+                        "sender": "main",
+                        "target": "host",
+                        "message": "Supervision exchange to evaluate:\n"
+                        "- source: browser_main_reply\n"
+                        "- browser_latest_request:\n"
+                        f"{'internal-browser-request ' * 80}\n\n"
+                        "- main_latest_reply:\n"
+                        f"{'duplicated-main-reply ' * 80}",
+                    },
+                )
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "target": "main", "message": "latest browser request"})
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "main", "target": "sub-001", "message": "delegate useful sub work"})
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "sub-001", "target": "main", "message": "sub useful result"})
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "main", "target": "browser", "message": "latest main reply"})
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "next", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+
+        self.assertLessEqual(metrics["components"]["recent_conversation"]["chars"], 1800)
+        self.assertIn("latest browser request", prompt)
+        self.assertIn("delegate useful sub work", prompt)
+        self.assertIn("sub useful result", prompt)
+        self.assertIn("latest main reply", prompt)
+        self.assertNotIn("Supervision exchange to evaluate", prompt)
+        self.assertNotIn("internal-browser-request", prompt)
+        self.assertNotIn("duplicated-main-reply", prompt)
 
     def test_chat_prompt_scopes_status_and_events_to_current_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -366,8 +452,8 @@ class ChatPromptTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 code, _ = self.run_cli("task", "add", run_id, "Current compact prompt title", "--no-dispatch")
                 self.assertEqual(code, 0)
-                append_event(root, run_id, "agent_message", {"task_id": "task-002", "target": "main", "text": "foreign-event"})
-                append_event(root, run_id, "agent_message", {"task_id": "task-003", "target": "main", "text": "current-event"})
+                append_event(root, run_id, "message", {"task_id": "task-002", "sender": "browser", "target": "main", "message": "foreign-event"})
+                append_event(root, run_id, "message", {"task_id": "task-003", "sender": "browser", "target": "main", "message": "current-event"})
 
                 prompt = chat_prompt(
                     root,
@@ -379,9 +465,8 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertIn("Current compact prompt title", prompt)
         self.assertIn("current-event", prompt)
-        self.assertIn("task_counts", prompt)
+        self.assertIn("Current task constraints:", prompt)
         self.assertIn("Intent priority policy:", prompt)
-        self.assertIn("original request / historical background", prompt)
         self.assertNotIn("Foreign verbose task title that should stay out", prompt)
         self.assertNotIn("foreign-event", prompt)
 
@@ -421,7 +506,7 @@ class ChatPromptTests(unittest.TestCase):
                 )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("Current task delta:", prompt)
+        self.assertIn("Current task constraints:", prompt)
         self.assertIn("backend-session-1", prompt)
         self.assertIn("next request", prompt)
         self.assertIn("Intent priority policy:", prompt)
@@ -430,9 +515,57 @@ class ChatPromptTests(unittest.TestCase):
             prompt,
         )
         self.assertIn("task.description as the original request / historical background", prompt)
-        self.assertIn("task_hidden", prompt)
+        self.assertNotIn("task_hidden", prompt)
         self.assertNotIn("Ownership and routing policy", prompt)
         self.assertNotIn("already-in-backend-session", prompt)
         self.assertIn("sticky_context", metrics["components"])
-        self.assertIn("delta_status", metrics["components"])
+        self.assertIn("recent_conversation", metrics["components"])
+        self.assertNotIn("delta_status", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
+
+    def test_host_sticky_delta_uses_compact_supervision_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host prompt budget", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                item = {
+                    "sender": "main",
+                    "message": "Supervision exchange to evaluate:\n- source: browser_main_reply\n- browser_latest_request:\ncheck\n\n- main_latest_reply:\ndone",
+                    "task_id": "task-001",
+                    "role": "host",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+                full_prompt, full_metrics = chat_prompt_with_metrics(root, run_id, "host", item, "")
+                host_session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "host.json"
+                host_session = read_json(host_session_file)
+                host_session["backend_session_id"] = "host-backend-session"
+                host_session_file.write_text(json.dumps(host_session), encoding="utf-8")
+                sticky_prompt, sticky_metrics = chat_prompt_with_metrics(root, run_id, "host", item, "")
+
+        self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("AHA host instructions:", full_prompt)
+        self.assertIn("AHA host sticky summary:", sticky_prompt)
+        self.assertIn("Return exactly one JSON object", sticky_prompt)
+        self.assertIn("commit, merge, delete", sticky_prompt)
+        self.assertIn("route executable work to task-main", sticky_prompt)
+        self.assertNotIn("Use your read-only project access", sticky_prompt)
+        self.assertIn("supervision_host_context", full_metrics["components"])
+        self.assertNotIn("supervision_host_context", sticky_metrics["components"])
+        self.assertIn("supervision_host_delta_context", sticky_metrics["components"])
+        self.assertLess(
+            sticky_metrics["components"]["supervision_host_delta_context"]["chars"],
+            full_metrics["components"]["supervision_host_context"]["chars"] // 2,
+        )
+        self.assertLess(sticky_metrics["total"]["chars"], full_metrics["total"]["chars"])

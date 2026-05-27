@@ -327,8 +327,14 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         if str(backend_name).removesuffix("-chat") == "codex"
         else {}
     )
-    runtime_context_window = _positive_int(runtime_context.get("context_window"))
+    runtime_context_window = (
+        _positive_int(runtime_context.get("context_window"))
+        or _positive_int(latest_usage.get("context_window"))
+        or _positive_int(latest_usage.get("model_context_window"))
+    )
     runtime_context_usage = runtime_context.get("last_token_usage") if isinstance(runtime_context.get("last_token_usage"), dict) else {}
+    normalized_backend_name = str(backend_name).removesuffix("-chat")
+    pressure_runtime_usage = runtime_context_usage or (latest_usage if normalized_backend_name == "claude" else {})
     return {
         "target": target,
         "task_id": task_id,
@@ -345,7 +351,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
         "runtime_context_window": runtime_context_window,
-        "runtime_context_usage": runtime_context_usage,
+        "runtime_context_usage": pressure_runtime_usage,
         "latest_usage": latest_usage,
         "latest_prompt_metrics": latest_prompt_metrics,
         "context_pressure": context_pressure(
@@ -353,7 +359,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
             str(resolved_model) if resolved_model else None,
             latest_prompt_metrics,
             runtime_context_window=runtime_context_window,
-            runtime_token_usage=runtime_context_usage,
+            runtime_token_usage=pressure_runtime_usage,
             cfg=load_config(root),
         ),
         **activity,

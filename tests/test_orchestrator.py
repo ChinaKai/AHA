@@ -710,6 +710,129 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(main_messages[-1]["reply_target"], "browser")
                 self.assertIn("round summary", main_messages[-1]["message"])
 
+    def test_round_summary_request_offsets_main_and_restarts_stopped_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Round summary restart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                update_agent_runtime(
+                    root,
+                    run_id,
+                    "task-001",
+                    "main",
+                    model="gpt-test",
+                    sandbox="danger-full-access",
+                    approval="never",
+                )
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+                set_task_status(root, run_id, "task-001", "running")
+                append_message(root, run_id, "main", "old message", sender="browser", task_id="task-001", role="main")
+                main_inbox = inbox_path(root, run_id, "main")
+                baseline_offset = main_inbox.stat().st_size
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    first = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sub-001 done")
+                    second = record_sub_agent_report(root, run_id, "task-001", "sub-002", "sub-002 done")
+
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                saved_offset = load_chat_offset(main_inbox, offset_file, from_start=False)
+                queued_messages, _ = iter_jsonl_from(main_inbox, baseline_offset)
+
+        self.assertFalse(first.get("round_summary_requested"))
+        self.assertTrue(second["round_summary_requested"])
+        self.assertEqual(saved_offset, baseline_offset)
+        self.assertEqual(queued_messages[-1]["sender"], "aha")
+        self.assertEqual(queued_messages[-1]["coordination"], "subagents_complete")
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
+        self.assertEqual(start_backend.call_args.kwargs["backend"], "codex")
+        self.assertEqual(start_backend.call_args.kwargs["model"], "gpt-test")
+        self.assertEqual(start_backend.call_args.kwargs["sandbox"], "danger-full-access")
+        self.assertEqual(start_backend.call_args.kwargs["approval"], "never")
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
+        self.assertFalse(start_backend.call_args.kwargs["from_start"])
+
+    def test_monitor_task_coordination_recovers_requested_round_summary_main_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover requested summary", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                update_agent_runtime(
+                    root,
+                    run_id,
+                    "task-001",
+                    "main",
+                    model="gpt-test",
+                    sandbox="danger-full-access",
+                    approval="never",
+                )
+                set_agent_status(root, run_id, "task-001", "sub-001", "completed", 0)
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+                set_task_status(root, run_id, "task-001", "running")
+                mark_task_coordination(root, run_id, "task-001", round_summary_requested_at="2026-05-27T03:11:46+00:00")
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    actions = monitor_task_coordination(root, run_id)
+
+        self.assertIn({"type": "main_recovered", "task_id": "task-001"}, actions)
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
+        self.assertEqual(start_backend.call_args.kwargs["backend"], "codex")
+        self.assertEqual(start_backend.call_args.kwargs["model"], "gpt-test")
+        self.assertEqual(start_backend.call_args.kwargs["sandbox"], "danger-full-access")
+        self.assertEqual(start_backend.call_args.kwargs["approval"], "never")
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
+        self.assertFalse(start_backend.call_args.kwargs["from_start"])
+
+    def test_monitor_task_coordination_ignores_stale_completed_sub_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Ignore stale sub-agents", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                set_agent_status(root, run_id, "task-001", "sub-001", "completed", 0)
+                set_agent_status(root, run_id, "task-001", "sub-002", "completed", 0)
+                set_task_status(root, run_id, "task-001", "running")
+                mark_task_coordination(
+                    root,
+                    run_id,
+                    "task-001",
+                    final_summary_requested_at="",
+                    final_summary_completed_at="",
+                    round_summary_requested_at="",
+                    round_summary_completed_at="",
+                    followup_started_at="9999-01-01T00:00:00+00:00",
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend:
+                    actions = monitor_task_coordination(root, run_id)
+
+                self.assertNotIn({"type": "round_summary_requested", "task_id": "task-001"}, actions)
+                start_backend.assert_not_called()
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                self.assertFalse(any(item.get("coordination") == "subagents_complete" for item in main_messages))
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                self.assertFalse(any(event["type"] == "task_round_summary_requested" for event in events))
+
     def test_coordination_watchdog_recovers_stopped_pending_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

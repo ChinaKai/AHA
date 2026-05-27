@@ -19,7 +19,9 @@ from aha_cli.store.filesystem import (
     set_agent_status,
     set_task_status,
     task_snapshot,
+    update_task_supervision_config,
 )
+from aha_cli.web.task_messaging import handle_send_payload, task_host_review_message_blocker
 from aha_cli.web.task_command_actions import (
     compact_reset_selected_agent,
     interrupt_selected_agent,
@@ -119,6 +121,154 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertEqual(detail["status"], "awaiting_user")
         self.assertEqual(detail["agents"][0]["status"], "interrupted")
         self.assertTrue(any(event["type"] == "agent_interrupted" for event in events))
+
+    def test_interrupt_selected_agent_stops_idle_running_backend_and_records_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "running")
+            append_message(root, run_id, "main", "queued", sender="browser", task_id="task-001", role="main")
+
+            with (
+                mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "running", "pid": 1234}),
+                mock.patch("aha_cli.web.task_command_actions.stop_backend", return_value={"status": "stopped", "pid": None}) as stop_backend,
+            ):
+                message, payload = interrupt_selected_agent(root, run_id, "task-001", "main")
+            offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
+            inbox_size = inbox_path(root, run_id, "main").stat().st_size
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertIn("Interrupted main", message)
+        self.assertTrue(payload["interrupted"])
+        stop_backend.assert_called_once()
+        self.assertEqual(offset, inbox_size)
+        self.assertEqual(detail["status"], "awaiting_user")
+        self.assertEqual(detail["agents"][0]["status"], "interrupted")
+
+    def test_interrupt_selected_host_clears_main_host_wait_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            update_task_supervision_config(
+                root,
+                run_id,
+                "task-001",
+                mode="assisted",
+                host_backend="codex",
+                real_agent_enabled=True,
+            )
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+            set_agent_status(root, run_id, "task-001", "host", "running")
+
+            with (
+                mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "running", "pid": 1234}),
+                mock.patch("aha_cli.web.task_command_actions.stop_backend", return_value={"status": "stopped", "pid": None}) as stop_backend,
+            ):
+                _message, payload = interrupt_selected_agent(root, run_id, "task-001", "host")
+
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+            main_agent = next(agent for agent in detail["agents"] if agent["id"] == "main")
+            host_agent = next(agent for agent in detail["agents"] if agent["id"] == "host")
+            blocker = task_host_review_message_blocker(root, run_id, "task-001", "main")
+
+            with (
+                mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+            ):
+                followup = handle_send_payload(
+                    root,
+                    run_id,
+                    {
+                        "target": "main",
+                        "role": "main",
+                        "task_id": "task-001",
+                        "from_agent": "browser",
+                        "to_agent": "main",
+                        "sender": "browser",
+                        "message": "continue after host interrupt",
+                    },
+                    command_handler=lambda *_args: (False, None, {}),
+                    debug_logger=lambda *_args, **_kwargs: None,
+                )
+
+        self.assertTrue(payload["interrupted"])
+        stop_backend.assert_called_once()
+        self.assertEqual(detail["status"], "awaiting_user")
+        self.assertEqual(host_agent["status"], "interrupted")
+        self.assertEqual(main_agent["status"], "completed")
+        self.assertNotIn("waiting_reason", main_agent)
+        self.assertIsNone(blocker)
+        self.assertTrue(followup["ok"])
+        self.assertFalse(followup.get("deferred", False))
+        start_backend.assert_called_once()
+
+    def test_interrupt_stopped_pending_host_clears_main_host_wait_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            update_task_supervision_config(
+                root,
+                run_id,
+                "task-001",
+                mode="assisted",
+                host_backend="codex",
+                real_agent_enabled=True,
+            )
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+            set_agent_status(root, run_id, "task-001", "host", "pending")
+            append_message(root, run_id, "host", "stale host message", sender="main", task_id="task-001", role="host")
+
+            with (
+                mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "stopped", "pid": None}),
+                mock.patch(
+                    "aha_cli.web.task_command_actions.stop_backend",
+                    return_value={"status": "stopped", "pid": None, "already_stopped": True},
+                ) as stop_backend,
+            ):
+                message, payload = interrupt_selected_agent(root, run_id, "task-001", "host")
+
+            offset = json.loads(chat_offset_path(run_dir(root, run_id), "host", "task-001").read_text(encoding="utf-8"))["offset"]
+            inbox_size = inbox_path(root, run_id, "host").stat().st_size
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+            main_agent = next(agent for agent in detail["agents"] if agent["id"] == "main")
+            host_agent = next(agent for agent in detail["agents"] if agent["id"] == "host")
+            blocker = task_host_review_message_blocker(root, run_id, "task-001", "main")
+
+            with (
+                mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+            ):
+                followup = handle_send_payload(
+                    root,
+                    run_id,
+                    {
+                        "target": "main",
+                        "role": "main",
+                        "task_id": "task-001",
+                        "from_agent": "browser",
+                        "to_agent": "main",
+                        "sender": "browser",
+                        "message": "continue after stopped host interrupt",
+                    },
+                    command_handler=lambda *_args: (False, None, {}),
+                    debug_logger=lambda *_args, **_kwargs: None,
+                )
+
+        self.assertIn("Interrupted host", message)
+        self.assertTrue(payload["interrupted"])
+        stop_backend.assert_called_once()
+        self.assertEqual(offset, inbox_size)
+        self.assertEqual(detail["status"], "awaiting_user")
+        self.assertEqual(host_agent["status"], "interrupted")
+        self.assertEqual(main_agent["status"], "completed")
+        self.assertNotIn("waiting_reason", main_agent)
+        self.assertIsNone(blocker)
+        self.assertTrue(followup["ok"])
+        self.assertFalse(followup.get("deferred", False))
+        start_backend.assert_called_once()
 
 
 if __name__ == "__main__":

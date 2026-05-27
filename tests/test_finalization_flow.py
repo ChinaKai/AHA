@@ -337,7 +337,7 @@ class FinalizationFlowTests(unittest.TestCase):
                 self.assertEqual(detail["task"]["status"], "awaiting_user")
                 self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")["status"], "completed")
 
-    def test_task_scoped_main_backend_keeps_running_while_waiting(self) -> None:
+    def test_task_scoped_main_backend_exits_after_waiting_for_subagents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -357,10 +357,14 @@ class FinalizationFlowTests(unittest.TestCase):
                     code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 self.assertEqual(code, 0)
-                mark_stopped.assert_not_called()
+                mark_stopped.assert_called_once()
+                self.assertEqual(mark_stopped.call_args.args[:3], (root / ".aha", run_id, "main"))
+                self.assertEqual(mark_stopped.call_args.kwargs["task_id"], "task-001")
                 detail = task_snapshot(root, run_id, "task-001")
                 self.assertEqual(detail["task"]["status"], "running")
-                self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")["status"], "waiting")
+                main = next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")
+                self.assertEqual(main["status"], "waiting")
+                self.assertEqual(main["waiting_reason"], "subagents")
 
     def test_finalization_prompt_includes_task_journal(self) -> None:
         prompt = finalization_prompt(
@@ -449,4 +453,4 @@ class FinalizationFlowTests(unittest.TestCase):
         self.assertEqual(metrics["event_limit"], 0)
         self.assertIn("omitted for finalization", prompt)
         self.assertNotIn("NOISY_RECENT_EVENT", prompt)
-        self.assertLess(metrics["components"]["recent_events"]["chars"], 120)
+        self.assertLess(metrics["components"]["recent_conversation"]["chars"], 120)

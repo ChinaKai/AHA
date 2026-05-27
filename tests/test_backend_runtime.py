@@ -355,6 +355,62 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["status"], "running")
         self.assertEqual(status["pid"], 4242)
 
+    def test_backend_status_reports_claude_context_pressure_from_latest_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Claude context pressure", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001")
+                    append_event(
+                        root / ".aha",
+                        run_id,
+                        "agent_usage",
+                        {
+                            "task_id": "task-001",
+                            "target": "main",
+                            "usage": {
+                                "input_tokens": 1000,
+                                "cache_read_input_tokens": 2000,
+                                "cache_creation_input_tokens": 3000,
+                                "output_tokens": 400,
+                            },
+                        },
+                    )
+                    append_event(
+                        root / ".aha",
+                        run_id,
+                        "agent_prompt_metrics",
+                        {
+                            "task_id": "task-001",
+                            "target": "main",
+                            "source": "claude-chat",
+                            "total": {"chars": 1234, "bytes": 1234, "lines": 12},
+                        },
+                    )
+
+                    status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
+
+        self.assertEqual(status["backend"], "claude-chat")
+        self.assertEqual(status["runtime_context_usage"]["input_tokens"], 1000)
+        self.assertEqual(status["runtime_context_usage"]["cache_read_input_tokens"], 2000)
+        self.assertEqual(status["context_pressure"]["backend"], "claude")
+        self.assertEqual(status["context_pressure"]["context_window"], 200_000)
+        self.assertEqual(status["context_pressure"]["input_tokens"], 6000)
+        self.assertEqual(status["context_pressure"]["runtime_effective_input_tokens"], 6000)
+        self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.effective_input_tokens")
+        self.assertEqual(status["context_pressure"]["percent"], 3.0)
+
     def test_backend_process_home_matching_rejects_other_aha_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

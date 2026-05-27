@@ -13,9 +13,9 @@ from aha_cli.backends.claude import build_claude_exec_command, claude_permission
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message, run_codex_exec
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
-from aha_cli.services.chat import chat_prompt
+from aha_cli.services.chat import chat_offset_path, chat_prompt, save_chat_offset
 from aha_cli.services.session_compact import compact_reset_backend_session
-from aha_cli.store.filesystem import append_jsonl, read_json, run_dir
+from aha_cli.store.filesystem import append_jsonl, inbox_path, iter_jsonl_from, read_json, run_dir
 from aha_cli.web.server import backend_session_jsonl_info
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -211,6 +211,17 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertIn("Agent,Task,TaskCreate", cmd)
         self.assertIn("--resume", cmd)
         self.assertIn("session-123", cmd)
+
+    def test_claude_plan_command_adds_global_readonly_dir(self) -> None:
+        cmd = build_claude_exec_command(
+            claude_bin="claude",
+            model=None,
+            permission_mode="plan",
+            session_id=None,
+        )
+
+        self.assertIn("--add-dir", cmd)
+        self.assertEqual(cmd[cmd.index("--add-dir") + 1], "/")
 
     def test_claude_stream_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -456,7 +467,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertGreater(analysis["tool_output_chars"], 0)
         self.assertGreater(analysis["assistant_message_chars"], 0)
 
-    def test_compact_reset_archives_backend_session_and_injects_summary(self) -> None:
+    def test_compact_reset_archives_backend_session_and_keeps_prompt_lean(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:
             root = Path(tmp)
             home = Path(home_tmp)
@@ -481,6 +492,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
 
                 updated = read_json(session_file)
                 summary_exists = (run_dir(root, run_id) / payload["summary_path"]).exists()
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                offset = read_json(offset_file)
+                inbox_size = inbox_path(root, run_id, "main").stat().st_size
                 prompt = chat_prompt(
                     root,
                     run_id,
@@ -494,16 +508,40 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(updated["history_backend_sessions"][0]["backend_session_id"], session_id)
         self.assertEqual(updated["compact_summary"]["archived_backend_session_id"], session_id)
         self.assertTrue(summary_exists)
-        self.assertIn("Backend compact summary from previous session", prompt)
+        self.assertEqual(offset["offset"], inbox_size)
+        self.assertNotIn("Backend compact summary from previous session", prompt)
         self.assertIn("previous request", prompt)
-        self.assertIn(
-            "Intent priority: current user message > task journal / active intent > compact summary / recent messages > original task description",
-            prompt,
-        )
-        self.assertIn("original_request:", prompt)
-        self.assertIn("Completed or superseded original requirements should not be restarted", prompt)
-        self.assertIn("Explicit exclusions from recent user messages override older requirements", prompt)
-        self.assertIn("Next action should come from the latest active user intent", prompt)
+        self.assertIn("Recent conversation chains", prompt)
+        self.assertIn("Intent priority policy:", prompt)
+
+    def test_compact_reset_preserves_existing_task_scoped_chat_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Compact reset offset", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_id = "compact-reset-offset-session-1"
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = session_id
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                append_message(root, run_id, "main", "already processed", sender="browser", task_id="task-001", role="main")
+                inbox = inbox_path(root, run_id, "main")
+                preserved_offset = inbox.stat().st_size
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, preserved_offset)
+                append_message(root, run_id, "main", "queued after offset", sender="browser", task_id="task-001", role="main")
+
+                compact_reset_backend_session(root, run_id, "task-001", "main", reason="manual")
+
+                offset = read_json(offset_file)
+                queued, _ = iter_jsonl_from(inbox, preserved_offset)
+
+        self.assertEqual(offset["offset"], preserved_offset)
+        self.assertEqual([item["message"] for item in queued], ["queued after offset"])
 
     def test_compact_reset_api_uses_selected_agent_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:

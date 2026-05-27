@@ -7,11 +7,12 @@ from aha_cli.services.chat_supervision import (
     is_task_supervision_host_agent,
     prompt_event_visible_to_target,
     supervision_host_context,
+    supervision_host_delta_context,
     supervision_host_handoff_notes,
     supervision_host_notes,
+    task_supervision_host_id,
 )
 from aha_cli.services.commit_policy import commit_message_policy_prompt
-from aha_cli.services.messages import format_event
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.event_views import event_agent_refs
 from aha_cli.store.filesystem import (
@@ -38,6 +39,11 @@ DELTA_PROMPT_SKIP_EVENT_TYPES = {
     "task_journal_rendered",
     "task_status_changed",
 }
+PROMPT_CONVERSATION_CHAIN_LIMIT = 3
+PROMPT_CONVERSATION_SCAN_LIMIT = 200
+PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT = 700
+PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT = 240
+PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
 
 
 def recent_run_events(root: Path, run_id: str, limit: int) -> list[dict]:
@@ -100,6 +106,151 @@ def _is_current_message_event(event: dict, item: dict, target: str) -> bool:
     )
 
 
+def _message_endpoint(data: dict, *keys: str) -> str:
+    for key in keys:
+        value = str(data.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _conversation_message_endpoints(event: dict) -> tuple[str, str]:
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender = _message_endpoint(data, "display_sender", "from_agent", "sender") or "-"
+    target = _message_endpoint(data, "display_target", "to_agent", "target") or "-"
+    return sender, target
+
+
+def _conversation_message_visible_to_target(event: dict, target: str, task: dict | None) -> bool:
+    if event.get("type") != "message":
+        return False
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if str(data.get("sender") or "").lower() == "aha" or str(data.get("from_agent") or "").lower() == "aha":
+        return False
+    sender, recipient = _conversation_message_endpoints(event)
+    endpoint_refs = {sender, recipient}
+    endpoint_refs.update(str(data.get(key) or "").strip() for key in ("sender", "target", "from_agent", "to_agent", "display_sender", "display_target"))
+    endpoint_refs = {ref for ref in endpoint_refs if ref}
+    if target in endpoint_refs:
+        return True
+    return prompt_event_visible_to_target(event, target, task)
+
+
+def _conversation_internal_evaluation_event(event: dict, task: dict | None) -> bool:
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender, recipient = _conversation_message_endpoints(event)
+    message = str(data.get("message") or "")
+    if message.startswith("Supervision exchange to evaluate:\n"):
+        return True
+    host_agent_id = task_supervision_host_id(task) if task else None
+    return bool(host_agent_id and sender == "main" and recipient == host_agent_id)
+
+
+def _conversation_starts_chain(event: dict) -> bool:
+    sender, _recipient = _conversation_message_endpoints(event)
+    return sender.lower() == "browser"
+
+
+def _truncate_for_prompt(value: object, limit: int = PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 15)].rstrip() + " ...[truncated]"
+
+
+def recent_conversation_events(
+    root: Path,
+    run_id: str,
+    chain_limit: int,
+    task_id: str | None,
+    target: str,
+    item: dict,
+) -> list[dict]:
+    if not task_id:
+        return []
+    visibility_task = _prompt_visibility_task(root, run_id, task_id, target)
+    events: list[dict] = []
+    chain_starts = 0
+    scanned = 0
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        if _event_task_id(event) != task_id:
+            continue
+        if event.get("type") != "message":
+            continue
+        scanned += 1
+        if scanned > PROMPT_CONVERSATION_SCAN_LIMIT:
+            break
+        if _is_current_message_event(event, item, target):
+            continue
+        if not _conversation_message_visible_to_target(event, target, visibility_task):
+            continue
+        if _conversation_internal_evaluation_event(event, visibility_task):
+            continue
+        events.append(event)
+        if _conversation_starts_chain(event):
+            chain_starts += 1
+            if chain_starts >= chain_limit:
+                break
+    return list(reversed(events))
+
+
+def _conversation_line(event: dict, message_limit: int) -> str:
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender, recipient = _conversation_message_endpoints(event)
+    ts = str(data.get("ts") or event.get("ts") or "-")
+    return f"- {ts} {sender} -> {recipient}: {_truncate_for_prompt(data.get('message'), message_limit)}"
+
+
+def _format_conversation_chains(chains: list[list[dict]], message_limit: int) -> str:
+    lines = [f"Recent conversation chains (last {len(chains)}, oldest first):"]
+    for index, chain in enumerate(chains, 1):
+        lines.append(f"Chain {index}:")
+        for event in chain:
+            lines.append(_conversation_line(event, message_limit))
+    return "\n".join(lines)
+
+
+def _format_conversation_with_budget(chains: list[list[dict]], budget: int) -> str:
+    selected = [list(chain) for chain in chains]
+    for message_limit in (PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT, 480, PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT):
+        candidate = [list(chain) for chain in selected]
+        while candidate:
+            text = _format_conversation_chains(candidate, message_limit)
+            if len(text) <= budget:
+                return text
+            if len(candidate) > 1:
+                candidate = candidate[1:]
+                continue
+            if len(candidate[0]) > 2:
+                candidate[0] = candidate[0][1:]
+                continue
+            break
+    text = _format_conversation_chains(selected[-1:], PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT)
+    if len(text) <= budget:
+        return text
+    return text[: max(0, budget - 25)].rstrip() + "\n...[truncated to budget]"
+
+
+def format_recent_conversation(
+    events: list[dict],
+    chain_limit: int = PROMPT_CONVERSATION_CHAIN_LIMIT,
+    budget: int = PROMPT_RECENT_CONVERSATION_CHAR_BUDGET,
+) -> str:
+    if not events:
+        return "(no prior conversation for this task/agent)"
+    chains: list[list[dict]] = []
+    current: list[dict] = []
+    for event in events:
+        if _conversation_starts_chain(event) and current:
+            chains.append(current)
+            current = []
+        current.append(event)
+    if current:
+        chains.append(current)
+    chains = chains[-chain_limit:]
+    return _format_conversation_with_budget(chains, budget)
+
+
 def recent_delta_prompt_events(root: Path, run_id: str, limit: int, task_id: str | None, target: str, item: dict) -> list[dict]:
     events: list[dict] = []
     visibility_task = _prompt_visibility_task(root, run_id, task_id, target)
@@ -159,6 +310,26 @@ def _agent_summary_for_prompt(agent: dict) -> dict:
         "backend_session_id": agent.get("backend_session_id"),
         "session_status": agent.get("session_status"),
     }
+
+
+def _agent_constraints_for_prompt(agent: dict | None) -> dict:
+    if not isinstance(agent, dict):
+        return {}
+    keys = (
+        "id",
+        "role",
+        "backend",
+        "model",
+        "sandbox",
+        "approval",
+        "status",
+        "session_policy",
+        "assignment",
+        "scope_id",
+        "generation",
+        "created_reason",
+    )
+    return {key: agent.get(key) for key in keys if agent.get(key) not in (None, "", [])}
 
 
 def _task_summary_for_prompt(task: dict, target: str) -> dict:
@@ -384,10 +555,10 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             final_context = ""
             if is_finalization and existing_final:
                 final_context = f"- existing Final chars: {len(existing_final)}\n"
-            compact_context = compact_summary_context(root, run_id, session)
+            compact_context = compact_summary_context(root, run_id, session) if is_finalization else ""
             rounds = detail.get("rounds", [])
             journal_context = ""
-            if rounds:
+            if rounds and is_finalization:
                 recent_rounds = rounds[-10:]
                 journal_lines = ["Task journal:"]
                 for round_item in recent_rounds:
@@ -407,9 +578,11 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 ),
             ).rstrip()
             visible_agents = agents_visible_to_prompt(detail["task"], target)
+            visible_agent_constraints = [_agent_constraints_for_prompt(entry) for entry in visible_agents]
+            current_agent_constraints = _agent_constraints_for_prompt(agent)
             components.update(
                 {
-                    "task_agents": visible_agents,
+                    "task_agents": visible_agent_constraints,
                     "task_journal": journal_context,
                     "commit_policy": commit_policy,
                     "compact_summary": compact_context,
@@ -422,16 +595,18 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 description=detail["task"].get("description", ""),
                 status=detail["task"].get("status", ""),
                 role=item.get("role", ""),
+                workspace=detail["task"].get("workspace_path", ""),
                 collaboration_mode=detail["task"].get("collaboration_mode", "auto"),
                 delegation_policy=detail["task"].get("delegation_policy", "auto"),
                 max_sub_agents=detail["task"].get("max_sub_agents", 0),
-                agents=visible_agents,
+                current_agent=current_agent_constraints,
+                agents=visible_agent_constraints,
                 final_context=final_context.rstrip(),
                 task_journal=journal_context,
                 compact_summary=compact_context.rstrip(),
                 commit_policy=commit_policy,
             )
-            if is_task_supervision_host_agent(detail["task"], target):
+            if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):
                 supervision_context = supervision_host_context(
                     detail["task"],
                     supervision_host_notes(root, run_id, str(task_id), target),
@@ -446,12 +621,19 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
     mode_instruction = render_prompt_template(
         "mode_instruction_final.md" if is_finalization else "mode_instruction_default.md"
     ).strip()
-    event_limit = 0 if is_finalization else 20
+    event_limit = 0 if is_finalization else PROMPT_CONVERSATION_CHAIN_LIMIT
+    conversation_chain_limit = event_limit
     if sticky_delta:
-        event_limit = 8
-        events = recent_delta_prompt_events(root, run_id, event_limit, str(task_id) if task_id else None, target, item)
-        recent = "\n".join(format_event(event) for event in events) or "(no external AHA events since previous backend turn)"
-        status = prompt_delta_status_snapshot(root, run_id, str(task_id) if task_id else None, target)
+        event_limit = conversation_chain_limit
+        conversation_events = recent_conversation_events(
+            root,
+            run_id,
+            conversation_chain_limit,
+            str(task_id) if task_id else None,
+            target,
+            item,
+        )
+        recent_conversation = format_recent_conversation(conversation_events, conversation_chain_limit)
         sticky_context = render_prompt_template(
             "backend_sticky_context.md",
             task_id=task_id,
@@ -462,6 +644,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             backend=(agent or {}).get("backend") or (task or {}).get("preferred_backend") or "codex",
             workspace=(agent or {}).get("workspace_path") or (task or {}).get("workspace_path") or "-",
             collaboration_mode=(task or {}).get("collaboration_mode") or "auto",
+            delegation_policy=(task or {}).get("delegation_policy") or "auto",
             max_sub_agents=(task or {}).get("max_sub_agents") if task else "-",
             sandbox=(agent or {}).get("sandbox") or (task or {}).get("preferred_sandbox") or "-",
             approval=(agent or {}).get("approval") or (task or {}).get("preferred_approval") or "-",
@@ -469,21 +652,20 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             backend_session_id=(agent or {}).get("backend_session_id") or "-",
         )
         if task and is_task_supervision_host_agent(task, target):
-            supervision_context = supervision_host_context(
+            supervision_context = supervision_host_delta_context(
                 task,
                 supervision_host_notes(root, run_id, str(task_id), target),
                 supervision_host_handoff_notes(root, run_id, str(task_id)),
             )
             sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_context}\n"
-            components["supervision_host_context"] = supervision_context
-        for stale_component in ("task_context", "task_agents", "task_journal", "commit_policy"):
+            components["supervision_host_delta_context"] = supervision_context
+        for stale_component in ("task_context", "task_agents", "task_journal", "commit_policy", "supervision_host_context"):
             components.pop(stale_component, None)
         components.update(
             {
                 "mode_instruction": mode_instruction,
-                "delta_status": status,
-                "external_events": recent,
                 "sticky_context": sticky_context,
+                "recent_conversation": recent_conversation,
             }
         )
         prompt = render_prompt_template(
@@ -492,9 +674,8 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             target=target,
             mode_instruction=mode_instruction,
             run_goal=plan["goal"],
-            status=status,
             sticky_context=sticky_context.rstrip(),
-            recent_events=recent,
+            recent_conversation=recent_conversation,
             sender=item.get("sender", "browser"),
             ts=item.get("ts", ""),
             message=item.get("message", ""),
@@ -512,16 +693,21 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         )
         return prompt
     if is_finalization:
-        recent = "(omitted for finalization; use the Task journal, compact summary, and current finalization request)"
+        recent_conversation = "(omitted for finalization; use the Task journal and current finalization request)"
     else:
-        events = recent_prompt_events(root, run_id, event_limit, str(task_id) if task_id else None, target)
-        recent = "\n".join(format_event(event) for event in events) or "(no events)"
-    status = prompt_status_snapshot(root, run_id, str(task_id) if task_id else None, target)
+        conversation_events = recent_conversation_events(
+            root,
+            run_id,
+            conversation_chain_limit,
+            str(task_id) if task_id else None,
+            target,
+            item,
+        )
+        recent_conversation = format_recent_conversation(conversation_events, conversation_chain_limit)
     components.update(
         {
             "mode_instruction": mode_instruction,
-            "status_snapshot": status,
-            "recent_events": recent,
+            "recent_conversation": recent_conversation,
             "task_context": task_context or "Current task context: none",
         }
     )
@@ -531,9 +717,8 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         target=target,
         mode_instruction=mode_instruction,
         run_goal=plan["goal"],
-        status=status,
         task_context=task_context or "Current task context: none",
-        recent_events=recent,
+        recent_conversation=recent_conversation,
         sender=item.get("sender", "browser"),
         ts=item.get("ts", ""),
         message=item.get("message", ""),
@@ -555,8 +740,10 @@ __all__ = [
     "chat_prompt",
     "chat_prompt_with_metrics",
     "compact_summary_context",
+    "format_recent_conversation",
     "prompt_delta_status_snapshot",
     "prompt_status_snapshot",
+    "recent_conversation_events",
     "recent_delta_prompt_events",
     "recent_prompt_events",
     "recent_run_events",

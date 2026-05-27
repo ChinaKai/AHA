@@ -189,7 +189,7 @@ header > div:first-child h1 {
 }
 .web-service-actions {
   display: grid;
-  grid-template-columns: minmax(96px, auto) minmax(104px, auto) minmax(88px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(96px, auto) minmax(104px, auto) minmax(88px, auto);
   align-items: center;
   gap: 8px;
   position: relative;
@@ -197,14 +197,6 @@ header > div:first-child h1 {
 .web-service-actions button {
   min-height: 30px;
   padding: 0 10px;
-}
-.web-service-actions code {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #667085;
-  font-size: 12px;
 }
 .weixin-console {
   display: grid;
@@ -1013,6 +1005,29 @@ button, input, select, textarea { font: inherit; }
   border-left-color: #2563eb;
   background: #f8fbff;
 }
+.context-view {
+  display: grid;
+  gap: 12px;
+}
+.raw-prompt-section {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d8dde4;
+  border-left: 3px solid #2563eb;
+  border-radius: 6px;
+  padding: 10px;
+  background: #ffffff;
+}
+.raw-prompt-section .message-copy {
+  align-self: start;
+}
+.raw-prompt-body {
+  max-height: min(62vh, 760px);
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .session-compact-summary {
   border-left-width: 4px;
 }
@@ -1807,6 +1822,7 @@ button, input, select, textarea { font: inherit; }
   font-size: 12px;
   overflow-x: auto;
 }
+.conversation-filters.hidden { display: none; }
 .conversation-filters > span {
   color: #475467;
   font-weight: 600;

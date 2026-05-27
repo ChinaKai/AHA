@@ -74,6 +74,81 @@ class ChatOffsetTests(unittest.TestCase):
 
         self.assertFalse(worker_backend_should_exit_after_turn(root, "run", None, "task-001", inbox, 0))
 
+    def test_main_waiting_backend_exits_after_turn_while_task_keeps_running(self) -> None:
+        root = Path("/tmp/root")
+        inbox = Path("/tmp/inbox")
+        task = {
+            "status": "running",
+            "agents": [
+                {"id": "main", "status": "waiting", "waiting_reason": "subagents"},
+                {"id": "sub-001", "status": "running", "role": "sub"},
+            ],
+        }
+
+        with (
+            mock.patch("aha_cli.services.chat_offsets.task_snapshot", return_value={"task": task}),
+            mock.patch("aha_cli.services.chat_offsets.task_has_incomplete_sub_agents", return_value=True),
+        ):
+            self.assertTrue(
+                worker_backend_should_exit_after_turn(
+                    root,
+                    "run",
+                    "task-001",
+                    "task-001",
+                    inbox,
+                    0,
+                    target="main",
+                )
+            )
+            self.assertFalse(
+                worker_backend_should_exit_after_turn(
+                    root,
+                    "run",
+                    "task-001",
+                    "task-001",
+                    inbox,
+                    0,
+                    target="sub-001",
+                )
+            )
+
+        task["agents"][0]["waiting_reason"] = "host"
+        with mock.patch("aha_cli.services.chat_offsets.task_snapshot", return_value={"task": task}):
+            self.assertTrue(
+                worker_backend_should_exit_after_turn(
+                    root,
+                    "run",
+                    "task-001",
+                    "task-001",
+                    inbox,
+                    0,
+                    target="main",
+                )
+            )
+
+    def test_main_waiting_backend_does_not_exit_with_unprocessed_inbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path("/tmp/root")
+            inbox = Path(tmp) / "inbox.jsonl"
+            append_jsonl(inbox, {"message": "new work"})
+            task = {
+                "status": "running",
+                "agents": [{"id": "main", "status": "waiting", "waiting_reason": "host"}],
+            }
+
+            with mock.patch("aha_cli.services.chat_offsets.task_snapshot", return_value={"task": task}):
+                self.assertFalse(
+                    worker_backend_should_exit_after_turn(
+                        root,
+                        "run",
+                        "task-001",
+                        "task-001",
+                        inbox,
+                        0,
+                        target="main",
+                    )
+                )
+
     def test_task_scoped_backend_exits_when_idle_and_task_is_awaiting_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

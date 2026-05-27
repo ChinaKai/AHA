@@ -46,6 +46,8 @@ def worker_backend_should_exit_after_turn(
     worker_task_id: str | None,
     inbox: Path,
     processed_offset: int,
+    *,
+    target: str = "main",
 ) -> bool:
     if not task_id or not worker_task_id:
         return False
@@ -54,9 +56,18 @@ def worker_backend_should_exit_after_turn(
     except KeyError:
         return True
     status = str(task.get("status") or "")
-    if status != "awaiting_user" and status not in TERMINAL_TASK_STATUSES:
+    main_waiting = False
+    if str(target or "main") == "main" and status == "running":
+        agents = task.get("agents") if isinstance(task.get("agents"), list) else []
+        main = next((agent for agent in agents if str(agent.get("id") or "") == "main"), None)
+        waiting_reason = str((main or {}).get("waiting_reason") or "").lower()
+        main_waiting = (
+            str((main or {}).get("status") or "").lower() == "waiting"
+            and waiting_reason in {"host", "subagents"}
+        )
+    if not main_waiting and status != "awaiting_user" and status not in TERMINAL_TASK_STATUSES:
         return False
-    if task_has_incomplete_sub_agents(task):
+    if not main_waiting and task_has_incomplete_sub_agents(task):
         return False
     try:
         if inbox.exists() and inbox.stat().st_size > processed_offset:

@@ -73,6 +73,7 @@ const conversationSessionRefreshes = new Map();
 const conversationSessionRefreshAt = new Map();
 const expandedMessageKeys = new Set();
 const copyTextByKey = new Map();
+const promptArtifactCache = new Map();
 const finalDetails = new Map();
 const contextDetails = new Map();
 const logStates = new Map();
@@ -783,11 +784,9 @@ function renderSessionSummary() {
     runIdEl.textContent = runId || "-";
     runIdEl.title = runId || "";
   }
-  const updatedAt = statusData?.updated_at || runUpdatedAtOf(run);
-  const runStateText = `updated ${formatLocalTimestamp(updatedAt, updatedAt || "-")}`;
   if (runStateEl) {
-    runStateEl.textContent = runStateText;
-    runStateEl.title = runStateText;
+    runStateEl.textContent = "";
+    runStateEl.title = "";
   }
   if (sessionDetailTextEl) {
     const taskCount = Number.isFinite(run?.task_count) ? `${run.completed_count || 0}/${run.task_count} tasks` : "";
@@ -795,7 +794,6 @@ function renderSessionSummary() {
       run?.mode ? `mode ${run.mode}` : statusData?.mode ? `mode ${statusData.mode}` : "",
       run?.status ? `状态 ${run.status}` : "",
       taskCount,
-      updatedAt ? `更新 ${formatLocalTimestamp(updatedAt, updatedAt)}` : "",
       realtimeTransportText(),
       runsError ? `提示 ${runsError}` : ""
     ].filter(Boolean).join(" · ") || "Run 详情";
@@ -1135,7 +1133,7 @@ async function refreshRunScopedView() {
   await loadStatus({ forceAgents: true });
   await Promise.all([ensureConversationLoaded(), loadBackendStatus()]);
   await syncRealtimeEvents();
-  renderPanel();
+  renderPanel({ preserveContextScroll: true });
 }
 
 async function switchRun(runId) {
@@ -2726,9 +2724,20 @@ function contextPressureHasPercent(pressure) {
   return Number.isFinite(Number(pressure.percent));
 }
 
+function backendSessionId(session) {
+  return String(session?.id || session?.backend_session_id || "").trim();
+}
+
+function backendSessionIdsDiffer(nextSession, previousSession) {
+  const nextId = backendSessionId(nextSession);
+  const previousId = backendSessionId(previousSession);
+  return Boolean(nextId || previousId) && nextId !== previousId;
+}
+
 function backendSessionWithPreviousContextPressure(nextSession, previousSession) {
   if (!nextSession) return previousSession || null;
   if (contextPressureHasPercent(nextSession.context_pressure)) return nextSession;
+  if (backendSessionIdsDiffer(nextSession, previousSession)) return nextSession;
   if (!contextPressureHasPercent(previousSession?.context_pressure)) return nextSession;
   return { ...nextSession, context_pressure: previousSession.context_pressure };
 }
@@ -3139,7 +3148,9 @@ function renderUsageBreakdown(usage, usageStatus, source, contextPressure = null
     ["input_tokens", contextPressure?.input_tokens ?? "-"],
     ["prompt_tokens", contextPressure?.prompt_tokens ?? "-"],
     ["runtime_input_tokens", contextPressure?.runtime_input_tokens ?? "-"],
+    ["runtime_effective_input_tokens", contextPressure?.runtime_effective_input_tokens ?? "-"],
     ["runtime_cached_input_tokens", contextPressure?.runtime_cached_input_tokens ?? "-"],
+    ["runtime_cache_creation_input_tokens", contextPressure?.runtime_cache_creation_input_tokens ?? "-"],
     ["runtime_total_tokens", contextPressure?.runtime_total_tokens ?? "-"],
     ["prompt_chars", contextPressure?.prompt_chars ?? "-"],
     ["prompt_bytes", contextPressure?.prompt_bytes ?? "-"],
@@ -3199,6 +3210,118 @@ function componentMetricRows(components, totalChars) {
       const percent = totalChars > 0 ? Math.min(100, Math.max(0, item.chars / totalChars * 100)) : 0;
       return { ...item, percent };
     });
+}
+
+function promptRefPath(promptRef) {
+  if (!promptRef) return "";
+  if (typeof promptRef === "string") return promptRef.trim();
+  return String(promptRef.path || promptRef.ref || "").trim();
+}
+
+function promptArtifactCacheKey(ref) {
+  return `${currentRunId || ""}:${ref}`;
+}
+
+function promptArtifactMeta(promptRef, total = {}) {
+  const ref = promptRef && typeof promptRef === "object" ? promptRef : {};
+  return {
+    chars: ref.chars ?? total.chars,
+    bytes: ref.bytes ?? total.bytes,
+    lines: ref.lines ?? total.lines,
+    created_at: ref.created_at || ""
+  };
+}
+
+async function ensurePromptArtifactLoaded(promptRef) {
+  const ref = promptRefPath(promptRef);
+  if (!ref) return;
+  const cacheKey = promptArtifactCacheKey(ref);
+  const cached = promptArtifactCache.get(cacheKey);
+  if (cached?.loading || cached?.loaded || cached?.error) return;
+  promptArtifactCache.set(cacheKey, { loading: true, loaded: false, error: "", prompt: "", prompt_ref: promptRef });
+  try {
+    const payload = await fetchJson(apiUrl("/api/prompt-artifact", { ref }), {}, "Failed to load raw prompt");
+    promptArtifactCache.set(cacheKey, {
+      loading: false,
+      loaded: true,
+      error: "",
+      prompt: String(payload.prompt || ""),
+      prompt_ref: payload.prompt_ref || promptRef
+    });
+  } catch (err) {
+    promptArtifactCache.set(cacheKey, {
+      loading: false,
+      loaded: false,
+      error: err?.message || "Failed to load raw prompt",
+      prompt: "",
+      prompt_ref: promptRef
+    });
+  }
+  renderPanel({ preserveContextScroll: true });
+}
+
+function renderRawPromptSection(data = {}, total = {}) {
+  const promptRef = data?.prompt_ref || null;
+  const ref = promptRefPath(promptRef);
+  const meta = promptArtifactMeta(promptRef, total);
+  if (ref) ensurePromptArtifactLoaded(promptRef);
+  const artifact = ref ? promptArtifactCache.get(promptArtifactCacheKey(ref)) : null;
+  const prompt = artifact?.prompt || "";
+  const copyKey = prompt ? `raw-prompt:${ref}` : "";
+  if (copyKey) copyTextByKey.set(copyKey, prompt);
+  const detailParts = [
+    meta.chars != null ? `${formatMetricNumber(meta.chars)} chars` : "",
+    meta.bytes != null ? formatMetricBytes(meta.bytes) : "",
+    meta.lines != null ? `${formatMetricNumber(meta.lines)} lines` : "",
+    data.prompt_mode ? `mode ${data.prompt_mode}` : "",
+    data.source ? `source ${data.source}` : ""
+  ].filter(Boolean);
+  const copyButton = copyKey
+    ? `<button class="message-copy" type="button" data-copy-message-key="${escapeHtml(copyKey)}" data-copy-state="idle" title="Copy raw prompt" aria-label="Copy raw prompt"><span class="message-copy-icon" aria-hidden="true"></span><span class="message-copy-label sr-only">Copy raw prompt</span></button>`
+    : "";
+  const state = !ref
+    ? "No raw prompt artifact for this turn."
+    : artifact?.error
+      ? artifact.error
+      : artifact?.loaded
+        ? ref
+        : "Loading raw prompt...";
+  return `
+    <section class="raw-prompt-section">
+      <div class="prompt-metrics-head">
+        <div>
+          <span>Latest assembled prompt</span>
+          <strong>${escapeHtml(ref ? "Raw Prompt" : "No artifact")}</strong>
+          <code>${escapeHtml(state)}</code>
+        </div>
+        ${copyButton}
+      </div>
+      <div class="prompt-metric-kpis">
+        ${(detailParts.length ? detailParts : ["waiting for prompt_ref"]).map(part => `<code>${escapeHtml(part)}</code>`).join("")}
+      </div>
+      <pre class="raw-prompt-body">${escapeHtml(prompt || state)}</pre>
+    </section>
+  `;
+}
+
+function captureContextScrollState() {
+  const rawPrompt = panelEl.querySelector(".raw-prompt-body");
+  const metricsDetails = panelEl.querySelector(".compact-metrics-details");
+  return {
+    hasContextView: Boolean(panelEl.querySelector(".context-view")),
+    panelTop: panelEl.scrollTop,
+    rawPromptTop: rawPrompt ? rawPrompt.scrollTop : 0,
+    metricsOpen: metricsDetails instanceof HTMLDetailsElement ? metricsDetails.open : false
+  };
+}
+
+function restoreContextScrollState(state) {
+  if (!state?.hasContextView) return;
+  const rawPrompt = panelEl.querySelector(".raw-prompt-body");
+  const metricsDetails = panelEl.querySelector(".compact-metrics-details");
+  if (metricsDetails instanceof HTMLDetailsElement) metricsDetails.open = state.metricsOpen;
+  panelEl.scrollTop = state.panelTop;
+  if (rawPrompt) rawPrompt.scrollTop = state.rawPromptTop;
 }
 
 function promptMetricsState(taskId) {
@@ -3979,7 +4102,10 @@ async function ensureActiveTabData() {
   } else if (activeTab === "final") {
     await loadFinalDetail(selectedTaskId, true);
   } else if (activeTab === "context") {
-    await loadContextDetail(selectedTaskId);
+    await Promise.all([
+      loadContextDetail(selectedTaskId),
+      loadConversationPage(selectedTaskId, backendTarget())
+    ]);
   }
 }
 
@@ -4968,6 +5094,30 @@ function shouldCollapseMessage(value) {
   return text.length > collapsedMessageCharLimit || text.split("\n").length > collapsedMessageLineLimit;
 }
 
+function expandedMessageStateKey(key, contextKey = conversationKey()) {
+  const messageKey = String(key || "");
+  if (!messageKey) return "";
+  return `${contextKey}::${messageKey}`;
+}
+
+function setExpandedMessageKey(key, open, contextKey = conversationKey()) {
+  const stateKey = expandedMessageStateKey(key, contextKey);
+  if (!stateKey) return;
+  if (open) {
+    expandedMessageKeys.add(stateKey);
+  } else {
+    expandedMessageKeys.delete(stateKey);
+  }
+}
+
+function syncExpandedMessageKeysFromDom(root = panelEl) {
+  root.querySelectorAll(".collapsed-message[data-message-key]").forEach(details => {
+    if (details instanceof HTMLDetailsElement) {
+      setExpandedMessageKey(details.dataset.messageKey, details.open, details.dataset.messageContextKey || conversationKey());
+    }
+  });
+}
+
 function renderMessageBody(body, key = "") {
   const text = String(body || "");
   if (!shouldCollapseMessage(text)) {
@@ -4975,9 +5125,10 @@ function renderMessageBody(body, key = "") {
   }
   const lines = text.split("\n").length;
   const summary = compactText(text, 220);
-  const open = key && expandedMessageKeys.has(key) ? " open" : "";
+  const contextKey = conversationKey();
+  const open = expandedMessageKeys.has(expandedMessageStateKey(key, contextKey)) ? " open" : "";
   return `
-    <details class="message-body collapsed-message" data-message-key="${escapeHtml(key)}"${open}>
+    <details class="message-body collapsed-message" data-message-key="${escapeHtml(key)}" data-message-context-key="${escapeHtml(contextKey)}"${open}>
       <summary>
         <span>${escapeHtml(summary || "(empty message)")}</span>
         <em>${escapeHtml(`${text.length} chars | ${lines} lines`)}</em>
@@ -5601,6 +5752,7 @@ function renderPanel(options = {}) {
     const metricsPopoverState = capturePromptMetricsPopoverState();
     const metricsPopoverOpen = Boolean(metricsPopoverState);
     const shouldFollow = !metricsPopoverOpen && (conversationAutoFollow || isPanelNearBottom());
+    syncExpandedMessageKeysFromDom();
     panelEl.innerHTML = renderConversation(task.id);
     if (options.preserveScroll) {
       panelEl.scrollTop = panelEl.scrollHeight - previousHeight + previousTop;
@@ -5637,17 +5789,17 @@ function renderPanel(options = {}) {
       panelEl.innerHTML = '<div class="empty">Loading context...</div>';
       return;
     }
-    const context = [
-      "Task:",
-      JSON.stringify(localizeTimestampFields(detail.task), null, 2),
-      "",
-      "Sessions:",
-      JSON.stringify(localizeTimestampFields(detail.sessions || []), null, 2),
-      "",
-      "Prompt:",
-      detail.prompt ? localizeTimestampText(detail.prompt) : "No prompt file."
-    ].join("\n");
-    panelEl.innerHTML = `<pre>${escapeHtml(context)}</pre>`;
+    const contextScrollState = (options.preserveContextScroll || panelEl.querySelector(".context-view"))
+      ? captureContextScrollState()
+      : null;
+    const metrics = promptMetricsState(task.id);
+    panelEl.innerHTML = `
+      <div class="context-view">
+        ${renderRawPromptSection(metrics.data, metrics.total)}
+        ${renderPromptMetricsPanel(task.id)}
+      </div>
+    `;
+    restoreContextScrollState(contextScrollState);
   }
 }
 
@@ -5900,7 +6052,6 @@ panelEl.addEventListener("scroll", () => {
   positionPromptMetricsPopover();
   if (activeTab === "conversation") {
     conversationAutoFollow = isPanelNearBottom();
-    if (panelEl.scrollTop < 48) loadOlderConversation();
   } else if (activeTab === "logs") {
     if (selectedTaskId) logState(selectedTaskId).autoFollow = isPanelNearBottom();
     if (panelEl.scrollTop < 48) loadOlderLogs();
@@ -5956,6 +6107,21 @@ panelEl.addEventListener("click", event => {
   const logButton = event.target instanceof Element ? event.target.closest("[data-load-older-log]") : null;
   if (logButton) loadOlderLogs();
 });
+panelEl.addEventListener("pointerdown", event => {
+  const summary = event.target instanceof Element ? event.target.closest(".collapsed-message > summary") : null;
+  const details = summary?.parentElement;
+  if (details instanceof HTMLDetailsElement) {
+    setExpandedMessageKey(details.dataset.messageKey, !details.open, details.dataset.messageContextKey);
+  }
+}, true);
+panelEl.addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const summary = event.target instanceof Element ? event.target.closest(".collapsed-message > summary") : null;
+  const details = summary?.parentElement;
+  if (details instanceof HTMLDetailsElement) {
+    setExpandedMessageKey(details.dataset.messageKey, !details.open, details.dataset.messageContextKey);
+  }
+}, true);
 panelEl.addEventListener("toggle", event => {
   const details = event.target instanceof HTMLDetailsElement ? event.target : null;
   const metricsKey = details?.dataset.turnMetricsKey;
@@ -5967,11 +6133,7 @@ panelEl.addEventListener("toggle", event => {
   }
   const key = details?.dataset.messageKey;
   if (!key) return;
-  if (details.open) {
-    expandedMessageKeys.add(key);
-  } else {
-    expandedMessageKeys.delete(key);
-  }
+  setExpandedMessageKey(key, details.open, details.dataset.messageContextKey);
 }, true);
 document.addEventListener("pointerdown", closePromptMetricsPopoverForOutsideEvent, true);
 document.addEventListener("focusin", closePromptMetricsPopoverForOutsideEvent, true);

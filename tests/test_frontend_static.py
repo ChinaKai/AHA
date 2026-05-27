@@ -98,16 +98,30 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('id="play-console"', html)
         self.assertIn('id="play-console-popover"', html)
+        self.assertIn('id="web-service-address"', html)
         self.assertIn("玩了个玩", html)
+        actions_start = html.find('<div class="web-service-actions">')
+        actions_end = html.find('<div id="play-console-popover"', actions_start)
+        session_detail = html.find('<div id="session-detail"')
+        self.assertGreater(actions_start, -1)
+        self.assertGreater(actions_end, actions_start)
+        self.assertGreater(session_detail, actions_end)
+        self.assertNotIn("0.0.0.0:8766", html[actions_start:actions_end])
+        self.assertLess(html.find('id="session-detail-text"'), html.find('id="web-service-address"'))
+        self.assertLess(html.find('id="web-service-address"'), html.find('id="run-id"'))
         self.assertIn("function renderPlayConsole()", script)
         self.assertIn('apiUrl("/api/games")', script)
         self.assertIn("playConsoleState", script)
+        self.assertIn('runStateEl.textContent = "";', script)
+        self.assertNotIn('const runStateText = `updated ${formatLocalTimestamp(updatedAt, updatedAt || "-")}`;', script)
+        self.assertNotIn('updatedAt ? `更新 ${formatLocalTimestamp(updatedAt, updatedAt)}` : "",', script)
         self.assertIn("webgame_workspace", script)
         self.assertNotIn('href="/games/cailegecai/"', script)
         self.assertNotIn("task-056", script)
         self.assertIn("setPlayConsoleOpen", script)
         self.assertIn(".play-console-popover", styles)
         self.assertIn(".play-game-card", styles)
+        self.assertNotIn(".web-service-actions code", styles)
 
     def test_frontend_composer_supports_multiline_input(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -340,6 +354,20 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("agent_prompt_metrics", script)
         self.assertIn("agent_context_overflow", script)
         self.assertIn("renderPromptMetricsPanel", script)
+        self.assertIn("promptArtifactCache", script)
+        self.assertIn("function renderRawPromptSection", script)
+        self.assertIn("function ensurePromptArtifactLoaded", script)
+        self.assertIn('apiUrl("/api/prompt-artifact", { ref })', script)
+        self.assertIn("renderPanel({ preserveContextScroll: true })", script)
+        self.assertIn("function captureContextScrollState", script)
+        self.assertIn("function restoreContextScrollState", script)
+        self.assertIn("rawPrompt.scrollTop", script)
+        self.assertIn("panelEl.scrollTop = state.panelTop", script)
+        self.assertIn("prompt_ref", script)
+        self.assertIn("Latest assembled prompt", script)
+        self.assertNotIn("Context snapshot / breakdown source", script)
+        self.assertNotIn("context-snapshot-details", script)
+        self.assertIn("loadConversationPage(selectedTaskId, backendTarget())", script)
         self.assertIn("AHA Input", script)
         self.assertIn("Backend Usage", script)
         self.assertIn("Backend Session", script)
@@ -348,7 +376,10 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('if (pressure?.percent == null || pressure?.percent === "") return "";', script)
         self.assertNotIn("const percent = Number(pressure?.percent);", script)
         self.assertIn("function contextPressureHasPercent(pressure)", script)
+        self.assertIn("function backendSessionId(session)", script)
+        self.assertIn("function backendSessionIdsDiffer(nextSession, previousSession)", script)
         self.assertIn("function backendSessionWithPreviousContextPressure(nextSession, previousSession)", script)
+        self.assertIn("if (backendSessionIdsDiffer(nextSession, previousSession)) return nextSession;", script)
         self.assertIn("return { ...nextSession, context_pressure: previousSession.context_pressure };", script)
         self.assertIn("state.backendSession = backendSessionWithPreviousContextPressure(payload.backend_session, state.backendSession);", script)
         self.assertNotIn("state.backendSession = null;", script)
@@ -426,6 +457,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("prompt-component-bars", script)
         self.assertIn("backend-metrics-section", styles)
         self.assertIn("context-metrics-section", styles)
+        self.assertIn("raw-prompt-section", styles)
+        self.assertIn("raw-prompt-body", styles)
+        self.assertNotIn("context-snapshot-details", styles)
         self.assertIn(".context-metrics-section .prompt-metrics-head > div:first-child > strong", styles)
         self.assertIn(".context-metrics-section .prompt-metrics-head > div:first-child > code", styles)
         self.assertIn("session-metrics-section", styles)
@@ -451,6 +485,26 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("session-ok", styles)
         self.assertIn("prompt-metrics", styles)
         self.assertIn("prompt-component-track", styles)
+
+    def test_frontend_does_not_inherit_context_pressure_across_backend_sessions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('return String(session?.id || session?.backend_session_id || "").trim();', script)
+        self.assertIn("return Boolean(nextId || previousId) && nextId !== previousId;", script)
+        self.assertIn("if (backendSessionIdsDiffer(nextSession, previousSession)) return nextSession;", script)
+
+    def test_conversation_show_filter_only_renders_on_conversation_tab(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('conversationFiltersEl.classList.toggle("hidden", activeTab !== "conversation");', script)
+        self.assertIn('if (activeTab !== "conversation") return;', script)
+        filter_rule_index = styles.find(".conversation-filters {\n  display: flex;")
+        hidden_rule_index = styles.find(".conversation-filters.hidden { display: none; }")
+        self.assertGreaterEqual(filter_rule_index, 0)
+        self.assertGreater(hidden_rule_index, filter_rule_index)
 
     def test_frontend_keeps_supervision_state_in_runtime_filter(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -518,9 +572,26 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("taskAgentCount(task)", script)
         self.assertIn('url.searchParams.set("lite", "1")', script)
         self.assertIn('url.searchParams.set("selected_task_id", selectedTaskId)', script)
+
         self.assertIn("selectedTaskNeedsAgentDetails", script)
         self.assertIn("applyBackendData(payload.backends || [])", script)
         self.assertNotIn("Promise.all([loadBackends(), loadWorkspaces()])", script)
+
+    def test_frontend_keeps_conversation_scroll_and_expansion_stable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-load-older="true"', script)
+        self.assertIn("if (button) loadOlderConversation();", script)
+        self.assertNotIn("if (panelEl.scrollTop < 48) loadOlderConversation();", script)
+        self.assertIn("function expandedMessageStateKey", script)
+        self.assertIn("function syncExpandedMessageKeysFromDom", script)
+        self.assertIn("syncExpandedMessageKeysFromDom();", script)
+        self.assertIn("data-message-context-key", script)
+        self.assertIn("expandedMessageKeys.has(expandedMessageStateKey(key, contextKey))", script)
+        self.assertIn('event.target.closest(".collapsed-message > summary")', script)
+        self.assertIn("setExpandedMessageKey(details.dataset.messageKey, !details.open, details.dataset.messageContextKey);", script)
+        self.assertIn("setExpandedMessageKey(key, details.open, details.dataset.messageContextKey);", script)
 
     def test_frontend_pending_messages_wait_for_agent_blockers(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -104,9 +104,45 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(window, 234567)
         self.assertEqual(source, "env:AHA_CONTEXT_WINDOW_CODEX_GPT_5_5")
 
+    def test_claude_known_1m_model_uses_table_window(self) -> None:
+        window, source = context_window_for_model(
+            "claude",
+            "claude-sonnet-4-6",
+            environ={},
+        )
+
+        self.assertEqual(window, 1_000_000)
+        self.assertEqual(source, "table")
+
     def test_unknown_context_window_keeps_pressure_unknown(self) -> None:
-        pressure = context_pressure("claude", None, {"total": {"tokens": 10}})
+        pressure = context_pressure("unknown", None, {"total": {"tokens": 10}})
 
         self.assertIsNone(pressure["context_window"])
         self.assertIsNone(pressure["ratio"])
         self.assertEqual(pressure["level"], "unknown")
+
+    def test_claude_usage_uses_default_window_and_effective_input_tokens(self) -> None:
+        pressure = context_pressure(
+            "claude-chat",
+            None,
+            {"total": {"chars": 1234, "bytes": 1234}},
+            runtime_token_usage={
+                "input_tokens": 1000,
+                "cache_read_input_tokens": 2000,
+                "cache_creation_input_tokens": 3000,
+                "output_tokens": 400,
+            },
+            environ={},
+        )
+
+        self.assertEqual(pressure["backend"], "claude")
+        self.assertEqual(pressure["context_window"], 200_000)
+        self.assertEqual(pressure["context_window_source"], "table")
+        self.assertEqual(pressure["input_tokens"], 6000)
+        self.assertEqual(pressure["runtime_input_tokens"], 1000)
+        self.assertEqual(pressure["runtime_effective_input_tokens"], 6000)
+        self.assertEqual(pressure["runtime_cached_input_tokens"], 2000)
+        self.assertEqual(pressure["runtime_cache_creation_input_tokens"], 3000)
+        self.assertEqual(pressure["pressure_source"], "runtime.last_token_usage.effective_input_tokens")
+        self.assertEqual(pressure["percent"], 3.0)
+        self.assertEqual(pressure["level"], "ok")

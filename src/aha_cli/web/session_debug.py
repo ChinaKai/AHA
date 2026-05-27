@@ -23,9 +23,9 @@ def session_jsonl_text(value) -> str:
 def classify_aha_session_prompt(text: str) -> str:
     if AHA_BACKEND_PROMPT_MARKER not in text or "User message from" not in text:
         return ""
-    if "Current delta status:" in text:
+    if "Current delta status:" in text or "Sticky session note:" in text:
         return "sticky_delta"
-    if "Current status:" in text:
+    if "Current status:" in text or "Current task constraints:" in text:
         return "full"
     return "unknown"
 

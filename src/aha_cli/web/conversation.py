@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from aha_cli.services.backend_runtime import backend_status
+from aha_cli.services.prompt_artifacts import read_prompt_artifact
 from aha_cli.store.event_views import conversation_events_page, event_agent_refs, event_task_id
 from aha_cli.store.filesystem import (
     event_path,
@@ -121,6 +122,10 @@ def conversation_view_page(
     session_info["resolved_model"] = backend_state.get("resolved_model")
     view["backend_session"] = session_info
     return view
+
+
+def prompt_artifact_view(root: Path, run_id: str, ref: str) -> dict:
+    return read_prompt_artifact(root, run_id, ref)
 
 
 def event_stream_view_page(root: Path, run_id: str, offset: int = 0, limit: int = DEFAULT_EVENTS_LIMIT) -> dict:

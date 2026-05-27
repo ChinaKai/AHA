@@ -6,6 +6,13 @@ from collections.abc import Mapping
 
 DEFAULT_CONTEXT_WINDOWS = {
     ("codex", "gpt-5.5"): 258_000,
+    ("claude", "default"): 200_000,
+    ("claude", "claude-opus-4-7"): 1_000_000,
+    ("claude", "opus-4-7"): 1_000_000,
+    ("claude", "claude-opus-4-6"): 1_000_000,
+    ("claude", "opus-4-6"): 1_000_000,
+    ("claude", "claude-sonnet-4-6"): 1_000_000,
+    ("claude", "sonnet-4-6"): 1_000_000,
 }
 
 
@@ -46,7 +53,11 @@ def context_window_for_model(
 ) -> tuple[int | None, str]:
     normalized_backend = str(backend or "").removesuffix("-chat").strip().lower()
     normalized_model = str(model or "").strip()
-    if not normalized_backend or not normalized_model:
+    if not normalized_backend:
+        return None, "unknown"
+    if not normalized_model and (normalized_backend, "default") in DEFAULT_CONTEXT_WINDOWS:
+        normalized_model = "default"
+    if not normalized_model:
         return None, "unknown"
 
     env = os.environ if environ is None else environ
@@ -66,6 +77,9 @@ def context_window_for_model(
     from_table = DEFAULT_CONTEXT_WINDOWS.get((normalized_backend, normalized_model))
     if from_table:
         return from_table, "table"
+    from_default_table = DEFAULT_CONTEXT_WINDOWS.get((normalized_backend, "default"))
+    if from_default_table:
+        return from_default_table, "table:default"
     return None, "unknown"
 
 
@@ -79,6 +93,7 @@ def context_pressure(
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict:
+    normalized_backend = str(backend or "").removesuffix("-chat").strip().lower() or None
     metrics = prompt_metrics or {}
     total = metrics.get("total")
     total_metrics = total if isinstance(total, Mapping) else {}
@@ -93,7 +108,8 @@ def context_pressure(
     prompt_lines = _positive_int(total_metrics.get("lines"))
     runtime_usage = runtime_token_usage or {}
     runtime_input_tokens = _positive_int(runtime_usage.get("input_tokens"))
-    runtime_cached_input_tokens = _positive_int(runtime_usage.get("cached_input_tokens"))
+    runtime_cached_input_tokens = _positive_int(runtime_usage.get("cached_input_tokens")) or _positive_int(runtime_usage.get("cache_read_input_tokens"))
+    runtime_cache_creation_input_tokens = _positive_int(runtime_usage.get("cache_creation_input_tokens"))
     runtime_total_tokens = _positive_int(runtime_usage.get("total_tokens"))
     context_window, source = context_window_for_model(
         backend,
@@ -102,7 +118,10 @@ def context_pressure(
         cfg=cfg,
         environ=environ,
     )
-    input_tokens = runtime_input_tokens or prompt_tokens
+    runtime_effective_input_tokens = runtime_input_tokens
+    if normalized_backend == "claude" and runtime_input_tokens is not None:
+        runtime_effective_input_tokens = runtime_input_tokens + int(runtime_cached_input_tokens or 0) + int(runtime_cache_creation_input_tokens or 0)
+    input_tokens = runtime_effective_input_tokens or prompt_tokens
     ratio = (input_tokens / context_window) if input_tokens is not None and context_window else None
     level = "unknown"
     if ratio is not None:
@@ -112,8 +131,8 @@ def context_pressure(
             level = "watch"
         else:
             level = "ok"
-    if runtime_input_tokens is not None:
-        pressure_source = "runtime.last_token_usage.input_tokens"
+    if runtime_effective_input_tokens is not None:
+        pressure_source = "runtime.last_token_usage.effective_input_tokens" if normalized_backend == "claude" else "runtime.last_token_usage.input_tokens"
     elif prompt_tokens is not None:
         pressure_source = "prompt_metrics.tokens"
     elif prompt_chars or prompt_bytes:
@@ -121,12 +140,14 @@ def context_pressure(
     else:
         pressure_source = "unknown"
     return {
-        "backend": str(backend or "").removesuffix("-chat").strip().lower() or None,
+        "backend": normalized_backend,
         "model": str(model).strip() if model else None,
         "input_tokens": input_tokens,
         "prompt_tokens": prompt_tokens,
         "runtime_input_tokens": runtime_input_tokens,
+        "runtime_effective_input_tokens": runtime_effective_input_tokens,
         "runtime_cached_input_tokens": runtime_cached_input_tokens,
+        "runtime_cache_creation_input_tokens": runtime_cache_creation_input_tokens,
         "runtime_total_tokens": runtime_total_tokens,
         "prompt_chars": prompt_chars,
         "prompt_bytes": prompt_bytes,

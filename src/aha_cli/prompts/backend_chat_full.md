@@ -7,13 +7,10 @@ Do not modify files unless the user explicitly asks for a repository change.
 Run goal:
 $run_goal
 
-Current status:
-$status
-
 $task_context
 
-Recent events:
-$recent_events
+Recent conversation:
+$recent_conversation
 
 User message from $sender at $ts:
 $message

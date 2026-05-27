@@ -12,6 +12,7 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.backend_runtime import start_backend
+from aha_cli.services.prompt_artifacts import save_prompt_artifact
 from aha_cli.store.filesystem import (
     append_event,
     conversation_events_page,
@@ -83,6 +84,26 @@ class WebEventsApiTests(unittest.TestCase):
         status_body = json.loads(gzip.decompress(status_response.split(b"\r\n\r\n", 1)[1]).decode("utf-8"))
         self.assertIn("conversationPageLimit", script_body)
         self.assertEqual(status_body["run_id"], run_id)
+
+    def test_prompt_artifact_api_reads_raw_prompt_by_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Raw prompt artifact", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                prompt_ref = save_prompt_artifact(root, run_id, "task-001", "main", "raw assembled prompt\nline two")
+
+                response = asyncio.run(fetch_ui_response(root, run_id, f"/api/prompt-artifact?ref={prompt_ref['path']}"))
+                invalid_response = asyncio.run(fetch_ui_response(root, run_id, "/api/prompt-artifact?ref=../events.jsonl"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(body["prompt"], "raw assembled prompt\nline two")
+        self.assertEqual(body["prompt_ref"]["path"], prompt_ref["path"])
+        self.assertEqual(body["prompt_ref"]["chars"], len(body["prompt"]))
+        self.assertTrue(invalid_response.startswith(b"HTTP/1.1 400 Bad Request"))
 
     def test_api_events_uses_snapshot_and_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

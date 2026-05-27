@@ -13,7 +13,8 @@ import json
 from pathlib import Path
 
 from aha_cli.domain.models import DEFAULT_TASK_SUPERVISION_MAX_ROUNDS, TASK_SUPERVISION_ASK_USER_GATES, utc_now
-from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, start_backend
+from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
+from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS
 from aha_cli.services.chat_offsets import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import (
     chat_offset_exists,
@@ -167,6 +168,28 @@ def supervision_ask_user_gate_notes(supervision: dict) -> list[str]:
     return notes
 
 
+def _compact_task_context_for_host(task: dict) -> dict:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    return {
+        "id": task.get("id"),
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "workspace_path": task.get("workspace_path"),
+        "current_round_id": task.get("current_round_id"),
+        "round_sequence": task.get("round_sequence"),
+        "ask_user_gates": supervision.get("ask_user_gates"),
+        "agents": [
+            {
+                "id": agent.get("id"),
+                "role": agent.get("role"),
+                "backend": agent.get("backend"),
+                "status": agent.get("status"),
+            }
+            for agent in task.get("agents", [])
+        ],
+    }
+
+
 def supervision_host_context(task: dict, host_notes: list[str] | None = None, handoff_notes: list[str] | None = None) -> str:
     supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     task_context = {
@@ -224,6 +247,30 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "Use actions only when main should execute concrete AHA actions; otherwise return an empty list.\n\n"
         f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
         f"Task context:\n{json.dumps(task_context, ensure_ascii=False, indent=2)}\n\n"
+        f"Recent steward handoffs:\n{chr(10).join(handoff_notes or ['(none)'])}\n\n"
+        f"Recent browser-to-host notes:\n{chr(10).join(host_notes or ['(none)'])}"
+    )
+
+
+def supervision_host_delta_context(
+    task: dict,
+    host_notes: list[str] | None = None,
+    handoff_notes: list[str] | None = None,
+) -> str:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    return (
+        "AHA host sticky summary:\n"
+        "- Continue the full delegated browser->main control-plane contract already established in this sticky session.\n"
+        "- Stay read-only: inspect context, choose the next safe decision, and route executable work to task-main.\n"
+        "- Keep role/routing boundaries: do not do implementation, commit, merge, delete, or state-changing work yourself.\n"
+        "- Enforce auto delegation only when it reduces the critical path; avoid forcing needless splits.\n"
+        "- Preserve ask-user gates: ask for destructive, commit/merge/delete, permission, external, or product decisions only when the gate requires it.\n"
+        "- Response text must read like a natural browser instruction; do not mention host, supervision, delegated control plane, JSON, or internal mechanics.\n"
+        "- Return exactly one JSON object with decision, reason, response, and actions.\n"
+        "- Allowed decisions: ask_user, continue, wait, stop, route_to_agent, spawn_sub, record_task_update.\n"
+        "- Use continue for concrete next work, wait when agents are already working, and stop only when evidence shows no follow-up remains.\n\n"
+        f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
+        f"Task state:\n{json.dumps(_compact_task_context_for_host(task), ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"Recent steward handoffs:\n{chr(10).join(handoff_notes or ['(none)'])}\n\n"
         f"Recent browser-to-host notes:\n{chr(10).join(host_notes or ['(none)'])}"
     )
@@ -781,6 +828,7 @@ __all__ = [
     "prompt_event_visible_to_target",
     "supervision_exchange_message",
     "supervision_host_context",
+    "supervision_host_delta_context",
     "supervision_host_handoff_notes",
     "supervision_host_notes",
     "supervision_host_prompt",
