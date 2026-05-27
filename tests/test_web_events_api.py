@@ -5,7 +5,6 @@ import gzip
 import io
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -353,7 +352,7 @@ class WebEventsApiTests(unittest.TestCase):
         host_texts = [str(event["data"].get("text") or event["data"].get("message") or "") for event in host_body["events"]]
         self.assertIn(host_action_envelope, host_texts)
 
-    def test_web_restart_api_schedules_source_ui_on_8766(self) -> None:
+    def test_web_restart_api_requests_process_exit_after_response(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -361,15 +360,14 @@ class WebEventsApiTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Restart web", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="scheduled\n", stderr="")
-                with mock.patch("aha_cli.web.system_routes.subprocess.run", return_value=completed) as run_command:
+                with mock.patch("aha_cli.web.server.schedule_web_restart_exit") as schedule_exit:
                     response = asyncio.run(
                         fetch_ui_response(
                             root,
                             run_id,
                             "/api/web/restart",
                             method="POST",
-                            payload={"host": "0.0.0.0", "port": 8766},
+                            payload={},
                         )
                     )
                 body = json_response_body(response)
@@ -378,17 +376,9 @@ class WebEventsApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
-        self.assertEqual(body["host"], "0.0.0.0")
-        self.assertEqual(body["port"], 8766)
-        self.assertEqual(body["service_unit"], "aha-ui-source-8766.service")
-        command = run_command.call_args.args[0]
-        self.assertEqual(command[0], "systemd-run")
-        self.assertIn("--on-active=1s", command)
-        command_text = " ".join(command)
-        self.assertIn(str(root), command_text)
-        self.assertIn("0.0.0.0", command_text)
-        self.assertIn("8766", command_text)
-        self.assertIn("systemctl --user restart aha-ui-source-8766.service", command_text)
+        self.assertEqual(body["restart"], "process-exit")
+        self.assertEqual(body["exit_code"], 75)
+        schedule_exit.assert_called_once_with()
         self.assertIn("web_restart_requested", events)
 
     def test_conversation_events_api_restores_latest_turn_metrics_outside_page(self) -> None:

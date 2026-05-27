@@ -16,11 +16,8 @@ from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
 from aha_cli.web.status import recover_stale_running_agent, web_status_snapshot
 from aha_cli.web.system_routes import (
-    WEB_RESTART_HOST,
-    WEB_RESTART_LEGACY_UNIT,
-    WEB_RESTART_PORT,
-    WEB_RESTART_SOURCE_UNIT,
-    schedule_source_web_restart,
+    WEB_RESTART_EXIT_CODE,
+    consume_web_restart_requested,
     system_route_response,
 )
 from aha_cli.web.task_actions import (
@@ -35,6 +32,16 @@ from aha_cli.web.task_actions import (
 from aha_cli.web.task_routes import route_task_agent_request, task_final_view_snapshot
 
 WEIXIN_KEEPALIVE_INTERVAL_SECONDS = 30
+WEB_RESTART_EXIT_DELAY_SECONDS = 0.25
+
+
+def exit_for_web_restart(exit_code: int = WEB_RESTART_EXIT_CODE) -> None:
+    raise SystemExit(exit_code)
+
+
+def schedule_web_restart_exit(delay_seconds: float = WEB_RESTART_EXIT_DELAY_SECONDS) -> None:
+    loop = asyncio.get_running_loop()
+    loop.call_later(delay_seconds, exit_for_web_restart, WEB_RESTART_EXIT_CODE)
 
 
 def task_agent_response(route_result: dict, method: str) -> bytes | None:
@@ -79,6 +86,8 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             writer.write(response if response is not None else http_response("404 Not Found", b"not found\n"))
 
         await writer.drain()
+        if consume_web_restart_requested():
+            schedule_web_restart_exit()
     except ApiRunNotFound as exc:
         writer.write(json_response({"error": f"run not found: {exc.run_id}"}, "404 Not Found"))
         await writer.drain()

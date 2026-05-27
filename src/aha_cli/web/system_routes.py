@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import shlex
-import subprocess
-import sys
-import textwrap
-import time
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.backend_runtime import backend_status
@@ -27,10 +21,8 @@ from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.session_debug import realtime_debug_log
 from aha_cli.web.status import web_status_snapshot
 
-WEB_RESTART_HOST = "0.0.0.0"
-WEB_RESTART_PORT = 8766
-WEB_RESTART_SOURCE_UNIT = "aha-ui-source-8766"
-WEB_RESTART_LEGACY_UNIT = "aha-ui-8766.service"
+WEB_RESTART_EXIT_CODE = 75
+_web_restart_requested = False
 
 REALTIME_DEBUG_ALLOWED_KEYS = {
     "seq",
@@ -86,60 +78,23 @@ def selected_task_id(query: dict[str, list[str]]) -> str | None:
     return str(query.get("selected_task_id", [""])[0] or query.get("task_id", [""])[0] or "").strip() or None
 
 
-def schedule_source_web_restart(root: Path, run_id: str, *, host: str = WEB_RESTART_HOST, port: int = WEB_RESTART_PORT) -> dict:
-    safe_host = str(host or WEB_RESTART_HOST).strip() or WEB_RESTART_HOST
-    safe_port = int(port or WEB_RESTART_PORT)
-    if safe_port < 1 or safe_port > 65535:
-        raise ValueError("port must be between 1 and 65535")
-    source_root = Path.cwd()
-    service_unit = WEB_RESTART_SOURCE_UNIT if safe_port == WEB_RESTART_PORT else f"aha-ui-source-{safe_port}"
-    restart_unit = f"aha-ui-source-restart-{safe_port}-{int(time.time())}-{os.getpid()}"
-    source_service = f"{service_unit}.service"
-    script = textwrap.dedent(
-        f"""
-        set -e
-        if systemctl --user show -p LoadState --value {shlex.quote(source_service)} 2>/dev/null | grep -qv '^not-found$'; then
-          systemctl --user restart {shlex.quote(source_service)}
-          exit 0
-        fi
-        systemctl --user stop {shlex.quote(WEB_RESTART_LEGACY_UNIT)} >/dev/null 2>&1 || true
-        if command -v fuser >/dev/null 2>&1; then
-          fuser -k {safe_port}/tcp >/dev/null 2>&1 || true
-        fi
-        systemd-run --user \\
-          --collect \\
-          --unit={shlex.quote(service_unit)} \\
-          --working-directory={shlex.quote(str(source_root))} \\
-          --setenv=PYTHONPATH=src \\
-          --property=Restart=always \\
-          --property=RestartSec=2 \\
-          {shlex.quote(sys.executable)} -m aha_cli ui {shlex.quote(run_id)} --host {shlex.quote(safe_host)} --port {safe_port}
-        """
-    ).strip()
-    command = [
-        "systemd-run",
-        "--user",
-        "--on-active=1s",
-        f"--unit={restart_unit}",
-        "/usr/bin/env",
-        "bash",
-        "-lc",
-        script,
-    ]
-    result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=5)
+def request_web_restart(root: Path, run_id: str) -> dict:
+    global _web_restart_requested
+    _web_restart_requested = True
     payload = {
         "run_id": run_id,
-        "host": safe_host,
-        "port": safe_port,
-        "source_root": str(source_root),
-        "scheduler": "systemd-run",
-        "restart_unit": restart_unit,
-        "service_unit": source_service,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
+        "restart": "process-exit",
+        "exit_code": WEB_RESTART_EXIT_CODE,
     }
     append_event(root, run_id, "web_restart_requested", payload)
     return payload
+
+
+def consume_web_restart_requested() -> bool:
+    global _web_restart_requested
+    requested = _web_restart_requested
+    _web_restart_requested = False
+    return requested
 
 
 def events_response(root: Path, run_id: str, method: str, query: dict[str, list[str]]) -> bytes:
@@ -268,18 +223,9 @@ def system_route_response(
         return prompt_artifact_response(root, run_id, method, query, headers)
     if method == "POST" and path == "/api/web/restart":
         payload = parse_json_body(body) if body.strip() else {}
-        run_id = require_api_run_id(root, default_run_id, query)
-        try:
-            port = int(payload.get("port") or WEB_RESTART_PORT)
-            restart = schedule_source_web_restart(
-                root,
-                run_id,
-                host=str(payload.get("host") or WEB_RESTART_HOST),
-                port=port,
-            )
-            return json_response({"ok": True, **restart})
-        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as exc:
-            return json_response({"error": f"failed to schedule web restart: {exc}"}, "500 Internal Server Error")
+        run_id = require_api_run_id(root, default_run_id, query, payload)
+        restart = request_web_restart(root, run_id)
+        return json_response({"ok": True, **restart})
     if method in {"GET", "HEAD"} and path == "/api/weixin":
         run_id = require_api_run_id(root, default_run_id, query)
         payload = weixin_status_snapshot(root, run_id)

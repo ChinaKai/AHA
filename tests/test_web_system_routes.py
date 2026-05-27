@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -11,7 +10,7 @@ from urllib.parse import parse_qs
 
 from aha_cli.cli import append_message, main
 from aha_cli.store.filesystem import append_event, event_path, iter_jsonl_from
-from aha_cli.web.system_routes import system_route_response
+from aha_cli.web.system_routes import consume_web_restart_requested, system_route_response
 from tests.helpers import json_response_body
 
 
@@ -82,7 +81,7 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(conversation_body["events"][-1]["data"]["output_tail_omitted"])
         self.assertTrue(missing_task and missing_task.startswith(b"HTTP/1.1 400 Bad Request"))
 
-    def test_system_routes_record_debug_and_schedule_restart(self) -> None:
+    def test_system_routes_record_debug_and_request_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -92,24 +91,17 @@ class WebSystemRoutesTests(unittest.TestCase):
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 debug_body = json.dumps({"run_id": run_id, "seq": 7, "ignored": "private"}).encode("utf-8")
                 debug = system_route_response(root, "", "POST", "/api/debug/realtime", {}, debug_body)
-                completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="scheduled\n", stderr="")
-                with mock.patch("aha_cli.web.system_routes.subprocess.run", return_value=completed) as run_command:
-                    restart = system_route_response(
-                        root,
-                        run_id,
-                        "POST",
-                        "/api/web/restart",
-                        {},
-                        json.dumps({"host": "0.0.0.0", "port": 8766}).encode("utf-8"),
-                    )
+                restart = system_route_response(root, run_id, "POST", "/api/web/restart", {}, b"{}")
+                restart_requested = consume_web_restart_requested()
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 log_text = (root / ".aha" / "runs" / run_id / "logs" / "realtime-debug.log").read_text(encoding="utf-8")
 
         self.assertTrue(debug and debug.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(restart and restart.startswith(b"HTTP/1.1 200 OK"))
         restart_body = json_response_body(restart)
-        self.assertEqual(restart_body["service_unit"], "aha-ui-source-8766.service")
-        self.assertEqual(run_command.call_args.args[0][0], "systemd-run")
+        self.assertTrue(restart_requested)
+        self.assertEqual(restart_body["restart"], "process-exit")
+        self.assertEqual(restart_body["exit_code"], 75)
         self.assertIn('"source": "client"', log_text)
         self.assertIn('"seq": 7', log_text)
         self.assertNotIn("ignored", log_text)

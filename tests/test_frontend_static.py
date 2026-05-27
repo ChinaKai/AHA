@@ -55,6 +55,38 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("bootstrap-proxy", styles)
         self.assertIn("collaboration-help", styles)
 
+    def test_web_restart_polling_starts_quickly(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        restart_block = script[
+            script.index("async function waitForWebRestartAndReload") : script.index("async function refreshAfterWebRestart")
+        ]
+        refresh_block = script[
+            script.index("async function refreshAfterWebRestart") : script.index("function closeTaskCreateDialog")
+        ]
+
+        self.assertIn('async function waitForWebRestartAndReload(restartVersion = "")', script)
+        self.assertIn("await sleep(500);", script)
+        self.assertNotIn("await sleep(2500);", script)
+        self.assertIn("const restartVersion = currentAppVersion();", script)
+        self.assertIn('apiUrl("/api/bootstrap")', restart_block)
+        self.assertNotIn('apiUrl("/api/status")', restart_block)
+        self.assertIn("applyBootstrapPayload(payload);", restart_block)
+        self.assertIn("if (nextVersion && nextVersion !== restartVersion)", script)
+        self.assertNotIn("restartVersion && nextVersion && nextVersion !== restartVersion", script)
+        self.assertNotIn("if (response.ok) {\n        window.location.reload();", script)
+        self.assertIn("function applyBootstrapPayload", script)
+        self.assertIn("await loadStatus({ forceAgents: true });", refresh_block)
+        self.assertIn("await loadBackendStatus();", refresh_block)
+        self.assertIn("function resetEventWebSocketReconnectState", script)
+        self.assertIn("eventSocketFailureCount = 0;", script)
+        self.assertIn("eventSocketReconnectAt = 0;", script)
+        self.assertIn('resetEventWebSocketReconnectState("web_restart_recovered");', script)
+        self.assertIn("await catchUpRealtimeEvents();", refresh_block)
+        self.assertIn("await ensureEventWebSocket();", restart_block)
+        self.assertIn("void refreshAfterWebRestart();", restart_block)
+        self.assertIn('setWebRestartState("重启完成。");', script)
+
     def test_frontend_has_aha_logo_and_favicon(self) -> None:
         root = Path(__file__).resolve().parents[1]
         static_root = root / "src" / "aha_cli" / "web" / "static"

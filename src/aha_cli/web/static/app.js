@@ -663,8 +663,7 @@ function applyWorkspaceData(workspaces = []) {
   renderWorkspaceSelect();
 }
 
-async function loadBootstrap() {
-  const payload = await fetchJson("/api/bootstrap", {}, "Failed to bootstrap AHA");
+function applyBootstrapPayload(payload = {}) {
   bootstrapError = "";
   bootstrapData = payload;
   applyRunListData(payload);
@@ -673,6 +672,11 @@ async function loadBootstrap() {
   runsError = "";
   runsLoaded = true;
   renderSessionMenu();
+}
+
+async function loadBootstrap() {
+  const payload = await fetchJson("/api/bootstrap", {}, "Failed to bootstrap AHA");
+  applyBootstrapPayload(payload);
   return payload;
 }
 
@@ -760,9 +764,14 @@ function refreshRealtimeIndicator() {
   if (runStateEl && (statusData || currentRunId)) renderSessionSummary();
 }
 
+function currentAppVersion() {
+  const version = String(statusData?.aha_version || bootstrapData?.aha_version || "").trim();
+  return version;
+}
+
 function renderAppVersion() {
   if (!appVersionEl) return;
-  const version = String(statusData?.aha_version || bootstrapData?.aha_version || "").trim();
+  const version = currentAppVersion();
   appVersionEl.textContent = version ? `v${version}` : "";
   appVersionEl.title = version ? `AHA version ${version}` : "";
   document.title = version ? `AHA v${version}` : "AHA Dashboard";
@@ -1294,17 +1303,18 @@ async function restartWebService() {
     alert("请先选择 Run");
     return;
   }
+  const restartVersion = currentAppVersion();
   webRestartInFlight = true;
   setWebRestartState("正在安排重启...");
   renderSessionMenu();
   try {
-    const payload = await fetchJson(apiUrl("/api/web/restart"), {
+    await fetchJson(apiUrl("/api/web/restart"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host: "0.0.0.0", port: 8766 })
+      body: JSON.stringify({})
     }, "重启 Web 失败");
-    setWebRestartState(`已安排 ${payload.host || "0.0.0.0"}:${payload.port || 8766}，等待恢复...`);
-    waitForWebRestartAndReload();
+    setWebRestartState(`已请求重启，等待恢复...`);
+    waitForWebRestartAndReload(restartVersion);
   } catch (err) {
     webRestartInFlight = false;
     setWebRestartState(err?.message || String(err || "重启 Web 失败"), true);
@@ -1312,14 +1322,33 @@ async function restartWebService() {
   }
 }
 
-async function waitForWebRestartAndReload() {
-  await sleep(2500);
+async function waitForWebRestartAndReload(restartVersion = "") {
+  await sleep(500);
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetchWithTimeout(apiUrl("/api/status"), { cache: "no-store" }, 2000);
+      const response = await fetchWithTimeout(apiUrl("/api/bootstrap"), { cache: "no-store" }, 2000);
       if (response.ok) {
-        window.location.reload();
+        const payload = await readJsonResponse(response, "Failed to bootstrap AHA");
+        const nextVersion = String(payload?.aha_version || "").trim();
+        if (nextVersion && nextVersion !== restartVersion) {
+          window.location.reload();
+          return;
+        }
+        applyBootstrapPayload(payload);
+        tickFailureCount = 0;
+        tickBackoffUntil = 0;
+        resetEventWebSocketReconnectState("web_restart_recovered");
+        try {
+          await ensureEventWebSocket();
+        } catch (err) {
+          console.warn("Failed to reopen websocket after web restart", err);
+        }
+        void refreshAfterWebRestart();
+        webRestartInFlight = false;
+        setWebRestartState("重启完成。");
+        renderSessionMenu();
+        renderPanelForRealtime();
         return;
       }
     } catch (_err) {
@@ -1328,8 +1357,28 @@ async function waitForWebRestartAndReload() {
     await sleep(1000);
   }
   webRestartInFlight = false;
-  setWebRestartState("重启已安排；如果页面未更新，请手动刷新。");
+  setWebRestartState("已请求重启，若页面未恢复请手动启动。");
   renderSessionMenu();
+}
+
+async function refreshAfterWebRestart() {
+  try {
+    const accepted = await catchUpRealtimeEvents();
+    if (accepted.length) renderPanelForRealtime();
+  } catch (err) {
+    console.warn("Failed to catch up realtime after web restart", err);
+  }
+  try {
+    await loadStatus({ forceAgents: true });
+  } catch (err) {
+    console.warn("Failed to refresh status after web restart", err);
+  }
+  try {
+    await loadBackendStatus();
+  } catch (err) {
+    console.warn("Failed to refresh backend status after web restart", err);
+  }
+  renderPanelForRealtime();
 }
 
 function closeTaskCreateDialog() {
@@ -4462,6 +4511,17 @@ function closeEventWebSocket() {
     socket.onclose = null;
     socket.close();
   }
+}
+
+function resetEventWebSocketReconnectState(reason = "") {
+  if (eventSocket) closeEventWebSocket();
+  eventSocketFailureCount = 0;
+  eventSocketReconnectAt = 0;
+  lastRealtimeMessageAt = 0;
+  lastRealtimeFallbackPollAt = 0;
+  eventSocketState = "idle";
+  realtimeDebug("ws.reconnect_reset", { reason });
+  refreshRealtimeIndicator();
 }
 
 function eventWebSocketBaseUrl() {
