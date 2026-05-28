@@ -522,6 +522,24 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         return []
     executed: list[dict] = []
     used_sub_agent_ids: set[str] = set()
+    followup_started_at: str | None = None
+
+    def ensure_followup_round_started() -> None:
+        nonlocal followup_started_at
+        if followup_started_at is not None:
+            return
+        followup_started_at = utc_now()
+        mark_task_coordination(
+            root,
+            run_id,
+            task_id,
+            final_summary_requested_at="",
+            final_summary_completed_at="",
+            round_summary_requested_at="",
+            round_summary_completed_at="",
+            followup_started_at=followup_started_at,
+        )
+
     for action in payload.get("actions", []):
         if not isinstance(action, dict):
             continue
@@ -574,16 +592,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                     },
                 )
                 continue
-            mark_task_coordination(
-                root,
-                run_id,
-                task_id,
-                final_summary_requested_at="",
-                final_summary_completed_at="",
-                round_summary_requested_at="",
-                round_summary_completed_at="",
-                followup_started_at=utc_now(),
-            )
+            ensure_followup_round_started()
             set_task_status(root, run_id, task_id, "running")
             set_agent_status(root, run_id, task_id, target_id, "pending")
             append_message(
@@ -630,16 +639,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             append_spawn_sub_skipped(root, run_id, task_id, reason="delegation disabled", max_sub_agents=max_sub_agents)
             continue
         assignment = str(action.get("title") or action.get("prompt") or "Assist task-main with this task.")
-        mark_task_coordination(
-            root,
-            run_id,
-            task_id,
-            final_summary_requested_at="",
-            final_summary_completed_at="",
-            round_summary_requested_at="",
-            round_summary_completed_at="",
-            followup_started_at=utc_now(),
-        )
+        ensure_followup_round_started()
         set_task_status(root, run_id, task_id, "running")
         requested_agent_id = str(action.get("agent_id") or action.get("target") or "").strip()
         if requested_agent_id:

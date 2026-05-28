@@ -257,6 +257,49 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(len([row for row in rows if row["type"] == "sub_agent_reused"]), 3)
         self.assertFalse(any(row["type"] == "action_skipped" and row["data"].get("type") == "spawn_sub" for row in rows))
 
+    def test_spawn_batch_waits_for_all_sub_agents_before_round_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ticks = iter(range(100))
+
+            def fake_now() -> str:
+                return f"2026-05-28T00:00:{next(ticks):02d}+00:00"
+
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Wait for spawn batch", "--agents", "2")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {"type": "spawn_sub", "title": "Inspect SDK", "backend": "codex"},
+                            {"type": "spawn_sub", "title": "Inspect workspace", "backend": "codex"},
+                        ],
+                        "response": "parallel",
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.utc_now", side_effect=fake_now),
+                    mock.patch("aha_cli.store.filesystem.utc_now", side_effect=fake_now),
+                    mock.patch("aha_cli.services.orchestrator.start_backend"),
+                ):
+                    executed = execute_actions(root, run_id, "task-001", reply)
+                    second = record_sub_agent_report(root, run_id, "task-001", "sub-002", "workspace done")
+                    first = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sdk done")
+
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual([item["agent"]["id"] for item in executed], ["sub-001", "sub-002"])
+        self.assertFalse(second.get("round_summary_requested"))
+        self.assertTrue(first.get("round_summary_requested"))
+        summary_messages = [item for item in main_messages if item.get("coordination") == "subagents_complete"]
+        self.assertEqual(len(summary_messages), 1)
+        waiting_events = [row for row in rows if row["type"] == "task_waiting_for_subagents"]
+        self.assertEqual(waiting_events[-1]["data"]["pending"], ["sub-001"])
+
     def test_execute_actions_spawn_sub_can_target_specific_existing_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
