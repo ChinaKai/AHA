@@ -54,6 +54,8 @@ def handle_codex_event(
         event = json.loads(line)
     except json.JSONDecodeError:
         return
+    if not isinstance(event, dict):
+        return
     raw_type = event.get("type")
     data: dict = {"source": source, "raw_type": raw_type}
     if task_id:
@@ -76,10 +78,13 @@ def handle_codex_event(
         if is_context_overflow_message(data["message"]):
             append_event_to_file(events_file, run_id, "agent_context_overflow", data | {"reason": "context_window"})
     elif raw_type == "turn.completed":
-        data["usage"] = event.get("usage", {})
+        usage = event.get("usage", {})
+        data["usage"] = usage if isinstance(usage, dict) else {}
         append_event_to_file(events_file, run_id, "agent_usage", data)
     elif raw_type in {"item.started", "item.completed"}:
         item = event.get("item", {})
+        if not isinstance(item, dict):
+            return
         data["item_type"] = item.get("type")
         if item.get("type") == "agent_message" and raw_type == "item.completed":
             data["text"] = item.get("text", "")

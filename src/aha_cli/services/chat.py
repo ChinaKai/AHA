@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import time
+import traceback
 import uuid
 
 from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
@@ -330,43 +331,48 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 except OSError as exc:
                     prompt_metrics["prompt_ref_error"] = str(exc)
                 append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
-                if backend_name == "claude":
-                    exit_code, reply, session = run_claude_exec(
-                        prompt,
-                        cwd=workspace,
-                        output_file=output_file,
-                        claude_bin=getattr(args, "claude_bin", "claude"),
-                        model=model,
-                        permission_mode=claude_permission_mode("research", sandbox),
-                        extra_args=args.extra_arg or [],
-                        events_file=events_file,
-                        run_id=run_id,
-                        task_id=item_task_id,
-                        source=source_name,
-                        target=args.target,
-                        session=session,
-                        proxy_env=proxy_env,
-                        claude_config=cfg.get("claude", {}),
-                    )
-                else:
-                    exit_code, reply, session = run_codex_exec(
-                        prompt,
-                        cwd=workspace,
-                        output_file=output_file,
-                        codex_bin=args.codex_bin,
-                        model=model,
-                        sandbox=sandbox,
-                        approval=requested_approval,
-                        json_events=not getattr(args, "no_json", False),
-                        extra_args=args.extra_arg or [],
-                        events_file=events_file,
-                        run_id=run_id,
-                        task_id=item_task_id,
-                        source=source_name,
-                        target=args.target,
-                        session=session,
-                        proxy_env=proxy_env,
-                    )
+                try:
+                    if backend_name == "claude":
+                        exit_code, reply, session = run_claude_exec(
+                            prompt,
+                            cwd=workspace,
+                            output_file=output_file,
+                            claude_bin=getattr(args, "claude_bin", "claude"),
+                            model=model,
+                            permission_mode=claude_permission_mode("research", sandbox),
+                            extra_args=args.extra_arg or [],
+                            events_file=events_file,
+                            run_id=run_id,
+                            task_id=item_task_id,
+                            source=source_name,
+                            target=args.target,
+                            session=session,
+                            proxy_env=proxy_env,
+                            claude_config=cfg.get("claude", {}),
+                        )
+                    else:
+                        exit_code, reply, session = run_codex_exec(
+                            prompt,
+                            cwd=workspace,
+                            output_file=output_file,
+                            codex_bin=args.codex_bin,
+                            model=model,
+                            sandbox=sandbox,
+                            approval=requested_approval,
+                            json_events=not getattr(args, "no_json", False),
+                            extra_args=args.extra_arg or [],
+                            events_file=events_file,
+                            run_id=run_id,
+                            task_id=item_task_id,
+                            source=source_name,
+                            target=args.target,
+                            session=session,
+                            proxy_env=proxy_env,
+                        )
+                except Exception as exc:
+                    traceback.print_exc()
+                    exit_code = 1
+                    reply = f"{backend_name.title()} backend crashed while handling agent turn: {type(exc).__name__}: {exc}"
                 if session:
                     save_session(root, session)
                 if item_task_id and is_task_supervision_host_agent(task, agent_id):

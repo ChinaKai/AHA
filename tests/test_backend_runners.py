@@ -126,6 +126,25 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(rows[1]["data"]["target"], "sub-001")
         self.assertEqual(len(rows[1]["data"]["output_tail"]), 1200)
 
+    def test_codex_event_ignores_non_object_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            common_kwargs = {
+                "events_file": events,
+                "run_id": "run",
+                "task_id": "task-001",
+                "source": "codex-chat",
+                "target": "main",
+            }
+            handle_codex_event(json.dumps("plain string"), **common_kwargs)
+            handle_codex_event(json.dumps(["unexpected"]), **common_kwargs)
+            handle_codex_event(json.dumps({"type": "item.completed", "item": "not an object"}), **common_kwargs)
+            handle_codex_event(json.dumps({"type": "turn.completed", "usage": "not an object"}), **common_kwargs)
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([row["type"] for row in rows], ["agent_usage"])
+        self.assertEqual(rows[0]["data"]["usage"], {})
+
     def test_codex_thread_started_reactivates_reset_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             events = Path(tmp) / "events.jsonl"

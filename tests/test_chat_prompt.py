@@ -142,6 +142,40 @@ class ChatPromptTests(unittest.TestCase):
         agent_errors = [event for event in events if event["type"] == "agent_error"]
         self.assertIn("Failed to start Codex backend command: codex", agent_errors[-1]["data"]["message"])
 
+    def test_codex_chat_catches_backend_runner_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Backend crash chat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "trigger crash", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.traceback.print_exc") as print_traceback, mock.patch(
+                    "aha_cli.services.chat.run_codex_exec",
+                    side_effect=AttributeError("'str' object has no attribute 'get'"),
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertEqual(code, 1)
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["agents"][0]["status"], "failed")
+        self.assertEqual(browser_messages[-1]["sender"], "system")
+        self.assertEqual(browser_messages[-1]["coordination"], "agent_error")
+        self.assertEqual(browser_messages[-1]["agent_id"], "main")
+        self.assertIn("AHA runtime 检测到 `main` agent 后端异常退出", browser_messages[-1]["message"])
+        self.assertIn("Codex backend crashed while handling agent turn", browser_messages[-1]["message"])
+        self.assertIn("AttributeError", browser_messages[-1]["message"])
+        agent_errors = [event for event in events if event["type"] == "agent_error"]
+        self.assertIn("AttributeError", agent_errors[-1]["data"]["message"])
+        self.assertTrue(any(event["type"] == "agent_finished" for event in events))
+        print_traceback.assert_called_once()
+
     def test_codex_chat_passes_latest_task_proxy_env_to_codex_exec(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
