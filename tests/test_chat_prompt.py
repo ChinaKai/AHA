@@ -452,6 +452,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(metrics["source"], "codex-chat")
         self.assertEqual(metrics["task_id"], "task-001")
         self.assertGreater(metrics["total"]["chars"], 0)
+        self.assertEqual(metrics["total"]["tokens"], max(1, metrics["total"]["chars"] // 4))
         self.assertGreater(metrics["components"]["recent_conversation"]["chars"], 0)
         self.assertGreater(metrics["components"]["task_context"]["chars"], 0)
         self.assertIn("prompt_ref", metrics)

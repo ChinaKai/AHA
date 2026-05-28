@@ -450,10 +450,12 @@ def prompt_delta_status_snapshot(root: Path, run_id: str, task_id: str | None, t
 
 def _text_metrics(value) -> dict:
     text = "" if value is None else str(value)
+    chars = len(text)
     return {
-        "chars": len(text),
+        "chars": chars,
         "bytes": len(text.encode("utf-8")),
         "lines": text.count("\n") + 1 if text else 0,
+        "tokens": max(1, chars // 4),
     }
 
 
