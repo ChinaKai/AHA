@@ -146,6 +146,29 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertEqual(detail["status"], "awaiting_user")
         self.assertEqual(detail["agents"][0]["status"], "interrupted")
 
+    def test_interrupt_selected_agent_recovers_stale_stopped_running_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "running")
+
+            with (
+                mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "stopped", "pid": None}),
+                mock.patch("aha_cli.web.task_command_actions.stop_backend") as stop_backend,
+            ):
+                message, payload = interrupt_selected_agent(root, run_id, "task-001", "main")
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+            events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertIn("Recovered stale stopped backend", message)
+        self.assertTrue(payload["interrupted"])
+        self.assertEqual(payload["reason"], "stale_recovered")
+        stop_backend.assert_not_called()
+        self.assertEqual(detail["status"], "awaiting_user")
+        self.assertEqual(detail["agents"][0]["status"], "interrupted")
+        self.assertTrue(any(event["type"] == "agent_status_recovered" for event in events))
+
     def test_interrupt_selected_host_clears_main_host_wait_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

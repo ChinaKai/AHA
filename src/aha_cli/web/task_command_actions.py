@@ -15,6 +15,7 @@ from aha_cli.store.filesystem import (
     set_task_status,
     task_snapshot,
 )
+from aha_cli.web.status import recover_stale_running_agent
 from aha_cli.web.task_runtime import (
     finalization_prompt,
     format_task_journal_for_prompt,
@@ -105,12 +106,26 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
         return f"Task not found: {task_id}", {"interrupted": False, "reason": "task_not_found"}
     task = detail["task"]
     agent_id = target or "main"
-    if not any(str(agent.get("id") or "") == agent_id for agent in task.get("agents", [])):
+    agent_obj = _agent_by_id(task, agent_id)
+    if not agent_obj:
         return f"Agent not found: {agent_id}", {"interrupted": False, "reason": "agent_not_found", "agent_id": agent_id}
     state = backend_status(root, run_id, agent_id, task_id=task_id)
     state_status = str(state.get("status") or "").lower()
     logical_interrupt = state_status == "stopped" and _can_logically_interrupt_stopped_host(task, agent_id)
     if state_status not in {"busy", "running"} and not logical_interrupt:
+        if state_status == "stopped" and str(agent_obj.get("status") or "").lower() == "running":
+            recovered = recover_stale_running_agent(root, run_id, task, agent_obj, dict(state))
+            if recovered:
+                return (
+                    f"Recovered stale stopped backend for {agent_id} on {task_id}; marked agent interrupted.",
+                    {
+                        "interrupted": True,
+                        "reason": "stale_recovered",
+                        "agent_id": agent_id,
+                        "task_id": task_id,
+                        "backend": state,
+                    },
+                )
         return (
             f"No active turn to interrupt for {agent_id} on {task_id}.",
             {"interrupted": False, "reason": "not_busy", "agent_id": agent_id, "task_id": task_id, "backend": state},

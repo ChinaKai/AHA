@@ -14,7 +14,7 @@ from aha_cli.web.http_utils import http_response, json_response, read_http_reque
 from aha_cli.web.run_api import ApiRunNotFound, require_api_run_id, workspace_options
 from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
-from aha_cli.web.status import recover_stale_running_agent, web_status_snapshot
+from aha_cli.web.status import recover_stale_running_agent, recover_stale_running_agents, web_status_snapshot
 from aha_cli.web.system_routes import (
     WEB_RESTART_EXIT_CODE,
     consume_web_restart_requested,
@@ -132,6 +132,8 @@ async def weixin_keepalive_loop(root: Path, interval_seconds: int = WEIXIN_KEEPA
 
 
 async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_interval_ms: int) -> None:
+    if run_id:
+        recover_stale_running_agents(root, run_id)
     server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w), host, port)
     weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root))
     addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
