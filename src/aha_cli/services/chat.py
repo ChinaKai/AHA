@@ -339,7 +339,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             output_file=output_file,
                             claude_bin=getattr(args, "claude_bin", "claude"),
                             model=model,
-                            sandbox=sandbox,
                             permission_mode=claude_permission_mode("research", sandbox),
                             extra_args=args.extra_arg or [],
                             events_file=events_file,

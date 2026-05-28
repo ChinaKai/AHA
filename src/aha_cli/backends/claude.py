@@ -238,7 +238,6 @@ def run_claude_exec(
     output_file: Path,
     claude_bin: str = "claude",
     model: str | None = None,
-    sandbox: str | None = None,
     permission_mode: str = "plan",
     extra_args: list[str] | None = None,
     events_file: Path | None = None,
@@ -255,7 +254,6 @@ def run_claude_exec(
     cmd = build_claude_exec_command(
         claude_bin=claude_bin,
         model=model,
-        sandbox=sandbox,
         permission_mode=permission_mode,
         session_id=session_id,
     )
@@ -333,15 +331,12 @@ def build_claude_exec_command(
     *,
     claude_bin: str,
     model: str | None,
-    sandbox: str | None,
     permission_mode: str,
     session_id: str | None,
 ) -> list[str]:
     cmd = [claude_bin, "-p", "--output-format", "stream-json", "--verbose"]
     if model:
         cmd.extend(["--model", model])
-    if sandbox:
-        cmd.extend(["--sandbox", sandbox])
     if permission_mode:
         cmd.extend(["--permission-mode", permission_mode])
     if permission_mode == "plan":

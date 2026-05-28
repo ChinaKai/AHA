@@ -218,15 +218,13 @@ class BackendRunnerSessionTests(unittest.TestCase):
         cmd = build_claude_exec_command(
             claude_bin="claude",
             model="sonnet",
-            sandbox="workspace-write",
             permission_mode="acceptEdits",
             session_id="session-123",
         )
         self.assertEqual(cmd[:5], ["claude", "-p", "--output-format", "stream-json", "--verbose"])
         self.assertIn("--model", cmd)
         self.assertIn("sonnet", cmd)
-        self.assertIn("--sandbox", cmd)
-        self.assertIn("workspace-write", cmd)
+        self.assertNotIn("--sandbox", cmd)
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)
         self.assertIn("--disallowedTools", cmd)
@@ -241,13 +239,11 @@ class BackendRunnerSessionTests(unittest.TestCase):
         cmd = build_claude_exec_command(
             claude_bin="claude",
             model=None,
-            sandbox="read-only",
             permission_mode="plan",
             session_id=None,
         )
 
-        self.assertIn("--sandbox", cmd)
-        self.assertEqual(cmd[cmd.index("--sandbox") + 1], "read-only")
+        self.assertNotIn("--sandbox", cmd)
         self.assertIn("--add-dir", cmd)
         self.assertEqual(cmd[cmd.index("--add-dir") + 1], "/")
 
