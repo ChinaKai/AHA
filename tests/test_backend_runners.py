@@ -227,7 +227,10 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)
         self.assertIn("--disallowedTools", cmd)
-        self.assertIn("Agent,Task,TaskCreate", cmd)
+        disallowed_tools = cmd[cmd.index("--disallowedTools") + 1].split(",")
+        self.assertEqual(disallowed_tools[:3], ["Agent", "Task", "TaskCreate"])
+        self.assertIn("AskUserQuestion", disallowed_tools)
+        self.assertIn("ExitPlanMode", disallowed_tools)
         self.assertIn("--resume", cmd)
         self.assertIn("session-123", cmd)
 

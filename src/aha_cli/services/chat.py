@@ -389,11 +389,11 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                         if host_result.get("backend_failed"):
                             set_task_status(root, run_id, item_task_id, SUPERVISION_FAILURE_FALLBACK_STATUS, exit_code)
-                        elif host_result.get("routed_to_main"):
-                            set_agent_status(root, run_id, item_task_id, "main", "pending")
-                            set_task_status(root, run_id, item_task_id, "running")
                         elif host_result.get("waiting"):
                             set_agent_status(root, run_id, item_task_id, "main", "waiting", waiting_reason="subagents")
+                            set_task_status(root, run_id, item_task_id, "running")
+                        elif host_result.get("routed_to_main"):
+                            set_agent_status(root, run_id, item_task_id, "main", "pending")
                             set_task_status(root, run_id, item_task_id, "running")
                         elif host_result.get("routed_to_browser"):
                             set_task_status(root, run_id, item_task_id, "awaiting_user", exit_code)

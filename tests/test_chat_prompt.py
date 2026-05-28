@@ -375,6 +375,59 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("让host agent处理02号", prompt)
         self.assertNotIn("task supervision host agent", prompt)
 
+    def test_chat_prompt_labels_current_host_to_main_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host current message label", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="claude",
+                    real_agent_enabled=True,
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "Supervision exchange to evaluate:\n- main_latest_reply:\n内部评审上下文",
+                    sender="main",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="main",
+                    to_agent="host",
+                    display_sender="main",
+                    display_target="host",
+                    agent_id="host",
+                )
+                host_message = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "继续按 MI 驱动方向排查。",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                    display_sender="host",
+                    display_target="main",
+                    agent_id="host",
+                )
+
+                prompt = chat_prompt(root, run_id, "main", host_message, "")
+
+        self.assertIn("User message from host -> main", prompt)
+        self.assertNotIn("User message from browser", prompt)
+        self.assertIn("继续按 MI 驱动方向排查。", prompt)
+        self.assertNotIn("Supervision exchange to evaluate", prompt)
+        self.assertNotIn("内部评审上下文", prompt)
+
     def test_codex_chat_records_prompt_metrics_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -619,7 +672,13 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
         self.assertIn("AHA host instructions:", full_prompt)
         self.assertIn("AHA host sticky summary:", sticky_prompt)
+        self.assertIn("Output only one JSON object", sticky_prompt)
+        self.assertIn("JSON response field is the only natural-language message", sticky_prompt)
         self.assertIn("Return exactly one JSON object", sticky_prompt)
+        self.assertIn("Do not call Claude native tools such as AskUserQuestion or ExitPlanMode", sticky_prompt)
+        self.assertIn("AHA JSON decision ask_user only", sticky_prompt)
+        self.assertIn('browser -> host: 让其直接回复测试111', sticky_prompt)
+        self.assertIn('"response":"请直接回复测试111"', sticky_prompt)
         self.assertIn("commit, merge, delete", sticky_prompt)
         self.assertIn("route executable work to task-main", sticky_prompt)
         self.assertNotIn("Use your read-only project access", sticky_prompt)
@@ -631,3 +690,47 @@ class ChatPromptTests(unittest.TestCase):
             full_metrics["components"]["supervision_host_context"]["chars"] // 2,
         )
         self.assertLess(sticky_metrics["total"]["chars"], full_metrics["total"]["chars"])
+
+    def test_host_prompt_does_not_duplicate_inlined_browser_to_host_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host notes dedupe", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "让 host 回复测试消息3",
+                    sender="browser",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="browser",
+                    to_agent="host",
+                )
+                item = {
+                    "sender": "main",
+                    "message": "Supervision exchange to evaluate:\n"
+                    "- source: browser_main_reply\n"
+                    "- browser_latest_request:\n直接回复测试消息2\n\n"
+                    "- browser_to_host_notes:\nbrowser -> host: 让 host 回复测试消息3\n\n"
+                    "- main_latest_reply:\n测试消息2",
+                    "task_id": "task-001",
+                    "role": "host",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+
+                prompt = chat_prompt(root, run_id, "host", item, "")
+
+        self.assertEqual(prompt.count("browser -> host: 让 host 回复测试消息3"), 1)
+        self.assertIn("Recent browser-to-host notes:\n(none)", prompt)

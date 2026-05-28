@@ -213,12 +213,19 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
     }
     return (
         "AHA host instructions:\n"
+        "Output contract: return exactly one JSON object and nothing else. Do not emit prose, Markdown fences, code blocks, or tool calls.\n"
+        "The JSON response field is the only natural-language message AHA will route to task-main or browser.\n"
         f"{DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT}"
         "The current message from main is either task-main's raw reply to your prior instruction or a supervision exchange containing a fresh browser request.\n"
-        "When it is a supervision exchange, use browser_latest_request and main_latest_reply together.\n"
+        "When it is a supervision exchange, use browser_latest_request, browser_to_host_notes, and main_latest_reply together.\n"
+        "browser_to_host_notes are browser instructions to you, the host, for how to evaluate and respond to this current supervision exchange.\n"
+        "Use browser_to_host_notes to choose your decision and shape the response you send to task-main or browser; do not treat them as browser_latest_request to task-main.\n"
+        "If browser_to_host_notes asks task-main to reply with specific text, prefer decision continue and put that direct instruction in response unless it conflicts with safety or task boundaries.\n"
+        'Minimal example: browser_to_host_notes says "browser -> host: 让其直接回复测试111" -> return {"decision":"continue","reason":"browser_to_host_notes asks main to reply","response":"请直接回复测试111","actions":[]}.\n'
         "Talk to task-main as the next browser control message: direct, natural, and focused on the next step.\n"
         "Your response field is inserted as the next user message to task-main.\n"
-        "Do not mention host, agent, supervision, proxy, decision, JSON, or delegated control-plane mechanics.\n"
+        "When these instructions say response text must be natural, that applies only to the JSON response field, not to the whole assistant message.\n"
+        "Inside the JSON response field, do not mention host, agent, supervision, proxy, decision, JSON, or delegated control-plane mechanics.\n"
         "Do not merely restate main's answer. Give a browser-facing judgment: agree, disagree, ask for user confirmation, or direct the next concrete step.\n"
         "When main is right and the next step is user-facing, say so concisely, for example: 同意，请按 main 的方案复测这个点。\n"
         "When main is wrong, incomplete, drifting, or under-verified, say what must happen next instead of echoing the report.\n"
@@ -234,9 +241,11 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
         "Use ask_user when the ask-user gate policy marks that class as required.\n"
         "When a gate says host may decide, do not ask the browser for that class; use read-only evidence and choose continue, stop, route, wait, or an action yourself.\n"
         "Use ask_user only when every safe route still requires a browser-owned decision, missing permission, credential, payment, or external fact you cannot observe.\n"
+        "Do not call Claude native tools such as AskUserQuestion or ExitPlanMode. If you need browser input, return AHA JSON with decision ask_user; never ask through a native tool.\n"
         "A config file that contains secrets is not automatically an ask_user case when the safe action is narrow and observable; tell task-main to preserve secret fields and edit only the intended non-secret field.\n"
         "Never say you will change files, patch code, commit, run commands, or otherwise perform the work yourself.\n"
         "For executable work, instruct task-main to do it; phrase response as a browser instruction to main, not as the host taking ownership.\n"
+        "For route_to_agent or spawn_sub decisions, still include a concise response for task-main explaining the routed work and how main should proceed after results return.\n"
         "Inspect context only. Do not modify files or execute state-changing commands.\n"
         "Decide what task-main should do next after its latest reply in the evaluated exchange.\n\n"
         "Return only one JSON object with this shape:\n"
@@ -260,13 +269,20 @@ def supervision_host_delta_context(
     supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     return (
         "AHA host sticky summary:\n"
+        "- Output only one JSON object. Do not emit prose, Markdown fences, code blocks, or tool calls.\n"
+        "- The JSON response field is the only natural-language message AHA will route to task-main or browser.\n"
         "- Continue the full delegated browser->main control-plane contract already established in this sticky session.\n"
         "- Stay read-only: inspect context, choose the next safe decision, and route executable work to task-main.\n"
         "- Keep role/routing boundaries: do not do implementation, commit, merge, delete, or state-changing work yourself.\n"
         "- Enforce auto delegation only when it reduces the critical path; avoid forcing needless splits.\n"
         "- Preserve ask-user gates: ask for destructive, commit/merge/delete, permission, external, or product decisions only when the gate requires it.\n"
-        "- Response text must read like a natural browser instruction; do not mention host, supervision, delegated control plane, JSON, or internal mechanics.\n"
+        "- Response field text must read like a natural browser instruction; do not mention host, supervision, delegated control plane, JSON, or internal mechanics inside that field.\n"
+        "- Current supervision exchanges may include browser_to_host_notes; treat them as browser instructions to you, the host, for how to evaluate and respond to this current exchange.\n"
+        "- Use browser_to_host_notes to choose your decision and shape the response to task-main or browser; do not treat them as browser_latest_request to task-main.\n"
+        '- If browser_to_host_notes says "browser -> host: 让其直接回复测试111", prefer {"decision":"continue","reason":"browser_to_host_notes asks main to reply","response":"请直接回复测试111","actions":[]} unless safety or task boundaries conflict.\n'
+        "- For route_to_agent or spawn_sub decisions, still include a concise response for task-main explaining the routed work and how main should proceed after results return.\n"
         "- Return exactly one JSON object with decision, reason, response, and actions.\n"
+        "- Do not call Claude native tools such as AskUserQuestion or ExitPlanMode; ask through AHA JSON decision ask_user only.\n"
         "- Allowed decisions: ask_user, continue, wait, stop, route_to_agent, spawn_sub, record_task_update.\n"
         "- Use continue for concrete next work, wait when agents are already working, and stop only when evidence shows no follow-up remains.\n\n"
         f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
@@ -282,13 +298,15 @@ def supervision_host_prompt(
     host_notes: list[str] | None = None,
     handoff_notes: list[str] | None = None,
 ) -> str:
+    browser_to_host_notes = "\n".join(host_notes or ["(none)"])
     exchange = (
         "Supervision exchange to evaluate:\n"
         "- source: unknown\n"
         "- browser_latest_request:\n(none)\n\n"
+        f"- browser_to_host_notes:\n{browser_to_host_notes}\n\n"
         f"- main_latest_reply:\n{main_reply}"
     )
-    return f"{supervision_host_context(task, host_notes, handoff_notes)}\n\n{exchange}\n"
+    return f"{supervision_host_context(task, [], handoff_notes)}\n\n{exchange}\n"
 
 
 def _message_endpoint(item: dict | None, *keys: str) -> str:
@@ -341,16 +359,19 @@ def supervision_exchange_message(
     host_agent_id: str,
     source_message: dict | None,
     main_reply: str,
+    host_notes: list[str] | None = None,
 ) -> tuple[str, str]:
     source_is_host = _source_message_is_from_host(source_message, host_agent_id)
     source = "host_main_reply" if source_is_host else "browser_main_reply"
     if source_is_host:
         return main_reply, source
     browser_request = latest_browser_main_request(root, run_id, task_id, host_agent_id, source_message)
+    browser_to_host_notes = "\n".join(host_notes or ["(none)"])
     exchange = (
         "Supervision exchange to evaluate:\n"
         f"- source: {source}\n"
         f"- browser_latest_request:\n{browser_request or '(none)'}\n\n"
+        f"- browser_to_host_notes:\n{browser_to_host_notes}\n\n"
         f"- main_latest_reply:\n{main_reply}"
     )
     return exchange, source
@@ -366,23 +387,24 @@ def parse_supervision_exchange_message(message: str) -> dict:
             source = line.removeprefix("- source: ").strip()
             break
 
-    def field_value(name: str, next_name: str | None = None) -> str:
+    def field_value(name: str, next_names: tuple[str, ...] = ()) -> str:
         marker = f"- {name}:\n"
         start = text.find(marker)
         if start < 0:
             return ""
         start += len(marker)
         end = len(text)
-        if next_name:
+        for next_name in next_names:
             next_marker = f"\n\n- {next_name}:\n"
             next_start = text.find(next_marker, start)
             if next_start >= 0:
-                end = next_start
+                end = min(end, next_start)
         return text[start:end].strip()
 
     return {
         "source": source,
-        "browser_latest_request": field_value("browser_latest_request", "main_latest_reply"),
+        "browser_latest_request": field_value("browser_latest_request", ("browser_to_host_notes", "main_latest_reply")),
+        "browser_to_host_notes": field_value("browser_to_host_notes", ("main_latest_reply",)),
         "main_latest_reply": field_value("main_latest_reply"),
     }
 
@@ -491,10 +513,18 @@ def clear_main_host_wait(root: Path, run_id: str, task_id: str) -> None:
         set_agent_status(root, run_id, task_id, "main", "completed")
 
 
+def _host_visible_message_to_main_or_browser(item: dict, host_agent_id: str) -> bool:
+    sender = _message_endpoint(item, "display_sender", "from_agent", "sender")
+    recipient = _message_endpoint(item, "display_target", "to_agent", "target")
+    return sender == host_agent_id and recipient in {"main", "browser"}
+
+
 def supervision_host_notes(root: Path, run_id: str, task_id: str, host_agent_id: str, limit: int = 8) -> list[str]:
     path = run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl"
     notes: list[str] = []
     for _offset, item in iter_jsonl_reverse(path) or ():
+        if _host_visible_message_to_main_or_browser(item, host_agent_id):
+            break
         if item.get("sender") == "browser" and (item.get("target") == host_agent_id or item.get("to_agent") == host_agent_id):
             message = str(item.get("message") or "").strip()
             if message:
@@ -539,6 +569,7 @@ def apply_supervision_real_host(
         supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else supervision
         host_agent_id = str(host_agent.get("id") or "host")
         host_backend = str(host_agent.get("backend") or supervision.get("host_backend") or host_backend)
+    host_notes = supervision_host_notes(root, run_id, task_id, host_agent_id)
     host_message, exchange_source = supervision_exchange_message(
         root,
         run_id,
@@ -546,6 +577,7 @@ def apply_supervision_real_host(
         host_agent_id=host_agent_id,
         source_message=source_message,
         main_reply=reply_text,
+        host_notes=host_notes,
     )
     append_event(
         root,
@@ -678,6 +710,7 @@ def apply_supervision_host_decision(
     except (TypeError, ValueError):
         max_rounds = DEFAULT_TASK_SUPERVISION_MAX_ROUNDS
     previous_host_rounds = supervision_host_decision_count(root, run_id, task_id, host_agent_id)
+    route_to_main_decision = decision["decision"] in {"continue", "route_to_agent", "spawn_sub"}
     if decision["decision"] == "wait":
         waiting_for_subagents = task_has_incomplete_sub_agents(task)
         if waiting_for_subagents:
@@ -685,8 +718,13 @@ def apply_supervision_host_decision(
             set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="subagents")
         else:
             route_skipped_reason = "wait requested without incomplete sub-agents"
-    elif decision["decision"] == "continue" and host_chat_message and not main_route_blocked_by_actions:
-        if previous_host_rounds < max_rounds:
+    elif route_to_main_decision and host_chat_message:
+        should_route_visible_guidance = (
+            previous_host_rounds < max_rounds
+            or main_route_blocked_by_actions
+            or decision["decision"] in {"route_to_agent", "spawn_sub"}
+        )
+        if should_route_visible_guidance:
             append_message(
                 root,
                 run_id,
@@ -712,21 +750,30 @@ def apply_supervision_host_decision(
                 followup_started_at=utc_now(),
             )
             set_task_status(root, run_id, task_id, "running")
-            set_agent_status(root, run_id, task_id, "main", "pending")
-            main_backend = str(main_agent.get("backend") or task.get("preferred_backend") or "codex")
-            if main_backend in PROCESS_AGENT_BACKENDS:
-                start_backend(
-                    root,
-                    run_id,
-                    "main",
-                    backend=main_backend,
-                    model=main_agent.get("model") or task.get("preferred_model"),
-                    sandbox=main_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
-                    approval=main_agent.get("approval") or task.get("preferred_approval") or "never",
-                    from_start=not chat_offset_exists(root, run_id, "main", task_id),
-                    task_id=task_id,
-                )
             routed_to_main = True
+            if main_route_blocked_by_actions:
+                try:
+                    fresh_task = task_snapshot(root, run_id, task_id)["task"]
+                except KeyError:
+                    fresh_task = task
+                waiting_for_subagents = task_has_incomplete_sub_agents(fresh_task)
+                if waiting_for_subagents:
+                    set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="subagents")
+            else:
+                set_agent_status(root, run_id, task_id, "main", "pending")
+                main_backend = str(main_agent.get("backend") or task.get("preferred_backend") or "codex")
+                if main_backend in PROCESS_AGENT_BACKENDS:
+                    start_backend(
+                        root,
+                        run_id,
+                        "main",
+                        backend=main_backend,
+                        model=main_agent.get("model") or task.get("preferred_model"),
+                        sandbox=main_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+                        approval=main_agent.get("approval") or task.get("preferred_approval") or "never",
+                        from_start=not chat_offset_exists(root, run_id, "main", task_id),
+                        task_id=task_id,
+                    )
         else:
             route_skipped_reason = "max_rounds reached"
     elif decision["decision"] in {"ask_user", "stop"} and host_chat_message and not duplicate_browser_stop:

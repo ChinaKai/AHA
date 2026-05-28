@@ -121,6 +121,33 @@ def _conversation_message_endpoints(event: dict) -> tuple[str, str]:
     return sender, target
 
 
+def _current_message_sender_label(item: dict) -> str:
+    sender = _message_endpoint(item, "display_sender", "from_agent", "sender") or "browser"
+    recipient = _message_endpoint(item, "display_target", "to_agent", "target")
+    if (item.get("display_sender") or item.get("display_target")) and recipient:
+        return f"{sender} -> {recipient}"
+    return sender
+
+
+def _host_notes_for_prompt(root: Path, run_id: str, task_id: str, target: str, item: dict) -> list[str]:
+    if "- browser_to_host_notes:\n" in str(item.get("message") or ""):
+        return []
+    return supervision_host_notes(root, run_id, task_id, target)
+
+
+def _current_message_inlines_browser_to_host_notes(item: dict) -> bool:
+    return "- browser_to_host_notes:\n" in str(item.get("message") or "")
+
+
+def _is_browser_to_target_message(event: dict, target: str) -> bool:
+    if event.get("type") != "message":
+        return False
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender = _message_endpoint(data, "display_sender", "from_agent", "sender")
+    recipient = _message_endpoint(data, "display_target", "to_agent", "target")
+    return sender == "browser" and recipient == target
+
+
 def _conversation_message_visible_to_target(event: dict, target: str, task: dict | None) -> bool:
     if event.get("type") != "message":
         return False
@@ -172,6 +199,7 @@ def recent_conversation_events(
     events: list[dict] = []
     chain_starts = 0
     scanned = 0
+    skip_inlined_browser_host_notes = is_task_supervision_host_agent(visibility_task or {}, target) and _current_message_inlines_browser_to_host_notes(item)
     for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
         if _event_task_id(event) != task_id:
             continue
@@ -181,6 +209,8 @@ def recent_conversation_events(
         if scanned > PROMPT_CONVERSATION_SCAN_LIMIT:
             break
         if _is_current_message_event(event, item, target):
+            continue
+        if skip_inlined_browser_host_notes and _is_browser_to_target_message(event, target):
             continue
         if not _conversation_message_visible_to_target(event, target, visibility_task):
             continue
@@ -607,9 +637,10 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 commit_policy=commit_policy,
             )
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):
+                host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
                 supervision_context = supervision_host_context(
                     detail["task"],
-                    supervision_host_notes(root, run_id, str(task_id), target),
+                    host_notes,
                     supervision_host_handoff_notes(root, run_id, str(task_id)),
                 )
                 task_context = f"{task_context.rstrip()}\n\n{supervision_context}\n"
@@ -652,9 +683,10 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             backend_session_id=(agent or {}).get("backend_session_id") or "-",
         )
         if task and is_task_supervision_host_agent(task, target):
+            host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
             supervision_context = supervision_host_delta_context(
                 task,
-                supervision_host_notes(root, run_id, str(task_id), target),
+                host_notes,
                 supervision_host_handoff_notes(root, run_id, str(task_id)),
             )
             sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_context}\n"
@@ -676,7 +708,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             run_goal=plan["goal"],
             sticky_context=sticky_context.rstrip(),
             recent_conversation=recent_conversation,
-            sender=item.get("sender", "browser"),
+            sender=_current_message_sender_label(item),
             ts=item.get("ts", ""),
             message=item.get("message", ""),
         )
@@ -719,7 +751,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         run_goal=plan["goal"],
         task_context=task_context or "Current task context: none",
         recent_conversation=recent_conversation,
-        sender=item.get("sender", "browser"),
+        sender=_current_message_sender_label(item),
         ts=item.get("ts", ""),
         message=item.get("message", ""),
     )

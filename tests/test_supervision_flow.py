@@ -9,7 +9,12 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import apply_supervision_host_decision, chat_prompt
-from aha_cli.services.chat_supervision import supervision_exchange_message, supervision_host_context
+from aha_cli.services.chat_supervision import (
+    parse_supervision_exchange_message,
+    supervision_exchange_message,
+    supervision_host_context,
+    supervision_host_notes,
+)
 from aha_cli.services.messages import format_event
 from aha_cli.store.filesystem import (
     add_agent,
@@ -56,6 +61,8 @@ class SupervisionFlowTests(unittest.TestCase):
         )
 
         self.assertIn("delegated browser->main control plane", context)
+        self.assertIn("Output contract: return exactly one JSON object and nothing else", context)
+        self.assertIn("The JSON response field is the only natural-language message", context)
         self.assertIn("not a third-party reviewer", context)
         self.assertIn("Steward handles deterministic low-risk continuation", context)
         self.assertIn("Use your read-only project access", context)
@@ -89,6 +96,8 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertIn("inspect git status, exclude unrelated changes", context)
         self.assertIn("commit with AHA commit policy", context)
         self.assertIn("ask_user before requesting commit, merge, delete", context)
+        self.assertIn("Do not call Claude native tools such as AskUserQuestion or ExitPlanMode", context)
+        self.assertIn("return AHA JSON with decision ask_user", context)
         self.assertIn("preserve secret fields and edit only the intended non-secret field", context)
         self.assertIn("instruct task-main to do it", context)
         self.assertIn("scope or goal change", context)
@@ -98,6 +107,12 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertIn("needs semantic decision", context)
         self.assertIn("raw reply to your prior instruction", context)
         self.assertIn("browser_latest_request", context)
+        self.assertIn("browser instructions to you, the host, for how to evaluate", context)
+        self.assertIn("Use browser_to_host_notes to choose your decision", context)
+        self.assertIn('browser_to_host_notes says "browser -> host: 让其直接回复测试111"', context)
+        self.assertIn('"response":"请直接回复测试111"', context)
+        self.assertIn("applies only to the JSON response field", context)
+        self.assertIn("For route_to_agent or spawn_sub decisions", context)
         self.assertIn("main_latest_reply", context)
 
     def test_supervision_exchange_sends_raw_main_reply_for_host_routed_reply(self) -> None:
@@ -177,8 +192,104 @@ class SupervisionFlowTests(unittest.TestCase):
 
         self.assertEqual(source, "browser_main_reply")
         self.assertIn("browser_latest_request:\n新的用户问题", exchange)
+        self.assertIn("browser_to_host_notes:\n(none)", exchange)
         self.assertIn("main_latest_reply:\nmain 的回答", exchange)
         self.assertNotIn("host_latest_instruction", exchange)
+
+    def test_supervision_exchange_inlines_browser_to_host_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host notes exchange", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "让 host 回复测试消息3",
+                    sender="browser",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="browser",
+                    to_agent="host",
+                )
+                browser_message = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "直接回复测试消息2",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                )
+
+                exchange, source = supervision_exchange_message(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    source_message=browser_message,
+                    main_reply="测试消息2",
+                    host_notes=supervision_host_notes(root, run_id, "task-001", "host"),
+                )
+                parsed = parse_supervision_exchange_message(exchange)
+
+        self.assertEqual(source, "browser_main_reply")
+        self.assertEqual(parsed["browser_latest_request"], "直接回复测试消息2")
+        self.assertIn("browser -> host: 让 host 回复测试消息3", parsed["browser_to_host_notes"])
+        self.assertEqual(parsed["main_latest_reply"], "测试消息2")
+
+    def test_supervision_host_notes_stop_at_last_host_visible_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host note window", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "旧一轮 host 指令",
+                    sender="browser",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="browser",
+                    to_agent="host",
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "browser",
+                    "旧一轮已处理。",
+                    sender="host",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="host",
+                    to_agent="browser",
+                    display_sender="host",
+                    display_target="browser",
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "host",
+                    "只影响当前轮的 host 指令",
+                    sender="browser",
+                    task_id="task-001",
+                    role="host",
+                    from_agent="browser",
+                    to_agent="host",
+                )
+
+                notes = supervision_host_notes(root, run_id, "task-001", "host")
+
+        self.assertEqual(notes, ["browser -> host: 只影响当前轮的 host 指令"])
 
     def test_codex_chat_records_supervision_stub_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -457,6 +568,141 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertEqual(main["waiting_reason"], "subagents")
         self.assertFalse(any(row["type"] == "main_reported_to_host" for row in rows))
         self.assertTrue(any(row["type"] == "supervision_deferred" for row in rows))
+
+    def test_host_spawn_sub_decision_routes_visible_guidance_to_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host spawn guidance", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                host_reply = json.dumps(
+                    {
+                        "decision": "spawn_sub",
+                        "reason": "parallel check",
+                        "response": "已安排 sub 检查，main 等结果回来后再汇总。",
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "检查独立范围",
+                                "backend": "codex",
+                                "reason": "parallel check",
+                            }
+                        ],
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_sub,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    result = apply_supervision_host_decision(
+                        root,
+                        run_id,
+                        "task-001",
+                        host_agent_id="host",
+                        host_reply=host_reply,
+                        exit_code=0,
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        start_sub.assert_called_once()
+        start_main.assert_not_called()
+        self.assertTrue(result["routed_to_main"])
+        self.assertTrue(result["waiting"])
+        self.assertEqual(result["executed"][0]["type"], "spawn_sub")
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main["status"], "waiting")
+        self.assertEqual(main["waiting_reason"], "subagents")
+        routed_messages = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message"
+            and row["data"].get("sender") == "browser"
+            and row["data"].get("target") == "main"
+            and row["data"].get("display_sender") == "host"
+            and row["data"].get("display_target") == "main"
+        ]
+        self.assertEqual([row["message"] for row in routed_messages], ["已安排 sub 检查，main 等结果回来后再汇总。"])
+
+    def test_host_route_to_agent_decision_routes_visible_guidance_to_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Host route guidance", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                host_reply = json.dumps(
+                    {
+                        "decision": "route_to_agent",
+                        "reason": "sub owns this scope",
+                        "response": "已让 sub 继续检查，main 先等子代理结果。",
+                        "actions": [
+                            {
+                                "type": "route_to_agent",
+                                "agent_id": sub["id"],
+                                "message": "继续检查你负责的范围",
+                                "reason": "sub owns this scope",
+                            }
+                        ],
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_sub,
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    result = apply_supervision_host_decision(
+                        root,
+                        run_id,
+                        "task-001",
+                        host_agent_id="host",
+                        host_reply=host_reply,
+                        exit_code=0,
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        start_sub.assert_called_once()
+        start_main.assert_not_called()
+        self.assertTrue(result["routed_to_main"])
+        self.assertTrue(result["waiting"])
+        self.assertEqual(result["executed"][0]["type"], "route_to_agent")
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(main["status"], "waiting")
+        self.assertEqual(main["waiting_reason"], "subagents")
+        self.assertTrue(
+            any(
+                row["type"] == "message"
+                and row["data"].get("message") == "已让 sub 继续检查，main 先等子代理结果。"
+                and row["data"].get("display_sender") == "host"
+                and row["data"].get("display_target") == "main"
+                for row in rows
+            )
+        )
 
     def test_round_summary_keeps_main_waiting_for_real_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,7 +11,6 @@ from aha_cli.backends.codex import is_context_overflow_message, tail_text
 from aha_cli.domain.models import utc_now
 from aha_cli.services.native_subagents import (
     CLAUDE_NATIVE_SUBAGENT_TOOLS,
-    claude_disallowed_subagent_tools_arg,
     text_claims_subagent_created,
 )
 from aha_cli.services.proxy import apply_proxy_environment
@@ -19,6 +18,7 @@ from aha_cli.store.filesystem import append_event_to_file
 
 CLAUDE_AUTH_ENV_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 CLAUDE_GLOBAL_READONLY_DIR = "/"
+CLAUDE_NATIVE_CONTROL_PLANE_TOOLS = ("AskUserQuestion", "ExitPlanMode")
 CLAUDE_CONFIG_ENV_ALIASES = {
     "api_key": "ANTHROPIC_API_KEY",
     "auth_token": "ANTHROPIC_AUTH_TOKEN",
@@ -71,6 +71,10 @@ def claude_missing_auth_message() -> str:
         "Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN in the AHA process environment, "
         "or add it under claude.env in AHA config."
     )
+
+
+def claude_disallowed_aha_tools_arg() -> str:
+    return ",".join((*CLAUDE_NATIVE_SUBAGENT_TOOLS, *CLAUDE_NATIVE_CONTROL_PLANE_TOOLS))
 
 
 def claude_permission_mode(mode: str, requested: str) -> str:
@@ -337,7 +341,7 @@ def build_claude_exec_command(
         cmd.extend(["--permission-mode", permission_mode])
     if permission_mode == "plan":
         cmd.extend(["--add-dir", CLAUDE_GLOBAL_READONLY_DIR])
-    cmd.extend(["--disallowedTools", claude_disallowed_subagent_tools_arg()])
+    cmd.extend(["--disallowedTools", claude_disallowed_aha_tools_arg()])
     if session_id:
         cmd.extend(["--resume", session_id])
     return cmd
