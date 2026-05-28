@@ -78,6 +78,53 @@ def status_from_agent_result(exit_code: int, reply: str) -> str:
     return "completed"
 
 
+def agent_error_notice(target: str, exit_code: int, reply: str) -> str:
+    detail = reply.strip()
+    if detail:
+        return f"AHA runtime 检测到 `{target}` agent 后端异常退出（exit={exit_code}）。\n\n{detail}"
+    return f"AHA runtime 检测到 `{target}` agent 没有返回有效回复（exit={exit_code}）。请检查 Runtime 日志或后端连通性。"
+
+
+def append_agent_error_notice(
+    root: Path,
+    run_id: str,
+    *,
+    source: str,
+    target: str,
+    task_id: str | None,
+    agent_id: str,
+    exit_code: int,
+    reply: str,
+    role: str,
+) -> None:
+    message = agent_error_notice(target, exit_code, reply)
+    append_event(
+        root,
+        run_id,
+        "agent_error",
+        {
+            "source": source,
+            "target": target,
+            "task_id": task_id,
+            "exit_code": exit_code,
+            "message": message,
+        },
+    )
+    append_message(
+        root,
+        run_id,
+        "browser",
+        message,
+        sender="system",
+        task_id=task_id,
+        role=role,
+        from_agent="system",
+        to_agent="browser",
+        coordination="agent_error",
+        agent_id=agent_id,
+    )
+
+
 def auto_reply(root: Path, run_id: str, args) -> int:
     require_plan(root, run_id)
     inbox = inbox_path(root, run_id, args.target)
@@ -350,6 +397,18 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         else:
                             next_task_status = "awaiting_user" if final_status == "completed" else final_status
                             set_task_status(root, run_id, item_task_id, next_task_status, exit_code)
+                    if exit_code != 0:
+                        append_agent_error_notice(
+                            root,
+                            run_id,
+                            source=source_name,
+                            target=args.target,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            exit_code=exit_code,
+                            reply=reply,
+                            role=item.get("role") or "main",
+                        )
                     append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                     print(f"{args.sender} supervision decision: {action_response_text(reply)}", flush=True)
                     if worker_task_id:
@@ -556,7 +615,17 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                     stop_task_backends(root, run_id, item_task_id, exclude_pid=os.getpid())
                                 exit_after_message = bool(worker_task_id)
                     if not empty_reply_waiting_for_subagents:
-                        append_event(root, run_id, "agent_error", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                        append_agent_error_notice(
+                            root,
+                            run_id,
+                            source=source_name,
+                            target=args.target,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            exit_code=exit_code,
+                            reply=reply,
+                            role=item.get("role") or "main",
+                        )
                 if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset, target=args.target):
                     exit_after_message = True
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
