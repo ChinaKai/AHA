@@ -2442,33 +2442,31 @@ function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGat
   };
 }
 
-function applyProxyDefaultValues(httpEl, httpsEl, noProxyEl, enabledEl) {
+function applyProxyDefaultValue(inputEl, defaultValue, enabledEl, options = {}) {
   let changed = false;
-  if (httpEl && !httpEl.value.trim()) {
-    httpEl.value = defaultHttpProxy;
+  if (inputEl && !inputEl.value.trim()) {
+    inputEl.value = defaultValue;
     changed = true;
   }
-  if (httpsEl && !httpsEl.value.trim()) {
-    httpsEl.value = defaultHttpsProxy;
-    changed = true;
-  }
-  if (noProxyEl && !noProxyEl.value.trim()) {
-    noProxyEl.value = defaultNoProxy;
-    changed = true;
-  }
-  if ((httpEl?.value.trim() || httpsEl?.value.trim()) && enabledEl && !enabledEl.checked) {
+  if (options.enableProxy && inputEl?.value.trim() && enabledEl && !enabledEl.checked) {
     enabledEl.checked = true;
     changed = true;
   }
   return changed;
 }
 
-function fillTaskCreateProxyDefaults() {
-  return applyProxyDefaultValues(taskHttpProxyEl, taskHttpsProxyEl, taskNoProxyEl, taskProxyEnabledEl);
+function fillTaskCreateProxyDefaultFor(input) {
+  if (input === taskHttpProxyEl) return applyProxyDefaultValue(taskHttpProxyEl, defaultHttpProxy, taskProxyEnabledEl, { enableProxy: true });
+  if (input === taskHttpsProxyEl) return applyProxyDefaultValue(taskHttpsProxyEl, defaultHttpsProxy, taskProxyEnabledEl, { enableProxy: true });
+  if (input === taskNoProxyEl) return applyProxyDefaultValue(taskNoProxyEl, defaultNoProxy, taskProxyEnabledEl);
+  return false;
 }
 
-function fillSelectedTaskProxyDefaults() {
-  return applyProxyDefaultValues(selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl, selectedTaskNoProxyEl, selectedTaskProxyEnabledEl);
+function fillSelectedTaskProxyDefaultFor(input) {
+  if (input === selectedTaskHttpProxyEl) return applyProxyDefaultValue(selectedTaskHttpProxyEl, defaultHttpProxy, selectedTaskProxyEnabledEl, { enableProxy: true });
+  if (input === selectedTaskHttpsProxyEl) return applyProxyDefaultValue(selectedTaskHttpsProxyEl, defaultHttpsProxy, selectedTaskProxyEnabledEl, { enableProxy: true });
+  if (input === selectedTaskNoProxyEl) return applyProxyDefaultValue(selectedTaskNoProxyEl, defaultNoProxy, selectedTaskProxyEnabledEl);
+  return false;
 }
 
 function setCreateProxyDefaultsFromInputs() {
@@ -7148,8 +7146,8 @@ taskContextFormEl?.addEventListener("submit", async event => {
   });
 });
 [selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl, selectedTaskNoProxyEl].forEach(input => {
-  input?.addEventListener("focus", fillSelectedTaskProxyDefaults);
-  input?.addEventListener("click", fillSelectedTaskProxyDefaults);
+  input?.addEventListener("focus", () => fillSelectedTaskProxyDefaultFor(input));
+  input?.addEventListener("click", () => fillSelectedTaskProxyDefaultFor(input));
 });
 agentTargetEl.addEventListener("change", async () => {
   syncAgentCards();
@@ -7166,8 +7164,8 @@ collaborationModeEl?.addEventListener("change", syncCollaborationFields);
 taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeFields);
 [taskHttpProxyEl, taskHttpsProxyEl].forEach(input => input?.addEventListener("input", setCreateProxyDefaultsFromInputs));
 [taskHttpProxyEl, taskHttpsProxyEl, taskNoProxyEl].forEach(input => {
-  input?.addEventListener("focus", fillTaskCreateProxyDefaults);
-  input?.addEventListener("click", fillTaskCreateProxyDefaults);
+  input?.addEventListener("focus", () => fillTaskCreateProxyDefaultFor(input));
+  input?.addEventListener("click", () => fillTaskCreateProxyDefaultFor(input));
 });
 showHiddenEl.addEventListener("change", () => {
   const tasks = visibleTasks();
