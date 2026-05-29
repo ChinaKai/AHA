@@ -2548,14 +2548,22 @@ body.empty-run .panel {
 }
 @media (max-width: 720px) {
   .bootstrap-config-grid,
-  .bootstrap-list-row,
   .bootstrap-pair-row {
     grid-template-columns: 1fr;
+  }
+  .bootstrap-list-row {
+    grid-template-columns: minmax(0, 1fr) 38px;
   }
   .bootstrap-icon-button {
     width: auto;
     justify-self: start;
     padding: 0 12px;
+  }
+  .bootstrap-list-row .bootstrap-icon-button {
+    width: 38px;
+    min-width: 38px;
+    justify-self: end;
+    padding: 0;
   }
 }
 @media (min-width: 981px) {

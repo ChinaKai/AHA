@@ -6269,6 +6269,11 @@ function bootstrapConfigMode(form) {
   return String(form?.dataset?.bootstrapConfigMode || "init");
 }
 
+function confirmBootstrapConfigSave(mode) {
+  if (mode !== "settings") return true;
+  return window.confirm("Save AHA Settings to .aha/config.json?");
+}
+
 function previousBootstrapEnvGroup(index, name) {
   const groups = bootstrapEnvGroups(bootstrapConfigData()?.claude?.env);
   const named = groups.find(group => configString(group.name) === name);
@@ -6349,6 +6354,7 @@ async function saveBootstrapConfigForm(form) {
   const submit = form.querySelector('button[type="submit"]');
   const state = form.querySelector("[data-bootstrap-config-state]");
   const mode = bootstrapConfigMode(form);
+  if (!confirmBootstrapConfigSave(mode)) return;
   if (submit) submit.disabled = true;
   if (state) state.textContent = "Saving...";
   try {
