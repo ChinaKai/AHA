@@ -335,6 +335,19 @@ def create_plan(
     return plan
 
 
+def rename_run(root: Path, run_id: str, name: str) -> dict:
+    run_name = str(name or "").strip()
+    if not run_name:
+        raise ValueError("run name cannot be empty")
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        plan["goal"] = run_name
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        append_event(root, run_id, "run_renamed", {"name": run_name})
+        return run_summary_from_plan(root, plan)
+
+
 def write_task_artifacts(root: Path, plan: dict, task: dict) -> None:
     base = run_dir(root, plan["id"])
     prompt_file = base / task["prompt_file"]

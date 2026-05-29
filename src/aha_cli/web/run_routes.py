@@ -12,6 +12,7 @@ from aha_cli.store.filesystem import (
     config_path,
     create_plan,
     load_config,
+    rename_run,
     resolve_workspace_path,
     run_summary,
 )
@@ -329,6 +330,22 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
     return json_response(response, "201 Created")
 
 
+def handle_update_run(root: Path, default_run_id: str, run_id: str, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    name = str(payload.get("name", payload.get("goal", "")) or "").strip()
+    if not name:
+        return json_response({"error": "run name cannot be empty"}, "400 Bad Request")
+    try:
+        run = rename_run(root, run_id, name)
+    except SystemExit as exc:
+        return json_response({"error": str(exc)}, "404 Not Found")
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    response = runs_payload(root, default_run_id)
+    response.update({"ok": True, "run": run})
+    return json_response(response)
+
+
 def handle_workspaces_index(root: Path, method: str) -> bytes:
     response = json_response(workspaces_payload(root))
     return head_or_response(method, response)
@@ -367,6 +384,11 @@ def handle_run_workspace_route(
         return handle_save_bootstrap(root, default_run_id, body)
     if method == "POST" and path == "/api/runs":
         return handle_create_run(root, body)
+    if method == "PATCH" and path.startswith("/api/runs/"):
+        run_id = path.removeprefix("/api/runs/").strip("/")
+        if not run_id or "/" in run_id:
+            return json_response({"error": "run id is required"}, "400 Bad Request")
+        return handle_update_run(root, default_run_id, run_id, body)
     if method in {"GET", "HEAD"} and path == "/api/workspaces":
         return handle_workspaces_index(root, method)
     if method == "POST" and path == "/api/workspaces":
@@ -378,6 +400,7 @@ __all__ = [
     "handle_bootstrap",
     "handle_create_run",
     "handle_create_workspace",
+    "handle_update_run",
     "handle_save_bootstrap",
     "handle_run_export",
     "handle_run_import",

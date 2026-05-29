@@ -160,8 +160,16 @@ header > div:first-child h1 {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 8px;
 }
+.session-rename {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
 .session-create #new-run-goal {
   grid-column: 1 / -1;
+}
+.session-rename #rename-run-name {
+  min-width: 0;
 }
 .session-create .collaboration-help {
   grid-column: 1 / -1;

@@ -135,6 +135,8 @@ const sessionTitleEl = document.getElementById("session-title");
 const sessionMenuEl = document.getElementById("session-menu");
 const sessionRefreshEl = document.getElementById("session-refresh");
 const runSelectEl = document.getElementById("run-select");
+const runRenameFormEl = document.getElementById("run-rename-form");
+const renameRunNameEl = document.getElementById("rename-run-name");
 const runCreateFormEl = document.getElementById("run-create-form");
 const newRunGoalEl = document.getElementById("new-run-goal");
 const runExportEl = document.getElementById("run-export");
@@ -828,10 +830,22 @@ function renderSessionSummary() {
   }
 }
 
+function syncCurrentRunDisplay(run, fallbackName = "") {
+  if (!run || runIdOf(run) !== currentRunId) return;
+  const runName = String(run.goal || fallbackName || "").trim();
+  if (statusData) {
+    statusData.goal = runName || statusData.goal;
+    statusData.updated_at = run.updated_at || statusData.updated_at;
+  }
+  renderSessionSummary();
+  if (summaryEl && runName) summaryEl.textContent = runName;
+}
+
 function renderSessionMenu() {
   if (!runSelectEl) return;
   const fallback = fallbackCurrentRun();
   const runs = runsData.length ? runsData : (fallback ? [fallback] : []);
+  const currentRun = currentRunSummary() || fallback;
   runSelectEl.innerHTML = "";
   for (const run of runs) {
     const id = runIdOf(run);
@@ -844,6 +858,16 @@ function renderSessionMenu() {
   }
   runSelectEl.disabled = runActionInFlight || runSelectEl.options.length === 0;
   if (sessionRefreshEl) sessionRefreshEl.disabled = runActionInFlight;
+  if (renameRunNameEl) {
+    if (document.activeElement !== renameRunNameEl) {
+      renameRunNameEl.value = currentRun ? runTitleOf(currentRun) : "";
+    }
+    renameRunNameEl.disabled = runActionInFlight || !currentRunId;
+  }
+  if (runRenameFormEl) {
+    const button = runRenameFormEl.querySelector("button");
+    if (button) button.disabled = runActionInFlight || !currentRunId;
+  }
   if (newRunGoalEl) newRunGoalEl.disabled = runActionInFlight;
   const hasRun = Boolean(currentRunId);
   if (runExportEl) runExportEl.disabled = runActionInFlight || !hasRun;
@@ -1221,6 +1245,29 @@ async function createRun(goal, mode, options = {}) {
     } else {
       await switchRun(nextRunId);
     }
+  } catch (err) {
+    alert(err?.message || String(err));
+  } finally {
+    runActionInFlight = false;
+    renderSessionMenu();
+  }
+}
+
+async function renameCurrentRun(name) {
+  const runId = String(currentRunId || "").trim();
+  const trimmedName = String(name || "").trim();
+  if (!runId || !trimmedName) return;
+  runActionInFlight = true;
+  try {
+    const payload = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmedName })
+    }, "Failed to rename run");
+    applyRunListData(payload);
+    const run = payload.run || currentRunSummary();
+    syncCurrentRunDisplay(run, trimmedName);
+    runsError = "";
   } catch (err) {
     alert(err?.message || String(err));
   } finally {
@@ -1900,6 +1947,10 @@ function initSessionControl() {
   runCreateFormEl?.addEventListener("submit", async event => {
     event.preventDefault();
     await createRun(newRunGoalEl?.value || "", "research", { createInitialTask: false });
+  });
+  runRenameFormEl?.addEventListener("submit", async event => {
+    event.preventDefault();
+    await renameCurrentRun(renameRunNameEl?.value || "");
   });
   document.addEventListener("click", event => {
     const target = event.target instanceof Element ? event.target : null;

@@ -317,6 +317,7 @@ The dashboard uses local HTTP endpoints:
 GET  /api/bootstrap
 GET  /api/runs
 POST /api/runs
+PATCH /api/runs/<run-id>
 GET  /api/run/export?run_id=<run-id>&no_logs=1
 POST /api/run/import
 GET  /api/status

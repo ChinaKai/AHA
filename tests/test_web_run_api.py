@@ -348,6 +348,59 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(create_body["run"]["goal"], "Second session")
         self.assertIn(create_body["run"]["id"], {item["id"] for item in updated_body["runs"]})
 
+    def test_api_run_can_be_renamed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Original run", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                rename_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/runs/{run_id}",
+                        method="PATCH",
+                        payload={"name": "Renamed run"},
+                    )
+                )
+                rename_body = json_response_body(rename_response)
+                runs_response = asyncio.run(fetch_ui_response(root, run_id, "/api/runs"))
+                runs_body = json_response_body(runs_response)
+                plan = read_json(root / ".aha" / "runs" / run_id / "plan.json")
+                events, _ = iter_jsonl_from(root / ".aha" / "runs" / run_id / "events.jsonl", 0)
+
+        self.assertTrue(rename_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(rename_body["ok"])
+        self.assertEqual(rename_body["run"]["goal"], "Renamed run")
+        self.assertEqual(plan["goal"], "Renamed run")
+        self.assertIn(run_id, {item["id"] for item in rename_body["runs"]})
+        self.assertIn("Renamed run", {item["goal"] for item in runs_body["runs"]})
+        self.assertTrue(any(event["type"] == "run_renamed" and event["data"]["name"] == "Renamed run" for event in events))
+
+    def test_api_run_rename_rejects_empty_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Original run", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/runs/{run_id}",
+                        method="PATCH",
+                        payload={"name": "   "},
+                    )
+                )
+                plan = read_json(root / ".aha" / "runs" / run_id / "plan.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertEqual(plan["goal"], "Original run")
+
     def test_api_run_archive_exports_and_imports_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
