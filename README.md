@@ -361,7 +361,7 @@ Messages still use JSONL inbox/event files, but browser messages carry `task_id`
 
 The task form dispatches the assignment immediately. Users should not need to repeat the task in the conversation box after creation.
 
-When AHA starts with no selected run, the dashboard shows a First Run bootstrap form. That form can initialize a run, register a workspace, choose backend/model/sandbox/approval, and set initial task proxy values before the first backend is started.
+When AHA starts without `.aha/config.json`, the dashboard shows a bootstrap form for the AHA config file. Its Core Settings section contains only Default backend and Task concurrency; the backend selector exposes `codex` and `claude`. The same form can set workspace roots, Codex `bin` and `model` defaults, and the Claude `bin`. Claude env is configured as named groups with fixed Anthropic fields (`ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_API_KEY`), while the active env selector also offers Claude official mode to avoid applying env values. Runner command, default mode, and context window overrides are not part of the init UI. After initialization, an empty dashboard shows a First Run form with only Run name; task creation stays in the New Task flow. The Run menu exposes Settings to edit the same AHA config defaults later. When creating a Claude task, a configured active env group supplies the model through `ANTHROPIC_MODEL`; if no env is configured, the task form falls back to a Claude model selector.
 
 ## Run Import And Export
 

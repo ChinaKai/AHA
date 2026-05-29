@@ -9,7 +9,7 @@ import textwrap
 import unittest
 from unittest import mock
 
-from aha_cli.backends.claude import build_claude_exec_command, claude_permission_mode, handle_claude_event
+from aha_cli.backends.claude import build_claude_exec_command, claude_config_env, claude_permission_mode, handle_claude_event
 from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message, run_codex_exec
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
@@ -26,6 +26,54 @@ class BackendRunnerSessionTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_claude_config_env_uses_active_named_group(self) -> None:
+        env = claude_config_env(
+            {
+                "env_active": "prod",
+                "env": [
+                    {
+                        "name": "dev",
+                        "ANTHROPIC_API_KEY": "dev-key",
+                        "ANTHROPIC_BASE_URL": "https://dev.example",
+                    },
+                    {
+                        "name": "prod",
+                        "ANTHROPIC_API_KEY": "prod-key",
+                        "ANTHROPIC_BASE_URL": "https://prod.example",
+                        "ANTHROPIC_MODEL": "claude-prod",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "prod-key")
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://prod.example")
+        self.assertEqual(env["ANTHROPIC_MODEL"], "claude-prod")
+
+    def test_claude_config_env_can_disable_env_groups_for_official_claude(self) -> None:
+        env = claude_config_env(
+            {
+                "env_active": None,
+                "env": [{"name": "prod", "ANTHROPIC_API_KEY": "prod-key", "ANTHROPIC_MODEL": "claude-prod"}],
+            }
+        )
+
+        self.assertEqual(env, {})
+
+    def test_claude_config_env_keeps_legacy_first_group_without_active_field(self) -> None:
+        env = claude_config_env(
+            {"env": [{"name": "prod", "ANTHROPIC_API_KEY": "prod-key", "ANTHROPIC_MODEL": "claude-prod"}]}
+        )
+
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "prod-key")
+        self.assertEqual(env["ANTHROPIC_MODEL"], "claude-prod")
+
+    def test_claude_config_env_keeps_legacy_dict_shape(self) -> None:
+        env = claude_config_env({"env": {"api_key": "test-key", "base_url": "https://claude.test"}})
+
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "test-key")
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://claude.test")
 
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(

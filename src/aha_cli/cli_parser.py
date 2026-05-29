@@ -59,7 +59,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     init_p.add_argument("--force", action="store_true")
     init_p.add_argument("--backend", choices=backend_names(), default=None)
     init_p.add_argument("--runner-command", default=None)
-    init_p.add_argument("--parallel", type=int, default=4)
+    init_p.add_argument("--parallel", type=int, default=10)
     init_p.set_defaults(func=handlers["init"])
 
     plan_p = sub.add_parser("plan", help="Create a multi-agent task plan")

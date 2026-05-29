@@ -117,10 +117,13 @@ def runs_payload(root: Path, default_run_id: str) -> dict:
 
 
 def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
+    cfg = load_config(root)
     return {
         "aha_home": str(root),
         "aha_version": aha_version(root),
         "initialized": config_path(root).exists(),
+        "config": cfg,
+        "config_backend_options": ["codex", "claude"],
         "default_workspace_path": str(cwd or Path.cwd()),
         "default_run_id": default_api_run_id(root, default_run_id),
         "runs": list_run_summaries(root),

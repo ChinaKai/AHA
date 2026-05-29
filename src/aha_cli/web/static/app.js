@@ -88,6 +88,7 @@ const defaultTaskContextThresholdPercent = 75;
 const defaultHttpProxy = "http://127.0.0.1:7890";
 const defaultHttpsProxy = defaultHttpProxy;
 const defaultNoProxy = "localhost,127.0.0.1,::1";
+const claudeEnvGroupFields = ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY"];
 const collapsedMessageCharLimit = 900;
 const collapsedMessageLineLimit = 2;
 const conversationFilters = {
@@ -136,14 +137,15 @@ const sessionRefreshEl = document.getElementById("session-refresh");
 const runSelectEl = document.getElementById("run-select");
 const runCreateFormEl = document.getElementById("run-create-form");
 const newRunGoalEl = document.getElementById("new-run-goal");
-const newRunModeEl = document.getElementById("new-run-mode");
-const newRunCollaborationEl = document.getElementById("new-run-collaboration");
-const newRunCollaborationHelpEl = document.getElementById("new-run-collaboration-help");
 const runExportEl = document.getElementById("run-export");
 const runImportEl = document.getElementById("run-import");
 const runExportLogsEl = document.getElementById("run-export-logs");
 const runImportFileEl = document.getElementById("run-import-file");
 const runArchiveStateEl = document.getElementById("run-archive-state");
+const ahaSettingsEl = document.getElementById("aha-settings");
+const settingsDialogEl = document.getElementById("settings-dialog");
+const closeSettingsEl = document.getElementById("close-settings");
+const settingsContentEl = document.getElementById("settings-content");
 const webRestartEl = document.getElementById("web-restart");
 const weixinConsoleEl = document.getElementById("weixin-console");
 const weixinConsolePopoverEl = document.getElementById("weixin-console-popover");
@@ -843,7 +845,6 @@ function renderSessionMenu() {
   runSelectEl.disabled = runActionInFlight || runSelectEl.options.length === 0;
   if (sessionRefreshEl) sessionRefreshEl.disabled = runActionInFlight;
   if (newRunGoalEl) newRunGoalEl.disabled = runActionInFlight;
-  if (newRunModeEl) newRunModeEl.disabled = runActionInFlight;
   const hasRun = Boolean(currentRunId);
   if (runExportEl) runExportEl.disabled = runActionInFlight || !hasRun;
   if (runImportEl) runImportEl.disabled = runActionInFlight;
@@ -1184,14 +1185,16 @@ async function createRun(goal, mode, options = {}) {
   if (!trimmedGoal) return;
   const selectedMode = String(mode || "research").trim() || "research";
   const collaborationMode = String(options.collaborationMode || "auto").trim() || "auto";
+  const createInitialTask = options.createInitialTask !== false;
   const body = {
     goal: trimmedGoal,
     mode: selectedMode,
-    backend: options.backend || "codex",
     collaboration_mode: collaborationMode,
-    dispatch: options.dispatch !== false,
-    task_titles: options.taskTitles || [trimmedGoal]
+    dispatch: createInitialTask && options.dispatch !== false,
+    create_initial_task: createInitialTask,
+    task_titles: createInitialTask ? (options.taskTitles || [trimmedGoal]) : []
   };
+  if (options.backend) body.backend = options.backend;
   if (options.workspaceId) body.workspace_id = options.workspaceId;
   if (options.workspacePath) body.workspace_path = options.workspacePath;
   if (options.proxyEnabled !== undefined) body.proxy_enabled = Boolean(options.proxyEnabled);
@@ -1415,6 +1418,74 @@ function initTaskCreateDialog() {
   });
 }
 
+function closeSettingsDialog() {
+  if (!settingsDialogEl) return;
+  if (typeof settingsDialogEl.close === "function" && settingsDialogEl.open) {
+    settingsDialogEl.close();
+  } else {
+    settingsDialogEl.removeAttribute("open");
+  }
+}
+
+function renderSettingsDialogContent() {
+  if (!settingsContentEl) return;
+  settingsContentEl.innerHTML = bootstrapConfigFormHtml({ mode: "settings", submitLabel: "Save Settings" });
+}
+
+async function openSettingsDialog() {
+  if (!settingsDialogEl) return;
+  if (!bootstrapData) await loadBootstrap();
+  renderSettingsDialogContent();
+  setSessionMenu(false);
+  closeMobileSheets();
+  closeMobileActionPanel();
+  try {
+    if (typeof settingsDialogEl.showModal === "function") {
+      if (!settingsDialogEl.open) settingsDialogEl.showModal();
+    } else {
+      settingsDialogEl.setAttribute("open", "");
+    }
+  } catch (_err) {
+    settingsDialogEl.setAttribute("open", "");
+  }
+}
+
+function initSettingsDialog() {
+  ahaSettingsEl?.addEventListener("click", event => {
+    event.stopPropagation();
+    void openSettingsDialog();
+  });
+  closeSettingsEl?.addEventListener("click", closeSettingsDialog);
+  settingsDialogEl?.addEventListener("click", event => {
+    if (event.target === settingsDialogEl) {
+      closeSettingsDialog();
+      return;
+    }
+    const addConfigRow = event.target instanceof Element ? event.target.closest("[data-bootstrap-add-row]") : null;
+    if (addConfigRow) {
+      event.preventDefault();
+      addBootstrapConfigRow(addConfigRow);
+      return;
+    }
+    const removeConfigRow = event.target instanceof Element ? event.target.closest("[data-bootstrap-remove-row]") : null;
+    if (removeConfigRow) {
+      event.preventDefault();
+      removeBootstrapConfigRow(removeConfigRow);
+    }
+  });
+  settingsDialogEl?.addEventListener("submit", event => {
+    const form = event.target instanceof Element ? event.target.closest("[data-bootstrap-config-form]") : null;
+    if (!form) return;
+    event.preventDefault();
+    saveBootstrapConfigForm(form);
+  });
+  settingsDialogEl?.addEventListener("input", event => {
+    const input = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!input?.matches("[data-bootstrap-env-name], [data-bootstrap-env-field]")) return;
+    syncBootstrapEnvActiveOptions(input.closest("[data-bootstrap-config-form]"));
+  });
+}
+
 const collaborationModeOptions = ["auto", "solo", "pair", "team"];
 const collaborationModeDescriptions = {
   auto: "AHA 会在能提速时自动组队，否则保持 solo。",
@@ -1458,18 +1529,6 @@ function syncCollaborationFields() {
     maxSubAgentsFieldEl.classList.toggle("hidden", !isAuto);
   }
   if (maxSubAgentsEl) maxSubAgentsEl.disabled = !isAuto;
-}
-
-function syncNewRunCollaborationHelp() {
-  syncCollaborationHelp(newRunCollaborationEl, newRunCollaborationHelpEl);
-}
-
-function syncBootstrapCollaborationHelp(form) {
-  if (!form) return;
-  syncCollaborationHelp(
-    form.querySelector("[data-bootstrap-collaboration-mode]"),
-    form.querySelector("[data-bootstrap-collaboration-help]")
-  );
 }
 
 function sidebarStorageKey(side) {
@@ -1840,11 +1899,7 @@ function initSessionControl() {
   });
   runCreateFormEl?.addEventListener("submit", async event => {
     event.preventDefault();
-    await createRun(newRunGoalEl?.value || "", newRunModeEl?.value || "research", {
-      collaborationMode: newRunCollaborationEl?.value || "auto",
-      workspaceId: selectedWorkspaceId(),
-      workspacePath: selectedWorkspacePath()
-    });
+    await createRun(newRunGoalEl?.value || "", "research", { createInitialTask: false });
   });
   document.addEventListener("click", event => {
     const target = event.target instanceof Element ? event.target : null;
@@ -2360,17 +2415,6 @@ function fillSelectedTaskProxyDefaults() {
   return applyProxyDefaultValues(selectedTaskHttpProxyEl, selectedTaskHttpsProxyEl, selectedTaskNoProxyEl, selectedTaskProxyEnabledEl);
 }
 
-function fillBootstrapProxyDefaults(input) {
-  const form = input?.closest?.("[data-bootstrap-run-form]");
-  if (!form) return false;
-  return applyProxyDefaultValues(
-    form.querySelector("[data-bootstrap-http-proxy]"),
-    form.querySelector("[data-bootstrap-https-proxy]"),
-    form.querySelector("[data-bootstrap-no-proxy]"),
-    form.querySelector("[data-bootstrap-proxy-enabled]")
-  );
-}
-
 function setCreateProxyDefaultsFromInputs() {
   const configured = Boolean(taskHttpProxyEl?.value.trim() || taskHttpsProxyEl?.value.trim());
   if (configured && taskProxyEnabledEl && !taskProxyEnabledEl.checked) taskProxyEnabledEl.checked = true;
@@ -2470,6 +2514,10 @@ function syncSupervisionModeFields(modeEl, maxRoundsFieldEl, askUserFieldEl) {
 function visibleTasks() {
   const tasks = statusData?.tasks || [];
   return showHiddenEl.checked ? tasks : tasks.filter(task => !task.hidden);
+}
+
+function runHasNoTasks() {
+  return Boolean(currentRunId) && (statusData?.tasks || []).length === 0;
 }
 
 function taskActivityMillis(task) {
@@ -3984,10 +4032,52 @@ async function loadBackends() {
   return payload;
 }
 
+function activeClaudeEnvGroup() {
+  const claude = bootstrapConfigData()?.claude || {};
+  const groups = bootstrapEnvGroups(claude.env);
+  if (!groups.length) return null;
+  const activeConfigured = Object.prototype.hasOwnProperty.call(claude, "env_active");
+  const active = configString(claude.env_active);
+  if (activeConfigured && !active) return null;
+  return groups.find((group, index) => bootstrapEnvGroupName(group, index) === active) || groups[0];
+}
+
+function activeClaudeEnvLabel() {
+  const group = activeClaudeEnvGroup();
+  if (!group) return "env not configured";
+  return activeClaudeEnvModelLabel();
+}
+
+function activeClaudeEnvModelLabel() {
+  const group = activeClaudeEnvGroup();
+  if (!group) return "Claude official";
+  return configString(group.ANTHROPIC_MODEL, "not configured");
+}
+
+function activeClaudeEnvConfigured() {
+  const group = activeClaudeEnvGroup();
+  if (!group) return false;
+  return claudeEnvGroupFields.some(key => Boolean(configString(group[key])));
+}
+
+function taskModelSelectionEnabled() {
+  return taskBackendEl.value !== "claude" || !activeClaudeEnvConfigured();
+}
+
 function renderModelOptions() {
+  const useModelSelect = taskModelSelectionEnabled();
   const previous = taskModelEl.value;
-  const models = backendModels.get(taskBackendEl.value) || [{ name: "", label: "default" }];
   taskModelEl.innerHTML = "";
+  if (!useModelSelect) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = activeClaudeEnvModelLabel();
+    taskModelEl.appendChild(opt);
+    taskModelEl.disabled = true;
+    return;
+  }
+  taskModelEl.disabled = false;
+  const models = backendModels.get(taskBackendEl.value) || [{ name: "", label: "default" }];
   for (const model of models) {
     const opt = document.createElement("option");
     opt.value = model.name;
@@ -5300,6 +5390,13 @@ function selectedWorkspaceLabel() {
   return option?.textContent || selectedWorkspacePath();
 }
 
+function taskBackendConfirmLabel(payload) {
+  if (payload.backend === "claude" && !taskModelSelectionEnabled()) {
+    return `claude / ${activeClaudeEnvLabel()}`;
+  }
+  return `${payload.backend || "default"} / ${payload.model || "default"}`;
+}
+
 function addTaskConfirmRows(payload) {
   const proxyConfigured = Boolean(payload.http_proxy || payload.https_proxy);
   const proxyLabel = payload.proxy_enabled
@@ -5312,7 +5409,7 @@ function addTaskConfirmRows(payload) {
     ["Title", payload.title],
     ["Description", payload.description || "-"],
     ["Workspace", selectedWorkspaceLabel() || payload.workspace_path || payload.workspace_id || "-"],
-    ["Backend", `${payload.backend || "default"} / ${payload.model || "default"}`],
+    ["Backend", taskBackendConfirmLabel(payload)],
     ["Sandbox", payload.sandbox || "-"],
     ["Approval", payload.approval || "-"],
     ["Collaboration", `${payload.collaboration_mode || "auto"} (${payload.max_sub_agents || 0})`],
@@ -5575,19 +5672,245 @@ function renderTimelineStatus(title, body, status, ts = "") {
   `;
 }
 
-function renderBootstrapWorkspaceOptions() {
-  const options = workspaceData.map((workspace, index) => `
-    <option value="${escapeHtml(workspace.path || "")}" data-workspace-id="${escapeHtml(workspace.id || "")}" ${index === 0 ? "selected" : ""}>
-      ${escapeHtml(workspace.label || workspace.name || workspace.path || "Workspace")}
-    </option>
-  `).join("");
-  const selected = workspaceData.length ? "" : " selected";
-  return `${options}<option value="__custom__"${selected}>Custom path...</option>`;
+function bootstrapConfigData() {
+  return bootstrapData?.config || {};
+}
+
+function bootstrapBackendOptions() {
+  return ["codex", "claude"];
+}
+
+function configString(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value);
+  return text || fallback;
+}
+
+function configListValues(value) {
+  if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+  return [];
+}
+
+function bootstrapRootRows(value) {
+  const values = configListValues(value);
+  const rows = values.length ? values : [""];
+  return rows.map(item => bootstrapConfigRowHtml("workspace_roots", { value: item })).join("");
+}
+
+function bootstrapEnvGroups(value) {
+  if (Array.isArray(value)) {
+    return value.filter(item => item && typeof item === "object" && !Array.isArray(item));
+  }
+  if (value && typeof value === "object") {
+    return [{
+      name: "default",
+      ANTHROPIC_BASE_URL: value.ANTHROPIC_BASE_URL || value.base_url || "",
+      ANTHROPIC_MODEL: value.ANTHROPIC_MODEL || value.model || "",
+      ANTHROPIC_API_KEY: value.ANTHROPIC_API_KEY || value.api_key || ""
+    }];
+  }
+  return [];
+}
+
+function bootstrapEnvGroupName(item, index) {
+  return configString(item?.name, `env-${index + 1}`);
+}
+
+function bootstrapEnvActiveOptions(value, active = "") {
+  const groups = bootstrapEnvGroups(value);
+  const names = groups.map((item, index) => bootstrapEnvGroupName(item, index));
+  const activeName = names.includes(configString(active)) ? configString(active) : "";
+  const official = `<option value="" ${activeName ? "" : "selected"}>Claude official (no env)</option>`;
+  return `${official}${names.map(name => `<option value="${escapeHtml(name)}" ${name === activeName ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}`;
+}
+
+function bootstrapEnvRows(value, active = "", options = {}) {
+  const groups = bootstrapEnvGroups(value);
+  const rows = groups.length ? groups : [{ name: "" }];
+  return rows.map((item, index) => bootstrapConfigRowHtml("claude.env", item, index, options)).join("");
+}
+
+function backendModelSelectOptions(backend, current) {
+  const models = backendModels.get(backend) || [{ name: "", label: "default" }];
+  const selected = configString(current);
+  return models.map(model => {
+    const name = configString(model.name);
+    const label = configString(model.label, name || "default");
+    return `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+function bootstrapConfigRowHtml(kind, data = {}, index = 0, options = {}) {
+  if (kind === "workspace_roots") {
+    return `
+      <div class="bootstrap-list-row" data-bootstrap-row="workspace_roots">
+        <input data-bootstrap-root-value placeholder="/path/to/projects" value="${escapeHtml(configString(data.value))}">
+        <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
+      </div>
+    `;
+  }
+  if (kind === "claude.env") {
+    const name = configString(data.name);
+    const namePlaceholder = index === 0 ? "default" : `env-${index + 1}`;
+    const apiKeyValue = options.maskSecrets ? "" : configString(data.ANTHROPIC_API_KEY);
+    const apiKeyPlaceholder = options.maskSecrets && configString(data.ANTHROPIC_API_KEY)
+      ? "Configured; leave blank to keep"
+      : "";
+    return `
+      <div class="bootstrap-env-group" data-bootstrap-row="claude.env">
+        <div class="bootstrap-env-group-head">
+          <strong>Env group</strong>
+          <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
+        </div>
+        <div class="bootstrap-env-fields">
+          <label class="field-label">
+            <span>Name</span>
+            <input data-bootstrap-env-name placeholder="${escapeHtml(namePlaceholder)}" value="${escapeHtml(name)}">
+          </label>
+          <label class="field-label">
+            <span>Base URL</span>
+            <input data-bootstrap-env-field="ANTHROPIC_BASE_URL" placeholder="https://api.anthropic.com" value="${escapeHtml(configString(data.ANTHROPIC_BASE_URL))}">
+          </label>
+          <label class="field-label">
+            <span>Model</span>
+            <input data-bootstrap-env-field="ANTHROPIC_MODEL" placeholder="claude-sonnet-4-5" value="${escapeHtml(configString(data.ANTHROPIC_MODEL))}">
+          </label>
+          <label class="field-label">
+            <span>API key</span>
+            <input data-bootstrap-env-field="ANTHROPIC_API_KEY" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
+          </label>
+        </div>
+      </div>
+    `;
+  }
+  return "";
+}
+
+function bootstrapConfigFormHtml(options = {}) {
+  const mode = configString(options.mode, "init");
+  const submitLabel = configString(options.submitLabel, mode === "settings" ? "Save Settings" : "Save AHA Config");
+  const cfg = bootstrapConfigData();
+  const codex = cfg.codex || {};
+  const claude = cfg.claude || {};
+  const backend = bootstrapBackendOptions().includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
+  const maskSecrets = mode === "settings";
+  return `
+    <form class="bootstrap-form" data-bootstrap-config-form data-bootstrap-config-mode="${escapeHtml(mode)}">
+      <details class="bootstrap-config-section" open>
+        <summary>Core Settings</summary>
+        <div class="bootstrap-config-stack">
+          <label class="field-label">
+            <span>Default backend</span>
+            <select data-bootstrap-config-field="backend">${selectOptions(bootstrapBackendOptions(), backend)}</select>
+            <div class="field-help">Backend used for new tasks when none is specified.</div>
+          </label>
+          <label class="field-label">
+            <span>Task concurrency</span>
+            <input data-bootstrap-config-field="default_parallel" type="number" min="1" step="1" value="${escapeHtml(configString(cfg.default_parallel, "10"))}">
+            <div class="field-help">Default number of tasks AHA may run in parallel.</div>
+          </label>
+        </div>
+      </details>
+      <details class="bootstrap-config-section" open>
+        <summary>Workspaces</summary>
+        <label class="field-label">
+          <span>Workspace roots</span>
+          <div class="bootstrap-config-list" data-bootstrap-config-list="workspace_roots">
+            ${bootstrapRootRows(cfg.workspace_roots)}
+            <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="workspace_roots">Add root</button>
+          </div>
+          <div class="field-help">Project roots used for dashboard workspace discovery.</div>
+        </label>
+        <label class="field-label">
+          <span>Webgame workspace</span>
+          <input data-bootstrap-config-field="webgame_workspace" value="${escapeHtml(configString(cfg.webgame_workspace))}">
+          <div class="field-help">Optional workspace for web game static assets.</div>
+        </label>
+      </details>
+      <details class="bootstrap-config-section" open>
+        <summary>Codex defaults</summary>
+        <div class="bootstrap-config-grid">
+          <label class="field-label">
+            <span>Bin</span>
+            <input data-bootstrap-config-field="codex.bin" value="${escapeHtml(configString(codex.bin, "codex"))}">
+            <div class="field-help">Codex CLI executable name or path.</div>
+          </label>
+          <label class="field-label">
+            <span>Model</span>
+            <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codex.model)}</select>
+            <div class="field-help">Default Codex model.</div>
+          </label>
+        </div>
+      </details>
+      <details class="bootstrap-config-section">
+        <summary>Claude defaults</summary>
+        <div class="bootstrap-config-grid">
+          <label class="field-label">
+            <span>Bin</span>
+            <input data-bootstrap-config-field="claude.bin" value="${escapeHtml(configString(claude.bin, "claude"))}">
+            <div class="field-help">Claude CLI executable name or path.</div>
+          </label>
+          <label class="field-label">
+            <span>Active env group</span>
+            <select data-bootstrap-config-field="claude.env_active">${bootstrapEnvActiveOptions(claude.env, claude.env_active)}</select>
+            <div class="field-help">Claude env group to use.</div>
+          </label>
+        </div>
+        <label class="field-label">
+          <span>Env groups</span>
+          <div class="bootstrap-config-list" data-bootstrap-config-list="claude.env">
+            ${bootstrapEnvRows(claude.env, claude.env_active, { maskSecrets })}
+            <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="claude.env">Add env group</button>
+          </div>
+          <div class="field-help">Each group has fixed Anthropic fields; select the group AHA should use.</div>
+        </label>
+      </details>
+      <div class="bootstrap-form-actions">
+        <button type="submit">${escapeHtml(submitLabel)}</button>
+        <div data-bootstrap-config-state class="meta"></div>
+      </div>
+    </form>
+  `;
+}
+
+function renderBootstrapConfigState(force = false) {
+  document.body.classList.add("empty-run");
+  currentRunId = "";
+  statusData = null;
+  selectedTaskId = null;
+  backendStatusData = null;
+  if (eventSocket) closeEventWebSocket();
+  renderSessionMenu();
+  renderSessionSummary();
+  if (summaryEl) summaryEl.textContent = "Initialize AHA";
+  renderTaskList();
+  renderSelectedHeader();
+  if (selectedTitleEl) selectedTitleEl.textContent = "AHA config";
+  renderAgents();
+  renderBackendStatus();
+  renderPendingMessages();
+  conversationFiltersEl?.classList.add("hidden");
+  if (!force && panelEl.querySelector("[data-bootstrap-config-form]")) return;
+
+  panelEl.innerHTML = `
+    <div class="bootstrap-panel bootstrap-config-panel">
+      <div class="bootstrap-head">
+        <h3>Initialize AHA</h3>
+        <code>${escapeHtml(bootstrapData?.aha_home || "")}/config.json</code>
+      </div>
+      ${bootstrapConfigFormHtml({ mode: "init", submitLabel: "Save AHA Config" })}
+    </div>
+  `;
 }
 
 function renderFirstRunState(force = false) {
   if (bootstrapError) {
     renderBootstrapError(bootstrapError);
+    return;
+  }
+  if (!bootstrapData?.initialized) {
+    renderBootstrapConfigState(force);
     return;
   }
   document.body.classList.add("empty-run");
@@ -5608,8 +5931,6 @@ function renderFirstRunState(force = false) {
   conversationFiltersEl?.classList.add("hidden");
   if (!force && panelEl.querySelector("[data-bootstrap-run-form]")) return;
 
-  const defaultWorkspacePath = bootstrapData?.default_workspace_path || "";
-  const customHidden = workspaceData.length ? " hidden" : "";
   panelEl.innerHTML = `
     <div class="bootstrap-panel">
       <div class="bootstrap-head">
@@ -5618,54 +5939,13 @@ function renderFirstRunState(force = false) {
       </div>
       <form class="bootstrap-form" data-bootstrap-run-form>
         <label class="field-label">
-          <span>Workspace</span>
-          <select data-bootstrap-workspace-select>${renderBootstrapWorkspaceOptions()}</select>
+          <span>Run name</span>
+          <input data-bootstrap-run-name placeholder="Name this run" autofocus>
         </label>
-        <input data-bootstrap-workspace-custom class="${customHidden}" placeholder="Workspace path" value="${escapeHtml(workspaceData.length ? "" : defaultWorkspacePath)}">
-        <label class="field-label">
-          <span>Run goal</span>
-          <input data-bootstrap-run-goal placeholder="What should AHA work on?" autofocus>
-        </label>
-        <label class="field-label">
-          <span>Mode</span>
-          <select data-bootstrap-run-mode>
-            <option value="research">research</option>
-            <option value="implementation">implementation</option>
-          </select>
-        </label>
-        <label class="field-label">
-          <span>Collaboration</span>
-          <select data-bootstrap-collaboration-mode>
-            ${renderCollaborationModeOptions("auto")}
-          </select>
-          <div data-bootstrap-collaboration-help class="collaboration-help"></div>
-        </label>
-        <details class="bootstrap-proxy">
-          <summary>Proxy</summary>
-          <div class="proxy-form">
-            <label class="field-label">
-              <span>HTTP proxy</span>
-              <input data-bootstrap-http-proxy placeholder="http://127.0.0.1:7890">
-            </label>
-            <label class="field-label">
-              <span>HTTPS proxy</span>
-              <input data-bootstrap-https-proxy placeholder="http://127.0.0.1:7890">
-            </label>
-            <label class="field-label">
-              <span>NO_PROXY</span>
-              <input data-bootstrap-no-proxy placeholder="localhost,127.0.0.1,::1">
-            </label>
-            <label class="proxy-toggle">
-              <input data-bootstrap-proxy-enabled type="checkbox">
-              <span>Enable proxy for initial agents</span>
-            </label>
-          </div>
-        </details>
-        <button type="submit">Start Run and Initial Task</button>
+        <button type="submit">Create Run</button>
       </form>
     </div>
   `;
-  syncBootstrapCollaborationHelp(panelEl.querySelector("[data-bootstrap-run-form]"));
 }
 
 function renderBootstrapError(error) {
@@ -5690,7 +5970,7 @@ function renderBootstrapError(error) {
         <h3>Backend Not Ready</h3>
         <code>${escapeHtml(location.origin)}</code>
       </div>
-      <p class="meta">前端已经加载，但当前 Web 后端不支持新的 bootstrap API。请重启后端或确认浏览器连接的是同一份 AHA 代码。</p>
+      <p class="meta">The frontend loaded, but this Web backend does not support the bootstrap API. Restart the backend or confirm the browser is connected to this AHA checkout.</p>
       <pre>${escapeHtml(String(error || ""))}</pre>
     </div>
   `;
@@ -5822,57 +6102,164 @@ function renderWeixinConsole() {
   `;
 }
 
-function bootstrapWorkspaceSelection(form) {
-  const select = form.querySelector("[data-bootstrap-workspace-select]");
-  const custom = form.querySelector("[data-bootstrap-workspace-custom]");
-  const selectedOption = select?.options?.[select.selectedIndex];
-  const customSelected = select?.value === "__custom__";
-  return {
-    workspaceId: customSelected ? "" : (selectedOption?.dataset.workspaceId || ""),
-    workspacePath: customSelected ? String(custom?.value || "").trim() : String(select?.value || "").trim(),
-    customSelected
-  };
+function bootstrapConfigField(form, name) {
+  return form.querySelector(`[data-bootstrap-config-field="${name}"]`);
+}
+
+function bootstrapConfigText(form, name) {
+  return String(bootstrapConfigField(form, name)?.value || "").trim();
+}
+
+function bootstrapConfigRoots(form) {
+  return [...form.querySelectorAll("[data-bootstrap-root-value]")]
+    .map(input => String(input.value || ""))
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function bootstrapConfigMode(form) {
+  return String(form?.dataset?.bootstrapConfigMode || "init");
+}
+
+function previousBootstrapEnvGroup(index, name) {
+  const groups = bootstrapEnvGroups(bootstrapConfigData()?.claude?.env);
+  const named = groups.find(group => configString(group.name) === name);
+  return named || groups[index] || {};
+}
+
+function bootstrapConfigEnvGroups(form) {
+  const preserveSecrets = bootstrapConfigMode(form) === "settings";
+  return [...form.querySelectorAll("[data-bootstrap-row='claude.env']")]
+    .map((row, index) => {
+      const rawName = String(row.querySelector("[data-bootstrap-env-name]")?.value || "").trim();
+      const group = {
+        name: rawName || `env-${index + 1}`
+      };
+      for (const key of claudeEnvGroupFields) {
+        group[key] = String(row.querySelector(`[data-bootstrap-env-field="${key}"]`)?.value || "").trim();
+      }
+      const hasNonSecretValue = Boolean(rawName || group.ANTHROPIC_BASE_URL || group.ANTHROPIC_MODEL);
+      if (preserveSecrets && !group.ANTHROPIC_API_KEY && hasNonSecretValue) {
+        group.ANTHROPIC_API_KEY = configString(previousBootstrapEnvGroup(index, group.name).ANTHROPIC_API_KEY);
+      }
+      return {
+        group,
+        hasValue: Boolean(hasNonSecretValue || group.ANTHROPIC_API_KEY)
+      };
+    })
+    .filter(item => item.hasValue)
+    .map(item => item.group);
+}
+
+function bootstrapConfigEnvGroupNames(form) {
+  return bootstrapConfigEnvGroups(form).map((group, index) => bootstrapEnvGroupName(group, index));
+}
+
+function bootstrapConfigActiveEnvGroup(form) {
+  const names = bootstrapConfigEnvGroupNames(form);
+  const selected = bootstrapConfigText(form, "claude.env_active");
+  if (!selected) return "";
+  if (!names.length) return "";
+  return names.includes(selected) ? selected : names[0];
+}
+
+function syncBootstrapEnvActiveOptions(form) {
+  const select = bootstrapConfigField(form, "claude.env_active");
+  if (!select) return;
+  const previous = String(select.value || "");
+  const names = bootstrapConfigEnvGroupNames(form);
+  const active = names.includes(previous) ? previous : "";
+  const official = `<option value="" ${active ? "" : "selected"}>Claude official (no env)</option>`;
+  select.innerHTML = `${official}${names.map(name => `<option value="${escapeHtml(name)}" ${name === active ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}`;
+  select.value = active;
+}
+
+function addBootstrapConfigRow(button) {
+  const kind = button?.dataset?.bootstrapAddRow || "";
+  if (!kind) return;
+  const list = button.closest("[data-bootstrap-config-list]");
+  const index = list ? list.querySelectorAll("[data-bootstrap-row]").length : 0;
+  button.insertAdjacentHTML("beforebegin", bootstrapConfigRowHtml(kind, {}, index));
+  syncBootstrapEnvActiveOptions(button.closest("[data-bootstrap-config-form]"));
+}
+
+function removeBootstrapConfigRow(button) {
+  const row = button.closest("[data-bootstrap-row]");
+  const list = row?.closest("[data-bootstrap-config-list]");
+  if (!row || !list) return;
+  const rows = [...list.querySelectorAll("[data-bootstrap-row]")];
+  if (rows.length <= 1) {
+    row.querySelectorAll("input").forEach(input => { input.value = ""; });
+    syncBootstrapEnvActiveOptions(list.closest("[data-bootstrap-config-form]"));
+    return;
+  }
+  row.remove();
+  syncBootstrapEnvActiveOptions(list.closest("[data-bootstrap-config-form]"));
+}
+
+async function saveBootstrapConfigForm(form) {
+  const submit = form.querySelector('button[type="submit"]');
+  const state = form.querySelector("[data-bootstrap-config-state]");
+  const mode = bootstrapConfigMode(form);
+  if (submit) submit.disabled = true;
+  if (state) state.textContent = "Saving...";
+  try {
+    const body = {
+      backend: bootstrapConfigText(form, "backend") || "codex",
+      default_parallel: Number(bootstrapConfigText(form, "default_parallel") || 10),
+      workspace_roots: bootstrapConfigRoots(form),
+      webgame_workspace: bootstrapConfigText(form, "webgame_workspace"),
+      codex: {
+        bin: bootstrapConfigText(form, "codex.bin") || "codex",
+        model: bootstrapConfigText(form, "codex.model"),
+        sandbox: "auto",
+        approval: "never",
+        json: true,
+        session_policy: "sticky"
+      },
+      claude: {
+        bin: bootstrapConfigText(form, "claude.bin") || "claude",
+        sandbox: "auto",
+        permission_mode: "",
+        session_policy: "sticky",
+        env_active: bootstrapConfigActiveEnvGroup(form),
+        env: bootstrapConfigEnvGroups(form)
+      }
+    };
+    if (mode === "settings") body.force = true;
+    const payload = await fetchJson("/api/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }, mode === "settings" ? "Failed to save settings" : "Failed to initialize AHA");
+    applyBootstrapPayload(payload);
+    if (state) state.textContent = mode === "settings" ? "Saved." : "";
+    if (mode === "settings") return;
+    if (currentRunId) {
+      await loadStatus({ forceAgents: true });
+    } else {
+      renderFirstRunState(true);
+    }
+  } catch (err) {
+    const message = err?.message || String(err);
+    if (state) state.textContent = message;
+    else alert(message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
 }
 
 async function createRunFromBootstrapForm(form) {
-  const goalEl = form.querySelector("[data-bootstrap-run-goal]");
-  const modeEl = form.querySelector("[data-bootstrap-run-mode]");
-  const collaborationEl = form.querySelector("[data-bootstrap-collaboration-mode]");
-  const proxyEnabledEl = form.querySelector("[data-bootstrap-proxy-enabled]");
-  const httpProxyEl = form.querySelector("[data-bootstrap-http-proxy]");
-  const httpsProxyEl = form.querySelector("[data-bootstrap-https-proxy]");
-  const noProxyEl = form.querySelector("[data-bootstrap-no-proxy]");
+  const goalEl = form.querySelector("[data-bootstrap-run-name]");
   const submit = form.querySelector('button[type="submit"]');
   const goal = String(goalEl?.value || "").trim();
   if (!goal) {
     goalEl?.focus();
     return;
   }
-  let { workspaceId, workspacePath, customSelected } = bootstrapWorkspaceSelection(form);
   if (submit) submit.disabled = true;
   try {
-    if (customSelected && workspacePath) {
-      const payload = await fetchJson("/api/workspaces", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: workspacePath, name: pathName(workspacePath) })
-      }, "Failed to add workspace");
-      workspaceId = payload.workspace?.id || "";
-      workspacePath = payload.workspace?.path || workspacePath;
-      await loadWorkspaces().catch(() => {});
-    }
-    const httpProxy = String(httpProxyEl?.value || "").trim();
-    const httpsProxy = String(httpsProxyEl?.value || "").trim();
-    const proxyEnabled = Boolean(proxyEnabledEl?.checked || httpProxy || httpsProxy);
-    await createRun(goal, modeEl?.value || "research", {
-      collaborationMode: collaborationEl?.value || "auto",
-      workspaceId,
-      workspacePath,
-      proxyEnabled,
-      httpProxy,
-      httpsProxy,
-      noProxy: proxyEnabled ? String(noProxyEl?.value || "").trim() : ""
-    });
+    await createRun(goal, "research", { createInitialTask: false });
   } catch (err) {
     alert(err?.message || String(err));
   } finally {
@@ -5888,7 +6275,15 @@ function renderPanel(options = {}) {
   }
   const task = selectedTask();
   if (!task) {
-    panelEl.innerHTML = '<div class="empty">No task selected.</div>';
+    panelEl.innerHTML = runHasNoTasks()
+      ? `
+        <div class="empty first-task-empty">
+          <strong>No tasks yet</strong>
+          <span>Create the first task for this run.</span>
+          <button type="button" data-open-first-task>Create first task</button>
+        </div>
+      `
+      : '<div class="empty">No task selected.</div>';
     return;
   }
   if (activeTab === "conversation") {
@@ -5990,7 +6385,6 @@ taskFormEl?.addEventListener("submit", async event => {
     title,
     description,
     backend: taskBackendEl.value,
-    model: taskModelEl.value || null,
     sandbox: taskSandboxEl.value,
     approval: taskApprovalEl.value,
     proxy_enabled: createProxyEnabled,
@@ -6006,6 +6400,7 @@ taskFormEl?.addEventListener("submit", async event => {
     supervision,
     dispatch: true
   };
+  if (taskModelSelectionEnabled()) payload.model = taskModelEl.value || null;
   const reopenCreateDialog = Boolean(taskCreateDialogEl?.open);
   if (reopenCreateDialog) closeTaskCreateDialog();
   const confirmed = await confirmAddTask(payload);
@@ -6201,35 +6596,41 @@ panelEl.addEventListener("scroll", () => {
   }
 });
 panelEl.addEventListener("submit", event => {
-  const form = event.target instanceof Element ? event.target.closest("[data-bootstrap-run-form]") : null;
+  const target = event.target instanceof Element ? event.target : null;
+  const configForm = target?.closest("[data-bootstrap-config-form]");
+  if (configForm) {
+    event.preventDefault();
+    saveBootstrapConfigForm(configForm);
+    return;
+  }
+  const form = target?.closest("[data-bootstrap-run-form]");
   if (!form) return;
   event.preventDefault();
   createRunFromBootstrapForm(form);
 });
-panelEl.addEventListener("change", event => {
-  const select = event.target instanceof HTMLSelectElement ? event.target : null;
-  if (!select) return;
-  const form = select.closest("[data-bootstrap-run-form]");
-  if (select?.matches("[data-bootstrap-collaboration-mode]")) {
-    syncBootstrapCollaborationHelp(form);
-    return;
-  }
-  if (!select?.matches("[data-bootstrap-workspace-select]")) return;
-  const custom = form?.querySelector("[data-bootstrap-workspace-custom]");
-  const isCustom = select.value === "__custom__";
-  custom?.classList.toggle("hidden", !isCustom);
-  if (isCustom) custom?.focus();
-});
-panelEl.addEventListener("focusin", event => {
+panelEl.addEventListener("input", event => {
   const input = event.target instanceof HTMLInputElement ? event.target : null;
-  if (input?.matches("[data-bootstrap-http-proxy], [data-bootstrap-https-proxy], [data-bootstrap-no-proxy]")) {
-    fillBootstrapProxyDefaults(input);
-  }
+  if (!input?.matches("[data-bootstrap-env-name], [data-bootstrap-env-field]")) return;
+  syncBootstrapEnvActiveOptions(input.closest("[data-bootstrap-config-form]"));
 });
 panelEl.addEventListener("click", event => {
-  const proxyInput = event.target instanceof HTMLInputElement ? event.target : null;
-  if (proxyInput?.matches("[data-bootstrap-http-proxy], [data-bootstrap-https-proxy], [data-bootstrap-no-proxy]")) {
-    fillBootstrapProxyDefaults(proxyInput);
+  const firstTaskButton = event.target instanceof Element ? event.target.closest("[data-open-first-task]") : null;
+  if (firstTaskButton) {
+    event.preventDefault();
+    openTaskCreateDialog();
+    return;
+  }
+  const addConfigRow = event.target instanceof Element ? event.target.closest("[data-bootstrap-add-row]") : null;
+  if (addConfigRow) {
+    event.preventDefault();
+    addBootstrapConfigRow(addConfigRow);
+    return;
+  }
+  const removeConfigRow = event.target instanceof Element ? event.target.closest("[data-bootstrap-remove-row]") : null;
+  if (removeConfigRow) {
+    event.preventDefault();
+    removeBootstrapConfigRow(removeConfigRow);
+    return;
   }
   const copyButton = event.target instanceof Element ? event.target.closest("[data-copy-message-key]") : null;
   if (copyButton) {
@@ -6353,7 +6754,6 @@ agentTargetEl.addEventListener("change", async () => {
 });
 taskBackendEl.addEventListener("change", renderModelOptions);
 collaborationModeEl?.addEventListener("change", syncCollaborationFields);
-newRunCollaborationEl?.addEventListener("change", syncNewRunCollaborationHelp);
 taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeFields);
 [taskHttpProxyEl, taskHttpsProxyEl].forEach(input => input?.addEventListener("input", setCreateProxyDefaultsFromInputs));
 [taskHttpProxyEl, taskHttpsProxyEl, taskNoProxyEl].forEach(input => {
@@ -6390,10 +6790,10 @@ window.addEventListener("online", () => {
 });
 
 initTaskCreateDialog();
+initSettingsDialog();
 if (taskNoProxyEl && !taskNoProxyEl.value) taskNoProxyEl.value = defaultNoProxy;
 renderAskUserGateControls(taskSupervisionAskUserGatesEl, defaultAskUserGates());
 syncCollaborationFields();
-syncNewRunCollaborationHelp();
 syncCreateTaskSupervisionModeFields();
 syncTaskContextFields();
 initDesktopSidebars();

@@ -278,9 +278,10 @@ def create_plan(
     https_proxy: str | None = None,
     no_proxy: str | None = None,
     collaboration_mode: str | None = None,
+    create_default_tasks: bool = True,
 ) -> dict:
     run_id = new_run_id()
-    titles = task_titles or default_tasks(goal, agents, mode)
+    titles = task_titles or (default_tasks(goal, agents, mode) if create_default_tasks else [])
     created = utc_now()
     http_proxy = normalize_proxy_value(http_proxy)
     https_proxy = normalize_proxy_value(https_proxy)

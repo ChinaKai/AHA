@@ -34,9 +34,147 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(body["aha_home"], str(root))
         self.assertEqual(body["aha_version"], "20260527.057e500")
         self.assertFalse(body["initialized"])
+        self.assertEqual(body["config"]["backend"], "stub")
+        self.assertEqual(body["config"]["default_parallel"], 10)
+        self.assertEqual(body["config_backend_options"], ["codex", "claude"])
         self.assertIn("default_workspace_path", body)
         self.assertEqual(body["default_run_id"], "")
         self.assertEqual(body["runs"], [])
+
+    def test_api_bootstrap_can_initialize_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            workspace_root = Path(tmp) / "projects"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "default_parallel": 2,
+                        "default_mode": "implementation",
+                        "workspace_roots": [str(workspace_root)],
+                        "codex": {
+                            "model": "gpt-5.5",
+                            "sandbox": "workspace-write",
+                            "approval": "never",
+                            "json": True,
+                        },
+                        "claude": {
+                            "env_active": "work",
+                            "env": [
+                                {
+                                    "name": "work",
+                                    "ANTHROPIC_BASE_URL": "https://claude.test",
+                                    "ANTHROPIC_MODEL": "claude-sonnet",
+                                    "ANTHROPIC_API_KEY": "test-key",
+                                }
+                            ],
+                        },
+                    },
+                )
+            )
+            body = json_response_body(response)
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(body["initialized"])
+        self.assertEqual(cfg["backend"], "codex")
+        self.assertEqual(cfg["default_parallel"], 2)
+        self.assertEqual(cfg["default_mode"], "implementation")
+        self.assertEqual(cfg["workspace_roots"], [str(workspace_root)])
+        self.assertEqual(cfg["codex"]["model"], "gpt-5.5")
+        self.assertEqual(cfg["codex"]["sandbox"], "workspace-write")
+        self.assertNotIn("model", cfg["claude"])
+        self.assertEqual(cfg["claude"]["env_active"], "work")
+        self.assertEqual(
+            cfg["claude"]["env"],
+            [
+                {
+                    "name": "work",
+                    "ANTHROPIC_BASE_URL": "https://claude.test",
+                    "ANTHROPIC_MODEL": "claude-sonnet",
+                    "ANTHROPIC_API_KEY": "test-key",
+                }
+            ],
+        )
+
+    def test_api_bootstrap_rejects_invalid_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(root, "", "/api/bootstrap", method="POST", payload={"backend": "bogus"})
+            )
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertFalse((root / "config.json").exists())
+
+    def test_api_bootstrap_can_select_official_claude_without_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "claude",
+                        "claude": {
+                            "env_active": "",
+                            "env": [
+                                {
+                                    "name": "work",
+                                    "ANTHROPIC_BASE_URL": "https://claude.test",
+                                    "ANTHROPIC_MODEL": "claude-sonnet",
+                                    "ANTHROPIC_API_KEY": "test-key",
+                                }
+                            ],
+                        },
+                    },
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertIsNone(cfg["claude"]["env_active"])
+        self.assertEqual(cfg["claude"]["env"][0]["name"], "work")
+
+    def test_api_bootstrap_force_updates_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(json.dumps({"backend": "codex", "default_parallel": 3}), encoding="utf-8")
+            blocked = asyncio.run(
+                fetch_ui_response(root, "", "/api/bootstrap", method="POST", payload={"backend": "claude"})
+            )
+            updated = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={"backend": "claude", "default_parallel": 10, "force": True},
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(blocked.startswith(b"HTTP/1.1 409 Conflict"))
+        self.assertTrue(updated.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(cfg["backend"], "claude")
+        self.assertEqual(cfg["default_parallel"], 10)
+
+    def test_api_bootstrap_rejects_non_ui_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(root, "", "/api/bootstrap", method="POST", payload={"backend": "command"})
+            )
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertFalse((root / "config.json").exists())
 
     def test_api_workspace_registration_can_create_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,6 +202,23 @@ class WebRunApiTests(unittest.TestCase):
         self.assertTrue(create_response.startswith(b"HTTP/1.1 201 Created"))
         self.assertEqual(plan["tasks"][0]["workspace_id"], "ws-001")
         self.assertEqual(plan["tasks"][0]["workspace_path"], str(workspace))
+
+    def test_api_run_creation_uses_config_backend_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(
+                json.dumps({"backend": "claude", "claude": {"model": "sonnet"}}),
+                encoding="utf-8",
+            )
+            create_response = asyncio.run(
+                fetch_ui_response(root, "", "/api/runs", method="POST", payload={"goal": "Use configured backend"})
+            )
+            create_body = json_response_body(create_response)
+            plan = read_json(root / "runs" / create_body["run"]["id"] / "plan.json")
+
+        self.assertTrue(create_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(plan["tasks"][0]["preferred_backend"], "claude")
 
     def test_api_run_creation_accepts_proxy_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,6 +287,34 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
         self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
         self.assertTrue(start_backend.call_args.kwargs["from_start"])
+
+    def test_api_run_creation_can_skip_initial_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            with mock.patch("aha_cli.web.task_runtime.start_backend") as start_backend:
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        "",
+                        "/api/runs",
+                        method="POST",
+                        payload={
+                            "goal": "Named run",
+                            "create_initial_task": False,
+                            "task_titles": ["Should be ignored"],
+                            "dispatch": True,
+                        },
+                    )
+                )
+                body = json_response_body(response)
+            run_id = body["run"]["id"]
+            plan = read_json(root / "runs" / run_id / "plan.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(plan["goal"], "Named run")
+        self.assertEqual(plan["tasks"], [])
+        start_backend.assert_not_called()
 
     def test_api_runs_lists_and_creates_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

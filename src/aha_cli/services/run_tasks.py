@@ -167,7 +167,7 @@ def run_pending_tasks(root: Path, run_id: str, args, codex_command_builder, clau
             raise SystemExit("backend=command requires --runner-command or config runner_command")
     else:
         raise SystemExit(f"Unknown backend: {backend}")
-    parallel = args.parallel or int(cfg.get("default_parallel", 4))
+    parallel = args.parallel or int(cfg.get("default_parallel", 10))
 
     runnable_tasks = [task for task in plan["tasks"] if not task.get("deleted_at")]
     pending = [task["id"] for task in runnable_tasks if task["status"] in {"pending", "failed"}]

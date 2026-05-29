@@ -4,18 +4,30 @@
 
 Web is the core entry point. CLI remains useful for automation, debugging, and local scripting.
 
-The browser UI now has two operating modes:
+The browser UI now has three operating modes:
 
 ```text
 First Run bootstrap
-  create an initial run
-  optionally register a workspace
-  choose backend/model/sandbox/approval
-  set initial task proxy defaults
+  create .aha/config.json
+  Core Settings: Default backend (codex/claude) and Task concurrency
+  set workspace roots, Codex bin/model defaults, and Claude bin
+  add named Claude env groups with fixed Anthropic fields or choose Claude official with no env
+  exclude runner command, default mode, and context window overrides from init UI
+
+First Run
+  create an initial run by Run name only
+  leave task creation to the New Task flow
+
+Settings
+  edit the existing .aha/config.json from the Run menu
+  reuse the bootstrap config form for future default changes
+  keep Run/Task-specific fields outside global AHA config
 
 Run workspace
   switch between local runs
   create and manage tasks
+  show the active Claude env group's ANTHROPIC_MODEL when env is configured
+  fall back to official Claude model choices when no Claude env is configured
   chat with task agents
   inspect results, logs, context, sessions, and backend runtime
   import or export run archives

@@ -123,6 +123,17 @@ class CliCoreTests(unittest.TestCase):
                 self.assertTrue((home / "config.json").exists())
                 self.assertFalse((cwd / ".aha").exists())
 
+    def test_ui_does_not_initialize_config_before_bootstrap_save(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            run_ui = mock.AsyncMock()
+            with mock.patch.dict(os.environ, {"AHA_HOME": str(home)}), mock.patch("aha_cli.cli.run_ui_server", run_ui):
+                code, _ = self.run_cli("ui", "--host", "127.0.0.1", "--port", "0")
+
+                self.assertEqual(code, 0)
+                self.assertFalse((home / "config.json").exists())
+                run_ui.assert_awaited_once()
+
     def test_init_defaults_to_user_aha_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp) / "workspace"
@@ -188,7 +199,7 @@ class CliCoreTests(unittest.TestCase):
                 code, _ = self.run_cli("--home", str(home), "ui", "--host", "127.0.0.1", "--port", "0")
 
             self.assertEqual(code, 0)
-            self.assertTrue((home / "config.json").exists())
+            self.assertFalse((home / "config.json").exists())
             self.assertEqual(calls, [(home, "", "127.0.0.1", 0, 1000)])
 
     def test_empty_command_defaults_to_ui(self) -> None:
@@ -202,7 +213,7 @@ class CliCoreTests(unittest.TestCase):
                 code, _ = self.run_cli("--home", str(home))
 
             self.assertEqual(code, 0)
-            self.assertTrue((home / "config.json").exists())
+            self.assertFalse((home / "config.json").exists())
             self.assertEqual(calls, [(home, "", "0.0.0.0", 8766, 1000)])
 
     def test_explicit_tasks_are_used(self) -> None:

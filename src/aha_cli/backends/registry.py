@@ -14,6 +14,11 @@ MODEL_OPTIONS = [
 ]
 
 DEFAULT_MODEL_OPTIONS = [DEFAULT_MODEL_OPTION]
+CLAUDE_MODEL_OPTIONS = [
+    {"name": "claude-opus-4-8", "label": "Claude Opus 4.8"},
+    {"name": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
+    {"name": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+]
 CODEX_AGENT_COMMANDS = [
     {"scope": "agent", "name": "/agent <command>", "insert": "/agent ", "desc": "Route a command to the selected agent."},
 ]
@@ -26,7 +31,7 @@ CLAUDE_AGENT_COMMANDS = [
 
 BACKENDS = {
     "codex": {"name": "codex", "kind": "agent", "models": MODEL_OPTIONS, "commands": CODEX_AGENT_COMMANDS, "native_commands": []},
-    "claude": {"name": "claude", "kind": "agent", "models": DEFAULT_MODEL_OPTIONS, "commands": CLAUDE_AGENT_COMMANDS, "native_commands": []},
+    "claude": {"name": "claude", "kind": "agent", "models": CLAUDE_MODEL_OPTIONS, "commands": CLAUDE_AGENT_COMMANDS, "native_commands": []},
     "stub": {"name": "stub", "kind": "agent", "models": DEFAULT_MODEL_OPTIONS, "commands": STUB_AGENT_COMMANDS, "native_commands": []},
     "command": {"name": "command", "kind": "runner", "label": "Shell command runner", "models": DEFAULT_MODEL_OPTIONS},
 }

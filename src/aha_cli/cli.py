@@ -90,7 +90,7 @@ def command_aha_home(args: argparse.Namespace) -> Path:
 
 def ensure_aha_home(root: Path) -> None:
     if not config_path(root).exists():
-        initialize_aha_home(root, argparse.Namespace(force=False, backend=None, runner_command=None, parallel=4))
+        initialize_aha_home(root, argparse.Namespace(force=False, backend=None, runner_command=None, parallel=10))
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -482,7 +482,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def cmd_ui(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
-    ensure_aha_home(root)
     run_id = args.run_id or latest_run_id(root) or ""
     if run_id:
         require_plan(root, run_id)

@@ -19,7 +19,7 @@ def default_config() -> dict:
     return {
         "backend": "stub",
         "runner_command": None,
-        "default_parallel": 4,
+        "default_parallel": 10,
         "default_mode": "research",
         "workspace_roots": [],
         "webgame_workspace": None,
@@ -34,11 +34,11 @@ def default_config() -> dict:
         },
         "claude": {
             "bin": "claude",
-            "model": None,
             "sandbox": "auto",
             "permission_mode": None,
             "session_policy": "sticky",
-            "env": {},
+            "env_active": None,
+            "env": [],
         },
     }
 

@@ -4,16 +4,18 @@ from pathlib import Path
 import tempfile
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
-from aha_cli.domain.models import TASK_COLLABORATION_MODES
+from aha_cli.domain.models import TASK_COLLABORATION_MODES, default_config
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
 from aha_cli.store.filesystem import (
     add_workspace,
+    config_path,
     create_plan,
     load_config,
     resolve_workspace_path,
     run_summary,
 )
+from aha_cli.store.io import write_json
 from aha_cli.web.http_utils import (
     http_response,
     json_response,
@@ -35,7 +37,16 @@ from aha_cli.web.run_api import (
 from aha_cli.web.task_actions import start_dispatched_task_backend
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
+CONFIG_SANDBOX_OPTIONS = SANDBOX_OPTIONS | {"auto"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
+SESSION_POLICY_OPTIONS = {"sticky", "fresh"}
+BOOTSTRAP_BACKEND_OPTIONS = {"codex", "claude"}
+CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
+CLAUDE_ENV_GROUP_ALIASES = {
+    "ANTHROPIC_BASE_URL": ("ANTHROPIC_BASE_URL", "base_url"),
+    "ANTHROPIC_MODEL": ("ANTHROPIC_MODEL", "model"),
+    "ANTHROPIC_API_KEY": ("ANTHROPIC_API_KEY", "api_key"),
+}
 
 
 def head_or_response(method: str, response: bytes, content_type: str = "application/json; charset=utf-8") -> bytes:
@@ -108,6 +119,134 @@ def handle_bootstrap(root: Path, default_run_id: str, method: str, request_heade
     return head_or_response(method, response)
 
 
+def _optional_string(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _string_or_default(value: object, default: str) -> str:
+    return str(value or "").strip() or default
+
+
+def _string_list(value: object, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = value.splitlines()
+    elif isinstance(value, list):
+        items = value
+    else:
+        raise ValueError(f"{field_name} must be a list")
+    return [str(item).strip() for item in items if str(item or "").strip()]
+
+
+def _object_value(value: object, field_name: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return value
+
+
+def _claude_env_groups(value: object) -> list[dict]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        legacy = {"name": "default"}
+        for key in CLAUDE_ENV_GROUP_FIELDS:
+            legacy[key] = next((str(value.get(alias) or "").strip() for alias in CLAUDE_ENV_GROUP_ALIASES[key] if value.get(alias)), "")
+        if not any(legacy.get(key) for key in CLAUDE_ENV_GROUP_FIELDS):
+            return []
+        return [legacy]
+    if not isinstance(value, list):
+        raise ValueError("claude.env must be a list")
+    groups: list[dict] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("claude.env entries must be objects")
+        raw_name = str(item.get("name") or "").strip()
+        group = {"name": raw_name or f"env-{index}"}
+        for key in CLAUDE_ENV_GROUP_FIELDS:
+            group[key] = str(item.get(key) or "").strip()
+        if raw_name or any(group.get(key) for key in CLAUDE_ENV_GROUP_FIELDS):
+            groups.append(group)
+    return groups
+
+
+def _config_sandbox(value: object, default: str) -> str:
+    sandbox = _string_or_default(value, default)
+    if sandbox not in CONFIG_SANDBOX_OPTIONS:
+        raise ValueError(f"unknown sandbox: {sandbox}")
+    return sandbox
+
+
+def _session_policy(value: object, default: str) -> str:
+    policy = _string_or_default(value, default)
+    if policy not in SESSION_POLICY_OPTIONS:
+        raise ValueError(f"unknown session policy: {policy}")
+    return policy
+
+
+def _bootstrap_config_from_payload(payload: dict) -> dict:
+    defaults = default_config()
+    backend = _string_or_default(payload.get("backend"), "codex")
+    if backend not in BOOTSTRAP_BACKEND_OPTIONS:
+        raise ValueError(f"unknown backend: {backend}")
+    mode = _string_or_default(payload.get("default_mode"), str(defaults["default_mode"]))
+    if mode not in {"research", "implementation"}:
+        raise ValueError(f"unknown default mode: {mode}")
+    try:
+        default_parallel = max(1, int(payload.get("default_parallel", defaults["default_parallel"]) or defaults["default_parallel"]))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("default_parallel must be an integer") from exc
+
+    codex_payload = _object_value(payload.get("codex"), "codex")
+    codex_defaults = defaults["codex"]
+    codex = {
+        "bin": _string_or_default(codex_payload.get("bin"), str(codex_defaults["bin"])),
+        "model": _optional_string(codex_payload.get("model")),
+        "sandbox": _config_sandbox(codex_payload.get("sandbox"), str(codex_defaults["sandbox"])),
+        "approval": _string_or_default(codex_payload.get("approval"), str(codex_defaults["approval"])),
+        "json": parse_optional_bool(codex_payload.get("json", codex_defaults["json"]), "codex.json"),
+        "session_policy": _session_policy(codex_payload.get("session_policy"), str(codex_defaults["session_policy"])),
+    }
+    if codex["approval"] not in APPROVAL_OPTIONS:
+        raise ValueError(f"unknown approval: {codex['approval']}")
+
+    claude_payload = _object_value(payload.get("claude"), "claude")
+    claude_defaults = defaults["claude"]
+    claude_env = _claude_env_groups(claude_payload.get("env"))
+    claude = {
+        "bin": _string_or_default(claude_payload.get("bin"), str(claude_defaults["bin"])),
+        "sandbox": _config_sandbox(claude_payload.get("sandbox"), str(claude_defaults["sandbox"])),
+        "permission_mode": _optional_string(claude_payload.get("permission_mode")),
+        "session_policy": _session_policy(claude_payload.get("session_policy"), str(claude_defaults["session_policy"])),
+        "env_active": _optional_string(claude_payload.get("env_active")),
+        "env": claude_env,
+    }
+
+    return {
+        "backend": backend,
+        "runner_command": _optional_string(payload.get("runner_command")),
+        "default_parallel": default_parallel,
+        "default_mode": mode,
+        "workspace_roots": _string_list(payload.get("workspace_roots"), "workspace_roots"),
+        "webgame_workspace": _optional_string(payload.get("webgame_workspace")),
+        "context_windows": _object_value(payload.get("context_windows"), "context_windows"),
+        "codex": codex,
+        "claude": claude,
+    }
+
+
+def handle_save_bootstrap(root: Path, default_run_id: str, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    if config_path(root).exists() and not parse_optional_bool(payload.get("force", False), "force"):
+        return json_response({"error": "AHA is already initialized"}, "409 Conflict")
+    cfg = _bootstrap_config_from_payload(payload)
+    write_json(config_path(root), cfg)
+    return json_response(bootstrap_payload(root, default_run_id), "201 Created")
+
+
 def handle_create_run(root: Path, body: bytes) -> bytes:
     payload = parse_json_body(body)
     goal = str(payload.get("goal", "") or "").strip()
@@ -133,9 +272,12 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
     if collaboration_mode not in TASK_COLLABORATION_MODES:
         return json_response({"error": f"unknown collaboration mode: {collaboration_mode}"}, "400 Bad Request")
 
+    create_initial_task = parse_optional_bool(payload.get("create_initial_task", True), "create_initial_task")
     task_titles = payload.get("task_titles", payload.get("tasks", []))
     if isinstance(task_titles, str):
         task_titles = [task_titles]
+    if not create_initial_task:
+        task_titles = []
     write_scopes = payload.get("write_scopes", [])
     if isinstance(write_scopes, str):
         write_scopes = [write_scopes]
@@ -172,6 +314,7 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
         https_proxy=str(payload.get("https_proxy", "") or "") or None,
         no_proxy=str(payload.get("no_proxy", "") or "") or None,
         collaboration_mode=collaboration_mode,
+        create_default_tasks=create_initial_task,
     )
     backend_states = []
     if bool(payload.get("dispatch", False)):
@@ -220,6 +363,8 @@ def handle_run_workspace_route(
         return handle_run_import(root, headers, body)
     if method in {"GET", "HEAD"} and path == "/api/bootstrap":
         return handle_bootstrap(root, default_run_id, method, headers)
+    if method == "POST" and path == "/api/bootstrap":
+        return handle_save_bootstrap(root, default_run_id, body)
     if method == "POST" and path == "/api/runs":
         return handle_create_run(root, body)
     if method in {"GET", "HEAD"} and path == "/api/workspaces":
@@ -233,6 +378,7 @@ __all__ = [
     "handle_bootstrap",
     "handle_create_run",
     "handle_create_workspace",
+    "handle_save_bootstrap",
     "handle_run_export",
     "handle_run_import",
     "handle_run_workspace_route",

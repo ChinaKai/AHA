@@ -700,7 +700,7 @@ button, input, select, textarea { font: inherit; }
   min-height: 92px;
 }
 .task-defaults-grid {
-  grid-template-columns: minmax(220px, 2fr) minmax(130px, 1fr) minmax(130px, 1fr);
+  grid-template-columns: 1fr;
 }
 .task-workspace-field {
   align-content: start;
@@ -2089,6 +2089,9 @@ button {
   background: transparent;
   color: #17202a;
 }
+.settings-dialog {
+  width: min(780px, calc(100vw - 32px));
+}
 .task-dialog::backdrop {
   background: rgba(15, 23, 42, 0.44);
 }
@@ -2358,6 +2361,24 @@ button {
   color: #667085;
 }
 .empty.compact { padding: 16px 8px; }
+.first-task-empty {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 220px;
+}
+.first-task-empty strong {
+  color: #344054;
+  font-size: 15px;
+}
+.first-task-empty button {
+  min-height: 40px;
+  padding: 0 16px;
+  border-color: #1f6feb;
+  background: #1f6feb;
+  color: #ffffff;
+  font-weight: 650;
+}
 body.empty-run .tabs,
 body.empty-run .conversation-filters,
 body.empty-run .composer,
@@ -2375,11 +2396,12 @@ body.empty-run main {
 }
 body.empty-run .panel {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  padding-block: 24px;
 }
 .bootstrap-panel {
-  width: min(560px, 100%);
+  width: min(720px, 100%);
   display: grid;
   gap: 14px;
   padding: 18px;
@@ -2404,6 +2426,80 @@ body.empty-run .panel {
   display: grid;
   gap: 10px;
 }
+.bootstrap-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.bootstrap-config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+.bootstrap-config-stack {
+  display: grid;
+  gap: 10px;
+}
+.bootstrap-config-list {
+  display: grid;
+  gap: 8px;
+}
+.bootstrap-list-row,
+.bootstrap-pair-row {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+}
+.bootstrap-list-row {
+  grid-template-columns: minmax(0, 1fr) 38px;
+}
+.bootstrap-pair-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 38px;
+}
+.bootstrap-env-group {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d8dde4;
+  border-radius: 8px;
+}
+.bootstrap-env-fields {
+  display: grid;
+  gap: 10px;
+}
+.bootstrap-env-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.bootstrap-config-section {
+  border: 1px solid #d8dde4;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.bootstrap-config-section > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #344054;
+}
+.bootstrap-config-section > .bootstrap-config-grid,
+.bootstrap-config-section > .bootstrap-config-stack,
+.bootstrap-config-section > .field-label {
+  margin-top: 10px;
+}
+.proxy-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+}
+.proxy-toggle .field-help {
+  grid-column: 2;
+}
 .bootstrap-proxy {
   border: 1px solid #d8dde4;
   border-radius: 8px;
@@ -2418,11 +2514,38 @@ body.empty-run .panel {
 .bootstrap-proxy .proxy-form {
   margin-top: 10px;
 }
-.bootstrap-form button {
+.bootstrap-form button[type="submit"] {
   justify-self: start;
   border-color: #1f6feb;
   background: #1f6feb;
   color: #ffffff;
+}
+.bootstrap-form .bootstrap-add-row,
+.bootstrap-form .bootstrap-icon-button {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #344054;
+}
+.bootstrap-add-row {
+  justify-self: start;
+}
+.bootstrap-icon-button {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .bootstrap-config-grid,
+  .bootstrap-list-row,
+  .bootstrap-pair-row {
+    grid-template-columns: 1fr;
+  }
+  .bootstrap-icon-button {
+    width: auto;
+    justify-self: start;
+    padding: 0 12px;
+  }
 }
 @media (min-width: 981px) {
   html,

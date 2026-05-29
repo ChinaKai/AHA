@@ -19,7 +19,10 @@ class BackendRegistryTests(unittest.TestCase):
         self.assertEqual(codex_options[0]["name"], "")
         self.assertEqual(codex_options[0]["label"], f"default ({CODEX_DEFAULT_MODEL})")
         self.assertIn("gpt-5.3-codex", {item["name"] for item in codex_options})
-        self.assertEqual(claude_options, [{"name": "", "label": "default"}])
+        self.assertEqual(
+            [item["name"] for item in claude_options],
+            ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        )
         self.assertEqual(stub_options, [{"name": "", "label": "default"}])
         self.assertIn("commands", agent_backends()[0])
 

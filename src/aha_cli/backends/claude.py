@@ -26,6 +26,7 @@ CLAUDE_CONFIG_ENV_ALIASES = {
     "model": "ANTHROPIC_MODEL",
     "small_fast_model": "ANTHROPIC_SMALL_FAST_MODEL",
 }
+CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
 
 
 def _normalize_claude_env_key(key: str) -> str | None:
@@ -45,7 +46,17 @@ def claude_config_env(claude_config: dict | None) -> dict[str, str]:
     if not isinstance(claude_config, dict):
         return {}
     configured = claude_config.get("env")
-    if not isinstance(configured, dict):
+    if isinstance(configured, list):
+        active_configured = "env_active" in claude_config
+        active = str(claude_config.get("env_active") or "").strip()
+        if active_configured and not active:
+            configured = {}
+        else:
+            groups = [item for item in configured if isinstance(item, dict)]
+            selected = next((item for item in groups if active and str(item.get("name") or "").strip() == active), None)
+            configured = selected or (groups[0] if groups else {})
+            configured = {key: configured.get(key) for key in CLAUDE_ENV_GROUP_FIELDS}
+    elif not isinstance(configured, dict):
         configured = {}
     env: dict[str, str] = {}
     for raw_key, raw_value in configured.items():
