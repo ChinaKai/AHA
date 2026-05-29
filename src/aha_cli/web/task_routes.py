@@ -5,6 +5,7 @@ from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names
 from aha_cli.domain.models import TASK_COLLABORATION_MODES
+from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
 from aha_cli.services.steward import apply_steward_decision, steward_decision_snapshot
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -303,18 +304,37 @@ def handle_create_agent_route(root: Path, run_id: str, payload: dict) -> dict:
 def handle_agent_config_route(root: Path, run_id: str, payload: dict) -> dict:
     task_id = str(payload.get("task_id", "")).strip()
     agent_id = str(payload.get("agent_id", "")).strip()
+    backend = str(payload.get("backend", "") or "").strip() or None
+    model = str(payload.get("model", "") or "").strip() if "model" in payload else None
     sandbox = str(payload.get("sandbox", "") or "") or None
     approval = str(payload.get("approval", "") or "") or None
     proxy_enabled = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None
+    restart_backend = parse_optional_bool(payload["restart_backend"], "restart_backend") if "restart_backend" in payload else False
     if not task_id or not agent_id:
         return route_result({"error": "task_id and agent_id are required"}, "400 Bad Request")
+    if backend is not None:
+        error = validate_backend_name(backend)
+        if error:
+            return route_result({"error": error}, "400 Bad Request")
     error = validate_runtime_options(sandbox, approval)
     if error:
         return route_result({"error": error}, "400 Bad Request")
     try:
-        agent = update_agent_config(root, run_id, task_id, agent_id, sandbox=sandbox, approval=approval, proxy_enabled=proxy_enabled)
-        return route_result({"ok": True, "agent": agent})
-    except SystemExit as exc:
+        agent = None
+        if sandbox is not None or approval is not None or proxy_enabled is not None:
+            agent = update_agent_config(root, run_id, task_id, agent_id, sandbox=sandbox, approval=approval, proxy_enabled=proxy_enabled)
+        backend_switch = None
+        if backend is not None:
+            switch_kwargs = {"model": model} if "model" in payload else {}
+            backend_switch = switch_agent_backend(root, run_id, task_id, agent_id, backend=backend, **switch_kwargs)
+            agent = backend_switch["agent"]
+        backend_restart = None
+        if restart_backend and backend is None:
+            backend_restart = restart_agent_backend(root, run_id, task_id, agent_id)
+        if agent is None:
+            agent = update_agent_config(root, run_id, task_id, agent_id)
+        return route_result({"ok": True, "agent": agent, "backend_switch": backend_switch, "backend_restart": backend_restart})
+    except (SystemExit, ValueError) as exc:
         return route_result({"error": str(exc)}, "404 Not Found")
 
 

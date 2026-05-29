@@ -348,6 +348,8 @@ POST /api/send
 
 There is no explicit HTTP start/stop backend endpoint yet. `POST /api/send` autostarts a stopped Codex backend for the addressed task agent when possible.
 
+`POST /api/agent-config` can update per-agent runtime options. When it changes an agent backend, AHA stops any active old backend process, archives the previous backend session id, appends a handoff message for the new backend, and restarts the backend when the old one was active. Runtime-only settings such as sandbox, approval, and proxy can be saved for the next backend start or saved with `restart_backend=true` to apply immediately.
+
 Task proxy configuration lives on the task (`http_proxy`, `https_proxy`, `no_proxy`, and the default enable flag). Agents only store a `proxy_enabled` switch. When an enabled Codex agent runs, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` plus their lowercase variants into the backend command environment; disabled agents have those proxy variables removed from the child environment.
 
 It shows a task list on the left, a task workspace in the center, and task agents on the right. Selecting a task opens that task's conversation, result, logs, and prompt context.

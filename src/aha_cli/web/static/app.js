@@ -123,6 +123,7 @@ const backendSessionRefreshEventTypes = new Set([
   "agent_usage",
   "agent_context_overflow",
   "backend_started",
+  "agent_backend_switched",
   "backend_session_reset",
   "backend_session_compact_reset"
 ]);
@@ -233,6 +234,8 @@ const selectedTaskContextThresholdEl = document.getElementById("selected-task-co
 const taskContextStateEl = document.getElementById("task-context-state");
 const taskCreateConfirmDialogEl = document.getElementById("task-create-confirm");
 const taskCreateConfirmDetailsEl = document.getElementById("task-create-confirm-details");
+const agentRuntimeConfirmDialogEl = document.getElementById("agent-runtime-confirm");
+const agentRuntimeConfirmMessageEl = document.getElementById("agent-runtime-confirm-message");
 const selectedAgentInfoEl = document.getElementById("selected-agent-info");
 const backendStatusEl = document.getElementById("backend-status");
 const pendingMessagesEl = document.getElementById("pending-messages");
@@ -2601,6 +2604,61 @@ function selectOptions(options, current) {
   return options.map(option => `<option value="${escapeHtml(option)}" ${option === current ? "selected" : ""}>${escapeHtml(option)}</option>`).join("");
 }
 
+function agentBackendOptions() {
+  const names = [...backendModels.keys()].filter(Boolean);
+  return names.length ? names : ["codex", "claude", "stub"];
+}
+
+function agentRuntimeFieldLabel(field) {
+  if (field === "sandbox") return "sandbox";
+  if (field === "approval") return "approval";
+  if (field === "proxy_enabled") return "proxy";
+  return field || "runtime setting";
+}
+
+function agentRuntimeChangeNeedsRestartChoice(agent, field) {
+  if (!["sandbox", "approval", "proxy_enabled"].includes(field)) return false;
+  return ["running", "busy"].includes(agentBackendProcessStatus(agent));
+}
+
+function setAgentConfigControlValue(target, value) {
+  if (target instanceof HTMLInputElement && target.type === "checkbox") {
+    target.checked = Boolean(value);
+  } else {
+    target.value = String(value ?? "");
+  }
+}
+
+function requestAgentRuntimeConfigAction(agent, field, value) {
+  const label = agentRuntimeFieldLabel(field);
+  const message = [
+    `Change ${agent.id} ${label} to ${value === true ? "on" : value === false ? "off" : value}?`,
+    "",
+    "The current backend process is already running.",
+    "Save for next start keeps the process running.",
+    "Save & restart backend applies the change immediately."
+  ].join("\n");
+  if (!agentRuntimeConfirmDialogEl || typeof agentRuntimeConfirmDialogEl.showModal !== "function") {
+    if (window.confirm(`${message}\n\nOK = Save & restart backend`)) return Promise.resolve("restart");
+    return Promise.resolve(window.confirm("Save for next backend start instead?") ? "next" : "cancel");
+  }
+  if (agentRuntimeConfirmMessageEl) {
+    agentRuntimeConfirmMessageEl.textContent = message;
+  }
+  if (agentRuntimeConfirmDialogEl.open) agentRuntimeConfirmDialogEl.close("cancel");
+  return new Promise(resolve => {
+    const onClose = () => resolve(agentRuntimeConfirmDialogEl.returnValue || "cancel");
+    agentRuntimeConfirmDialogEl.returnValue = "cancel";
+    agentRuntimeConfirmDialogEl.addEventListener("close", onClose, { once: true });
+    try {
+      agentRuntimeConfirmDialogEl.showModal();
+    } catch (_err) {
+      agentRuntimeConfirmDialogEl.removeEventListener("close", onClose);
+      resolve(window.confirm(`${message}\n\nOK = Save & restart backend`) ? "restart" : "cancel");
+    }
+  });
+}
+
 function matchingSlashCommands() {
   const value = messageEl.value.trimStart();
   if (!value.startsWith("/")) return [];
@@ -2756,6 +2814,8 @@ const timelineEventTypes = new Set([
   "sub_agent_backend_failed",
   "agent_created",
   "agent_config_updated",
+  "agent_backend_switched",
+  "agent_backend_restarted",
   "agent_finished",
   "agent_interrupted",
   "workspace_missing"
@@ -5251,6 +5311,7 @@ function renderAgents() {
       <div class="meta truncate">proxy=${escapeHtml(proxyEnabled ? "on" : "off")} | task proxy=${escapeHtml(taskProxySummary(task))}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | ${escapeHtml(contextPressure)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
       <div class="agent-permissions">
+        <select class="agent-backend-select" data-agent-field="backend" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(agentBackendOptions(), agent.backend || "codex")}</select>
         <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
         <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>
       </div>
@@ -5269,8 +5330,41 @@ function renderAgents() {
     card.addEventListener("change", event => {
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (!target?.dataset.agentField) return;
+      const field = target.dataset.agentField;
       const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
-      updateAgentConfig(agent.id, target.dataset.agentField, value);
+      const previousValue = field === "sandbox"
+        ? sandbox
+        : field === "approval"
+          ? approval
+          : field === "proxy_enabled"
+            ? proxyEnabled
+            : agent.backend || "codex";
+      if (field === "backend") {
+        const previousBackend = agent.backend || "codex";
+        const nextBackend = String(value || "").trim();
+        if (nextBackend && nextBackend !== previousBackend) {
+          const confirmed = confirm(
+            `确认将 ${agent.id} backend 从 ${previousBackend} 切换到 ${nextBackend}？\n\n` +
+            "AHA 会停止当前 backend、重置 backend_session_id，并给新 backend 写入交接信息。"
+          );
+          if (!confirmed) {
+            setAgentConfigControlValue(target, previousBackend);
+            return;
+          }
+        }
+      }
+      void (async () => {
+        let restartBackend = false;
+        if (agentRuntimeChangeNeedsRestartChoice(agent, field) && value !== previousValue) {
+          const action = await requestAgentRuntimeConfigAction(agent, field, value);
+          if (action === "cancel") {
+            setAgentConfigControlValue(target, previousValue);
+            return;
+          }
+          restartBackend = action === "restart";
+        }
+        await updateAgentConfig(agent.id, field, value, { restartBackend });
+      })();
     });
     return card;
   };
@@ -5348,11 +5442,12 @@ function renderBackendStatus() {
   `;
 }
 
-async function updateAgentConfig(agentId, field, value) {
+async function updateAgentConfig(agentId, field, value, options = {}) {
   const task = selectedTask();
   if (!task || !agentId || !field) return;
   const payload = { task_id: task.id, agent_id: agentId };
   payload[field] = value;
+  if (options.restartBackend) payload.restart_backend = true;
   const res = await fetchWithTimeout(apiUrl("/api/agent-config"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5628,7 +5723,9 @@ function renderTimelineEvent(event) {
     const waitingReason = data.waiting_reason ? ` waiting=${data.waiting_reason}` : "";
     return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}${waitingReason}`, data.status || "session", ts);
   }
-  if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
+  if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} backend=${data.backend || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
+  if (event.type === "agent_backend_switched") return renderTimelineStatus("agent backend switched", `${data.agent_id || "-"} ${data.old_backend || "-"} -> ${data.new_backend || "-"} summary=${data.summary_path || "-"}`, "session", ts);
+  if (event.type === "agent_backend_restarted") return renderTimelineStatus("agent backend restarted", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", ts);
   if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy updated", `default=${data.proxy_enabled ? "on" : "off"} http=${data.http_proxy_configured ? "set" : "-"} https=${data.https_proxy_configured ? "set" : "-"} no_proxy=${data.no_proxy_configured ? "set" : "-"}`, "session", ts);
   if (event.type === "task_supervision_config_updated") return renderTimelineStatus("task supervision updated", `${data.mode || "-"} via ${data.host_backend || "stub"} max_rounds=${data.max_rounds || "-"}`, "session", ts);
   if (event.type === "task_context_management_config_updated") return renderTimelineStatus("task context updated", `${data.auto_compact_enabled ? "auto on" : "auto off"} threshold=${data.auto_compact_threshold_percent || defaultTaskContextThresholdPercent}%`, "session", ts);

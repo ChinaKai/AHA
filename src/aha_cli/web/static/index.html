@@ -342,6 +342,19 @@
       </div>
     </form>
   </dialog>
+  <dialog id="agent-runtime-confirm" class="confirm-dialog" aria-labelledby="agent-runtime-confirm-title">
+    <form method="dialog" class="confirm-dialog-panel">
+      <div class="confirm-dialog-head">
+        <h2 id="agent-runtime-confirm-title">Apply runtime change?</h2>
+        <p id="agent-runtime-confirm-message">This change affects backend startup.</p>
+      </div>
+      <div class="confirm-dialog-actions">
+        <button type="submit" value="cancel">Cancel</button>
+        <button type="submit" value="next">Save for next start</button>
+        <button class="primary" type="submit" value="restart">Save & restart backend</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="settings-dialog" class="task-dialog settings-dialog" aria-labelledby="settings-title">
     <div class="task-dialog-panel">
       <div class="task-dialog-head">

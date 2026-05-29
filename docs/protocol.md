@@ -49,6 +49,8 @@ task_deleted
 task_proxy_config_updated
 agent_created
 agent_config_updated
+agent_backend_switched
+agent_backend_restarted
 agent_started
 agent_finished
 agent_command_started
@@ -56,6 +58,7 @@ agent_command_finished
 agent_message
 agent_message_routed
 backend_started
+backend_session_reset
 backend_start_failed
 backend_stopped
 run_imported

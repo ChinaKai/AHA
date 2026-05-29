@@ -27,6 +27,7 @@ Run workspace
   switch between local runs
   rename the current run
   create and manage tasks
+  switch task main/sub/host backends with session reset and handoff
   show the active Claude env group's ANTHROPIC_MODEL when env is configured
   fall back to official Claude model choices when no Claude env is configured
   chat with task agents

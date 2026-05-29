@@ -2343,6 +2343,9 @@ button {
   gap: 6px;
   margin-top: 7px;
 }
+.agent-backend-select {
+  grid-column: 1 / -1;
+}
 .agent-proxy {
   display: flex;
   align-items: center;

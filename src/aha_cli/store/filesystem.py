@@ -600,6 +600,10 @@ def update_task_supervision_config(
     ask_user_gates: object = UNSET,
 ) -> dict:
     should_ensure_host = False
+    host_agent_id = "host"
+    previous_host_backend = ""
+    desired_host_backend = ""
+    host_agent_exists = False
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
@@ -624,16 +628,34 @@ def update_task_supervision_config(
             and task["supervision"].get("real_agent_enabled")
             and task["supervision"].get("host_backend") != "stub"
         )
+        host_agent_id = str(task["supervision"].get("host_agent_id") or "host")
+        desired_host_backend = str(task["supervision"].get("host_backend") or "")
+        host_agent = next(
+            (
+                agent
+                for agent in task.get("agents", [])
+                if agent.get("id") == host_agent_id or agent.get("id") == "host" or agent.get("role") == "host"
+            ),
+            None,
+        )
+        host_agent_exists = host_agent is not None
+        previous_host_backend = str((host_agent or {}).get("backend") or "")
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
     if should_ensure_host:
-        task = ensure_task_supervision_host_agent(
-            root,
-            run_id,
-            task_id,
-            backend=str(task["supervision"].get("host_backend") or "codex"),
-        )["task"]
+        if host_agent_exists and previous_host_backend and previous_host_backend != desired_host_backend:
+            from aha_cli.services.agent_backend_switch import switch_agent_backend
+
+            switch_agent_backend(root, run_id, task_id, host_agent_id, backend=desired_host_backend)
+            task = task_snapshot(root, run_id, task_id)["task"]
+        else:
+            task = ensure_task_supervision_host_agent(
+                root,
+                run_id,
+                task_id,
+                backend=desired_host_backend or "codex",
+            )["task"]
     append_event(
         root,
         run_id,

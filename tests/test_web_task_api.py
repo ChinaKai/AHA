@@ -25,6 +25,7 @@ from aha_cli.store.filesystem import (
     update_task_supervision_config,
     write_task_result,
 )
+from aha_cli.store.sessions import ensure_session, save_session
 from aha_cli.web.server import handle_send_payload, workspace_options
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -189,6 +190,159 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(host["sandbox"], "read-only")
         self.assertEqual(host["approval"], "never")
         self.assertEqual(task["supervision"]["host_agent_id"], "host")
+
+    def test_api_agent_config_switches_sub_backend_with_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Switch sub backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                session = ensure_session(root, run_id, "task-001", sub["id"], "codex", model="gpt-5.5")
+                session["backend_session_id"] = "old-codex-session"
+                save_session(root, session)
+
+                with (
+                    mock.patch("aha_cli.services.agent_backend_switch.backend_status", return_value={"status": "running", "pid": 123}),
+                    mock.patch("aha_cli.services.agent_backend_switch.stop_backend", return_value={"status": "stopped", "pid": 123}) as stop_backend,
+                    mock.patch("aha_cli.services.agent_backend_switch.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                ):
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/agent-config",
+                            method="POST",
+                            payload={"task_id": "task-001", "agent_id": sub["id"], "backend": "claude"},
+                        )
+                    )
+                body = json_response_body(response)
+                task = status_snapshot(root, run_id)["tasks"][0]
+                updated_sub = next(agent for agent in task["agents"] if agent["id"] == sub["id"])
+                updated_session = ensure_session(root, run_id, "task-001", sub["id"], "claude")
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), 0)
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["agent"]["backend"], "claude")
+        self.assertEqual(updated_sub["backend"], "claude")
+        self.assertEqual(updated_session["backend"], "claude")
+        self.assertIsNone(updated_session["backend_session_id"])
+        self.assertEqual(updated_session["history_backend_sessions"][-1]["backend_session_id"], "old-codex-session")
+        self.assertEqual(updated_session["history_backend_sessions"][-1]["reason"], "backend_changed")
+        self.assertEqual(updated_session["compact_summary"]["reason"], "backend_switch")
+        self.assertTrue(any(message.get("coordination") == "backend_switch" and "previous backend: codex" in message.get("message", "") for message in messages))
+        self.assertTrue(any(event["type"] == "backend_session_reset" and event["data"].get("agent_id") == sub["id"] for event in events))
+        self.assertTrue(any(event["type"] == "agent_backend_switched" and event["data"].get("new_backend") == "claude" for event in events))
+        stop_backend.assert_called_once()
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, sub["id"]))
+        self.assertEqual(start_backend.call_args.kwargs["backend"], "claude")
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
+
+    def test_agent_backend_switch_for_main_updates_task_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Switch main backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/agent-config",
+                        method="POST",
+                        payload={"task_id": "task-001", "agent_id": "main", "backend": "claude"},
+                    )
+                )
+                task = status_snapshot(root, run_id)["tasks"][0]
+                main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(main_agent["backend"], "claude")
+        self.assertEqual(task["preferred_backend"], "claude")
+        self.assertIsNone(task.get("preferred_model"))
+
+    def test_agent_config_can_restart_backend_after_runtime_setting_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Restart backend config", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with (
+                    mock.patch("aha_cli.services.agent_backend_switch.backend_status", return_value={"status": "running", "pid": 456}),
+                    mock.patch("aha_cli.services.agent_backend_switch.stop_backend", return_value={"status": "stopped", "pid": 456}) as stop_backend,
+                    mock.patch("aha_cli.services.agent_backend_switch.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                ):
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/agent-config",
+                            method="POST",
+                            payload={
+                                "task_id": "task-001",
+                                "agent_id": "main",
+                                "sandbox": "read-only",
+                                "restart_backend": True,
+                            },
+                        )
+                    )
+                task = status_snapshot(root, run_id)["tasks"][0]
+                main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(main_agent["sandbox"], "read-only")
+        stop_backend.assert_called_once()
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.kwargs["sandbox"], "read-only")
+        self.assertTrue(any(event["type"] == "agent_backend_restarted" and event["data"].get("agent_id") == "main" for event in events))
+
+    def test_supervision_host_backend_switch_uses_handoff_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Switch host backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                session = ensure_session(root, run_id, "task-001", "host", "codex")
+                session["backend_session_id"] = "old-host-session"
+                save_session(root, session)
+
+                with (
+                    mock.patch("aha_cli.services.agent_backend_switch.backend_status", return_value={"status": "running", "pid": 321}),
+                    mock.patch("aha_cli.services.agent_backend_switch.stop_backend", return_value={"status": "stopped", "pid": 321}) as stop_backend,
+                    mock.patch("aha_cli.services.agent_backend_switch.start_backend", return_value={"status": "running", "started": True}),
+                ):
+                    update_task_supervision_config(root, run_id, "task-001", host_backend="claude")
+                task = status_snapshot(root, run_id)["tasks"][0]
+                host = next(agent for agent in task["agents"] if agent["id"] == "host")
+                updated_session = ensure_session(root, run_id, "task-001", "host", "claude")
+
+        self.assertEqual(task["supervision"]["host_backend"], "claude")
+        self.assertEqual(host["backend"], "claude")
+        self.assertIsNone(updated_session["backend_session_id"])
+        self.assertEqual(updated_session["history_backend_sessions"][-1]["backend_session_id"], "old-host-session")
+        stop_backend.assert_called_once()
 
     def test_send_to_supervision_host_stores_note_without_autostart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
