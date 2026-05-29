@@ -108,3 +108,21 @@ After import, session metadata is marked:
 ```
 
 The next backend interaction may create a fresh backend session under the same logical AHA scope.
+
+## Backend Switching
+
+AHA agent identity stays stable when an agent changes backend. The backend
+session does not. Switching a task `main`, `sub-*`, or assisted-supervision
+`host` backend stops any active old backend process, archives the old
+`backend_session_id`, clears the active id, and appends a handoff message for
+the new backend.
+
+The handoff message points at a compact summary stored under the task compact
+directory. The new backend should read that summary before continuing so it
+inherits the task intent, decisions, and open work without pretending to resume
+the old provider's native session.
+
+Startup settings such as `sandbox`, `approval`, and `proxy_enabled` are applied
+when a backend process starts. If those values change while a backend is running,
+the UI can either save them for the next start or request an immediate backend
+restart.

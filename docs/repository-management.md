@@ -51,6 +51,9 @@ Rules for store edits:
 
 - `services/backend_runtime.py` owns managed backend processes, locks, and
   runtime cleanup.
+- `services/agent_backend_switch.py` owns agent backend switching, backend
+  session reset, handoff summaries, and explicit backend restart after startup
+  setting changes.
 - `services/chat.py` owns backend chat turns and finalization handling.
 - `services/chat_offsets.py` owns chat inbox offset path/load/save helpers and
   task-scoped worker exit checks.
@@ -120,7 +123,7 @@ tests/test_chat_prompt.py       chat offsets, prompt context, sticky deltas
 tests/test_supervision_flow.py  supervision routing and agent command flow
 tests/test_finalization_flow.py final result, round journal, checkpoints
 tests/test_web_run_api.py       bootstrap, workspace, run creation, archives
-tests/test_web_task_api.py      task create/resume, settings, proxy APIs
+tests/test_web_task_api.py      task create/resume, settings, backend switch, proxy APIs
 tests/test_web_events_api.py    UI core, conversation events, logs, event replay
 tests/test_web_status.py        status snapshots, recovery, send/interrupt APIs
 tests/test_websocket.py         WebSocket replay and realtime stream behavior

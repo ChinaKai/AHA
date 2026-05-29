@@ -28,6 +28,7 @@ Run workspace
   rename the current run
   create and manage tasks
   switch task main/sub/host backends with session reset and handoff
+  save agent startup settings for next start or save and restart the backend
   show the active Claude env group's ANTHROPIC_MODEL when env is configured
   fall back to official Claude model choices when no Claude env is configured
   chat with task agents
@@ -72,6 +73,8 @@ Important service responsibilities:
 
 ```text
 services/backend_runtime.py  managed backend processes and runtime locks
+services/agent_backend_switch.py
+                             backend switch, session reset, handoff, restart
 services/chat.py             backend chat loop and task finalization handling
 services/orchestrator.py     AHA action execution and sub-agent coordination
 services/proxy.py            task proxy normalization and backend env injection
@@ -97,6 +100,8 @@ Current user message
 Each task also records a `workspace_path`. Backend agents execute from that workspace when starting a new scoped session, so task context points at the project being worked on rather than the AHA tool repository.
 
 Task-scoped proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are stored on the task so users can update them after creation. Each agent stores only a `proxy_enabled` switch. Backend launches and per-turn Codex executions read the latest task proxy values and apply them only when the selected agent switch is enabled.
+
+Agent `sandbox`, `approval`, and `proxy_enabled` are backend startup settings. Updating them does not mutate a running child process. The UI therefore lets users either save the new value for the next backend start or save and restart the current backend immediately.
 
 If run-main is activated later, it should work from summaries and decision records, not every task's full message history.
 
@@ -165,6 +170,8 @@ python -m aha_cli claude-chat ...
 In a one-bin zipapp it launches the current one-bin artifact instead, so a packaged dashboard does not require `aha_cli` to be installed as an importable Python module. External backend CLIs such as `codex` and `claude` are still resolved from the target machine.
 
 Claude uses the same AHA task/session model as Codex. Its backend authentication and provider overrides may come from process environment variables or from `claude.env` in the AHA config. Secrets must not be written to task journals, exported documentation, or user-visible logs.
+
+Changing a task `main`, `sub-*`, or assisted-supervision `host` backend is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend, appends a handoff message for the new backend, and restarts the new backend when the old one was active. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
 
 ## Distribution And Portability
 

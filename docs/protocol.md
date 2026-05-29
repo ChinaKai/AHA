@@ -114,6 +114,43 @@ Every task has a logical `main` agent. A task may have zero or more sub-agents:
 
 The backend is stored per agent. Valid chat backends include `codex` and `claude`, so one task may contain agents backed by different providers.
 
+## Agent Backend And Runtime Config
+
+`POST /api/agent-config` updates task agent configuration. It accepts the task
+and agent identity plus any supported fields:
+
+```json
+{
+  "task_id": "task-001",
+  "agent_id": "main",
+  "backend": "claude",
+  "sandbox": "workspace-write",
+  "approval": "never",
+  "proxy_enabled": true,
+  "restart_backend": true
+}
+```
+
+Changing `backend` is a backend switch. AHA stops an active old backend process,
+resets the backend session id, writes a compact handoff summary, appends a
+handoff message for the new backend, and restarts the new backend if the old one
+was active.
+
+Changing `sandbox`, `approval`, or `proxy_enabled` changes backend startup
+configuration. Existing backend processes are not hot-patched. If
+`restart_backend` is true, AHA saves the config and restarts the current backend
+so the startup settings apply immediately. If it is false or omitted, the values
+apply on the next backend start.
+
+Relevant events:
+
+```text
+backend_session_reset
+agent_backend_switched
+agent_backend_restarted
+agent_config_updated
+```
+
 ## Task Assignment
 
 Creating a task appends an AHA-mode assignment message:
