@@ -10,8 +10,9 @@ The browser UI now has three operating modes:
 First Run bootstrap
   create .aha/config.json
   Core Settings: Default backend (codex/claude) and Task concurrency
-  set workspace roots, Codex bin/model defaults, and Claude bin
-  add named Claude env groups with fixed Anthropic fields or choose Claude official with no env
+  set workspace roots, Codex bin, and Claude bin
+  choose default Codex/Claude model sources from official models or custom env groups
+  add named Codex and Claude env groups for third-party compatible providers
   exclude runner command, default mode, and context window overrides from init UI
 
 First Run
@@ -27,10 +28,10 @@ Run workspace
   switch between local runs
   rename the current run
   create and manage tasks
-  switch task main/sub/host backends with session reset and handoff
-  save agent startup settings for next start or save and restart the backend
-  show the active Claude env group's ANTHROPIC_MODEL when env is configured
-  fall back to official Claude model choices when no Claude env is configured
+  edit task main/sub/host backend/model/sandbox/approval/proxy in one agent config editor
+  reset and hand off sessions when backend or model changes
+  save runtime-only startup settings for next start or save and restart the backend
+  select Codex/Claude official models or custom env-group models from one Model control
   chat with task agents
   inspect results, logs, context, sessions, and backend runtime
   import or export run archives
@@ -169,9 +170,9 @@ python -m aha_cli claude-chat ...
 
 In a one-bin zipapp it launches the current one-bin artifact instead, so a packaged dashboard does not require `aha_cli` to be installed as an importable Python module. External backend CLIs such as `codex` and `claude` are still resolved from the target machine.
 
-Claude uses the same AHA task/session model as Codex. Its backend authentication and provider overrides may come from process environment variables or from `claude.env` in the AHA config. Secrets must not be written to task journals, exported documentation, or user-visible logs.
+Codex and Claude use the same AHA task/session model. Their Model selectors can point at an official model or at a custom env group. Env-group selections are stored as `env:<group-name>`. Codex env groups target OpenAI-compatible Responses providers: AHA passes the selected group's `OPENAI_MODEL` to Codex, adds a temporary Codex `model_provider` override for `OPENAI_BASE_URL`, and uses `CODEX_WIRE_API=responses` plus `CODEX_ENV_KEY` for provider-specific authentication. Chat Completions-only endpoints are not supported by current Codex CLI provider config. Claude env groups inject `ANTHROPIC_*` / `CLAUDE_*` values and launch Claude without a CLI `--model` argument, so `ANTHROPIC_MODEL` is the effective model. Secrets must not be written to task journals, exported documentation, or user-visible logs.
 
-Changing a task `main`, `sub-*`, or assisted-supervision `host` backend is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend, appends a handoff message for the new backend, and restarts the new backend when the old one was active. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
+Changing a task `main`, `sub-*`, or assisted-supervision `host` backend or model is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend/model, appends a handoff message for the new backend, and restarts the new backend when the old one was active. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
 
 ## Distribution And Portability
 

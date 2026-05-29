@@ -90,7 +90,7 @@ For a packaged one-bin zipapp, AHA launches the current artifact instead:
 
 This keeps one-bin deployments from depending on an installed `aha_cli` Python module. External tools such as `codex` and `claude` are still resolved from the target machine.
 
-Claude backend launches receive `ANTHROPIC_*` and `CLAUDE_*` variables from the process environment plus `claude.env` in the AHA config. Store only configuration shape in docs and logs; never persist real secret values in task-visible output.
+Codex and Claude launches can use either an official model id or a custom env-group model source. Custom env-group selections are stored as `env:<group-name>`. For Codex, each env group points at an OpenAI-compatible Responses provider base URL. AHA passes `OPENAI_MODEL` as the CLI model, launches Codex with a temporary `model_provider` override for `OPENAI_BASE_URL`, and uses `CODEX_WIRE_API=responses` plus `CODEX_ENV_KEY` to decide where to place the API key. Chat Completions-only endpoints are not supported by current Codex CLI provider config. For Claude, AHA applies that group's `ANTHROPIC_*` and `CLAUDE_*` values and does not pass a CLI model, so `ANTHROPIC_MODEL` becomes the effective model. Store only configuration shape in docs and logs; never persist real secret values in task-visible output.
 
 ## Imported Sessions
 
@@ -111,11 +111,11 @@ The next backend interaction may create a fresh backend session under the same l
 
 ## Backend Switching
 
-AHA agent identity stays stable when an agent changes backend. The backend
-session does not. Switching a task `main`, `sub-*`, or assisted-supervision
-`host` backend stops any active old backend process, archives the old
-`backend_session_id`, clears the active id, and appends a handoff message for
-the new backend.
+AHA agent identity stays stable when an agent changes backend or model. The
+backend session does not. Switching a task `main`, `sub-*`, or
+assisted-supervision `host` backend/model stops any active old backend process,
+archives the old `backend_session_id`, clears the active id, and appends a
+handoff message for the new backend/model.
 
 The handoff message points at a compact summary stored under the task compact
 directory. The new backend should read that summary before continuing so it

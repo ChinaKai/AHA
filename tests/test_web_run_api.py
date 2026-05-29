@@ -57,12 +57,24 @@ class WebRunApiTests(unittest.TestCase):
                         "default_mode": "implementation",
                         "workspace_roots": [str(workspace_root)],
                         "codex": {
-                            "model": "gpt-5.5",
+                            "model": "env:openai",
+                            "env_active": "openai",
+                            "env": [
+                                {
+                                    "name": "openai",
+                                    "OPENAI_BASE_URL": "https://openai.test/v1",
+                                    "OPENAI_MODEL": "gpt-5.5",
+                                    "OPENAI_API_KEY": "openai-key",
+                                    "CODEX_WIRE_API": "responses",
+                                    "CODEX_ENV_KEY": "OPENAI_API_KEY",
+                                }
+                            ],
                             "sandbox": "workspace-write",
                             "approval": "never",
                             "json": True,
                         },
                         "claude": {
+                            "model": "env:work",
                             "env_active": "work",
                             "env": [
                                 {
@@ -85,9 +97,13 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(cfg["default_parallel"], 2)
         self.assertEqual(cfg["default_mode"], "implementation")
         self.assertEqual(cfg["workspace_roots"], [str(workspace_root)])
-        self.assertEqual(cfg["codex"]["model"], "gpt-5.5")
+        self.assertEqual(cfg["codex"]["model"], "env:openai")
+        self.assertEqual(cfg["codex"]["env_active"], "openai")
+        self.assertEqual(cfg["codex"]["env"][0]["OPENAI_MODEL"], "gpt-5.5")
+        self.assertEqual(cfg["codex"]["env"][0]["CODEX_WIRE_API"], "responses")
+        self.assertEqual(cfg["codex"]["env"][0]["CODEX_ENV_KEY"], "OPENAI_API_KEY")
         self.assertEqual(cfg["codex"]["sandbox"], "workspace-write")
-        self.assertNotIn("model", cfg["claude"])
+        self.assertEqual(cfg["claude"]["model"], "env:work")
         self.assertEqual(cfg["claude"]["env_active"], "work")
         self.assertEqual(
             cfg["claude"]["env"],
@@ -123,6 +139,7 @@ class WebRunApiTests(unittest.TestCase):
                     payload={
                         "backend": "claude",
                         "claude": {
+                            "model": "claude-sonnet-4-6",
                             "env_active": "",
                             "env": [
                                 {
@@ -139,6 +156,7 @@ class WebRunApiTests(unittest.TestCase):
             cfg = read_json(root / "config.json")
 
         self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(cfg["claude"]["model"], "claude-sonnet-4-6")
         self.assertIsNone(cfg["claude"]["env_active"])
         self.assertEqual(cfg["claude"]["env"][0]["name"], "work")
 

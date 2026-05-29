@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
+from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import proxy_env_for_agent
@@ -34,9 +34,12 @@ def run_claude_task(args) -> int:
     permission_mode = args.permission_mode or claude_permission_mode(mode, args.sandbox)
     os.environ["AHA_AGENT_ID"] = "main"
     os.environ["AHA_BACKEND"] = "claude"
-    os.environ["AHA_MODEL"] = args.model or ""
-    os.environ["AHA_GENERATED_BY"] = generated_by_for_backend_model("claude", args.model)
     cfg = load_config(root)
+    configured_model = args.model or (cfg.get("claude", {}) or {}).get("model")
+    claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), configured_model)
+    resolved_model = claude_resolved_model(claude_config, configured_model)
+    os.environ["AHA_MODEL"] = resolved_model or ""
+    os.environ["AHA_GENERATED_BY"] = generated_by_for_backend_model("claude", resolved_model)
     session = ensure_session(root, run_id, task_id, "main", "claude")
     task = task_snapshot(root, run_id, task_id)["task"]
     agent = next((item for item in task.get("agents", []) if item.get("id") == "main"), {})
@@ -61,7 +64,7 @@ def run_claude_task(args) -> int:
         cwd=root,
         output_file=output_file,
         claude_bin=args.claude_bin,
-        model=args.model,
+        model=claude_cli_model(configured_model),
         permission_mode=permission_mode,
         extra_args=args.extra_arg or [],
         events_file=events_file,
@@ -70,7 +73,7 @@ def run_claude_task(args) -> int:
         source="claude-runner",
         session=session,
         proxy_env=proxy_env_for_agent(agent, task),
-        claude_config=cfg.get("claude", {}),
+        claude_config=claude_config,
     )
     if session:
         save_session(root, session)

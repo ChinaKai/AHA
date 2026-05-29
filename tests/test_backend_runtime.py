@@ -110,6 +110,47 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["resolved_model"], CODEX_DEFAULT_MODEL)
         self.assertEqual(status["model"], CODEX_DEFAULT_MODEL)
 
+    def test_start_backend_uses_selected_codex_env_model_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg["codex"]["env"] = [
+                    {
+                        "name": "openai",
+                        "OPENAI_API_KEY": "work-key",
+                        "OPENAI_BASE_URL": "https://openai.test/v1",
+                        "OPENAI_MODEL": "kimi-k2.6",
+                        "CODEX_WIRE_API": "responses",
+                        "CODEX_ENV_KEY": "MINIMAX_API_KEY",
+                    }
+                ]
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+                code, plan_output = self.run_cli("plan", "Codex env model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4244
+
+                with (
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    status = start_backend(root / ".aha", run_id, "main", backend="codex", model="env:openai", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        command = popen.call_args.args[0]
+        self.assertEqual(env["MINIMAX_API_KEY"], "work-key")
+        self.assertNotIn("OPENAI_BASE_URL", env)
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], "env:openai")
+        self.assertEqual(status["requested_model"], "env:openai")
+        self.assertEqual(status["resolved_model"], "kimi-k2.6")
+
     def test_backend_status_reports_context_pressure_from_latest_codex_token_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -464,6 +505,45 @@ class BackendRuntimeTests(unittest.TestCase):
         env = popen.call_args.kwargs["env"]
         self.assertEqual(env["ANTHROPIC_API_KEY"], "test-key")
         self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://claude.test")
+
+    def test_start_backend_uses_selected_claude_env_model_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg["claude"]["env"] = [
+                    {
+                        "name": "work",
+                        "ANTHROPIC_API_KEY": "work-key",
+                        "ANTHROPIC_BASE_URL": "https://claude.test",
+                        "ANTHROPIC_MODEL": "kimi-k2.6",
+                    }
+                ]
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+                code, plan_output = self.run_cli("plan", "Claude env model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4243
+
+                with (
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    status = start_backend(root / ".aha", run_id, "main", backend="claude", model="env:work", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        command = popen.call_args.args[0]
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "work-key")
+        self.assertEqual(env["ANTHROPIC_MODEL"], "kimi-k2.6")
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], "env:work")
+        self.assertEqual(status["requested_model"], "env:work")
+        self.assertEqual(status["resolved_model"], "kimi-k2.6")
 
     def test_claude_exec_reports_missing_auth_env_before_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

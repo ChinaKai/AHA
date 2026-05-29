@@ -43,6 +43,14 @@ APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 SESSION_POLICY_OPTIONS = {"sticky", "fresh"}
 BOOTSTRAP_BACKEND_OPTIONS = {"codex", "claude"}
 CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
+CODEX_ENV_GROUP_FIELDS = ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY")
+CODEX_ENV_GROUP_ALIASES = {
+    "OPENAI_BASE_URL": ("OPENAI_BASE_URL", "base_url"),
+    "OPENAI_MODEL": ("OPENAI_MODEL", "model"),
+    "OPENAI_API_KEY": ("OPENAI_API_KEY", "api_key"),
+    "CODEX_WIRE_API": ("CODEX_WIRE_API", "wire_api"),
+    "CODEX_ENV_KEY": ("CODEX_ENV_KEY", "env_key"),
+}
 CLAUDE_ENV_GROUP_ALIASES = {
     "ANTHROPIC_BASE_URL": ("ANTHROPIC_BASE_URL", "base_url"),
     "ANTHROPIC_MODEL": ("ANTHROPIC_MODEL", "model"),
@@ -174,6 +182,33 @@ def _claude_env_groups(value: object) -> list[dict]:
     return groups
 
 
+def _codex_env_groups(value: object) -> list[dict]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        legacy = {"name": "default"}
+        for key in CODEX_ENV_GROUP_FIELDS:
+            legacy[key] = next((str(value.get(alias) or "").strip() for alias in CODEX_ENV_GROUP_ALIASES[key] if value.get(alias)), "")
+        legacy["CODEX_WIRE_API"] = "responses"
+        if not any(legacy.get(key) for key in CODEX_ENV_GROUP_FIELDS):
+            return []
+        return [legacy]
+    if not isinstance(value, list):
+        raise ValueError("codex.env must be a list")
+    groups: list[dict] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("codex.env entries must be objects")
+        raw_name = str(item.get("name") or "").strip()
+        group = {"name": raw_name or f"env-{index}"}
+        for key in CODEX_ENV_GROUP_FIELDS:
+            group[key] = str(item.get(key) or "").strip()
+        group["CODEX_WIRE_API"] = "responses"
+        if raw_name or any(group.get(key) for key in CODEX_ENV_GROUP_FIELDS):
+            groups.append(group)
+    return groups
+
+
 def _config_sandbox(value: object, default: str) -> str:
     sandbox = _string_or_default(value, default)
     if sandbox not in CONFIG_SANDBOX_OPTIONS:
@@ -203,6 +238,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
 
     codex_payload = _object_value(payload.get("codex"), "codex")
     codex_defaults = defaults["codex"]
+    codex_env = _codex_env_groups(codex_payload.get("env"))
     codex = {
         "bin": _string_or_default(codex_payload.get("bin"), str(codex_defaults["bin"])),
         "model": _optional_string(codex_payload.get("model")),
@@ -210,6 +246,8 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "approval": _string_or_default(codex_payload.get("approval"), str(codex_defaults["approval"])),
         "json": parse_optional_bool(codex_payload.get("json", codex_defaults["json"]), "codex.json"),
         "session_policy": _session_policy(codex_payload.get("session_policy"), str(codex_defaults["session_policy"])),
+        "env_active": _optional_string(codex_payload.get("env_active")),
+        "env": codex_env,
     }
     if codex["approval"] not in APPROVAL_OPTIONS:
         raise ValueError(f"unknown approval: {codex['approval']}")
@@ -219,6 +257,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
     claude_env = _claude_env_groups(claude_payload.get("env"))
     claude = {
         "bin": _string_or_default(claude_payload.get("bin"), str(claude_defaults["bin"])),
+        "model": _optional_string(claude_payload.get("model")),
         "sandbox": _config_sandbox(claude_payload.get("sandbox"), str(claude_defaults["sandbox"])),
         "permission_mode": _optional_string(claude_payload.get("permission_mode")),
         "session_policy": _session_policy(claude_payload.get("session_policy"), str(claude_defaults["session_policy"])),

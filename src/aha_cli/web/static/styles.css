@@ -2271,7 +2271,7 @@ button {
 #agents,
 .agent-section,
 .agent-card,
-.agent-permissions {
+.agent-config-editor {
   min-width: 0;
   max-width: 100%;
 }
@@ -2337,33 +2337,25 @@ button {
   background: #f2f4f7;
   color: #475467;
 }
-.agent-permissions {
+.agent-config-editor {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-top: 7px;
 }
-.agent-backend-select {
+.agent-config-editor [data-agent-config-part="model"],
+.agent-config-editor [data-agent-config-apply] {
   grid-column: 1 / -1;
 }
-.agent-proxy {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 7px;
-  color: #475467;
-  font-size: 12px;
-}
-.agent-proxy input {
-  min-width: auto;
-  min-height: auto;
-  margin: 0;
-}
-.agent-permissions select {
+.agent-config-editor select {
   width: 100%;
   min-width: 0;
   min-height: 30px;
   padding: 0 6px;
+  font-size: 12px;
+}
+.agent-config-editor button {
+  min-height: 30px;
   font-size: 12px;
 }
 .empty {
@@ -2992,7 +2984,7 @@ body.empty-run .panel {
     box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
   }
   .field-row,
-  .agent-permissions {
+  .agent-config-editor {
     grid-template-columns: 1fr;
   }
   .task-list {
@@ -3130,7 +3122,7 @@ body.empty-run .panel {
   .agent-process {
     min-width: 0;
   }
-  .agent-permissions select {
+  .agent-config-editor select {
     width: 100%;
   }
   .message-head {

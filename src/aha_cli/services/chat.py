@@ -6,8 +6,8 @@ import time
 import traceback
 import uuid
 
-from aha_cli.backends.claude import claude_permission_mode, run_claude_exec
-from aha_cli.backends.codex import codex_sandbox, run_codex_exec
+from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
+from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
 from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
@@ -290,12 +290,19 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 requested_sandbox = (agent or {}).get("sandbox") or task.get("preferred_sandbox") or args.sandbox
                 requested_approval = (agent or {}).get("approval") or task.get("preferred_approval") or args.approval
                 configured_model = args.model or (agent or {}).get("model") or task.get("preferred_model")
+                if backend_name == "codex" and not configured_model:
+                    configured_model = (cfg.get("codex", {}) or {}).get("model")
+                if backend_name == "claude" and not configured_model:
+                    configured_model = (cfg.get("claude", {}) or {}).get("model")
                 model = configured_model or session.get("model")
                 raw_requested_model = getattr(args, "requested_model", None)
                 requested_model = None if raw_requested_model == "" else raw_requested_model
                 if raw_requested_model is None:
                     requested_model = configured_model if configured_model is not None else session.get("requested_model", model)
-                resolved_model = resolve_model(backend_name, model)
+                codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend_name == "codex" else None
+                claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend_name == "claude" else None
+                command_model = claude_cli_model(model) if backend_name == "claude" else codex_cli_model(codex_config, model) if backend_name == "codex" else model
+                resolved_model = claude_resolved_model(claude_config, model) if backend_name == "claude" else codex_resolved_model(codex_config, model) if backend_name == "codex" else resolve_model(backend_name, command_model)
                 if backend_name == "codex":
                     session["requested_model"] = requested_model
                     session["resolved_model"] = resolved_model
@@ -338,7 +345,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             cwd=workspace,
                             output_file=output_file,
                             claude_bin=getattr(args, "claude_bin", "claude"),
-                            model=model,
+                            model=command_model,
                             permission_mode=claude_permission_mode("research", sandbox),
                             extra_args=args.extra_arg or [],
                             events_file=events_file,
@@ -348,7 +355,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             target=args.target,
                             session=session,
                             proxy_env=proxy_env,
-                            claude_config=cfg.get("claude", {}),
+                            claude_config=claude_config,
                         )
                     else:
                         exit_code, reply, session = run_codex_exec(
@@ -368,6 +375,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             target=args.target,
                             session=session,
                             proxy_env=proxy_env,
+                            codex_config=codex_config,
                         )
                 except Exception as exc:
                     traceback.print_exc()

@@ -31,9 +31,12 @@ def default_config() -> dict:
             "approval": "never",
             "json": True,
             "session_policy": "sticky",
+            "env_active": None,
+            "env": [],
         },
         "claude": {
             "bin": "claude",
+            "model": None,
             "sandbox": "auto",
             "permission_mode": None,
             "session_policy": "sticky",

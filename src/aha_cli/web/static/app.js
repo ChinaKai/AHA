@@ -88,7 +88,9 @@ const defaultTaskContextThresholdPercent = 75;
 const defaultHttpProxy = "http://127.0.0.1:7890";
 const defaultHttpsProxy = defaultHttpProxy;
 const defaultNoProxy = "localhost,127.0.0.1,::1";
+const codexEnvGroupFields = ["OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY"];
 const claudeEnvGroupFields = ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY"];
+const claudeEnvModelPrefix = "env:";
 const collapsedMessageCharLimit = 900;
 const collapsedMessageLineLimit = 2;
 const conversationFilters = {
@@ -1532,7 +1534,7 @@ function initSettingsDialog() {
   settingsDialogEl?.addEventListener("input", event => {
     const input = event.target instanceof HTMLInputElement ? event.target : null;
     if (!input?.matches("[data-bootstrap-env-name], [data-bootstrap-env-field]")) return;
-    syncBootstrapEnvActiveOptions(input.closest("[data-bootstrap-config-form]"));
+    syncBootstrapModelOptions(input.closest("[data-bootstrap-config-form]"));
   });
 }
 
@@ -2610,6 +2612,7 @@ function agentBackendOptions() {
 }
 
 function agentRuntimeFieldLabel(field) {
+  if (field === "agent_config") return "runtime settings";
   if (field === "sandbox") return "sandbox";
   if (field === "approval") return "approval";
   if (field === "proxy_enabled") return "proxy";
@@ -2617,16 +2620,8 @@ function agentRuntimeFieldLabel(field) {
 }
 
 function agentRuntimeChangeNeedsRestartChoice(agent, field) {
-  if (!["sandbox", "approval", "proxy_enabled"].includes(field)) return false;
+  if (!["agent_config", "sandbox", "approval", "proxy_enabled"].includes(field)) return false;
   return ["running", "busy"].includes(agentBackendProcessStatus(agent));
-}
-
-function setAgentConfigControlValue(target, value) {
-  if (target instanceof HTMLInputElement && target.type === "checkbox") {
-    target.checked = Boolean(value);
-  } else {
-    target.value = String(value ?? "");
-  }
 }
 
 function requestAgentRuntimeConfigAction(agent, field, value) {
@@ -4143,59 +4138,118 @@ async function loadBackends() {
   return payload;
 }
 
-function activeClaudeEnvGroup() {
-  const claude = bootstrapConfigData()?.claude || {};
-  const groups = bootstrapEnvGroups(claude.env);
-  if (!groups.length) return null;
-  const activeConfigured = Object.prototype.hasOwnProperty.call(claude, "env_active");
-  const active = configString(claude.env_active);
-  if (activeConfigured && !active) return null;
-  return groups.find((group, index) => bootstrapEnvGroupName(group, index) === active) || groups[0];
+function claudeEnvModelValue(name) {
+  const clean = configString(name).trim();
+  return clean ? `${claudeEnvModelPrefix}${clean}` : "";
 }
 
-function activeClaudeEnvLabel() {
-  const group = activeClaudeEnvGroup();
-  if (!group) return "env not configured";
-  return activeClaudeEnvModelLabel();
+function isClaudeEnvModelValue(value) {
+  return configString(value).startsWith(claudeEnvModelPrefix);
 }
 
-function activeClaudeEnvModelLabel() {
-  const group = activeClaudeEnvGroup();
-  if (!group) return "Claude official";
-  return configString(group.ANTHROPIC_MODEL, "not configured");
+function claudeEnvModelName(value) {
+  if (!isClaudeEnvModelValue(value)) return "";
+  return configString(value).slice(claudeEnvModelPrefix.length).trim();
 }
 
-function activeClaudeEnvConfigured() {
-  const group = activeClaudeEnvGroup();
-  if (!group) return false;
-  return claudeEnvGroupFields.some(key => Boolean(configString(group[key])));
+function claudeEnvModelLabel(group, index) {
+  const name = bootstrapEnvGroupName(group, index);
+  const model = configString(group?.ANTHROPIC_MODEL, "not configured");
+  return `${model} (${name})`;
 }
 
-function taskModelSelectionEnabled() {
-  return taskBackendEl.value !== "claude" || !activeClaudeEnvConfigured();
+function codexEnvModelValue(name) {
+  return claudeEnvModelValue(name);
+}
+
+function codexEnvModelName(value) {
+  return claudeEnvModelName(value);
+}
+
+function codexEnvModelLabel(group, index) {
+  const name = bootstrapEnvGroupName(group, index);
+  const model = configString(group?.OPENAI_MODEL, "not configured");
+  return `${model} (${name})`;
+}
+
+function codexModelOptions() {
+  const official = backendModels.get("codex") || [];
+  const officialOptions = official.map(model => ({
+    name: configString(model.name),
+    label: configString(model.label, model.name || "default")
+  }));
+  const envOptions = bootstrapCodexEnvGroups(bootstrapConfigData()?.codex?.env)
+    .map((group, index) => ({
+      name: codexEnvModelValue(bootstrapEnvGroupName(group, index)),
+      label: codexEnvModelLabel(group, index)
+    }))
+    .filter(option => option.name);
+  return [...officialOptions, ...envOptions];
+}
+
+function claudeModelOptions() {
+  const official = backendModels.get("claude") || [];
+  const officialOptions = official.map(model => ({
+    name: configString(model.name),
+    label: configString(model.label, model.name || "default")
+  }));
+  const envOptions = bootstrapEnvGroups(bootstrapConfigData()?.claude?.env)
+    .map((group, index) => ({
+      name: claudeEnvModelValue(bootstrapEnvGroupName(group, index)),
+      label: claudeEnvModelLabel(group, index)
+    }))
+    .filter(option => option.name);
+  return [...officialOptions, ...envOptions];
+}
+
+function modelOptionsForBackend(backend) {
+  if (backend === "codex") return codexModelOptions();
+  if (backend === "claude") return claudeModelOptions();
+  return backendModels.get(backend) || [{ name: "", label: "default" }];
+}
+
+function defaultModelForBackend(backend) {
+  const cfg = bootstrapConfigData();
+  if (backend === "claude") {
+    const configured = configString(cfg?.claude?.model);
+    const legacyEnv = configString(cfg?.claude?.env_active);
+    return configured || claudeEnvModelValue(legacyEnv);
+  }
+  if (backend === "codex") {
+    const configured = configString(cfg?.codex?.model);
+    const legacyEnv = configString(cfg?.codex?.env_active);
+    return configured || codexEnvModelValue(legacyEnv);
+  }
+  return "";
+}
+
+function modelLabelForBackend(backend, value) {
+  const selected = configString(value);
+  const option = modelOptionsForBackend(backend).find(item => configString(item.name) === selected);
+  return configString(option?.label, selected || "default");
+}
+
+function fillModelSelect(select, backend, selected = "") {
+  if (!select) return;
+  const options = modelOptionsForBackend(backend);
+  select.innerHTML = "";
+  for (const model of options) {
+    const opt = document.createElement("option");
+    opt.value = configString(model.name);
+    opt.textContent = configString(model.label, model.name || "default");
+    select.appendChild(opt);
+  }
+  const values = [...select.options].map(item => item.value);
+  const requested = configString(selected);
+  const configured = defaultModelForBackend(backend);
+  const fallback = values.includes(requested) ? requested : configured;
+  if (values.includes(fallback)) select.value = fallback;
 }
 
 function renderModelOptions() {
-  const useModelSelect = taskModelSelectionEnabled();
   const previous = taskModelEl.value;
-  taskModelEl.innerHTML = "";
-  if (!useModelSelect) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = activeClaudeEnvModelLabel();
-    taskModelEl.appendChild(opt);
-    taskModelEl.disabled = true;
-    return;
-  }
   taskModelEl.disabled = false;
-  const models = backendModels.get(taskBackendEl.value) || [{ name: "", label: "default" }];
-  for (const model of models) {
-    const opt = document.createElement("option");
-    opt.value = model.name;
-    opt.textContent = model.label || model.name || "default";
-    taskModelEl.appendChild(opt);
-  }
-  if ([...taskModelEl.options].some(item => item.value === previous)) taskModelEl.value = previous;
+  fillModelSelect(taskModelEl, taskBackendEl.value, previous);
 }
 
 async function loadWorkspaces() {
@@ -5232,6 +5286,90 @@ function renderMobileTaskSummary(task) {
   mobileTaskSummaryEl.title = `${task.id} / ${task.title}`;
 }
 
+function agentModelValue(agent, task) {
+  return configString(agent?.model || (agent?.id === "main" ? task?.preferred_model : "") || defaultModelForBackend(agent?.backend || task?.preferred_backend || "codex"));
+}
+
+function normalizeAgentConfig(config = {}) {
+  return {
+    backend: configString(config.backend, "codex"),
+    model: configString(config.model),
+    sandbox: configString(config.sandbox, "workspace-write"),
+    approval: configString(config.approval, "never"),
+    proxyEnabled: Boolean(config.proxyEnabled)
+  };
+}
+
+function agentConfigValue(config = {}) {
+  const normalized = normalizeAgentConfig(config);
+  return JSON.stringify([
+    normalized.backend,
+    normalized.model,
+    normalized.sandbox,
+    normalized.approval,
+    normalized.proxyEnabled
+  ]);
+}
+
+function agentConfigLabel(config = {}) {
+  const normalized = normalizeAgentConfig(config);
+  return [
+    normalized.backend,
+    modelLabelForBackend(normalized.backend, normalized.model),
+    normalized.sandbox,
+    normalized.approval,
+    `proxy ${normalized.proxyEnabled ? "on" : "off"}`
+  ].join(" / ");
+}
+
+function agentBackendModelChanged(previousConfig, nextConfig) {
+  const previous = normalizeAgentConfig(previousConfig);
+  const next = normalizeAgentConfig(nextConfig);
+  return previous.backend !== next.backend || previous.model !== next.model;
+}
+
+function agentRuntimeConfigChanged(previousConfig, nextConfig) {
+  const previous = normalizeAgentConfig(previousConfig);
+  const next = normalizeAgentConfig(nextConfig);
+  return previous.sandbox !== next.sandbox || previous.approval !== next.approval || previous.proxyEnabled !== next.proxyEnabled;
+}
+
+function confirmAgentConfigChange(agent, previousConfig, nextConfig) {
+  if (agentConfigValue(previousConfig) === agentConfigValue(nextConfig)) return true;
+  const previousLabel = agentConfigLabel(previousConfig);
+  const nextLabel = agentConfigLabel(nextConfig);
+  return confirm(
+    `确认将 ${agent.id} config 从 ${previousLabel} 切换到 ${nextLabel}？\n\n` +
+    "AHA 会停止当前 backend、重置 backend_session_id，并给新 backend 写入交接信息。"
+  );
+}
+
+function proxySelectOptions(current) {
+  const selected = Boolean(current) ? "true" : "false";
+  return [
+    ["false", "proxy off"],
+    ["true", "proxy on"]
+  ].map(([value, label]) => (
+    `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`
+  )).join("");
+}
+
+function readAgentConfigEditor(card) {
+  return normalizeAgentConfig({
+    backend: card.querySelector('[data-agent-config-part="backend"]')?.value,
+    model: card.querySelector('[data-agent-config-part="model"]')?.value,
+    sandbox: card.querySelector('[data-agent-config-part="sandbox"]')?.value,
+    approval: card.querySelector('[data-agent-config-part="approval"]')?.value,
+    proxyEnabled: card.querySelector('[data-agent-config-part="proxy_enabled"]')?.value === "true"
+  });
+}
+
+function syncAgentConfigEditorModel(card) {
+  const backendSelect = card.querySelector('[data-agent-config-part="backend"]');
+  const modelSelect = card.querySelector('[data-agent-config-part="model"]');
+  fillModelSelect(modelSelect, backendSelect?.value || "codex", modelSelect?.value || "");
+}
+
 function renderAgents() {
   const task = selectedTask();
   agentsEl.innerHTML = "";
@@ -5276,7 +5414,15 @@ function renderAgents() {
     const lifecycleTiming = agentStatusTiming(agent);
     const lifecycleTimingText = agentStatusTimingText(agent);
     const lastReply = formatLocalTimestamp(agent.backend_process_last_reply_at, agent.backend_process_last_reply_at || "");
-    const resolvedModel = agent.backend_resolved_model || agent.model || "default";
+    const modelValue = agentModelValue(agent, task);
+    const currentConfig = normalizeAgentConfig({
+      backend: agent.backend || "codex",
+      model: modelValue,
+      sandbox,
+      approval,
+      proxyEnabled
+    });
+    const resolvedModel = agent.backend_resolved_model || modelLabelForBackend(agent.backend, modelValue);
     const contextPressure = agentContextPressureSummary(agent);
     const processDetail = [
       `process=${rawProcessStatus}`,
@@ -5310,60 +5456,50 @@ function renderAgents() {
       <div class="meta truncate">sandbox=${escapeHtml(sandbox)} | approval=${escapeHtml(approval)}</div>
       <div class="meta truncate">proxy=${escapeHtml(proxyEnabled ? "on" : "off")} | task proxy=${escapeHtml(taskProxySummary(task))}</div>
       <div class="meta truncate">process=${escapeHtml(rawProcessStatus)} | ${escapeHtml(contextPressure)} | session=${escapeHtml(agent.backend_session_id || "-")}</div>
-      <div class="agent-permissions">
-        <select class="agent-backend-select" data-agent-field="backend" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(agentBackendOptions(), agent.backend || "codex")}</select>
-        <select data-agent-field="sandbox" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(sandboxOptions, sandbox)}</select>
-        <select data-agent-field="approval" data-agent-id="${escapeHtml(agent.id)}">${selectOptions(approvalOptions, approval)}</select>
+      <div class="agent-config-editor" data-agent-config-editor data-agent-id="${escapeHtml(agent.id)}">
+        <select data-agent-config-part="backend" title="Backend">${selectOptions(agentBackendOptions(), currentConfig.backend)}</select>
+        <select data-agent-config-part="model" title="Model">${backendModelSelectOptions(currentConfig.backend, currentConfig.model)}</select>
+        <select data-agent-config-part="sandbox" title="Sandbox">${selectOptions(sandboxOptions, currentConfig.sandbox)}</select>
+        <select data-agent-config-part="approval" title="Approval">${selectOptions(approvalOptions, currentConfig.approval)}</select>
+        <select data-agent-config-part="proxy_enabled" title="Proxy">${proxySelectOptions(currentConfig.proxyEnabled)}</select>
+        <button type="button" data-agent-config-apply>Confirm</button>
       </div>
-      <label class="agent-proxy">
-        <input type="checkbox" data-agent-field="proxy_enabled" data-agent-id="${escapeHtml(agent.id)}" ${proxyEnabled ? "checked" : ""}>
-        <span>Proxy</span>
-      </label>
     `;
     card.addEventListener("click", event => {
       const clicked = event.target instanceof Element ? event.target : null;
-      if (clicked?.closest("select") || clicked?.closest("input")) return;
+      if (clicked?.closest("select") || clicked?.closest("input") || clicked?.closest("button")) return;
       agentTargetEl.value = agent.id;
       agentTargetEl.dispatchEvent(new Event("change"));
       closeMobileSheets();
     });
     card.addEventListener("change", event => {
       const target = event.target instanceof HTMLElement ? event.target : null;
-      if (!target?.dataset.agentField) return;
-      const field = target.dataset.agentField;
-      const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
-      const previousValue = field === "sandbox"
-        ? sandbox
-        : field === "approval"
-          ? approval
-          : field === "proxy_enabled"
-            ? proxyEnabled
-            : agent.backend || "codex";
-      if (field === "backend") {
-        const previousBackend = agent.backend || "codex";
-        const nextBackend = String(value || "").trim();
-        if (nextBackend && nextBackend !== previousBackend) {
-          const confirmed = confirm(
-            `确认将 ${agent.id} backend 从 ${previousBackend} 切换到 ${nextBackend}？\n\n` +
-            "AHA 会停止当前 backend、重置 backend_session_id，并给新 backend 写入交接信息。"
-          );
-          if (!confirmed) {
-            setAgentConfigControlValue(target, previousBackend);
-            return;
-          }
-        }
-      }
+      if (target?.dataset.agentConfigPart === "backend") syncAgentConfigEditorModel(card);
+    });
+    card.addEventListener("click", event => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (!target?.matches("[data-agent-config-apply]")) return;
+      const nextConfig = readAgentConfigEditor(card);
+      const backendModelChanged = agentBackendModelChanged(currentConfig, nextConfig);
+      const runtimeChanged = agentRuntimeConfigChanged(currentConfig, nextConfig);
+      if (!backendModelChanged && !runtimeChanged) return;
       void (async () => {
         let restartBackend = false;
-        if (agentRuntimeChangeNeedsRestartChoice(agent, field) && value !== previousValue) {
-          const action = await requestAgentRuntimeConfigAction(agent, field, value);
+        if (backendModelChanged) {
+          const confirmed = confirmAgentConfigChange(agent, currentConfig, nextConfig);
+          if (!confirmed) {
+            renderAgents();
+            return;
+          }
+        } else if (runtimeChanged && agentRuntimeChangeNeedsRestartChoice(agent, "agent_config")) {
+          const action = await requestAgentRuntimeConfigAction(agent, "agent_config", agentConfigLabel(nextConfig));
           if (action === "cancel") {
-            setAgentConfigControlValue(target, previousValue);
+            renderAgents();
             return;
           }
           restartBackend = action === "restart";
         }
-        await updateAgentConfig(agent.id, field, value, { restartBackend });
+        await updateAgentConfig(agent.id, nextConfig, { includeBackendModel: backendModelChanged, restartBackend });
       })();
     });
     return card;
@@ -5442,11 +5578,18 @@ function renderBackendStatus() {
   `;
 }
 
-async function updateAgentConfig(agentId, field, value, options = {}) {
+async function updateAgentConfig(agentId, config, options = {}) {
   const task = selectedTask();
-  if (!task || !agentId || !field) return;
+  if (!task || !agentId) return;
+  const normalized = normalizeAgentConfig(config);
   const payload = { task_id: task.id, agent_id: agentId };
-  payload[field] = value;
+  payload.sandbox = normalized.sandbox;
+  payload.approval = normalized.approval;
+  payload.proxy_enabled = normalized.proxyEnabled;
+  if (options.includeBackendModel) {
+    payload.backend = normalized.backend;
+    payload.model = normalized.model || null;
+  }
   if (options.restartBackend) payload.restart_backend = true;
   const res = await fetchWithTimeout(apiUrl("/api/agent-config"), {
     method: "POST",
@@ -5537,10 +5680,7 @@ function selectedWorkspaceLabel() {
 }
 
 function taskBackendConfirmLabel(payload) {
-  if (payload.backend === "claude" && !taskModelSelectionEnabled()) {
-    return `claude / ${activeClaudeEnvLabel()}`;
-  }
-  return `${payload.backend || "default"} / ${payload.model || "default"}`;
+  return `${payload.backend || "default"} / ${modelLabelForBackend(payload.backend, payload.model)}`;
 }
 
 function addTaskConfirmRows(payload) {
@@ -5723,7 +5863,7 @@ function renderTimelineEvent(event) {
     const waitingReason = data.waiting_reason ? ` waiting=${data.waiting_reason}` : "";
     return renderTimelineStatus("agent status", `${data.agent_id || "-"} ${data.status || "-"}${waitingReason}`, data.status || "session", ts);
   }
-  if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} backend=${data.backend || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
+  if (event.type === "agent_config_updated") return renderTimelineStatus("agent config updated", `${data.agent_id || "-"} backend=${data.backend || "-"} model=${data.model || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
   if (event.type === "agent_backend_switched") return renderTimelineStatus("agent backend switched", `${data.agent_id || "-"} ${data.old_backend || "-"} -> ${data.new_backend || "-"} summary=${data.summary_path || "-"}`, "session", ts);
   if (event.type === "agent_backend_restarted") return renderTimelineStatus("agent backend restarted", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", ts);
   if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy updated", `default=${data.proxy_enabled ? "on" : "off"} http=${data.http_proxy_configured ? "set" : "-"} https=${data.https_proxy_configured ? "set" : "-"} no_proxy=${data.no_proxy_configured ? "set" : "-"}`, "session", ts);
@@ -5861,16 +6001,25 @@ function bootstrapEnvGroups(value) {
   return [];
 }
 
-function bootstrapEnvGroupName(item, index) {
-  return configString(item?.name, `env-${index + 1}`);
+function bootstrapCodexEnvGroups(value) {
+  if (Array.isArray(value)) {
+    return value.filter(item => item && typeof item === "object" && !Array.isArray(item));
+  }
+  if (value && typeof value === "object") {
+    return [{
+      name: "default",
+      OPENAI_BASE_URL: value.OPENAI_BASE_URL || value.base_url || "",
+      OPENAI_MODEL: value.OPENAI_MODEL || value.model || "",
+      OPENAI_API_KEY: value.OPENAI_API_KEY || value.api_key || "",
+      CODEX_WIRE_API: value.CODEX_WIRE_API || value.wire_api || "",
+      CODEX_ENV_KEY: value.CODEX_ENV_KEY || value.env_key || ""
+    }];
+  }
+  return [];
 }
 
-function bootstrapEnvActiveOptions(value, active = "") {
-  const groups = bootstrapEnvGroups(value);
-  const names = groups.map((item, index) => bootstrapEnvGroupName(item, index));
-  const activeName = names.includes(configString(active)) ? configString(active) : "";
-  const official = `<option value="" ${activeName ? "" : "selected"}>Claude official (no env)</option>`;
-  return `${official}${names.map(name => `<option value="${escapeHtml(name)}" ${name === activeName ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}`;
+function bootstrapEnvGroupName(item, index) {
+  return configString(item?.name, `env-${index + 1}`);
 }
 
 function bootstrapEnvRows(value, active = "", options = {}) {
@@ -5879,10 +6028,44 @@ function bootstrapEnvRows(value, active = "", options = {}) {
   return rows.map((item, index) => bootstrapConfigRowHtml("claude.env", item, index, options)).join("");
 }
 
+function bootstrapCodexEnvRows(value, options = {}) {
+  const groups = bootstrapCodexEnvGroups(value);
+  const rows = groups.length ? groups : [{ name: "" }];
+  return rows.map((item, index) => bootstrapConfigRowHtml("codex.env", item, index, options)).join("");
+}
+
 function backendModelSelectOptions(backend, current) {
-  const models = backendModels.get(backend) || [{ name: "", label: "default" }];
+  const models = modelOptionsForBackend(backend);
   const selected = configString(current);
   return models.map(model => {
+    const name = configString(model.name);
+    const label = configString(model.label, name || "default");
+    return `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+function bootstrapFormModelOptions(form, backend) {
+  const official = backendModels.get(backend) || [];
+  const officialOptions = official.map(model => ({
+    name: configString(model.name),
+    label: configString(model.label, model.name || "default")
+  }));
+  const envOptions = bootstrapConfigEnvGroups(form, backend)
+    .map((group, index) => {
+      const name = bootstrapEnvGroupName(group, index);
+      const model = backend === "codex" ? configString(group.OPENAI_MODEL, "not configured") : configString(group.ANTHROPIC_MODEL, "not configured");
+      return {
+        name: `${claudeEnvModelPrefix}${name}`,
+        label: `${model} (${name})`
+      };
+    })
+    .filter(option => option.name !== claudeEnvModelPrefix);
+  return [...officialOptions, ...envOptions];
+}
+
+function bootstrapFormModelSelectOptions(form, backend, current) {
+  const selected = configString(current);
+  return bootstrapFormModelOptions(form, backend).map(model => {
     const name = configString(model.name);
     const label = configString(model.label, name || "default");
     return `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
@@ -5895,6 +6078,52 @@ function bootstrapConfigRowHtml(kind, data = {}, index = 0, options = {}) {
       <div class="bootstrap-list-row" data-bootstrap-row="workspace_roots">
         <input data-bootstrap-root-value placeholder="/path/to/projects" value="${escapeHtml(configString(data.value))}">
         <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
+      </div>
+    `;
+  }
+  if (kind === "codex.env") {
+    const name = configString(data.name);
+    const namePlaceholder = index === 0 ? "default" : `env-${index + 1}`;
+    const wireApi = "responses";
+    const envKey = configString(data.CODEX_ENV_KEY || data.env_key, "OPENAI_API_KEY");
+    const apiKeyValue = options.maskSecrets ? "" : configString(data.OPENAI_API_KEY);
+    const apiKeyPlaceholder = options.maskSecrets && configString(data.OPENAI_API_KEY)
+      ? "Configured; leave blank to keep"
+      : "";
+    return `
+      <div class="bootstrap-env-group" data-bootstrap-row="codex.env">
+        <div class="bootstrap-env-group-head">
+          <strong>Env group</strong>
+          <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
+        </div>
+        <div class="bootstrap-env-fields">
+          <label class="field-label">
+            <span>Name</span>
+            <input data-bootstrap-env-name placeholder="${escapeHtml(namePlaceholder)}" value="${escapeHtml(name)}">
+          </label>
+          <label class="field-label">
+            <span>OpenAI-compatible base URL</span>
+            <input data-bootstrap-env-field="OPENAI_BASE_URL" placeholder="https://api.openai.com/v1" value="${escapeHtml(configString(data.OPENAI_BASE_URL))}">
+          </label>
+          <label class="field-label">
+            <span>Model</span>
+            <input data-bootstrap-env-field="OPENAI_MODEL" placeholder="gpt-5.5" value="${escapeHtml(configString(data.OPENAI_MODEL))}">
+          </label>
+          <label class="field-label">
+            <span>API key</span>
+            <input data-bootstrap-env-field="OPENAI_API_KEY" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
+          </label>
+          <label class="field-label">
+            <span>Wire API</span>
+            <select data-bootstrap-env-field="CODEX_WIRE_API">
+              <option value="responses" ${wireApi === "responses" ? "selected" : ""}>responses</option>
+            </select>
+          </label>
+          <label class="field-label">
+            <span>Env key</span>
+            <input data-bootstrap-env-field="CODEX_ENV_KEY" placeholder="OPENAI_API_KEY" value="${escapeHtml(envKey)}">
+          </label>
+        </div>
       </div>
     `;
   }
@@ -5986,10 +6215,18 @@ function bootstrapConfigFormHtml(options = {}) {
           </label>
           <label class="field-label">
             <span>Model</span>
-            <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codex.model)}</select>
-            <div class="field-help">Default Codex model.</div>
+            <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codex.model || codexEnvModelValue(codex.env_active))}</select>
+            <div class="field-help">Official Codex model or custom OpenAI-compatible provider model.</div>
           </label>
         </div>
+        <label class="field-label">
+          <span>Env groups</span>
+          <div class="bootstrap-config-list" data-bootstrap-config-list="codex.env">
+            ${bootstrapCodexEnvRows(codex.env, { maskSecrets })}
+            <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="codex.env">Add env group</button>
+          </div>
+          <div class="field-help">Codex CLI currently requires OpenAI Responses-compatible providers; Chat Completions-only endpoints are not supported.</div>
+        </label>
       </details>
       <details class="bootstrap-config-section">
         <summary>Claude defaults</summary>
@@ -6000,9 +6237,9 @@ function bootstrapConfigFormHtml(options = {}) {
             <div class="field-help">Claude CLI executable name or path.</div>
           </label>
           <label class="field-label">
-            <span>Active env group</span>
-            <select data-bootstrap-config-field="claude.env_active">${bootstrapEnvActiveOptions(claude.env, claude.env_active)}</select>
-            <div class="field-help">Claude env group to use.</div>
+            <span>Model</span>
+            <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claude.model || claudeEnvModelValue(claude.env_active))}</select>
+            <div class="field-help">Official Claude model or custom env group model.</div>
           </label>
         </div>
         <label class="field-label">
@@ -6011,7 +6248,7 @@ function bootstrapConfigFormHtml(options = {}) {
             ${bootstrapEnvRows(claude.env, claude.env_active, { maskSecrets })}
             <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="claude.env">Add env group</button>
           </div>
-          <div class="field-help">Each group has fixed Anthropic fields; select the group AHA should use.</div>
+          <div class="field-help">Each group becomes a custom Claude model option.</div>
         </label>
       </details>
       <div class="bootstrap-form-actions">
@@ -6274,57 +6511,72 @@ function confirmBootstrapConfigSave(mode) {
   return window.confirm("Save AHA Settings to .aha/config.json?");
 }
 
-function previousBootstrapEnvGroup(index, name) {
-  const groups = bootstrapEnvGroups(bootstrapConfigData()?.claude?.env);
+function previousBootstrapEnvGroup(index, name, backend = "claude") {
+  const cfg = bootstrapConfigData();
+  const groups = backend === "codex" ? bootstrapCodexEnvGroups(cfg?.codex?.env) : bootstrapEnvGroups(cfg?.claude?.env);
   const named = groups.find(group => configString(group.name) === name);
   return named || groups[index] || {};
 }
 
-function bootstrapConfigEnvGroups(form) {
+function bootstrapConfigEnvGroups(form, backend = "claude") {
   const preserveSecrets = bootstrapConfigMode(form) === "settings";
-  return [...form.querySelectorAll("[data-bootstrap-row='claude.env']")]
+  const fields = backend === "codex" ? codexEnvGroupFields : claudeEnvGroupFields;
+  const secretKey = backend === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const modelKey = backend === "codex" ? "OPENAI_MODEL" : "ANTHROPIC_MODEL";
+  return [...form.querySelectorAll(`[data-bootstrap-row='${backend}.env']`)]
     .map((row, index) => {
       const rawName = String(row.querySelector("[data-bootstrap-env-name]")?.value || "").trim();
       const group = {
         name: rawName || `env-${index + 1}`
       };
-      for (const key of claudeEnvGroupFields) {
+      for (const key of fields) {
         group[key] = String(row.querySelector(`[data-bootstrap-env-field="${key}"]`)?.value || "").trim();
       }
-      const hasNonSecretValue = Boolean(rawName || group.ANTHROPIC_BASE_URL || group.ANTHROPIC_MODEL);
-      if (preserveSecrets && !group.ANTHROPIC_API_KEY && hasNonSecretValue) {
-        group.ANTHROPIC_API_KEY = configString(previousBootstrapEnvGroup(index, group.name).ANTHROPIC_API_KEY);
+      const hasNonSecretValue = Boolean(rawName || group[fields[0]] || group[modelKey]);
+      if (preserveSecrets && !group[secretKey] && hasNonSecretValue) {
+        group[secretKey] = configString(previousBootstrapEnvGroup(index, group.name, backend)[secretKey]);
       }
       return {
         group,
-        hasValue: Boolean(hasNonSecretValue || group.ANTHROPIC_API_KEY)
+        hasValue: Boolean(hasNonSecretValue || group[secretKey])
       };
     })
     .filter(item => item.hasValue)
     .map(item => item.group);
 }
 
-function bootstrapConfigEnvGroupNames(form) {
-  return bootstrapConfigEnvGroups(form).map((group, index) => bootstrapEnvGroupName(group, index));
+function bootstrapConfigEnvGroupNames(form, backend = "claude") {
+  return bootstrapConfigEnvGroups(form, backend).map((group, index) => bootstrapEnvGroupName(group, index));
 }
 
-function bootstrapConfigActiveEnvGroup(form) {
-  const names = bootstrapConfigEnvGroupNames(form);
-  const selected = bootstrapConfigText(form, "claude.env_active");
-  if (!selected) return "";
-  if (!names.length) return "";
-  return names.includes(selected) ? selected : names[0];
+function bootstrapConfigCodexModel(form) {
+  return bootstrapConfigText(form, "codex.model");
 }
 
-function syncBootstrapEnvActiveOptions(form) {
-  const select = bootstrapConfigField(form, "claude.env_active");
-  if (!select) return;
-  const previous = String(select.value || "");
-  const names = bootstrapConfigEnvGroupNames(form);
-  const active = names.includes(previous) ? previous : "";
-  const official = `<option value="" ${active ? "" : "selected"}>Claude official (no env)</option>`;
-  select.innerHTML = `${official}${names.map(name => `<option value="${escapeHtml(name)}" ${name === active ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}`;
-  select.value = active;
+function bootstrapConfigClaudeModel(form) {
+  return bootstrapConfigText(form, "claude.model");
+}
+
+function bootstrapConfigCodexActiveEnvGroup(form) {
+  const selected = bootstrapConfigCodexModel(form);
+  const name = codexEnvModelName(selected);
+  return bootstrapConfigEnvGroupNames(form, "codex").includes(name) ? name : "";
+}
+
+function bootstrapConfigClaudeActiveEnvGroup(form) {
+  const selected = bootstrapConfigClaudeModel(form);
+  const name = claudeEnvModelName(selected);
+  return bootstrapConfigEnvGroupNames(form, "claude").includes(name) ? name : "";
+}
+
+function syncBootstrapModelOptions(form) {
+  for (const backend of ["codex", "claude"]) {
+    const select = bootstrapConfigField(form, `${backend}.model`);
+    if (!select) continue;
+    const previous = String(select.value || "");
+    select.innerHTML = bootstrapFormModelSelectOptions(form, backend, previous);
+    if ([...select.options].some(item => item.value === previous)) select.value = previous;
+  }
 }
 
 function addBootstrapConfigRow(button) {
@@ -6333,7 +6585,7 @@ function addBootstrapConfigRow(button) {
   const list = button.closest("[data-bootstrap-config-list]");
   const index = list ? list.querySelectorAll("[data-bootstrap-row]").length : 0;
   button.insertAdjacentHTML("beforebegin", bootstrapConfigRowHtml(kind, {}, index));
-  syncBootstrapEnvActiveOptions(button.closest("[data-bootstrap-config-form]"));
+  syncBootstrapModelOptions(button.closest("[data-bootstrap-config-form]"));
 }
 
 function removeBootstrapConfigRow(button) {
@@ -6343,11 +6595,11 @@ function removeBootstrapConfigRow(button) {
   const rows = [...list.querySelectorAll("[data-bootstrap-row]")];
   if (rows.length <= 1) {
     row.querySelectorAll("input").forEach(input => { input.value = ""; });
-    syncBootstrapEnvActiveOptions(list.closest("[data-bootstrap-config-form]"));
+    syncBootstrapModelOptions(list.closest("[data-bootstrap-config-form]"));
     return;
   }
   row.remove();
-  syncBootstrapEnvActiveOptions(list.closest("[data-bootstrap-config-form]"));
+  syncBootstrapModelOptions(list.closest("[data-bootstrap-config-form]"));
 }
 
 async function saveBootstrapConfigForm(form) {
@@ -6365,19 +6617,22 @@ async function saveBootstrapConfigForm(form) {
       webgame_workspace: bootstrapConfigText(form, "webgame_workspace"),
       codex: {
         bin: bootstrapConfigText(form, "codex.bin") || "codex",
-        model: bootstrapConfigText(form, "codex.model"),
+        model: bootstrapConfigCodexModel(form),
         sandbox: "auto",
         approval: "never",
         json: true,
-        session_policy: "sticky"
+        session_policy: "sticky",
+        env_active: bootstrapConfigCodexActiveEnvGroup(form),
+        env: bootstrapConfigEnvGroups(form, "codex")
       },
       claude: {
         bin: bootstrapConfigText(form, "claude.bin") || "claude",
+        model: bootstrapConfigClaudeModel(form),
         sandbox: "auto",
         permission_mode: "",
         session_policy: "sticky",
-        env_active: bootstrapConfigActiveEnvGroup(form),
-        env: bootstrapConfigEnvGroups(form)
+        env_active: bootstrapConfigClaudeActiveEnvGroup(form),
+        env: bootstrapConfigEnvGroups(form, "claude")
       }
     };
     if (mode === "settings") body.force = true;
@@ -6554,7 +6809,7 @@ taskFormEl?.addEventListener("submit", async event => {
     supervision,
     dispatch: true
   };
-  if (taskModelSelectionEnabled()) payload.model = taskModelEl.value || null;
+  payload.model = taskModelEl.value || null;
   const reopenCreateDialog = Boolean(taskCreateDialogEl?.open);
   if (reopenCreateDialog) closeTaskCreateDialog();
   const confirmed = await confirmAddTask(payload);
@@ -6765,7 +7020,7 @@ panelEl.addEventListener("submit", event => {
 panelEl.addEventListener("input", event => {
   const input = event.target instanceof HTMLInputElement ? event.target : null;
   if (!input?.matches("[data-bootstrap-env-name], [data-bootstrap-env-field]")) return;
-  syncBootstrapEnvActiveOptions(input.closest("[data-bootstrap-config-form]"));
+  syncBootstrapModelOptions(input.closest("[data-bootstrap-config-form]"));
 });
 panelEl.addEventListener("click", event => {
   const firstTaskButton = event.target instanceof Element ? event.target.closest("[data-open-first-task]") : null;

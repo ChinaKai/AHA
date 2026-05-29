@@ -27,6 +27,45 @@ CLAUDE_CONFIG_ENV_ALIASES = {
     "small_fast_model": "ANTHROPIC_SMALL_FAST_MODEL",
 }
 CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
+CLAUDE_ENV_MODEL_PREFIX = "env:"
+
+
+def claude_env_model_value(group_name: str) -> str:
+    name = str(group_name or "").strip()
+    return f"{CLAUDE_ENV_MODEL_PREFIX}{name}" if name else ""
+
+
+def claude_env_group_from_model(model: str | None) -> str | None:
+    value = str(model or "").strip()
+    if not value.startswith(CLAUDE_ENV_MODEL_PREFIX):
+        return None
+    name = value[len(CLAUDE_ENV_MODEL_PREFIX) :].strip()
+    return name or None
+
+
+def claude_cli_model(model: str | None) -> str | None:
+    if claude_env_group_from_model(model):
+        return None
+    value = str(model or "").strip()
+    return value or None
+
+
+def claude_config_for_model(claude_config: dict | None, model: str | None) -> dict:
+    cfg = dict(claude_config or {})
+    env_group = claude_env_group_from_model(model)
+    if env_group:
+        cfg["env_active"] = env_group
+    elif claude_cli_model(model):
+        cfg["env_active"] = None
+    return cfg
+
+
+def claude_resolved_model(claude_config: dict | None, model: str | None) -> str | None:
+    cli_model = claude_cli_model(model)
+    if cli_model:
+        return cli_model
+    env = claude_config_env(claude_config_for_model(claude_config, model))
+    return env.get("ANTHROPIC_MODEL") or None
 
 
 def _normalize_claude_env_key(key: str) -> str | None:

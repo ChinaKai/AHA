@@ -3,12 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aha_cli.backends.codex import codex_sandbox, run_codex_exec
-from aha_cli.backends.registry import resolve_model
+from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import proxy_env_for_agent
-from aha_cli.store.filesystem import append_event_to_file, ensure_session, save_session, task_snapshot
+from aha_cli.store.filesystem import append_event_to_file, ensure_session, load_config, save_session, task_snapshot
 
 
 def run_codex_task(args) -> int:
@@ -33,7 +32,11 @@ def run_codex_task(args) -> int:
     inbox_file = Path(os.environ.get("AHA_INBOX_FILE", ""))
     events_file = Path(os.environ["AHA_EVENTS_FILE"])
     sandbox = codex_sandbox(mode, args.sandbox)
-    resolved_model = resolve_model("codex", args.model)
+    cfg = load_config(root)
+    configured_model = args.model or (cfg.get("codex", {}) or {}).get("model")
+    codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), configured_model)
+    command_model = codex_cli_model(codex_config, configured_model)
+    resolved_model = codex_resolved_model(codex_config, configured_model)
     os.environ["AHA_AGENT_ID"] = "main"
     os.environ["AHA_BACKEND"] = "codex"
     os.environ["AHA_MODEL"] = resolved_model or ""
@@ -62,7 +65,7 @@ def run_codex_task(args) -> int:
         cwd=root,
         output_file=output_file,
         codex_bin=args.codex_bin,
-        model=args.model,
+        model=configured_model,
         sandbox=sandbox,
         approval=args.approval,
         json_events=not args.no_json,
@@ -73,6 +76,7 @@ def run_codex_task(args) -> int:
         source="codex-runner",
         session=session,
         proxy_env=proxy_env_for_agent(agent, task),
+        codex_config=codex_config,
     )
     if session:
         save_session(root, session)

@@ -10,7 +10,8 @@ import sys
 import time
 import zipfile
 
-from aha_cli.backends.claude import apply_claude_environment
+from aha_cli.backends.claude import apply_claude_environment, claude_cli_model, claude_config_for_model, claude_resolved_model
+from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
 from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.commit_policy import generated_by_for_backend_model
@@ -527,6 +528,7 @@ def _backend_proxy_env(root: Path, run_id: str, target: str, task_id: str | None
 def _backend_process_env(
     proxy_env: dict[str, str] | None = None,
     claude_config: dict | None = None,
+    codex_config: dict | None = None,
     aha_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     env = os.environ.copy()
@@ -538,6 +540,7 @@ def _backend_process_env(
             for item in pythonpath.split(os.pathsep)
         )
     _add_user_backend_paths(env)
+    apply_codex_environment(env, codex_config)
     apply_claude_environment(env, claude_config)
     apply_proxy_environment(env, proxy_env)
     if aha_env:
@@ -589,8 +592,22 @@ def start_backend(
     target = target or "main"
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
+    cfg = load_config(root)
+    if backend == "codex" and not model:
+        model = (cfg.get("codex", {}) or {}).get("model")
+    if backend == "claude" and not model:
+        model = (cfg.get("claude", {}) or {}).get("model")
     requested_model = model
-    resolved_model = resolve_model(backend, model)
+    codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend == "codex" else None
+    claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend == "claude" else None
+    command_model = (
+        claude_cli_model(model)
+        if backend == "claude"
+        else codex_cli_model(codex_config, model)
+        if backend == "codex"
+        else model
+    )
+    resolved_model = claude_resolved_model(claude_config, model) if backend == "claude" else codex_resolved_model(codex_config, model) if backend == "codex" else resolve_model(backend, command_model)
     with locked_backend(root, run_id, target, task_id):
         current = backend_status(root, run_id, target, task_id)
         if current["status"] in {"running", "busy"}:
@@ -617,7 +634,6 @@ def start_backend(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = log_path.open("ab")
         proxy_env = _backend_proxy_env(root, run_id, target, task_id)
-        claude_config = load_config(root).get("claude", {}) if backend == "claude" else None
         aha_env = {
             "AHA_ROOT": str(root),
             "AHA_RUN_ID": run_id,
@@ -632,7 +648,7 @@ def start_backend(
             process = subprocess.Popen(
                 command,
                 cwd=root,
-                env=_backend_process_env(proxy_env, claude_config, aha_env),
+                env=_backend_process_env(proxy_env, claude_config, codex_config, aha_env),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,

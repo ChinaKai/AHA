@@ -269,6 +269,33 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(task["preferred_backend"], "claude")
         self.assertIsNone(task.get("preferred_model"))
 
+    def test_agent_config_model_change_uses_backend_switch_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Switch model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/agent-config",
+                        method="POST",
+                        payload={"task_id": "task-001", "agent_id": "main", "backend": "claude", "model": "env:work"},
+                    )
+                )
+                task = status_snapshot(root, run_id)["tasks"][0]
+                main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(main_agent["backend"], "claude")
+        self.assertEqual(main_agent["model"], "env:work")
+        self.assertEqual(task["preferred_backend"], "claude")
+        self.assertEqual(task["preferred_model"], "env:work")
+
     def test_agent_config_can_restart_backend_after_runtime_setting_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

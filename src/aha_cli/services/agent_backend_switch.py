@@ -96,6 +96,7 @@ def switch_agent_backend(
     model_changed = model_provided and new_model != old_model
     if not backend_changed and not model_changed:
         return {"ok": True, "changed": False, "agent": agent}
+    switch_reason = "backend_switch" if backend_changed else "model_switch"
 
     old_session = ensure_session(
         root,
@@ -114,7 +115,7 @@ def switch_agent_backend(
         stopped_backend = stop_backend(root, run_id, agent_id, task_id=task_id, timeout=3.0)
 
     switched_at = utc_now()
-    summary = build_compact_summary(root, run_id, task_id, agent_id, old_session, "backend_switch")
+    summary = build_compact_summary(root, run_id, task_id, agent_id, old_session, switch_reason)
     summary_path = _handoff_summary_path(root, run_id, task_id, agent_id, summary, switched_at)
     summary_ref = compact_summary_relpath(root, run_id, summary_path)
 
@@ -160,7 +161,7 @@ def switch_agent_backend(
             {
                 "backend_session_id": session.get("backend_session_id"),
                 "backend": session.get("backend"),
-                "model": session.get("model"),
+                "model": old_model,
                 "started_at": session.get("created_at"),
                 "archived_at": switched_at,
                 "reason": "model_changed",
@@ -176,7 +177,7 @@ def switch_agent_backend(
         "id": summary_path.stem,
         "path": summary_ref,
         "created_at": switched_at,
-        "reason": "backend_switch",
+        "reason": switch_reason,
         "chars": len(summary),
         "archived_backend_session_id": old_backend_session_id,
     }
@@ -192,7 +193,7 @@ def switch_agent_backend(
             "old_backend_session_id": old_backend_session_id,
             "old_backend": old_backend,
             "new_backend": new_backend,
-            "reason": "backend_switch",
+            "reason": switch_reason,
             "summary_path": summary_ref,
         },
     )

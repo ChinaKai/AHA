@@ -124,6 +124,7 @@ and agent identity plus any supported fields:
   "task_id": "task-001",
   "agent_id": "main",
   "backend": "claude",
+  "model": "env:work",
   "sandbox": "workspace-write",
   "approval": "never",
   "proxy_enabled": true,
@@ -131,10 +132,11 @@ and agent identity plus any supported fields:
 }
 ```
 
-Changing `backend` is a backend switch. AHA stops an active old backend process,
-resets the backend session id, writes a compact handoff summary, appends a
-handoff message for the new backend, and restarts the new backend if the old one
-was active.
+Changing `backend` or `model` is a backend/model switch. AHA stops an active old
+backend process, resets the backend session id, writes a compact handoff summary,
+appends a handoff message for the new backend/model, and restarts the new backend
+if the old one was active. For Codex and Claude, `model` may be an official
+model id or an env-group selector such as `env:work`.
 
 Changing `sandbox`, `approval`, or `proxy_enabled` changes backend startup
 configuration. Existing backend processes are not hot-patched. If

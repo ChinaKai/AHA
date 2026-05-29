@@ -10,7 +10,14 @@ import unittest
 from unittest import mock
 
 from aha_cli.backends.claude import build_claude_exec_command, claude_config_env, claude_permission_mode, handle_claude_event
-from aha_cli.backends.codex import build_codex_exec_command, handle_codex_event, is_context_overflow_message, run_codex_exec
+from aha_cli.backends.codex import (
+    build_codex_exec_command,
+    codex_config_env,
+    codex_config_overrides,
+    handle_codex_event,
+    is_context_overflow_message,
+    run_codex_exec,
+)
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path, chat_prompt, save_chat_offset
@@ -135,6 +142,87 @@ class BackendRunnerSessionTests(unittest.TestCase):
             self.assertEqual(session["model"], CODEX_DEFAULT_MODEL)
             command = popen.call_args.args[0]
             self.assertEqual(command[:3], ["codex", "-m", CODEX_DEFAULT_MODEL])
+
+    def test_codex_exec_uses_env_group_model_and_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+            session: dict = {}
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO("")
+
+                def wait(self) -> int:
+                    return 0
+
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()) as popen,
+            ):
+                code, reply, updated_session = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    model="env:openai",
+                    session=session,
+                    codex_config={
+                        "env": [
+                            {
+                                "name": "openai",
+                                "OPENAI_BASE_URL": "https://openai.test/v1",
+                                "OPENAI_MODEL": "kimi-k2.6",
+                                "OPENAI_API_KEY": "openai-key",
+                                "CODEX_WIRE_API": "chat",
+                                "CODEX_ENV_KEY": "MINIMAX_API_KEY",
+                            }
+                        ]
+                    },
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(reply, "done")
+            self.assertIs(updated_session, session)
+            self.assertEqual(session["requested_model"], "env:openai")
+            self.assertEqual(session["resolved_model"], "kimi-k2.6")
+            command = popen.call_args.args[0]
+            env = popen.call_args.kwargs["env"]
+            self.assertIn("-m", command)
+            self.assertEqual(command[command.index("-m") + 1], "kimi-k2.6")
+            joined_command = " ".join(command)
+            self.assertIn('model_provider="aha_codex_env_', joined_command)
+            self.assertIn("model_providers.", joined_command)
+            self.assertIn('wire_api="responses"', joined_command)
+            self.assertIn("requires_openai_auth=false", joined_command)
+            self.assertIn('env_key="MINIMAX_API_KEY"', joined_command)
+            self.assertNotIn("OPENAI_BASE_URL", env)
+            self.assertEqual(env["MINIMAX_API_KEY"], "openai-key")
+            self.assertEqual(codex_config_env({"env_active": None, "env": [{"name": "openai", "OPENAI_API_KEY": "x"}]}), {})
+
+    def test_codex_env_group_generates_provider_overrides(self) -> None:
+        overrides = codex_config_overrides(
+            {
+                "env_active": "work",
+                "env": [
+                    {
+                        "name": "work",
+                        "OPENAI_BASE_URL": "https://openai.test/v1",
+                        "OPENAI_MODEL": "model-x",
+                        "OPENAI_API_KEY": "key",
+                        "CODEX_WIRE_API": "responses",
+                        "CODEX_ENV_KEY": "OPENAI_API_KEY",
+                    }
+                ],
+            }
+        )
+
+        joined = " ".join(overrides)
+        self.assertIn("model_provider=", joined)
+        self.assertIn('model_providers.aha_codex_env_', joined)
+        self.assertIn('base_url="https://openai.test/v1"', joined)
+        self.assertIn('env_key="OPENAI_API_KEY"', joined)
+        self.assertIn('wire_api="responses"', joined)
+        self.assertIn("requires_openai_auth=false", joined)
 
     def test_codex_command_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
