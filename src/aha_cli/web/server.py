@@ -82,7 +82,8 @@ async def handle_ui_client(root: Path, run_id: str, reader: asyncio.StreamReader
             if response is None:
                 response = system_route_response(root, run_id, method, path, query, body, headers)
             if response is None:
-                response = task_agent_response(route_task_agent_request(root, run_id, method, path, query, body), method)
+                route_result = await asyncio.to_thread(route_task_agent_request, root, run_id, method, path, query, body)
+                response = task_agent_response(route_result, method)
             writer.write(response if response is not None else http_response("404 Not Found", b"not found\n"))
 
         await writer.drain()

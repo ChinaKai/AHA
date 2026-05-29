@@ -58,6 +58,7 @@ let realtimeCatchupRequested = false;
 let lastRealtimeMessageAt = 0;
 let lastRealtimeFallbackPollAt = 0;
 let realtimeDebugSeq = 0;
+let optimisticEventSeq = 0;
 let deferredPanelRender = false;
 let deferredPanelRenderTimer = 0;
 let openPromptMetricsKey = "";
@@ -2128,6 +2129,7 @@ function mergedPendingPrompt(items, currentMessage, interrupted) {
 
 async function sendBackendMessage(task, agentId, message) {
   const target = agentId === "main" ? "main" : agentId;
+  const optimistic = addOptimisticSendFeedback(task, target, message);
   realtimeDebug("send.request", { task_id: task.id, target, message_len: message.length });
   await prepareRealtimeCatchupBaseline();
   try {
@@ -2154,8 +2156,16 @@ async function sendBackendMessage(task, agentId, message) {
       deferred: Boolean(response?.deferred),
       reason: response?.reason || ""
     });
+    if (response?.deferred && optimistic) {
+      clearOptimisticEventsForContext(task.id, target);
+      renderPanelForRealtime();
+    }
     return response;
   } catch (err) {
+    if (optimistic) {
+      clearOptimisticEventsForContext(task.id, target);
+      renderPanelForRealtime();
+    }
     realtimeDebug("send.error", { task_id: task.id, target, error: err?.message || String(err) });
     throw err;
   }
@@ -2861,6 +2871,149 @@ function eventMatchesAgent(event, target) {
 
 function agentTimelineEvents(taskId, target = backendTarget()) {
   return taskTimelineEvents(taskId).filter(event => eventMatchesAgent(event, target));
+}
+
+function optimisticEventKey(event) {
+  const data = eventData(event);
+  const taskId = eventTaskId(event) || "";
+  if (event.type === "message") {
+    const sender = messageDisplaySender(data) || data.sender || "";
+    const target = messageDisplayTarget(data) || data.target || "";
+    return `message:${taskId}:${sender}:${target}:${String(data.message || "").trim()}`;
+  }
+  if (event.type === "agent_started") return `agent_started:${taskId}:${data.target || "main"}`;
+  if (event.type === "agent_status_changed") return `agent_status_changed:${taskId}:${data.agent_id || data.target || "main"}:${data.status || ""}`;
+  if (event.type === "task_status_changed") return `task_status_changed:${taskId}:${data.status || ""}`;
+  return "";
+}
+
+function optimisticEventContextKey(event) {
+  const data = eventData(event);
+  const taskId = eventTaskId(event) || "";
+  const target = data.target || data.agent_id || data.to_agent || messageDisplayTarget(data) || "main";
+  return `${taskId}::${target}`;
+}
+
+function clearOptimisticEventsForContext(taskId, target) {
+  const contextKey = `${taskId}::${target || "main"}`;
+  const matchesContext = event => event?._optimistic && optimisticEventContextKey(event) === contextKey;
+  let removed = false;
+  for (let index = allEvents.length - 1; index >= 0; index -= 1) {
+    if (matchesContext(allEvents[index])) {
+      allEvents.splice(index, 1);
+      removed = true;
+    }
+  }
+  for (const state of conversationStates.values()) {
+    const next = state.events.filter(event => !matchesContext(event));
+    if (next.length !== state.events.length) {
+      state.events = next;
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+function removeOptimisticEventsMatchedBy(events) {
+  const keys = new Set(events.map(optimisticEventKey).filter(Boolean));
+  const contextClearTypes = new Set(["agent_message", "agent_finished", "agent_error", "agent_status_changed"]);
+  const contextKeys = new Set(events
+    .filter(event => contextClearTypes.has(event.type))
+    .map(optimisticEventContextKey)
+    .filter(Boolean));
+  if (!keys.size && !contextKeys.size) return false;
+  let removed = false;
+  const isMatched = event => event?._optimistic && (keys.has(optimisticEventKey(event)) || contextKeys.has(optimisticEventContextKey(event)));
+  for (let index = allEvents.length - 1; index >= 0; index -= 1) {
+    if (isMatched(allEvents[index])) {
+      allEvents.splice(index, 1);
+      removed = true;
+    }
+  }
+  for (const state of conversationStates.values()) {
+    const next = state.events.filter(event => !isMatched(event));
+    if (next.length !== state.events.length) {
+      state.events = next;
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+function updateOptimisticAgentState(task, target, timestamp) {
+  if (!task) return;
+  task.current_status = "running";
+  task.activity_status = "busy";
+  const agent = (task.agents || []).find(item => item.id === target);
+  if (agent) {
+    agent.status = "running";
+    agent.waiting_reason = "";
+    agent.status_started_at = timestamp;
+    agent.backend_process_status = "busy";
+    agent.backend_process_last_reply_at = "";
+  }
+  if (selectedTaskId === task.id && target === backendTarget()) {
+    backendStatusData = {
+      ...(backendStatusData || {}),
+      id: target,
+      target,
+      task_id: task.id,
+      status: "busy"
+    };
+  }
+}
+
+function addOptimisticSendFeedback(task, target, message) {
+  if (!task || !target || !message || isAhaCommand(message)) return false;
+  clearOptimisticEventsForContext(task.id, target);
+  const ts = new Date().toISOString();
+  const role = target === "main" ? "main" : "sub";
+  const eventBase = () => ({
+    ts,
+    event_id: `optimistic-${++optimisticEventSeq}`,
+    _cursor: `optimistic-${optimisticEventSeq}`,
+    _optimistic: true,
+    _uiKey: `optimistic-${optimisticEventSeq}`
+  });
+  const events = [
+    {
+      ...eventBase(),
+      type: "message",
+      data: { task_id: task.id, target, role, sender: "browser", from_agent: "browser", to_agent: target, message }
+    },
+    {
+      ...eventBase(),
+      type: "task_status_changed",
+      data: { task_id: task.id, target, status: "running", exit_code: null }
+    },
+    {
+      ...eventBase(),
+      type: "agent_started",
+      data: {
+        task_id: task.id,
+        target,
+        sender: "browser",
+        sandbox: selectedAgent()?.sandbox || task.preferred_sandbox || "-",
+        approval: selectedAgent()?.approval || task.preferred_approval || "-",
+        proxy_enabled: Boolean(selectedAgent()?.proxy_enabled)
+      }
+    },
+    {
+      ...eventBase(),
+      type: "agent_status_changed",
+      data: { task_id: task.id, agent_id: target, status: "running", waiting_reason: "", exit_code: null }
+    }
+  ];
+  allEvents.push(...events);
+  appendRealtimeConversationEvents(events);
+  updateOptimisticAgentState(task, target, ts);
+  conversationAutoFollow = true;
+  renderTaskList();
+  renderSelectedHeader();
+  renderSelectedAgentInfo();
+  renderPendingMessages();
+  renderPanelForRealtime();
+  return true;
 }
 
 function conversationKey(taskId = selectedTaskId, target = backendTarget()) {
@@ -4772,6 +4925,7 @@ function appendRealtimeEvents(events, startOffset = "") {
   if (!accepted.length) return accepted;
   allEvents.push(...accepted);
   appendRealtimeConversationEvents(accepted);
+  removeOptimisticEventsMatchedBy(accepted);
   invalidateRealtimeTaskDetails(accepted);
   realtimeDebug("events.accepted", {
     count: accepted.length,

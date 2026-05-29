@@ -72,6 +72,12 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertEqual(sent["payload"]["message"]["message"], "hello")
         self.assertTrue(hidden["payload"]["task"]["hidden"])
 
+    def test_ui_server_runs_task_routes_off_event_loop(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src" / "aha_cli" / "web" / "server.py").read_text(encoding="utf-8")
+
+        self.assertIn("asyncio.to_thread(route_task_agent_request", source)
+
 
 if __name__ == "__main__":
     unittest.main()

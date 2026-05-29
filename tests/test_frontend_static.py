@@ -641,6 +641,17 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('if (event.type === "message") return "chat";', script)
         self.assertIn('if (event.type === "host_decision") return renderTimelineStatus("host decision"', script)
 
+    def test_frontend_renders_send_feedback_optimistically(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function addOptimisticSendFeedback", script)
+        self.assertIn("_optimistic: true", script)
+        self.assertIn('type: "agent_started"', script)
+        self.assertIn('status: "running"', script)
+        self.assertIn("removeOptimisticEventsMatchedBy(accepted)", script)
+        self.assertIn("clearOptimisticEventsForContext(task.id, target)", script)
+
     def test_frontend_prefills_empty_proxy_inputs_from_defaults(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app.js").read_text(encoding="utf-8")
