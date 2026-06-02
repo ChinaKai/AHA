@@ -61,8 +61,12 @@ scripts/install_user_service.sh
 默认服务命令是：
 
 ```text
-aha --home ~/.aha ui --host 0.0.0.0 --port 8788
+aha --home ~/.aha ui --host 0.0.0.0 --port 8788 --auth-token-file ~/.aha/web-token
 ```
+
+安装脚本默认启用 Web UI token 登录，并在 AHA home 下生成或复用
+`web-token`。默认登录 token 在 `~/.aha/web-token`，可用
+`cat ~/.aha/web-token` 查看；如果传了 `--aha-home`，就在对应目录下找。
 
 常用参数：
 

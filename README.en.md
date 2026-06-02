@@ -66,8 +66,12 @@ scripts/install_user_service.sh
 By default the service runs:
 
 ```text
-aha --home ~/.aha ui --host 0.0.0.0 --port 8788
+aha --home ~/.aha ui --host 0.0.0.0 --port 8788 --auth-token-file ~/.aha/web-token
 ```
+
+The install script enables Web UI token login by default and creates or reuses
+`web-token` under the AHA home. With the default home, read the login token from
+`~/.aha/web-token`; if you pass `--aha-home`, use that directory instead.
 
 Common overrides:
 
