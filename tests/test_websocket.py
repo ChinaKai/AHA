@@ -9,6 +9,7 @@ from unittest import mock
 
 from aha_cli.cli import main
 from aha_cli.store.filesystem import add_agent, append_event
+from aha_cli.websocket.server import realtime_debug_log
 from tests.helpers import fetch_initial_ws_messages, fetch_ws_messages
 
 
@@ -49,6 +50,13 @@ class WebSocketTests(unittest.TestCase):
         self.assertEqual(messages[0]["type"], "status")
         self.assertEqual(messages[1]["type"], "heartbeat")
         self.assertIn("last_event_id", messages[1])
+
+    def test_websocket_realtime_debug_does_not_create_missing_run_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            realtime_debug_log("ws", _root=root, run_id="missing-run", phase="heartbeat_sent")
+
+            self.assertFalse((root / ".aha" / "runs" / "missing-run").exists())
 
     def test_websocket_status_supports_lite_selected_task_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

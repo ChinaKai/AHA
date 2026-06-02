@@ -161,8 +161,41 @@ def _message_endpoint(data: dict, *keys: str) -> str:
     return ""
 
 
+def _text_body_key(text: object) -> str:
+    return " ".join(str(text or "").split())
+
+
 def _message_body_key(data: dict) -> str:
-    return " ".join(str(data.get("message") or "").split())
+    return _text_body_key(data.get("message"))
+
+
+def _supervision_main_latest_reply_key(text: object) -> str:
+    raw = str(text or "")
+    marker = "\n- main_latest_reply:\n"
+    start = raw.find(marker)
+    if start < 0:
+        return ""
+    return _text_body_key(raw[start + len(marker) :])
+
+
+def _host_browser_message_visible_to_main(event: dict) -> bool:
+    if event.get("type") != "message":
+        return False
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender = _message_endpoint(data, "display_sender", "sender", "from_agent")
+    target = _message_endpoint(data, "display_target", "to_agent", "target")
+    return (
+        str(data.get("role") or "").strip().lower() == "host"
+        and sender not in {"", "main"}
+        and target == "browser"
+    )
+
+
+def _conversation_event_refs(event: dict) -> set[str]:
+    refs = set(event_agent_refs(event))
+    if _host_browser_message_visible_to_main(event):
+        refs.add("main")
+    return refs
 
 
 def _main_host_mirror_key(event: dict) -> tuple[str, str, str] | None:
@@ -173,7 +206,8 @@ def _main_host_mirror_key(event: dict) -> tuple[str, str, str] | None:
     target = _message_endpoint(data, "display_target", "to_agent", "target")
     body = _message_body_key(data)
     if sender == "main" and target == "host" and body:
-        return (str(data.get("task_id") or ""), sender, body)
+        mirror_body = _supervision_main_latest_reply_key(data.get("message")) or body
+        return (str(data.get("task_id") or ""), sender, mirror_body)
     return None
 
 
@@ -199,7 +233,7 @@ def _conversation_event_matches(event: dict, task_id: str, target: str, categori
         _category_allowed(event_type, categories)
         and event_type in TIMELINE_EVENT_TYPES
         and event_task_id(event) == task_id
-        and (target or "main") in event_agent_refs(event)
+        and (target or "main") in _conversation_event_refs(event)
     )
 
 

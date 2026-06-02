@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import sys
 
-from aha_cli.backends.registry import resolve_model
+from aha_cli.backends.registry import normalize_model_selector, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
@@ -110,6 +110,7 @@ def codex_selected_env_group(codex_config: dict | None) -> dict:
 
 def codex_config_for_model(codex_config: dict | None, model: str | None) -> dict:
     cfg = dict(codex_config or {})
+    model = normalize_model_selector("codex", model, {"codex": cfg})
     env_group = codex_env_group_from_model(model)
     if env_group:
         cfg["env_active"] = env_group
@@ -119,6 +120,7 @@ def codex_config_for_model(codex_config: dict | None, model: str | None) -> dict
 
 
 def codex_cli_model(codex_config: dict | None, model: str | None) -> str | None:
+    model = normalize_model_selector("codex", model, {"codex": codex_config or {}})
     env_group = codex_env_group_from_model(model)
     if env_group:
         group = codex_selected_env_group(codex_config_for_model(codex_config, model))

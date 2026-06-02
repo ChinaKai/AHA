@@ -58,7 +58,7 @@ class RunArchiveTests(unittest.TestCase):
                     self.assertNotIn("run/runtime/local.cache", names)
                     plan = json.load(exported.extractfile("run/plan.json"))
                     exported_session = json.load(exported.extractfile("run/tasks/task-001/sessions/main.json"))
-                self.assertEqual(plan["tasks"][0]["preferred_http_proxy"], "<redacted>")
+                self.assertEqual(plan["proxy"]["http_proxy"], "<redacted>")
                 self.assertNotIn("secret", json.dumps(plan))
                 self.assertIsNone(exported_session["backend_session_id"])
                 self.assertEqual(exported_session["imported_backend_session_id"], "backend-secret")

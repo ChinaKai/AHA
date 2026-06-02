@@ -55,6 +55,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "title": "Detailed task",
                             "description": "Use the attached notes and preserve existing behavior.",
                             "collaboration_mode": "team",
+                            "workflow_template": "FAULT-DEBUG",
                             "dispatch": False,
                         },
                     )
@@ -62,10 +63,17 @@ class WebTaskApiTests(unittest.TestCase):
                 body = json_response_body(response)
                 status = status_snapshot(root, run_id)
                 context = task_context_snapshot(root, run_id, body["task"]["id"])
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+                task_created = next(
+                    event
+                    for event in events
+                    if event["type"] == "task_created" and event["data"]["task_id"] == body["task"]["id"]
+                )
 
         self.assertTrue(body["ok"])
         self.assertEqual(body["task"]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(body["task"]["collaboration_mode"], "team")
+        self.assertEqual(body["task"]["workflow_template"], "fault-debug")
         self.assertEqual(body["task"]["delegation_policy"], "auto")
         self.assertEqual(body["task"]["max_sub_agents"], 2)
         self.assertEqual(body["task"]["preferred_sandbox"], "danger-full-access")
@@ -75,7 +83,49 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
+        self.assertEqual(status["tasks"][-1]["collaboration_mode"], "team")
+        self.assertEqual(status["tasks"][-1]["workflow_template"], "fault-debug")
+        self.assertEqual(status["tasks"][-1]["max_sub_agents"], 2)
+        self.assertEqual(status["tasks"][-1]["preferred_sub_backend"], "codex")
+        self.assertIsNone(status["tasks"][-1]["preferred_sub_model"])
+        self.assertEqual(task_created["data"]["collaboration_mode"], "team")
+        self.assertEqual(task_created["data"]["workflow_template"], "fault-debug")
+        self.assertEqual(task_created["data"]["max_sub_agents"], 2)
+        self.assertEqual(task_created["data"]["preferred_sub_backend"], "codex")
+        self.assertIsNone(task_created["data"]["preferred_sub_model"])
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
+
+    def test_api_task_create_rejects_unknown_execution_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Invalid execution fields", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                bad_mode = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={"title": "Bad mode", "collaboration_mode": "crowd", "dispatch": False},
+                    )
+                )
+                bad_workflow = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={"title": "Bad workflow", "workflow_template": "unknown", "dispatch": False},
+                    )
+                )
+
+        self.assertTrue(bad_mode.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("unknown collaboration mode: crowd", json_response_body(bad_mode)["error"])
+        self.assertTrue(bad_workflow.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("unknown workflow template: unknown", json_response_body(bad_workflow)["error"])
 
     def test_api_task_create_accepts_supervision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -569,12 +619,49 @@ class WebTaskApiTests(unittest.TestCase):
                 task = snapshot["tasks"][0]
                 agents = {agent["id"]: agent for agent in task["agents"]}
 
-        self.assertEqual(task["preferred_http_proxy"], "http://127.0.0.1:8888")
-        self.assertEqual(task["preferred_https_proxy"], "http://127.0.0.1:8888")
-        self.assertEqual(task["preferred_no_proxy"], "localhost,127.0.0.1")
+        self.assertEqual(snapshot["proxy"]["http_proxy"], "http://127.0.0.1:8888")
+        self.assertEqual(snapshot["proxy"]["https_proxy"], "http://127.0.0.1:8888")
+        self.assertEqual(snapshot["proxy"]["no_proxy"], "localhost,127.0.0.1")
+        self.assertTrue(task["run_proxy_configured"])
         self.assertFalse(task["preferred_proxy_enabled"])
         self.assertTrue(agents["main"]["proxy_enabled"])
         self.assertFalse(agents["sub-001"]["proxy_enabled"])
+
+    def test_task_create_uses_selected_backend_proxy_default_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                (root / ".aha" / "config.json").write_text(
+                    json.dumps(
+                        {
+                            "backend": "codex",
+                            "codex": {"proxy": {"enabled": False, "http_proxy": "http://codex.proxy:7890"}},
+                            "claude": {"proxy": {"enabled": True, "http_proxy": "http://claude.proxy:7890"}},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                code, plan_output = self.run_cli("plan", "Backend proxy defaults", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={"title": "Claude task", "backend": "claude", "dispatch": False},
+                    )
+                )
+                body = json_response_body(response)
+                snapshot = status_snapshot(root, run_id)
+                created = next(task for task in snapshot["tasks"] if task["id"] == body["task"]["id"])
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["task"]["preferred_proxy_enabled"])
+        self.assertTrue(body["task"]["agents"][0]["proxy_enabled"])
+        self.assertTrue(created["run_proxy_configured"])
 
     def test_task_proxy_config_api_updates_existing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -605,8 +692,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["preferred_proxy_enabled"])
-        self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
-        self.assertEqual(body["task"]["preferred_no_proxy"], "localhost,127.0.0.1")
+        self.assertEqual(body["proxy"]["http_proxy"], "http://proxy.local:8080")
+        self.assertEqual(body["proxy"]["no_proxy"], "localhost,127.0.0.1")
 
     def test_task_proxy_action_api_updates_existing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -636,7 +723,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["preferred_proxy_enabled"])
-        self.assertEqual(body["task"]["preferred_http_proxy"], "http://proxy.local:8080")
+        self.assertEqual(body["proxy"]["http_proxy"], "http://proxy.local:8080")
 
     def test_task_context_management_api_updates_existing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

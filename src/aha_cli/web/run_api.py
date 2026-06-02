@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backends
+from aha_cli.domain.workflow_templates import workflow_template_metadata
 from aha_cli.services.app_version import aha_version
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import (
@@ -129,6 +130,7 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "runs": list_run_summaries(root),
         "workspaces": workspace_options(aha_home=root),
         "backends": agent_backends(),
+        "workflow_templates": workflow_template_metadata(),
     }
 
 

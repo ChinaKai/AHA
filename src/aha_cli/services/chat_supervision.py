@@ -13,15 +13,15 @@ import json
 from pathlib import Path
 
 from aha_cli.domain.models import DEFAULT_TASK_SUPERVISION_MAX_ROUNDS, TASK_SUPERVISION_ASK_USER_GATES, utc_now
+from aha_cli.services.action_payloads import extract_action_payload
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS
 from aha_cli.services.chat_offsets import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import (
     chat_offset_exists,
     execute_actions,
-    extract_action_payload,
-    task_has_incomplete_sub_agents,
 )
+from aha_cli.services.subagent_state import task_has_incomplete_sub_agents
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -483,6 +483,58 @@ def low_information_supervision_response(text: str) -> bool:
     return len(compact) <= 6 and any(marker in compact for marker in ("好", "嗯", "收", "等"))
 
 
+def host_decision_chat_text(decision: dict, *, backend_failed: bool = False) -> str:
+    response = str(decision.get("response") or "").strip()
+    if response:
+        return response
+    reason = str(decision.get("reason") or "").strip()
+    decision_type = str(decision.get("decision") or "").strip()
+    if backend_failed:
+        return "host 执行失败，AHA 转为询问用户确认。"
+    if reason and decision_type in {"ask_user", "stop"}:
+        return reason
+    defaults = {
+        "ask_user": "host 需要用户确认。",
+        "continue": "host decision: continue。",
+        "record_task_update": "host 已记录本轮任务更新。",
+        "route_to_agent": "host decision: route_to_agent。",
+        "spawn_sub": "host decision: spawn_sub。",
+        "stop": "host decision: stop。",
+        "wait": "host 决定等待子任务完成。",
+    }
+    text = defaults.get(decision_type, "host decision 已记录。")
+    return f"{text} {reason}".strip() if reason else text
+
+
+def append_visible_host_decision_message(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    host_agent_id: str,
+    text: str,
+    *,
+    display_target: str = "main",
+) -> None:
+    message = text.strip()
+    if not message:
+        return
+    append_message(
+        root,
+        run_id,
+        "browser",
+        message,
+        sender=host_agent_id,
+        task_id=task_id,
+        role="host",
+        from_agent=host_agent_id,
+        to_agent=display_target,
+        agent_id=host_agent_id,
+        display_sender=host_agent_id,
+        display_target=display_target,
+        coordination="host_decision",
+    )
+
+
 def supervision_actions_block_main_route(executed: list[dict]) -> bool:
     return any(str(action.get("type") or "") in SUPERVISION_MAIN_ROUTE_BLOCKING_ACTIONS for action in executed)
 
@@ -681,7 +733,7 @@ def apply_supervision_host_decision(
     else:
         decision = parse_supervision_host_decision(host_reply)
         executed = execute_actions(root, run_id, task_id, host_reply)
-    host_chat_message = decision["response"] or decision["reason"] or host_reply.strip()
+    host_chat_message = host_decision_chat_text(decision, backend_failed=backend_failed)
     main_route_blocked_by_actions = supervision_actions_block_main_route(executed)
     if (
         decision["decision"] == "continue"
@@ -693,10 +745,13 @@ def apply_supervision_host_decision(
             **decision,
             "decision": "wait",
             "reason": decision["reason"] or "host response is wait-like while sub-agents are still running",
+            "response": "",
         }
+        host_chat_message = host_decision_chat_text(decision)
     routed_to_main = False
     routed_to_browser = False
     waiting_for_subagents = False
+    visible_message_written = False
     route_skipped_reason = ""
     latest_exchange = latest_supervision_exchange_for_host(root, run_id, task_id, host_agent_id)
     duplicate_browser_stop = (
@@ -739,6 +794,7 @@ def apply_supervision_host_decision(
                 display_target="main",
                 agent_id=host_agent_id,
             )
+            visible_message_written = True
             mark_task_coordination(
                 root,
                 run_id,
@@ -787,13 +843,17 @@ def apply_supervision_host_decision(
             role="host",
             from_agent=host_agent_id,
             to_agent="browser",
-            agent_id="main",
+            agent_id=host_agent_id,
             display_sender=host_agent_id,
             display_target="browser",
         )
+        visible_message_written = True
         routed_to_browser = True
     elif duplicate_browser_stop:
         route_skipped_reason = "stop response duplicates main browser reply"
+        host_chat_message = host_decision_chat_text({**decision, "response": ""})
+    if not visible_message_written:
+        append_visible_host_decision_message(root, run_id, task_id, host_agent_id, host_chat_message)
     event_payload = {
         "task_id": task_id,
         "host_backend": host_backend,

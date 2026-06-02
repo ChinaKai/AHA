@@ -71,7 +71,7 @@ class WebEventsApiTests(unittest.TestCase):
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
                 script_response = asyncio.run(
-                    fetch_ui_response(root, run_id, "/static/app.js", headers={"Accept-Encoding": "gzip"})
+                    fetch_ui_response(root, run_id, "/static/app_runtime_setup.js", headers={"Accept-Encoding": "gzip"})
                 )
                 status_response = asyncio.run(
                     fetch_ui_response(root, run_id, "/api/status?lite=1", headers={"Accept-Encoding": "gzip"})
@@ -210,12 +210,29 @@ class WebEventsApiTests(unittest.TestCase):
                     "message": "next step",
                 },
             )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "host",
+                    "target": "browser",
+                    "from_agent": "host",
+                    "to_agent": "browser",
+                    "agent_id": "host",
+                    "role": "host",
+                    "display_sender": "host",
+                    "display_target": "browser",
+                    "message": "ask user",
+                },
+            )
 
             main_page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
             host_page = conversation_events_page(root, run_id, "task-001", "host", limit=10)
 
-        self.assertEqual([event["data"]["message"] for event in main_page["events"]], ["main reply", "next step"])
-        self.assertEqual([event["data"]["message"] for event in host_page["events"]], ["main reply", "next step"])
+        self.assertEqual([event["data"]["message"] for event in main_page["events"]], ["main reply", "next step", "ask user"])
+        self.assertEqual([event["data"]["message"] for event in host_page["events"]], ["main reply", "next step", "ask user"])
 
     def test_conversation_events_page_dedupes_main_browser_mirror_before_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +265,44 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertEqual(page["count"], 1)
         self.assertEqual(page["events"][0]["data"]["display_target"], "host")
         self.assertEqual(page["events"][0]["data"]["message"], "same reply")
+
+    def test_conversation_events_page_dedupes_supervision_exchange_main_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(
+                root,
+                run_id,
+                "message",
+                {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "host",
+                    "from_agent": "main",
+                    "to_agent": "host",
+                    "display_sender": "main",
+                    "display_target": "host",
+                    "message": (
+                        "Supervision exchange to evaluate:\n"
+                        "- source: browser_main_reply\n"
+                        "- browser_latest_request:\n继续\n\n"
+                        "- browser_to_host_notes:\n(none)\n\n"
+                        "- main_latest_reply:\n已完成。"
+                    ),
+                },
+            )
+            append_event(
+                root,
+                run_id,
+                "message",
+                {"task_id": "task-001", "sender": "main", "target": "browser", "from_agent": "main", "to_agent": "browser", "message": "已完成。"},
+            )
+
+            page = conversation_events_page(root, run_id, "task-001", "main", limit=1, categories={"chat"})
+
+        self.assertEqual(page["count"], 1)
+        self.assertEqual(page["events"][0]["data"]["display_target"], "host")
+        self.assertIn("main_latest_reply", page["events"][0]["data"]["message"])
 
     def test_conversation_events_page_keeps_main_browser_without_host_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

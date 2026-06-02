@@ -46,6 +46,7 @@ task_completed
 task_hidden
 task_restored
 task_deleted
+run_proxy_config_updated
 task_proxy_config_updated
 agent_created
 agent_config_updated
@@ -176,6 +177,8 @@ Tasks expose a `collaboration_mode` intent:
 - `pair`: at most one sub-agent for a parallel implementation, research, or review responsibility.
 - `team`: up to two sub-agents for parallel responsibility areas, with `task-main` leading and merging.
 
+New tasks also expose a `workflow_template` efficiency hint. It defaults to `auto` and does not by itself choose an agent count. Supported values are `auto`, `bugfix`, `feature`, `review`, `embedded-driver`, `fault-debug`, `hil-regression`, and `release`. The template gives `task-main` a domain-specific splitting strategy while `max_sub_agents` remains the hard concurrency/cost cap. The web UI treats execution as `auto` by default and keeps legacy `solo` / `pair` / `team` values as protocol-compatible options rather than the primary user-facing choice.
+
 The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard execution controls. If `task-main` needs sub-agents or must route follow-up work to an existing owner, it can include a JSON action payload in its response:
 
 ```json
@@ -184,6 +187,8 @@ The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard ex
   "actions": [
     {
       "type": "spawn_sub",
+      "agent_id": null,
+      "scope_id": "optional stable scope id when continuing the same scope",
       "title": "Inspect package rules",
       "backend": "codex",
       "model": null,
@@ -209,22 +214,25 @@ The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard ex
 }
 ```
 
-`spawn_sub` creates a new task-scoped sub-agent. `sandbox` and `approval` may be `null` to inherit the task defaults. `route_to_agent` sends a concrete follow-up message to an existing sub-agent and is used when ownership already belongs to that agent.
+`spawn_sub` creates a new task-scoped sub-agent or reassigns a terminal sub-agent when `agent_id` names a specific reusable `sub-*`. For a brand-new sub-agent, omit `agent_id` or set it to `null`; do not invent `sub-001` / `sub-002` names. Use a concrete `agent_id` only when that sub-agent already appears in the task's agents list. Use `scope_id` only when intentionally continuing the same scope; omit it or change it for a fresh scope. `sandbox` and `approval` may be `null` to inherit the task defaults. `route_to_agent` sends a concrete follow-up message to an existing sub-agent and is used when ownership already belongs to that agent.
 
 `spawn_sub.backend` may explicitly choose the child agent backend:
 
 ```json
 {
   "type": "spawn_sub",
+  "agent_id": null,
+  "scope_id": "claude-behavior-check",
   "title": "Check Claude-specific behavior",
   "backend": "claude",
+  "model": null,
   "sandbox": "read-only",
   "approval": "never",
   "reason": "independent cross-backend validation"
 }
 ```
 
-When `backend` is omitted, AHA uses `preferred_sub_backend`, then `preferred_backend`, then `codex`. This allows a Codex task-main to start a Claude sub-agent, or a Claude task-main to start a Codex sub-agent. `route_to_agent` does not choose a new backend; it starts the target agent with that agent's stored backend.
+When `backend` is omitted, AHA uses `preferred_sub_backend`, then `preferred_backend`, then `codex`. When `model` is omitted or `null`, a newly created sub-agent uses `preferred_sub_model`; a reused sub-agent keeps its model for same-scope continuation and uses `preferred_sub_model` for fresh-scope reuse when one is configured. `spawn_sub.model` may be an official model id or an env-group selector such as `env:work`; AHA also normalizes UI/task-side aliases such as `gpt5.5`, `kimi`, or `minimax` to the configured backend selector before launching the sub-agent. This allows a Codex task-main to start a Claude sub-agent, or a Claude task-main to start a Codex sub-agent. `route_to_agent` does not choose a new backend or model; it starts the target agent with that agent's stored backend/model.
 
 `record_task_update` writes a durable task journal row in:
 
@@ -258,15 +266,31 @@ Every task starts with `round-001`:
 
 ## Proxy Configuration
 
-Proxy values live on the task:
+Proxy values live in the AHA Core Settings config, split by backend:
 
 ```json
 {
-  "preferred_proxy_enabled": true,
-  "preferred_http_proxy": "http://127.0.0.1:7890",
-  "preferred_https_proxy": "http://127.0.0.1:7890",
-  "preferred_no_proxy": "localhost,127.0.0.1,::1"
+  "codex": {
+    "proxy": {
+      "http_proxy": "http://127.0.0.1:7890",
+      "https_proxy": "http://127.0.0.1:7890",
+      "no_proxy": "localhost,127.0.0.1,::1"
+    }
+  },
+  "claude": {
+    "proxy": {
+      "http_proxy": "http://127.0.0.1:7891",
+      "https_proxy": "http://127.0.0.1:7891",
+      "no_proxy": "localhost,127.0.0.1,::1"
+    }
+  }
 }
+```
+
+Tasks store only the default switch for new task agents:
+
+```json
+{"preferred_proxy_enabled": true}
 ```
 
 Agents store only:
@@ -275,7 +299,7 @@ Agents store only:
 {"proxy_enabled": true}
 ```
 
-When both the task has proxy values and the agent switch is enabled, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and lowercase variants into the child backend environment.
+When the selected backend has Core Settings proxy values and the agent switch is enabled, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and lowercase variants into the child backend environment. Old global/run/task-level proxy value fields are still read as a config/archive/runtime compatibility fallback.
 
 ## Run Archives
 
@@ -290,3 +314,22 @@ run/
 ```
 
 Export excludes `runtime/`, lock/pid/tmp files, and optionally `logs/`. It redacts proxy fields and clears `backend_session_id`. Import safe-extracts the archive, creates a new run id unless `--preserve-id` or `--run-id` is used, rewrites run references, marks sessions as `imported`, and appends `run_imported`.
+
+## Retention Archives
+
+Retention archives are tar files with:
+
+```text
+aha-run-retention-manifest.json
+run/
+  logs/...
+  prompts/...
+  chat/...   # only when requested
+```
+
+The manifest has kind `aha.run.retention`, schema `1`, `source_run_id`, creation
+time, selected policy groups, `min_age_seconds`, `delete_after_archive`, and a
+file list with relative path, size, mtime, and group. Restore reads only
+manifest-listed `run/` members, rejects unsafe paths, refuses current or active
+heartbeat runs, skips existing files by default, and overwrites only with
+`--force`.

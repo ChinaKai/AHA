@@ -151,6 +151,65 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["requested_model"], "env:openai")
         self.assertEqual(status["resolved_model"], "kimi-k2.6")
 
+    def test_start_backend_normalizes_historical_model_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg["claude"]["env"] = [
+                    {
+                        "name": "kimi-k2.6",
+                        "ANTHROPIC_API_KEY": "kimi-key",
+                        "ANTHROPIC_BASE_URL": "https://kimi.test",
+                        "ANTHROPIC_MODEL": "kimi-k2.6",
+                    },
+                    {
+                        "name": "MiniMax-M2.7-highspeed",
+                        "ANTHROPIC_API_KEY": "minimax-key",
+                        "ANTHROPIC_BASE_URL": "https://minimax.test",
+                        "ANTHROPIC_MODEL": "MiniMax-M2.7-highspeed",
+                    },
+                ]
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+                code, plan_output = self.run_cli("plan", "Historical model aliases", "--agents", "3")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    def __init__(self, pid: int) -> None:
+                        self.pid = pid
+
+                with (
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch(
+                        "aha_cli.services.backend_runtime.subprocess.Popen",
+                        side_effect=[FakeProcess(5001), FakeProcess(5002), FakeProcess(5003)],
+                    ) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    codex_status = start_backend(root / ".aha", run_id, "sub-001", backend="codex", model="gpt5.5", task_id="task-001")
+                    kimi_status = start_backend(root / ".aha", run_id, "sub-002", backend="claude", model="kimi", task_id="task-001")
+                    minimax_status = start_backend(root / ".aha", run_id, "sub-003", backend="claude", model="minimax", task_id="task-001")
+
+        commands = [call.args[0] for call in popen.call_args_list]
+        envs = [call.kwargs["env"] for call in popen.call_args_list]
+
+        self.assertEqual(codex_status["requested_model"], "gpt5.5")
+        self.assertEqual(codex_status["resolved_model"], "gpt-5.5")
+        self.assertEqual(commands[0][commands[0].index("--model") + 1], "gpt-5.5")
+
+        self.assertEqual(kimi_status["requested_model"], "kimi")
+        self.assertEqual(kimi_status["resolved_model"], "kimi-k2.6")
+        self.assertEqual(commands[1][commands[1].index("--model") + 1], "env:kimi-k2.6")
+        self.assertEqual(envs[1]["ANTHROPIC_MODEL"], "kimi-k2.6")
+
+        self.assertEqual(minimax_status["requested_model"], "minimax")
+        self.assertEqual(minimax_status["resolved_model"], "MiniMax-M2.7-highspeed")
+        self.assertEqual(commands[2][commands[2].index("--model") + 1], "env:MiniMax-M2.7-highspeed")
+        self.assertEqual(envs[2]["ANTHROPIC_MODEL"], "MiniMax-M2.7-highspeed")
+
     def test_backend_status_reports_context_pressure_from_latest_codex_token_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -633,6 +692,43 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(env["http_proxy"], "http://127.0.0.1:7890")
         self.assertEqual(env["https_proxy"], "http://127.0.0.1:7890")
         self.assertEqual(env["no_proxy"], "localhost,127.0.0.1")
+
+    def test_start_backend_uses_proxy_for_selected_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                write_json(
+                    root / ".aha" / "config.json",
+                    {
+                        "backend": "claude",
+                        "codex": {"proxy": {"http_proxy": "http://codex.proxy:7890"}},
+                        "claude": {
+                            "proxy": {
+                                "http_proxy": "http://claude.proxy:7890",
+                                "https_proxy": "http://claude.proxy:7890",
+                                "no_proxy": "localhost,127.0.0.1",
+                            }
+                        },
+                    },
+                )
+                code, plan_output = self.run_cli("plan", "Backend proxy by provider", "--agents", "1", "--enable-proxy")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["HTTP_PROXY"], "http://claude.proxy:7890")
+        self.assertEqual(env["HTTPS_PROXY"], "http://claude.proxy:7890")
+        self.assertNotEqual(env["HTTP_PROXY"], "http://codex.proxy:7890")
 
     def test_start_backend_clears_inherited_proxy_env_for_disabled_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

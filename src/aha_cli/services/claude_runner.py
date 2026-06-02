@@ -7,7 +7,7 @@ from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, c
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import proxy_env_for_agent
-from aha_cli.store.filesystem import append_event_to_file, ensure_session, load_config, save_session, task_snapshot
+from aha_cli.store.filesystem import append_event_to_file, ensure_session, load_config, require_plan, save_session, task_snapshot
 
 
 def run_claude_task(args) -> int:
@@ -41,6 +41,7 @@ def run_claude_task(args) -> int:
     os.environ["AHA_MODEL"] = resolved_model or ""
     os.environ["AHA_GENERATED_BY"] = generated_by_for_backend_model("claude", resolved_model)
     session = ensure_session(root, run_id, task_id, "main", "claude")
+    plan = require_plan(root, run_id)
     task = task_snapshot(root, run_id, task_id)["task"]
     agent = next((item for item in task.get("agents", []) if item.get("id") == "main"), {})
 
@@ -72,7 +73,7 @@ def run_claude_task(args) -> int:
         task_id=task_id,
         source="claude-runner",
         session=session,
-        proxy_env=proxy_env_for_agent(agent, task),
+        proxy_env=proxy_env_for_agent(agent, task, plan, cfg),
         claude_config=claude_config,
     )
     if session:

@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aha_cli.domain.models import utc_now
 from aha_cli.services.prompt_templates import render_prompt_template
-from aha_cli.store.filesystem import run_dir
+from aha_cli.web.realtime_debug import realtime_debug_log
 
 AHA_BACKEND_PROMPT_MARKER = render_prompt_template("backend_prompt_prefix.md").strip()
 
@@ -181,19 +180,3 @@ def backend_session_jsonl_info(session: dict) -> dict:
         "history": history,
         "compact_summary": compact_summary,
     }
-
-
-def realtime_debug_log(source: str, **fields: object) -> None:
-    root = fields.pop("_root", None)
-    run_id = str(fields.get("run_id") or "")
-    payload = {"ts": utc_now(), "source": source, **fields}
-    line = "[aha realtime] " + json.dumps(payload, ensure_ascii=False, default=str)
-    print(line, flush=True)
-    if isinstance(root, Path) and run_id:
-        try:
-            log_dir = run_dir(root, run_id) / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            with (log_dir / "realtime-debug.log").open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-        except OSError:
-            pass

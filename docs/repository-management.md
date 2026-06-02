@@ -63,9 +63,12 @@ Rules for store edits:
   visibility filtering, host routing, and host decision application.
 - `services/orchestrator.py` owns AHA action execution and sub-agent
   coordination.
-- `services/proxy.py` owns task proxy normalization and backend environment
+- `services/proxy.py` owns backend-specific Core proxy normalization and backend environment
   injection.
 - `services/run_archive.py` owns import/export archive behavior.
+- `services/run_retention_policy.py` owns retention policy thresholds,
+  all-run policy reporting, scheduled report persistence, and
+  apply-if-over-limit enforcement.
 - `services/onebin.py` and `scripts/build_onebin.py` own zipapp packaging.
 
 ## CLI Ownership
@@ -84,9 +87,9 @@ in focused modules so route handlers stay thin.
 ```text
 web/http_utils.py       HTTP parsing and response helpers
 web/run_api.py          workspace, bootstrap, run create/list/archive helpers
-web/run_routes.py       run, archive, bootstrap, and workspace HTTP routes
+web/run_routes.py       run, archive, maintenance, bootstrap, and workspace HTTP routes
 web/status.py           web status snapshots and backend-loss recovery
-web/system_routes.py    status, backend, events, debug, and restart routes
+web/system_routes.py    status, access-control, backend, events, debug, and restart routes
 web/task_actions.py     compatibility facade for task web helpers
 web/task_command_actions.py compact reset, checkpoint, final, reopen, interrupt actions
 web/task_command_format.py  /aha and /agent command text formatting

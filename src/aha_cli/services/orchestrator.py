@@ -1,19 +1,42 @@
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 
-from aha_cli.domain.models import utc_now
+from aha_cli.backends.registry import normalize_model_selector
+from aha_cli.domain.models import utc_now, workflow_template_guidance
+from aha_cli.services.action_payloads import (
+    AHA_ACTION_TYPES,
+    action_response_text,
+    extract_action_payload,
+    invalid_action_schema_message,
+    invalid_action_schema_reason,
+)
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
+from aha_cli.services.routing import (
+    route_to_agent_request,
+    route_to_agent_result,
+    route_to_agent_routed_event,
+    route_to_agent_skip_event,
+)
+from aha_cli.services.subagent_state import (
+    TERMINAL_AGENT_STATUSES,
+    active_sub_agent_count,
+    current_round_sub_agents,
+    pending_current_round_sub_agents,
+    pending_sub_agents,
+    sub_agents,
+    task_has_incomplete_sub_agents,
+    waiting_for_subagents_message,
+)
+from aha_cli.services.task_updates import handle_record_task_update_action
+from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     append_message,
-    append_task_round,
     ensure_session,
     inbox_path,
     mark_task_coordination,
@@ -27,10 +50,8 @@ from aha_cli.store.filesystem import (
     write_json,
 )
 
-TERMINAL_AGENT_STATUSES = {"completed", "failed", "blocked", "interrupted", "stopped"}
 REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
-AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 SUPERVISION_STUB_DECISION = "ask_user"
 COLLABORATION_GUIDANCE = {
     "auto": (
@@ -63,6 +84,7 @@ def task_has_active_followup(task: dict) -> bool:
 
 def task_assignment_prompt(task: dict) -> str:
     collaboration_mode = str(task.get("collaboration_mode") or "auto")
+    workflow_template = str(task.get("workflow_template") or "auto")
     return render_prompt_template(
         "task_assignment.md",
         task_title=task.get("title", ""),
@@ -70,9 +92,12 @@ def task_assignment_prompt(task: dict) -> str:
         workspace_path=task.get("workspace_path") or "(not set)",
         collaboration_mode=collaboration_mode,
         collaboration_guidance=COLLABORATION_GUIDANCE.get(collaboration_mode, COLLABORATION_GUIDANCE["auto"]),
+        workflow_template=workflow_template,
+        workflow_guidance=workflow_template_guidance(workflow_template),
         delegation_policy=task.get("delegation_policy", "auto"),
         max_sub_agents=task.get("max_sub_agents", 0),
         preferred_sub_backend=task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex",
+        preferred_sub_model=task.get("preferred_sub_model") or task.get("preferred_model") or "default",
         sandbox=task.get("preferred_sandbox") or "process default",
         approval=task.get("preferred_approval") or "process default",
         commit_policy=commit_message_policy_prompt(
@@ -99,63 +124,6 @@ def dispatch_task_to_main(root: Path, run_id: str, task: dict) -> dict:
     )
     append_event(root, run_id, "task_dispatched", {"task_id": task["id"], "target": "main"})
     return payload
-
-
-def extract_action_payload(text: str) -> dict | None:
-    stripped = text.strip()
-    candidates: list[str] = []
-    if stripped.startswith("{") and stripped.endswith("}"):
-        candidates.append(stripped)
-    fenced_match = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", stripped, flags=re.DOTALL)
-    if fenced_match:
-        candidates.append(fenced_match.group(1))
-    for candidate in candidates:
-        try:
-            payload = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    return None
-
-
-def invalid_action_schema_reason(payload: dict) -> str | None:
-    if "action" in payload:
-        return "top-level action is not supported; use actions array"
-    if payload.get("type") in AHA_ACTION_TYPES:
-        return "top-level type is not supported; use actions array"
-    if "actions" not in payload:
-        return None
-    actions = payload.get("actions")
-    if not isinstance(actions, list):
-        return "actions must be a list"
-    for action in actions:
-        if not isinstance(action, dict):
-            return "actions must contain objects"
-        action_type = action.get("type")
-        if not action_type:
-            return "each action must include type"
-        if action_type not in AHA_ACTION_TYPES:
-            return f"unknown action type: {action_type}"
-    return None
-
-
-def invalid_action_schema_message(reason: str) -> str:
-    return (
-        "Invalid AHA action schema: "
-        f"{reason}. Use {{\"actions\":[{{\"type\":\"route_to_agent\", ...}}], \"response\":\"...\"}}."
-    )
-
-
-def action_response_text(text: str) -> str:
-    payload = extract_action_payload(text)
-    if payload:
-        reason = invalid_action_schema_reason(payload)
-        if reason:
-            return invalid_action_schema_message(reason)
-    if payload and isinstance(payload.get("response"), str):
-        return payload["response"].strip()
-    return text.strip()
 
 
 def chat_offset_exists(root: Path, run_id: str, target: str, task_id: str | None = None) -> bool:
@@ -185,10 +153,6 @@ def save_chat_offset(root: Path, run_id: str, target: str, task_id: str | None =
 
 def find_sub_agent(task: dict, agent_id: str) -> dict | None:
     return next((agent for agent in sub_agents(task) if agent.get("id") == agent_id), None)
-
-
-def active_sub_agent_count(task: dict) -> int:
-    return sum(1 for agent in sub_agents(task) if agent.get("status") not in TERMINAL_AGENT_STATUSES)
 
 
 def reusable_sub_agent(task: dict, exclude_ids: set[str] | None = None) -> dict | None:
@@ -231,6 +195,7 @@ def reset_backend_session_for_fresh_scope(
     *,
     assignment_id: str,
     backend: str,
+    model: str | None,
     scope_id: str,
     reason: str,
 ) -> dict:
@@ -264,6 +229,7 @@ def reset_backend_session_for_fresh_scope(
         }
         history.append(archive)
     session["backend"] = backend
+    session["model"] = model
     session["history_backend_sessions"] = history
     session["backend_session_id"] = None
     session["status"] = "reset"
@@ -291,7 +257,10 @@ def spawn_sub_skipped_message(reason: str, max_sub_agents: int, target_agent_id:
     if reason == "delegation disabled":
         return "AHA 没有创建新的 sub-agent：当前任务已禁用 delegation。"
     if reason == "target sub-agent not found":
-        return f"AHA 没有分配 sub-agent：指定的 agent `{target_agent_id}` 不存在或不是 sub-agent。"
+        return (
+            f"AHA 没有分配 sub-agent：指定的 agent `{target_agent_id}` 不存在或不是 sub-agent。"
+            "新建 sub-agent 时请省略 `agent_id`；只有复用已存在的 sub-agent 时才填写。"
+        )
     if reason == "target sub-agent busy":
         return f"AHA 没有分配 sub-agent：指定的 agent `{target_agent_id}` 当前仍在工作，不能覆盖它的任务。"
     if reason == "target sub-agent already used":
@@ -311,7 +280,9 @@ def append_spawn_sub_skipped(
     reason: str,
     max_sub_agents: int,
     target_agent_id: str = "",
+    notify_main: bool = False,
 ) -> None:
+    message = spawn_sub_skipped_message(reason, max_sub_agents, target_agent_id)
     append_event(
         root,
         run_id,
@@ -328,7 +299,7 @@ def append_spawn_sub_skipped(
         root,
         run_id,
         "browser",
-        spawn_sub_skipped_message(reason, max_sub_agents, target_agent_id),
+        message,
         sender="aha",
         task_id=task_id,
         role="main",
@@ -336,6 +307,89 @@ def append_spawn_sub_skipped(
         to_agent="browser",
         coordination="action_skipped",
     )
+    if notify_main:
+        append_message(
+            root,
+            run_id,
+            "main",
+            message,
+            sender="aha",
+            task_id=task_id,
+            role="main",
+            from_agent="aha",
+            to_agent="main",
+            reply_target="browser",
+            coordination="action_skipped",
+        )
+
+
+def append_visible_sub_agent_result(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    message: str,
+    *,
+    coordination: str = "sub_agent_result",
+) -> None:
+    text = str(message or "").strip()
+    if not text:
+        return
+    append_message(
+        root,
+        run_id,
+        "browser",
+        text,
+        sender=agent_id,
+        task_id=task_id,
+        role="sub",
+        from_agent=agent_id,
+        to_agent="main",
+        agent_id=agent_id,
+        display_sender=agent_id,
+        display_target="main",
+        coordination=coordination,
+    )
+
+
+def sub_agent_failure_message(agent_id: str, reason: str) -> str:
+    if reason == "backend_process_stopped":
+        return f"{agent_id} backend 已停止。"
+    if reason == "backend_start_failed":
+        return f"{agent_id} 后端启动失败。"
+    if reason == "backend_recovery_failed":
+        return f"{agent_id} backend 多次恢复失败。"
+    return f"{agent_id} 执行失败。"
+
+
+def backend_start_result_failed(result: object) -> bool:
+    if not isinstance(result, dict):
+        return False
+    status = str(result.get("status") or "").strip().lower()
+    return status in {"failed", "error", "stopped"}
+
+
+def handle_sub_agent_start_failure(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    *,
+    reason: str = "backend_start_failed",
+    request_summary: bool = True,
+) -> None:
+    set_agent_status(root, run_id, task_id, agent_id, "failed", 1)
+    append_visible_sub_agent_result(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        sub_agent_failure_message(agent_id, reason),
+        coordination="sub_agent_failed",
+    )
+    append_event(root, run_id, "sub_agent_backend_failed", {"task_id": task_id, "agent_id": agent_id, "reason": reason})
+    if request_summary:
+        request_round_summary_if_ready(root, run_id, task_id)
 
 
 def dispatch_spawn_to_existing_sub_agent(
@@ -347,6 +401,7 @@ def dispatch_spawn_to_existing_sub_agent(
     agent: dict,
     assignment: str,
     *,
+    config: dict | None = None,
     reason: str,
 ) -> dict:
     previous_status = str(agent.get("status") or "")
@@ -358,6 +413,10 @@ def dispatch_spawn_to_existing_sub_agent(
     same_scope = scope_explicit and scope_id == previous_scope_id
     set_agent_status(root, run_id, task_id, agent_id, "pending")
     backend = str(action.get("backend") or agent.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex")
+    model = action.get("model") if action.get("model") is not None else agent.get("model")
+    if not same_scope and action.get("model") is None and task.get("preferred_sub_model") is not None:
+        model = task.get("preferred_sub_model")
+    model = normalize_model_selector(backend, model, config)
     runtime_fields = {
         "assignment": assignment,
         "assignment_id": assignment_id,
@@ -365,7 +424,7 @@ def dispatch_spawn_to_existing_sub_agent(
         "scope_explicit": scope_explicit,
         "generation": generation,
         "backend": backend,
-        "model": action.get("model") if action.get("model") is not None else agent.get("model"),
+        "model": model,
         "sandbox": action.get("sandbox") if action.get("sandbox") is not None else agent.get("sandbox") or task.get("preferred_sandbox"),
         "approval": action.get("approval") if action.get("approval") is not None else agent.get("approval") or task.get("preferred_approval"),
         "created_by": "main",
@@ -386,6 +445,7 @@ def dispatch_spawn_to_existing_sub_agent(
             agent,
             assignment_id=assignment_id,
             backend=backend,
+            model=model,
             scope_id=scope_id,
             reason=reason,
         )
@@ -436,17 +496,23 @@ def dispatch_spawn_to_existing_sub_agent(
         },
     )
     if backend in PROCESS_AGENT_BACKENDS:
-        start_backend(
-            root,
-            run_id,
-            agent_id,
-            backend=backend,
-            model=updated_agent.get("model"),
-            sandbox=updated_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
-            approval=updated_agent.get("approval") or task.get("preferred_approval") or "never",
-            from_start=False,
-            task_id=task_id,
-        )
+        try:
+            start_result = start_backend(
+                root,
+                run_id,
+                agent_id,
+                backend=backend,
+                model=updated_agent.get("model"),
+                sandbox=updated_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+                approval=updated_agent.get("approval") or task.get("preferred_approval") or "never",
+                from_start=False,
+                task_id=task_id,
+            )
+        except Exception:
+            handle_sub_agent_start_failure(root, run_id, task_id, agent_id, request_summary=False)
+        else:
+            if backend_start_result_failed(start_result):
+                handle_sub_agent_start_failure(root, run_id, task_id, agent_id, request_summary=False)
     return updated_agent
 
 
@@ -523,6 +589,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
     executed: list[dict] = []
     used_sub_agent_ids: set[str] = set()
     followup_started_at: str | None = None
+    config = load_config(root)
 
     def ensure_followup_round_started() -> None:
         nonlocal followup_started_at
@@ -551,47 +618,18 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         current_active_sub_agents = active_sub_agent_count(task)
         action_type = action.get("type")
         if action_type == "record_task_update":
-            summary = str(action.get("summary") or "").strip()
-            if not summary:
-                append_event(
-                    root,
-                    run_id,
-                    "action_skipped",
-                    {"task_id": task_id, "type": "record_task_update", "reason": "missing summary"},
-                )
-                continue
-            record = append_task_round(
-                root,
-                run_id,
-                task_id,
-                {
-                    "trigger": str(action.get("trigger") or "main_turn"),
-                    "summary": summary,
-                    "changed_files": action.get("changed_files") or action.get("files"),
-                    "verification": action.get("verification") or action.get("checks"),
-                    "risks": action.get("risks"),
-                    "agents": action.get("agents") or ["main"],
-                },
-            )
-            executed.append({"type": "record_task_update", "round_id": record["round_id"]})
+            result = handle_record_task_update_action(root, run_id, task_id, action)
+            if result:
+                executed.append(result)
             continue
         if action_type == "route_to_agent":
-            target_id = str(action.get("agent_id") or action.get("target") or "").strip()
-            message = str(action.get("message") or action.get("prompt") or "").strip()
-            target_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == target_id), None)
-            if not target_agent or not message or target_id == "main":
-                append_event(
-                    root,
-                    run_id,
-                    "action_skipped",
-                    {
-                        "task_id": task_id,
-                        "type": "route_to_agent",
-                        "target": target_id,
-                        "reason": "missing target agent, message, or target is main",
-                    },
-                )
+            route_request = route_to_agent_request(task, action)
+            if not route_request.get("ok"):
+                append_event(root, run_id, "action_skipped", route_to_agent_skip_event(task_id, route_request))
                 continue
+            target_id = route_request["target"]
+            message = route_request["message"]
+            target_agent = route_request["agent"]
             ensure_followup_round_started()
             set_task_status(root, run_id, task_id, "running")
             set_agent_status(root, run_id, task_id, target_id, "pending")
@@ -607,31 +645,27 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 to_agent=target_id,
                 coordination="routed_by_main",
             )
-            append_event(
-                root,
-                run_id,
-                "agent_message_routed",
-                {
-                    "task_id": task_id,
-                    "target": target_id,
-                    "reason": str(action.get("reason") or ""),
-                    "chars": len(message),
-                },
-            )
+            append_event(root, run_id, "agent_message_routed", route_to_agent_routed_event(task_id, route_request))
             backend = str(target_agent.get("backend") or task.get("preferred_backend") or "codex")
             if backend in PROCESS_AGENT_BACKENDS:
-                start_backend(
-                    root,
-                    run_id,
-                    target_id,
-                    backend=backend,
-                    model=target_agent.get("model"),
-                    sandbox=target_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
-                    approval=target_agent.get("approval") or task.get("preferred_approval") or "never",
-                    from_start=not chat_offset_exists(root, run_id, target_id, task_id),
-                    task_id=task_id,
-                )
-            executed.append({"type": "route_to_agent", "agent": target_agent})
+                try:
+                    start_result = start_backend(
+                        root,
+                        run_id,
+                        target_id,
+                        backend=backend,
+                        model=target_agent.get("model"),
+                        sandbox=target_agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+                        approval=target_agent.get("approval") or task.get("preferred_approval") or "never",
+                        from_start=not chat_offset_exists(root, run_id, target_id, task_id),
+                        task_id=task_id,
+                    )
+                except Exception:
+                    handle_sub_agent_start_failure(root, run_id, task_id, target_id, request_summary=False)
+                else:
+                    if backend_start_result_failed(start_result):
+                        handle_sub_agent_start_failure(root, run_id, task_id, target_id, request_summary=False)
+            executed.append(route_to_agent_result(route_request))
             continue
         if action_type != "spawn_sub":
             continue
@@ -652,6 +686,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                     reason="target sub-agent not found",
                     max_sub_agents=max_sub_agents,
                     target_agent_id=requested_agent_id,
+                    notify_main=True,
                 )
                 continue
             if requested_agent_id in used_sub_agent_ids:
@@ -685,6 +720,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 action,
                 reusable_agent,
                 assignment,
+                config=config,
                 reason="spawn_sub assigned to requested sub-agent",
             )
             used_sub_agent_ids.add(requested_agent_id)
@@ -704,23 +740,31 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 action,
                 reusable_agent,
                 assignment,
+                config=config,
                 reason="spawn_sub reused idle sub-agent slot",
             )
             used_sub_agent_ids.add(agent_id)
             executed.append({"type": "spawn_sub", "agent": agent, "reused": True})
             continue
+        backend = str(action.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex")
+        model = normalize_model_selector(
+            backend,
+            action.get("model") if action.get("model") is not None else task.get("preferred_sub_model"),
+            config,
+        )
         agent = add_agent(
             root,
             run_id,
             task_id,
-            backend=str(action.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex"),
+            backend=backend,
             role="sub",
-            model=action.get("model") if action.get("model") is not None else task.get("preferred_sub_model"),
+            model=model,
             sandbox=action.get("sandbox") if action.get("sandbox") is not None else task.get("preferred_sandbox"),
             approval=action.get("approval") if action.get("approval") is not None else task.get("preferred_approval"),
             created_by="main",
             created_reason=str(action.get("reason") or action.get("title") or "main requested sub-agent"),
         )
+        used_sub_agent_ids.add(str(agent["id"]))
         generation = 1
         assignment_id = assignment_id_for(agent["id"], generation)
         scope_id, scope_explicit = scope_id_for(action, assignment_id)
@@ -748,71 +792,33 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         )
         backend = str(agent.get("backend") or task.get("preferred_backend") or "codex")
         if backend in PROCESS_AGENT_BACKENDS:
-            start_backend(
-                root,
-                run_id,
-                agent["id"],
-                backend=backend,
-                model=agent.get("model"),
-                sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
-                approval=agent.get("approval") or task.get("preferred_approval") or "never",
-                from_start=True,
-                task_id=task_id,
-            )
+            try:
+                start_result = start_backend(
+                    root,
+                    run_id,
+                    agent["id"],
+                    backend=backend,
+                    model=agent.get("model"),
+                    sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+                    approval=agent.get("approval") or task.get("preferred_approval") or "never",
+                    from_start=True,
+                    task_id=task_id,
+                )
+            except Exception:
+                handle_sub_agent_start_failure(root, run_id, task_id, agent["id"], request_summary=False)
+            else:
+                if backend_start_result_failed(start_result):
+                    handle_sub_agent_start_failure(root, run_id, task_id, agent["id"], request_summary=False)
         executed.append({"type": "spawn_sub", "agent": agent})
     if executed:
+        try:
+            fresh_task = task_snapshot(root, run_id, task_id)["task"]
+        except KeyError:
+            fresh_task = {}
+        if fresh_task and current_round_sub_agents(fresh_task) and not pending_current_round_sub_agents(fresh_task):
+            request_round_summary_if_ready(root, run_id, task_id)
         append_event(root, run_id, "actions_executed", {"task_id": task_id, "actions": executed})
     return executed
-
-
-def sub_agents(task: dict) -> list[dict]:
-    return [agent for agent in task.get("agents", []) if agent.get("role") == "sub"]
-
-
-def _agent_activity_at(agent: dict) -> str:
-    timestamps = [
-        str(value).strip()
-        for value in (
-            agent.get("last_active_at"),
-            agent.get("status_started_at"),
-            agent.get("started_at"),
-            agent.get("finished_at"),
-            agent.get("reused_at"),
-        )
-        if value
-    ]
-    return max(timestamps) if timestamps else ""
-
-
-def current_round_sub_agents(task: dict) -> list[dict]:
-    agents = sub_agents(task)
-    coordination = task.get("coordination") or {}
-    followup_started_at = str(coordination.get("followup_started_at") or "").strip()
-    if not followup_started_at:
-        return agents
-    return [agent for agent in agents if _agent_activity_at(agent) >= followup_started_at]
-
-
-def pending_sub_agents(task: dict) -> list[dict]:
-    return [agent for agent in sub_agents(task) if agent.get("status") not in TERMINAL_AGENT_STATUSES]
-
-
-def pending_current_round_sub_agents(task: dict) -> list[dict]:
-    return [agent for agent in current_round_sub_agents(task) if agent.get("status") not in TERMINAL_AGENT_STATUSES]
-
-
-def task_has_incomplete_sub_agents(task: dict) -> bool:
-    return bool(pending_current_round_sub_agents(task))
-
-
-def waiting_for_subagents_message(task: dict) -> str:
-    agents = current_round_sub_agents(task)
-    pending = pending_current_round_sub_agents(task)
-    if not pending:
-        return "所有子 agent 已完成，等待 task-main 做本轮汇总。"
-    names = ", ".join(agent.get("id", "-") for agent in pending)
-    done = len(agents) - len(pending)
-    return f"等待子 agent 完成：{names}。当前进度 {done}/{len(agents)}。"
 
 
 def start_task_main_backend_if_stopped(root: Path, run_id: str, task_id: str, task: dict) -> bool:
@@ -924,6 +930,15 @@ def record_sub_agent_report(
         request_round_summary_if_ready(root, run_id, task_id)
         return {"handled": True, "ignored": True}
     set_agent_status(root, run_id, task_id, agent_id, status, exit_code)
+    if status != "completed" or (exit_code is not None and exit_code != 0):
+        append_visible_sub_agent_result(
+            root,
+            run_id,
+            task_id,
+            agent_id,
+            sub_agent_failure_message(agent_id, "agent_execution_failed"),
+            coordination="sub_agent_failed",
+        )
     append_event(root, run_id, "sub_agent_reported", {"task_id": task_id, "agent_id": agent_id, "status": status, "chars": len(message)})
     round_summary_requested = request_round_summary_if_ready(root, run_id, task_id)
     return {"handled": True, "round_summary_requested": round_summary_requested, "final_requested": False}
@@ -933,6 +948,7 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
     actions: list[dict] = []
     snapshot = status_snapshot(root, run_id)
     for task in snapshot.get("tasks", []):
+        round_summary_requested_for_task = False
         if task.get("status") in TERMINAL_AGENT_STATUSES:
             continue
         agents = sub_agents(task)
@@ -951,25 +967,43 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
             attempts = int(agent.get("recovery_attempts") or 0)
             if attempts >= WATCHDOG_MAX_RECOVERY_ATTEMPTS:
                 set_agent_status(root, run_id, task["id"], agent["id"], "failed", 1)
+                append_visible_sub_agent_result(
+                    root,
+                    run_id,
+                    task["id"],
+                    agent["id"],
+                    sub_agent_failure_message(agent["id"], "backend_recovery_failed"),
+                    coordination="sub_agent_failed",
+                )
                 append_event(
                     root,
                     run_id,
                     "sub_agent_backend_failed",
                     {"task_id": task["id"], "agent_id": agent["id"], "attempts": attempts},
                 )
+                round_summary_requested_for_task = request_round_summary_if_ready(root, run_id, task["id"]) or round_summary_requested_for_task
                 actions.append({"type": "agent_failed", "task_id": task["id"], "agent_id": agent["id"]})
                 continue
-            start_backend(
-                root,
-                run_id,
-                agent["id"],
-                backend=backend,
-                model=agent.get("model"),
-                sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
-                approval=agent.get("approval") or task.get("preferred_approval") or "never",
-                from_start=False,
-                task_id=task["id"],
-            )
+            try:
+                start_result = start_backend(
+                    root,
+                    run_id,
+                    agent["id"],
+                    backend=backend,
+                    model=agent.get("model"),
+                    sandbox=agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
+                    approval=agent.get("approval") or task.get("preferred_approval") or "never",
+                    from_start=False,
+                    task_id=task["id"],
+                )
+            except Exception:
+                handle_sub_agent_start_failure(root, run_id, task["id"], agent["id"])
+                actions.append({"type": "agent_failed", "task_id": task["id"], "agent_id": agent["id"]})
+                continue
+            if backend_start_result_failed(start_result):
+                handle_sub_agent_start_failure(root, run_id, task["id"], agent["id"])
+                actions.append({"type": "agent_failed", "task_id": task["id"], "agent_id": agent["id"]})
+                continue
             update_agent_runtime(
                 root,
                 run_id,
@@ -986,11 +1020,18 @@ def monitor_task_coordination(root: Path, run_id: str) -> list[dict]:
             )
             actions.append({"type": "agent_recovered", "task_id": task["id"], "agent_id": agent["id"]})
         fresh_task = task_snapshot(root, run_id, task["id"])["task"]
-        if not pending_current_round_sub_agents(fresh_task) and request_round_summary_if_ready(root, run_id, task["id"]):
+        if (
+            not round_summary_requested_for_task
+            and not pending_current_round_sub_agents(fresh_task)
+            and request_round_summary_if_ready(root, run_id, task["id"])
+        ):
+            round_summary_requested_for_task = True
             actions.append({"type": "round_summary_requested", "task_id": task["id"]})
             continue
         coordination = fresh_task.get("coordination") or {}
         if (
+            not round_summary_requested_for_task
+            and
             coordination.get("round_summary_requested_at")
             and not coordination.get("round_summary_completed_at")
             and not pending_sub_agents(fresh_task)

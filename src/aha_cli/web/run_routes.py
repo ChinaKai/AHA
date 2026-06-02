@@ -2,11 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
+from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
-from aha_cli.domain.models import TASK_COLLABORATION_MODES, default_config
+from aha_cli.domain.models import default_config
 from aha_cli.services.orchestrator import dispatch_task_to_main
+from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
+from aha_cli.services.run_delete import RunDeleteError, delete_run
+from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_run_lifecycle_status
+from aha_cli.services.run_recovery import RunRecoveryError, run_stale_runtime_recovery
+from aha_cli.services.run_retention import (
+    RunRetentionError,
+    apply_run_retention,
+    inspect_run_retention_archive,
+    list_retention_archives,
+    restore_run_retention_archive,
+    run_retention_report,
+)
+from aha_cli.services.run_retention_policy import enforce_run_retention_policy, retention_policy_schedule_config
 from aha_cli.store.filesystem import (
     add_workspace,
     config_path,
@@ -15,8 +29,10 @@ from aha_cli.store.filesystem import (
     rename_run,
     resolve_workspace_path,
     run_summary,
+    update_run_proxy_config,
 )
 from aha_cli.store.io import write_json
+from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import (
     http_response,
     json_response,
@@ -35,7 +51,7 @@ from aha_cli.web.run_api import (
     safe_download_name,
     workspaces_payload,
 )
-from aha_cli.web.task_actions import start_dispatched_task_backend
+from aha_cli.web.task_actions import parse_task_proxy_fields, start_dispatched_task_backend
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 CONFIG_SANDBOX_OPTIONS = SANDBOX_OPTIONS | {"auto"}
@@ -121,6 +137,295 @@ def handle_run_import(root: Path, headers: dict[str, str], body: bytes) -> bytes
     finally:
         if temp_archive_path is not None:
             temp_archive_path.unlink(missing_ok=True)
+
+
+def _query_text(query: dict[str, list[str]], key: str) -> str | None:
+    value = str(query.get(key, [""])[0] or "").strip()
+    return value or None
+
+
+def _query_int(query: dict[str, list[str]], key: str, default: int) -> int:
+    raw = str(query.get(key, [""])[0] or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+
+
+def _query_groups(query: dict[str, list[str]]) -> list[str] | None:
+    raw_values = query.get("group", []) + query.get("groups", [])
+    groups: list[str] = []
+    for raw_value in raw_values:
+        for item in str(raw_value or "").split(","):
+            value = item.strip()
+            if value and value not in groups:
+                groups.append(value)
+    return groups or None
+
+
+def _payload_text(payload: dict, key: str) -> str:
+    return str(payload.get(key, "") or "").strip()
+
+
+def _payload_int(payload: dict, key: str, default: int) -> int:
+    raw = _payload_text(payload, key)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+
+
+def _payload_groups(payload: dict) -> list[str] | None:
+    value = payload.get("groups", payload.get("group"))
+    if value is None:
+        return None
+    raw_values = value if isinstance(value, list) else [value]
+    groups: list[str] = []
+    for raw_value in raw_values:
+        for item in str(raw_value or "").split(","):
+            group = item.strip()
+            if group and group not in groups:
+                groups.append(group)
+    return groups or None
+
+
+def _retention_visibility_payload(root: Path, run_id: str, query: dict[str, list[str]]) -> dict:
+    return run_retention_report(
+        root,
+        run_id,
+        top=_query_int(query, "top", 10),
+        groups=_query_groups(query),
+        include_chat=parse_query_bool(query, "include_chat", False),
+        min_age_seconds=_query_int(query, "min_age_seconds", 0),
+        max_total_bytes=_query_int(query, "max_total_bytes", 0),
+        max_candidate_bytes=_query_int(query, "max_candidate_bytes", 0),
+        min_candidate_files=_query_int(query, "min_candidate_files", 0),
+    )
+
+
+def _retention_archive_visibility_payload(root: Path, run_id: str) -> dict:
+    return list_retention_archives(root, run_id)
+
+
+def _recovery_visibility_payload(root: Path, run_id: str, query: dict[str, list[str]]) -> dict:
+    return run_stale_runtime_recovery(
+        root,
+        run_id,
+        task_id=_query_text(query, "task_id"),
+        agent_id=_query_text(query, "agent_id"),
+        apply=False,
+    )
+
+
+def _run_visibility_error(exc: Exception) -> bytes | None:
+    if isinstance(exc, FileNotFoundError):
+        return json_response({"error": str(exc), "reason": "run_not_found"}, "404 Not Found")
+    if isinstance(exc, RunRetentionError):
+        return json_response({"error": str(exc), "reason": exc.reason}, exc.status_code)
+    if isinstance(exc, RunRecoveryError):
+        return json_response({"error": str(exc), "reason": exc.reason}, exc.status_code)
+    if isinstance(exc, ValueError):
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    return None
+
+
+def _confirmation_error(expected: str) -> bytes:
+    return json_response(
+        {
+            "error": f"confirmation required: {expected}",
+            "reason": "confirm_required",
+            "confirm": expected,
+        },
+        "400 Bad Request",
+    )
+
+
+def handle_run_retention_visibility(root: Path, method: str, run_id: str, query: dict[str, list[str]]) -> bytes:
+    try:
+        retention = _retention_visibility_payload(root, run_id, query)
+    except (FileNotFoundError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    response = json_response(
+        {"ok": True, "run_id": retention["run_id"], "retention": retention}
+    )
+    return head_or_response(method, response)
+
+
+def handle_run_recovery_visibility(root: Path, method: str, run_id: str, query: dict[str, list[str]]) -> bytes:
+    try:
+        recovery = _recovery_visibility_payload(root, run_id, query)
+    except (RunRecoveryError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    response = json_response(
+        {"ok": True, "run_id": recovery["run_id"], "recovery": recovery}
+    )
+    return head_or_response(method, response)
+
+
+def handle_run_retention_action(root: Path, default_run_id: str, run_id: str, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    action = _payload_text(payload, "action") or "archive"
+    force = action == "compact" or parse_optional_bool(payload.get("force", False), "force")
+    apply_if_over_limit = action == "policy" or parse_optional_bool(payload.get("apply_if_over_limit", False), "apply_if_over_limit")
+    if action not in {"archive", "compact", "policy"}:
+        return json_response({"error": f"unknown retention action: {action}"}, "400 Bad Request")
+    expected_confirm = "delete archived originals" if force else "apply retention policy" if apply_if_over_limit else "archive"
+    if _payload_text(payload, "confirm") != expected_confirm:
+        return _confirmation_error(expected_confirm)
+    try:
+        options = {
+            "current_run_id": default_run_id,
+            "active_heartbeat_seconds": _payload_int(payload, "active_heartbeat_seconds", 120),
+            "force": force,
+            "top": _payload_int(payload, "top", 10),
+            "groups": _payload_groups(payload),
+            "include_chat": parse_optional_bool(payload.get("include_chat", False), "include_chat"),
+            "min_age_seconds": _payload_int(payload, "min_age_seconds", 0),
+            "max_total_bytes": _payload_int(payload, "max_total_bytes", 0),
+            "max_candidate_bytes": _payload_int(payload, "max_candidate_bytes", 0),
+            "min_candidate_files": _payload_int(payload, "min_candidate_files", 0),
+        }
+        if apply_if_over_limit:
+            retention = enforce_run_retention_policy(root, run_id, apply=True, **options)
+        else:
+            retention = apply_run_retention(root, run_id, **options)
+        archives = _retention_archive_visibility_payload(root, retention["run_id"])
+    except (FileNotFoundError, RunRetentionError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    return json_response(
+        {
+            "ok": True,
+            "run_id": retention["run_id"],
+            "retention": retention,
+            "retention_archives": archives,
+        }
+    )
+
+
+def handle_run_recovery_action(root: Path, run_id: str, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    if _payload_text(payload, "confirm") != "recover stale agent":
+        return _confirmation_error("recover stale agent")
+    task_id = _payload_text(payload, "task_id")
+    agent_id = _payload_text(payload, "agent_id")
+    restart_backend = parse_optional_bool(payload.get("restart_backend", False), "restart_backend")
+    if not task_id or not agent_id:
+        return json_response({"error": "task_id and agent_id are required"}, "400 Bad Request")
+    try:
+        recovery = run_stale_runtime_recovery(
+            root,
+            run_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            apply=True,
+            restart_backend=restart_backend,
+        )
+    except (RunRecoveryError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    return json_response({"ok": True, "run_id": recovery["run_id"], "recovery": recovery})
+
+
+def handle_run_retention_archive_list(root: Path, method: str, run_id: str) -> bytes:
+    try:
+        archives = _retention_archive_visibility_payload(root, run_id)
+    except (FileNotFoundError, RunRetentionError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    response = json_response({"ok": True, "run_id": run_id, "retention_archives": archives})
+    return head_or_response(method, response)
+
+
+def handle_run_retention_archive_inspect(root: Path, method: str, run_id: str, archive_name: str) -> bytes:
+    try:
+        archive = inspect_run_retention_archive(root, run_id, unquote(archive_name))
+    except (FileNotFoundError, RunRetentionError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    response = json_response({"ok": True, "run_id": archive["run_id"], "retention_archive": archive})
+    return head_or_response(method, response)
+
+
+def handle_run_retention_archive_restore(
+    root: Path,
+    default_run_id: str,
+    run_id: str,
+    body: bytes,
+    archive_name: str | None = None,
+) -> bytes:
+    payload = parse_json_body(body)
+    archive_path = _payload_text(payload, "archive")
+    selected_archive_name = unquote(archive_name or Path(archive_path).name)
+    if not selected_archive_name:
+        return json_response({"error": "archive is required"}, "400 Bad Request")
+    force = parse_optional_bool(payload.get("force", False), "force")
+    expected_confirm = "overwrite restored files" if force else "restore archive"
+    if _payload_text(payload, "confirm") != expected_confirm:
+        return _confirmation_error(expected_confirm)
+    try:
+        restore = restore_run_retention_archive(
+            root,
+            run_id,
+            selected_archive_name,
+            current_run_id=default_run_id,
+            force=force,
+            active_heartbeat_seconds=_payload_int(payload, "active_heartbeat_seconds", 120),
+        )
+        archives = _retention_archive_visibility_payload(root, restore["run_id"])
+    except (FileNotFoundError, RunRetentionError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    return json_response(
+        {
+            "ok": True,
+            "run_id": restore["run_id"],
+            "restore": restore,
+            "retention_archives": archives,
+        }
+    )
+
+
+def handle_run_maintenance_visibility(root: Path, method: str, run_id: str, query: dict[str, list[str]]) -> bytes:
+    try:
+        retention = _retention_visibility_payload(root, run_id, query)
+        recovery = _recovery_visibility_payload(root, run_id, query)
+        archives = _retention_archive_visibility_payload(root, run_id)
+    except (FileNotFoundError, RunRetentionError, RunRecoveryError, ValueError) as exc:
+        response = _run_visibility_error(exc)
+        if response is not None:
+            return response
+        raise
+    response = json_response(
+        {
+            "ok": True,
+            "run_id": retention["run_id"],
+            "retention": retention,
+            "recovery": recovery,
+            "retention_archives": archives,
+        }
+    )
+    return head_or_response(method, response)
 
 
 def handle_bootstrap(root: Path, default_run_id: str, method: str, request_headers: dict[str, str] | None = None) -> bytes:
@@ -223,6 +528,17 @@ def _session_policy(value: object, default: str) -> str:
     return policy
 
 
+def _proxy_config_from_payload(value: object, field_name: str, fallback: dict | None = None) -> dict:
+    fallback = fallback or {}
+    payload = _object_value(value, field_name)
+    return normalize_proxy_config(
+        payload.get("enabled", payload.get("proxy_enabled", fallback.get("enabled", False))),
+        payload.get("http_proxy", fallback.get("http_proxy")),
+        payload.get("https_proxy", fallback.get("https_proxy")),
+        payload.get("no_proxy", fallback.get("no_proxy")),
+    )
+
+
 def _bootstrap_config_from_payload(payload: dict) -> dict:
     defaults = default_config()
     backend = _string_or_default(payload.get("backend"), "codex")
@@ -239,6 +555,8 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
     codex_payload = _object_value(payload.get("codex"), "codex")
     codex_defaults = defaults["codex"]
     codex_env = _codex_env_groups(codex_payload.get("env"))
+    legacy_proxy = _proxy_config_from_payload(payload.get("proxy"), "proxy")
+    proxy_fallback = legacy_proxy if proxy_configured(legacy_proxy) else None
     codex = {
         "bin": _string_or_default(codex_payload.get("bin"), str(codex_defaults["bin"])),
         "model": _optional_string(codex_payload.get("model")),
@@ -248,6 +566,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "session_policy": _session_policy(codex_payload.get("session_policy"), str(codex_defaults["session_policy"])),
         "env_active": _optional_string(codex_payload.get("env_active")),
         "env": codex_env,
+        "proxy": _proxy_config_from_payload(codex_payload.get("proxy"), "codex.proxy", proxy_fallback),
     }
     if codex["approval"] not in APPROVAL_OPTIONS:
         raise ValueError(f"unknown approval: {codex['approval']}")
@@ -263,6 +582,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "session_policy": _session_policy(claude_payload.get("session_policy"), str(claude_defaults["session_policy"])),
         "env_active": _optional_string(claude_payload.get("env_active")),
         "env": claude_env,
+        "proxy": _proxy_config_from_payload(claude_payload.get("proxy"), "claude.proxy", proxy_fallback),
     }
 
     return {
@@ -272,7 +592,9 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "default_mode": mode,
         "workspace_roots": _string_list(payload.get("workspace_roots"), "workspace_roots"),
         "webgame_workspace": _optional_string(payload.get("webgame_workspace")),
+        "proxy": legacy_proxy,
         "context_windows": _object_value(payload.get("context_windows"), "context_windows"),
+        "retention_policy": retention_policy_schedule_config(payload.get("retention_policy")),
         "codex": codex,
         "claude": claude,
     }
@@ -308,9 +630,10 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
         return json_response({"error": f"unknown sandbox: {sandbox}"}, "400 Bad Request")
     if approval is not None and approval not in APPROVAL_OPTIONS:
         return json_response({"error": f"unknown approval: {approval}"}, "400 Bad Request")
-    collaboration_mode = str(payload.get("collaboration_mode", "auto") or "auto")
-    if collaboration_mode not in TASK_COLLABORATION_MODES:
-        return json_response({"error": f"unknown collaboration mode: {collaboration_mode}"}, "400 Bad Request")
+    try:
+        execution_fields = parse_execution_fields(payload, default_collaboration_mode="auto")
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
 
     create_initial_task = parse_optional_bool(payload.get("create_initial_task", True), "create_initial_task")
     task_titles = payload.get("task_titles", payload.get("tasks", []))
@@ -336,6 +659,7 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
     except ValueError as exc:
         return json_response({"error": str(exc)}, "400 Bad Request")
 
+    explicit_proxy_enabled = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None
     plan = create_plan(
         root=root,
         goal=goal,
@@ -349,11 +673,12 @@ def handle_create_run(root: Path, body: bytes) -> bytes:
         workspace_id=workspace_id,
         sandbox=sandbox,
         approval=approval,
-        proxy_enabled=parse_optional_bool(payload.get("proxy_enabled", False), "proxy_enabled"),
+        proxy_enabled=explicit_proxy_enabled,
         http_proxy=str(payload.get("http_proxy", "") or "") or None,
         https_proxy=str(payload.get("https_proxy", "") or "") or None,
         no_proxy=str(payload.get("no_proxy", "") or "") or None,
-        collaboration_mode=collaboration_mode,
+        collaboration_mode=execution_fields["collaboration_mode"],
+        workflow_template=execution_fields["workflow_template"],
         create_default_tasks=create_initial_task,
     )
     backend_states = []
@@ -382,6 +707,48 @@ def handle_update_run(root: Path, default_run_id: str, run_id: str, body: bytes)
         return json_response({"error": str(exc)}, "400 Bad Request")
     response = runs_payload(root, default_run_id)
     response.update({"ok": True, "run": run})
+    return json_response(response)
+
+
+def handle_update_run_lifecycle(root: Path, default_run_id: str, run_id: str, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    status = str(payload.get("status", payload.get("lifecycle_status", "")) or "").strip()
+    if not status:
+        return json_response({"error": "lifecycle status is required"}, "400 Bad Request")
+    try:
+        run = set_run_lifecycle_status(root, run_id, status, current_run_id=default_run_id)
+    except RunLifecycleActionError as exc:
+        return json_response({"error": str(exc), "reason": exc.reason}, exc.status_code)
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    response = runs_payload(root, default_run_id)
+    response.update({"ok": True, "run": run})
+    return json_response(response)
+
+
+def handle_update_run_proxy(root: Path, default_run_id: str, run_id: str, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    try:
+        proxy = update_run_proxy_config(root, run_id, **parse_task_proxy_fields(payload))
+    except SystemExit as exc:
+        return json_response({"error": str(exc)}, "404 Not Found")
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    response = runs_payload(root, default_run_id)
+    response.update({"ok": True, "run": run_summary(root, run_id), "proxy": proxy})
+    return json_response(response)
+
+
+def handle_delete_run(root: Path, default_run_id: str, run_id: str, query: dict[str, list[str]]) -> bytes:
+    force = parse_query_bool(query, "force", False)
+    try:
+        deleted = delete_run(root, run_id, current_run_id=default_run_id, force=force)
+    except RunDeleteError as exc:
+        return json_response({"error": str(exc), "reason": exc.reason}, exc.status_code)
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    response = runs_payload(root, default_run_id)
+    response.update({"ok": True, "deleted": deleted})
     return json_response(response)
 
 
@@ -423,6 +790,42 @@ def handle_run_workspace_route(
         return handle_save_bootstrap(root, default_run_id, body)
     if method == "POST" and path == "/api/runs":
         return handle_create_run(root, body)
+    if method in {"GET", "HEAD"} and path.startswith("/api/runs/"):
+        route = path.removeprefix("/api/runs/").strip("/")
+        parts = route.split("/")
+        if len(parts) == 2 and parts[1] == "retention-archives":
+            return handle_run_retention_archive_list(root, method, parts[0])
+        if len(parts) == 3 and parts[1] == "retention-archives":
+            return handle_run_retention_archive_inspect(root, method, parts[0], parts[2])
+        if len(parts) == 2 and parts[1] == "retention":
+            return handle_run_retention_visibility(root, method, parts[0], query)
+        if len(parts) == 2 and parts[1] == "recovery":
+            return handle_run_recovery_visibility(root, method, parts[0], query)
+        if len(parts) == 2 and parts[1] == "maintenance":
+            return handle_run_maintenance_visibility(root, method, parts[0], query)
+    if method == "POST" and path.startswith("/api/runs/"):
+        route = path.removeprefix("/api/runs/").strip("/")
+        parts = route.split("/")
+        if len(parts) == 2 and parts[1] == "retention":
+            return handle_run_retention_action(root, default_run_id, parts[0], body)
+        if len(parts) == 2 and parts[1] == "recovery":
+            return handle_run_recovery_action(root, parts[0], body)
+        if len(parts) == 4 and parts[1] == "retention-archives" and parts[3] == "restore":
+            return handle_run_retention_archive_restore(root, default_run_id, parts[0], body, parts[2])
+        if len(parts) == 3 and parts[1] == "retention-archive" and parts[2] == "restore":
+            return handle_run_retention_archive_restore(root, default_run_id, parts[0], body)
+    if method in {"POST", "PATCH"} and path.startswith("/api/runs/"):
+        route = path.removeprefix("/api/runs/").strip("/")
+        parts = route.split("/")
+        if len(parts) == 2 and parts[1] == "lifecycle":
+            return handle_update_run_lifecycle(root, default_run_id, parts[0], body)
+        if len(parts) == 2 and parts[1] == "proxy":
+            return handle_update_run_proxy(root, default_run_id, parts[0], body)
+    if method == "DELETE" and path.startswith("/api/runs/"):
+        run_id = path.removeprefix("/api/runs/").strip("/")
+        if not run_id or "/" in run_id:
+            return json_response({"error": "run id is required"}, "400 Bad Request")
+        return handle_delete_run(root, default_run_id, run_id, query)
     if method == "PATCH" and path.startswith("/api/runs/"):
         run_id = path.removeprefix("/api/runs/").strip("/")
         if not run_id or "/" in run_id:
@@ -440,9 +843,19 @@ __all__ = [
     "handle_create_run",
     "handle_create_workspace",
     "handle_update_run",
+    "handle_update_run_lifecycle",
+    "handle_delete_run",
     "handle_save_bootstrap",
     "handle_run_export",
     "handle_run_import",
+    "handle_run_retention_action",
+    "handle_run_retention_archive_inspect",
+    "handle_run_retention_archive_list",
+    "handle_run_retention_archive_restore",
+    "handle_run_maintenance_visibility",
+    "handle_run_recovery_action",
+    "handle_run_recovery_visibility",
+    "handle_run_retention_visibility",
     "handle_run_workspace_route",
     "handle_runs_index",
     "handle_workspaces_index",

@@ -253,13 +253,36 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
             sub_agent_recovery_notice(agent_id, recovery_reason),
             recovery_reason,
         )
+        from aha_cli.services.orchestrator import (
+            append_visible_sub_agent_result,
+            request_round_summary_if_ready,
+            sub_agent_failure_message,
+        )
+
+        append_visible_sub_agent_result(
+            root,
+            run_id,
+            task_id,
+            agent_id,
+            sub_agent_failure_message(agent_id, recovery_reason),
+            coordination="sub_agent_failed",
+        )
+        main_agent = next((item for item in fresh_task.get("agents", []) if str(item.get("id") or "") == "main"), None)
+        main_waiting_for_subagents = (
+            main_agent is not None
+            and str(main_agent.get("status") or "") == "waiting"
+            and str(main_agent.get("waiting_reason") or "") == "subagents"
+        )
+        round_summary_requested = request_round_summary_if_ready(root, run_id, task_id) if main_waiting_for_subagents else False
+    else:
+        round_summary_requested = False
 
     task_recovered = False
     other_agent_running = any(
         str(item.get("id") or "") != agent_id and str(item.get("status") or "") == "running"
         for item in persisted_task.get("agents", [])
     )
-    if not other_agent_running:
+    if not other_agent_running and not round_summary_requested:
         updated_task = set_task_status(root, run_id, task_id, "awaiting_user")
         for field in ("status", "exit_code", "started_at", "finished_at"):
             task[field] = updated_task.get(field)

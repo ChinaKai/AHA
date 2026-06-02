@@ -11,11 +11,12 @@ from aha_cli.domain.models import (
     next_task_id,
     normalize_task_context_management,
     normalize_task_supervision,
+    task_metadata_projection,
     task_prompt,
     utc_now,
     new_run_id,
 )
-from aha_cli.services.proxy import DEFAULT_NO_PROXY, normalize_proxy_value, task_has_proxy_config
+from aha_cli.services.proxy import backend_has_proxy_config, backend_proxy_config, normalize_proxy_config, normalize_proxy_value, run_has_proxy_config, run_proxy_config
 from aha_cli.store.agents import (
     add_agent as _add_agent,
     add_agent_to_task_dict,
@@ -84,6 +85,7 @@ from aha_cli.store.runs import (
     run_summary,
     run_summary_from_plan,
     save_plan,
+    update_run_lifecycle,
 )
 from aha_cli.store.rounds import (
     ensure_current_task_round as _ensure_current_task_round,
@@ -187,6 +189,7 @@ def append_message(
     display_sender: str | None = None,
     display_target: str | None = None,
     final_context: dict | None = None,
+    recovery_context: str | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -221,6 +224,8 @@ def append_message(
         payload["display_target"] = display_target
     if final_context:
         payload["final_context"] = final_context
+    if recovery_context:
+        payload["recovery_context"] = recovery_context
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)
@@ -273,20 +278,29 @@ def create_plan(
     workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
-    proxy_enabled: bool = False,
+    proxy_enabled: bool | None = None,
     http_proxy: str | None = None,
     https_proxy: str | None = None,
     no_proxy: str | None = None,
     collaboration_mode: str | None = None,
+    workflow_template: str | None = None,
     create_default_tasks: bool = True,
 ) -> dict:
     run_id = new_run_id()
     titles = task_titles or (default_tasks(goal, agents, mode) if create_default_tasks else [])
     created = utc_now()
-    http_proxy = normalize_proxy_value(http_proxy)
-    https_proxy = normalize_proxy_value(https_proxy)
-    no_proxy = normalize_proxy_value(no_proxy) or (DEFAULT_NO_PROXY if (http_proxy or https_proxy) else None)
-    proxy_enabled = bool(proxy_enabled or http_proxy or https_proxy)
+    cfg = load_config(root)
+    backend_proxy = backend_proxy_config(cfg, backend)
+    proxy_fields_provided = any(value is not None for value in (http_proxy, https_proxy, no_proxy))
+    if proxy_enabled is None:
+        proxy_enabled = bool(backend_proxy.get("enabled") if not proxy_fields_provided else normalize_proxy_value(http_proxy) or normalize_proxy_value(https_proxy))
+    proxy_config = normalize_proxy_config(
+        proxy_enabled,
+        http_proxy,
+        https_proxy,
+        no_proxy,
+    )
+    proxy_enabled = bool(proxy_config["enabled"])
     tasks = [
         make_task(
             f"task-{idx:03d}",
@@ -299,10 +313,8 @@ def create_plan(
             sandbox=sandbox,
             approval=approval,
             proxy_enabled=proxy_enabled,
-            http_proxy=http_proxy,
-            https_proxy=https_proxy,
-            no_proxy=no_proxy,
             collaboration_mode=collaboration_mode,
+            workflow_template=workflow_template,
         )
         for idx, title in enumerate(titles, start=1)
     ]
@@ -313,6 +325,7 @@ def create_plan(
         "created_at": created,
         "updated_at": created,
         "write_scopes": write_scopes,
+        "proxy": proxy_config,
         "main_agent": make_agent(
             "main",
             "run-main",
@@ -331,7 +344,12 @@ def create_plan(
         ensure_session(root, run_id, task["id"], "main", backend, model=model, workspace_path=task.get("workspace_path"))
     ensure_session(root, run_id, None, "main", backend, model=model, workspace_path=workspace_path or str(root))
     save_plan(root, plan)
-    append_event(root, run_id, "plan_created", {"goal": goal, "mode": mode, "tasks": len(tasks)})
+    append_event(
+        root,
+        run_id,
+        "plan_created",
+        {"goal": goal, "mode": mode, "tasks": len(tasks), "proxy_enabled": proxy_enabled, "proxy_configured": backend_has_proxy_config(cfg, backend, plan)},
+    )
     return plan
 
 
@@ -374,11 +392,12 @@ def add_task(
     workspace_id: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
-    proxy_enabled: bool = False,
+    proxy_enabled: bool | None = None,
     http_proxy: str | None = None,
     https_proxy: str | None = None,
     no_proxy: str | None = None,
     collaboration_mode: str | None = None,
+    workflow_template: str | None = None,
     delegation_policy: str | None = "auto",
     max_sub_agents: int | None = 3,
     preferred_sub_backend: str | None = None,
@@ -388,10 +407,17 @@ def add_task(
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
-        http_proxy = normalize_proxy_value(http_proxy)
-        https_proxy = normalize_proxy_value(https_proxy)
-        no_proxy = normalize_proxy_value(no_proxy) or (DEFAULT_NO_PROXY if (http_proxy or https_proxy) else None)
-        proxy_enabled = bool(proxy_enabled or http_proxy or https_proxy)
+        proxy_fields_provided = any(value is not None for value in (http_proxy, https_proxy, no_proxy))
+        if proxy_fields_provided:
+            current_proxy = run_proxy_config(plan)
+            plan["proxy"] = normalize_proxy_config(
+                proxy_enabled if proxy_enabled is not None else bool(http_proxy or https_proxy or current_proxy["enabled"]),
+                http_proxy if http_proxy is not None else current_proxy["http_proxy"],
+                https_proxy if https_proxy is not None else current_proxy["https_proxy"],
+                no_proxy if no_proxy is not None else current_proxy["no_proxy"],
+            )
+        backend_proxy = backend_proxy_config(load_config(root), backend, plan)
+        task_proxy_enabled = bool(backend_proxy["enabled"] if proxy_enabled is None else proxy_enabled)
         sandbox = sandbox or DEFAULT_TASK_SANDBOX
         task = make_task(
             next_task_id(plan["tasks"]),
@@ -403,11 +429,9 @@ def add_task(
             workspace_id=workspace_id,
             sandbox=sandbox,
             approval=approval,
-            proxy_enabled=proxy_enabled,
-            http_proxy=http_proxy,
-            https_proxy=https_proxy,
-            no_proxy=no_proxy,
+            proxy_enabled=task_proxy_enabled,
             collaboration_mode=collaboration_mode,
+            workflow_template=workflow_template,
             delegation_policy=delegation_policy,
             max_sub_agents=max_sub_agents,
             preferred_sub_backend=preferred_sub_backend,
@@ -423,7 +447,7 @@ def add_task(
                 workspace_path=workspace_path or str(root),
                 sandbox=sandbox,
                 approval=approval,
-                proxy_enabled=proxy_enabled,
+                proxy_enabled=task_proxy_enabled,
                 created_by="system",
                 created_reason="task creation requested initial sub-agent",
             )
@@ -442,27 +466,18 @@ def add_task(
                 model=agent.get("model"),
                 workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
             )
-    append_event(
-        root,
-        run_id,
-        "task_created",
-        {
-            "task_id": task["id"],
-            "title": title,
-            "backend": backend,
-            "model": model,
-            "sandbox": sandbox,
-            "approval": approval,
-            "proxy_enabled": proxy_enabled,
-            "proxy_configured": task_has_proxy_config(task),
-            "workspace_id": task.get("workspace_id"),
-            "workspace_path": task.get("workspace_path"),
-            "collaboration_mode": task.get("collaboration_mode"),
-            "delegation_policy": task.get("delegation_policy"),
-            "max_sub_agents": task.get("max_sub_agents"),
-            "supervision": task.get("supervision"),
-        },
-    )
+    event_data = {
+        "task_id": task["id"],
+        "title": title,
+        "backend": backend,
+        "model": model,
+        "sandbox": sandbox,
+        "approval": approval,
+        "proxy_enabled": task_proxy_enabled,
+        "proxy_configured": backend_has_proxy_config(load_config(root), task.get("preferred_backend"), plan, task),
+    }
+    event_data.update(task_metadata_projection(task))
+    append_event(root, run_id, "task_created", event_data)
     return task
 
 
@@ -537,6 +552,62 @@ def update_agent_config(
     )
 
 
+def _apply_run_proxy_update(
+    plan: dict,
+    *,
+    proxy_enabled: object = UNSET,
+    http_proxy: object = UNSET,
+    https_proxy: object = UNSET,
+    no_proxy: object = UNSET,
+) -> dict[str, object]:
+    current = run_proxy_config(plan)
+    next_http_proxy = current["http_proxy"] if http_proxy is UNSET else normalize_proxy_value(http_proxy)
+    next_https_proxy = current["https_proxy"] if https_proxy is UNSET else normalize_proxy_value(https_proxy)
+    next_no_proxy = current["no_proxy"] if no_proxy is UNSET else normalize_proxy_value(no_proxy)
+    if proxy_enabled is UNSET:
+        next_proxy_enabled = current["enabled"]
+        if http_proxy is not UNSET or https_proxy is not UNSET:
+            next_proxy_enabled = bool(next_http_proxy or next_https_proxy)
+    else:
+        next_proxy_enabled = bool(proxy_enabled)
+    plan["proxy"] = normalize_proxy_config(next_proxy_enabled, next_http_proxy, next_https_proxy, next_no_proxy)
+    return plan["proxy"]
+
+
+def update_run_proxy_config(
+    root: Path,
+    run_id: str,
+    *,
+    proxy_enabled: object = UNSET,
+    http_proxy: object = UNSET,
+    https_proxy: object = UNSET,
+    no_proxy: object = UNSET,
+) -> dict[str, object]:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        proxy_config = _apply_run_proxy_update(
+            plan,
+            proxy_enabled=proxy_enabled,
+            http_proxy=http_proxy,
+            https_proxy=https_proxy,
+            no_proxy=no_proxy,
+        )
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+    append_event(
+        root,
+        run_id,
+        "run_proxy_config_updated",
+        {
+            "proxy_enabled": proxy_config.get("enabled"),
+            "http_proxy_configured": bool(proxy_config.get("http_proxy")),
+            "https_proxy_configured": bool(proxy_config.get("https_proxy")),
+            "no_proxy_configured": bool(proxy_config.get("no_proxy")),
+        },
+    )
+    return proxy_config
+
+
 def update_task_proxy_config(
     root: Path,
     run_id: str,
@@ -552,27 +623,26 @@ def update_task_proxy_config(
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
             raise SystemExit(f"Task not found: {task_id}")
+        proxy_fields_provided = http_proxy is not UNSET or https_proxy is not UNSET or no_proxy is not UNSET
+        if proxy_fields_provided:
+            _apply_run_proxy_update(
+                plan,
+                proxy_enabled=proxy_enabled,
+                http_proxy=http_proxy,
+                https_proxy=https_proxy,
+                no_proxy=no_proxy,
+            )
         for agent in task.get("agents", []):
             if "proxy_enabled" not in agent:
                 agent["proxy_enabled"] = bool(task.get("preferred_proxy_enabled"))
         if proxy_enabled is not UNSET:
             task["preferred_proxy_enabled"] = bool(proxy_enabled)
-        if http_proxy is not UNSET:
-            task["preferred_http_proxy"] = normalize_proxy_value(http_proxy)
-        if https_proxy is not UNSET:
-            task["preferred_https_proxy"] = normalize_proxy_value(https_proxy)
-        if no_proxy is not UNSET:
-            task["preferred_no_proxy"] = normalize_proxy_value(no_proxy)
-        if (
-            not task.get("preferred_no_proxy")
-            and (task.get("preferred_http_proxy") or task.get("preferred_https_proxy"))
-        ):
-            task["preferred_no_proxy"] = DEFAULT_NO_PROXY
         if proxy_enabled is UNSET and (http_proxy is not UNSET or https_proxy is not UNSET):
-            task["preferred_proxy_enabled"] = bool(task.get("preferred_http_proxy") or task.get("preferred_https_proxy"))
+            task["preferred_proxy_enabled"] = bool(run_proxy_config(plan).get("enabled"))
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+        proxy_config = run_proxy_config(plan, task)
     append_event(
         root,
         run_id,
@@ -580,11 +650,24 @@ def update_task_proxy_config(
         {
             "task_id": task_id,
             "proxy_enabled": task.get("preferred_proxy_enabled"),
-            "http_proxy_configured": bool(task.get("preferred_http_proxy")),
-            "https_proxy_configured": bool(task.get("preferred_https_proxy")),
-            "no_proxy_configured": bool(task.get("preferred_no_proxy")),
+            "http_proxy_configured": bool(proxy_config.get("http_proxy")),
+            "https_proxy_configured": bool(proxy_config.get("https_proxy")),
+            "no_proxy_configured": bool(proxy_config.get("no_proxy")),
         },
     )
+    if proxy_fields_provided:
+        append_event(
+            root,
+            run_id,
+            "run_proxy_config_updated",
+            {
+                "proxy_enabled": proxy_config.get("enabled"),
+                "http_proxy_configured": bool(proxy_config.get("http_proxy")),
+                "https_proxy_configured": bool(proxy_config.get("https_proxy")),
+                "no_proxy_configured": bool(proxy_config.get("no_proxy")),
+                "source": "task_proxy_compat",
+            },
+        )
     return task
 
 

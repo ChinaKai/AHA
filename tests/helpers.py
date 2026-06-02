@@ -30,8 +30,9 @@ async def fetch_ui_response(
     payload: dict | None = None,
     body: bytes | None = None,
     headers: dict[str, str] | None = None,
+    auth_token: str = "",
 ) -> bytes:
-    server = await asyncio.start_server(lambda reader, writer: handle_ui_client(root, run_id, reader, writer), "127.0.0.1", 0)
+    server = await asyncio.start_server(lambda reader, writer: handle_ui_client(root, run_id, reader, writer, auth_token), "127.0.0.1", 0)
     host, port = server.sockets[0].getsockname()
     try:
         reader, writer = await asyncio.open_connection(host, port)

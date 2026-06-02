@@ -19,19 +19,19 @@ from aha_cli.services.chat_supervision import (
     apply_supervision_real_host,
     is_task_supervision_host_agent,
 )
+from aha_cli.services.action_payloads import action_response_text, extract_action_payload
 from aha_cli.services.orchestrator import (
-    action_response_text,
+    append_visible_sub_agent_result,
     apply_supervision_stub,
     execute_actions,
-    extract_action_payload,
     monitor_task_coordination,
     record_sub_agent_report,
     request_round_summary_if_ready,
-    task_has_incomplete_sub_agents,
-    waiting_for_subagents_message,
+    sub_agent_failure_message,
 )
 from aha_cli.services.prompt_artifacts import save_prompt_artifact
 from aha_cli.services.proxy import proxy_env_for_agent
+from aha_cli.services.subagent_state import task_has_incomplete_sub_agents, waiting_for_subagents_message
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -66,6 +66,22 @@ BLOCKED_REPLY_MARKERS = (
 )
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+SUPERVISION_SKIP_COORDINATIONS = {
+    "agent_recovery_notice",
+    "backend_restart_status",
+    "deployment_status",
+    "service_restart_status",
+    "stale_runtime_recovery_restart",
+    "system_status",
+    "verification_status",
+}
+
+
+def message_triggers_supervision(item: dict) -> bool:
+    coordination = str(item.get("coordination") or "").strip().lower()
+    if coordination in SUPERVISION_SKIP_COORDINATIONS:
+        return False
+    return True
 
 
 def status_from_agent_result(exit_code: int, reply: str) -> str:
@@ -212,6 +228,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     continue
                 agent_id = args.target if args.target != "main" else "main"
                 detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
+                plan = require_plan(root, run_id) if item_task_id else {}
                 task = detail["task"] if detail else {}
                 is_agent_command = item.get("command_namespace") == "agent"
                 is_finalization = item.get("result_policy") == "finalize"
@@ -331,7 +348,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         "proxy_enabled": bool((agent or {}).get("proxy_enabled")),
                     },
                 )
-                proxy_env = proxy_env_for_agent(agent or {}, task)
+                proxy_env = proxy_env_for_agent(agent or {}, task, plan, cfg)
                 prompt, prompt_metrics = chat_prompt_with_metrics(root, run_id, args.target, item, args.prompt_prefix)
                 try:
                     prompt_metrics["prompt_ref"] = save_prompt_artifact(root, run_id, item_task_id, args.target, prompt)
@@ -451,7 +468,13 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     )
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
                     defer_supervision_for_subagents = False
-                    if agent_id == "main" and manages_task_status and not writes_task_final and not is_agent_command:
+                    if (
+                        agent_id == "main"
+                        and manages_task_status
+                        and not writes_task_final
+                        and not is_agent_command
+                        and message_triggers_supervision(item)
+                    ):
                         try:
                             supervision_detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
                         except KeyError:
@@ -600,6 +623,14 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     if manages_task_status:
                         if agent_id != "main":
                             set_agent_status(root, run_id, item_task_id, agent_id, "failed", exit_code)
+                            append_visible_sub_agent_result(
+                                root,
+                                run_id,
+                                item_task_id,
+                                agent_id,
+                                sub_agent_failure_message(agent_id, "agent_execution_failed"),
+                                coordination="sub_agent_failed",
+                            )
                             request_round_summary_if_ready(root, run_id, item_task_id)
                             set_task_status(root, run_id, item_task_id, "running")
                             exit_after_message = bool(worker_task_id)

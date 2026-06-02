@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from aha_cli.backends.codex import is_context_overflow_message, tail_text
+from aha_cli.backends.registry import normalize_model_selector
 from aha_cli.domain.models import utc_now
 from aha_cli.services.native_subagents import (
     CLAUDE_NATIVE_SUBAGENT_TOOLS,
@@ -52,6 +53,7 @@ def claude_cli_model(model: str | None) -> str | None:
 
 def claude_config_for_model(claude_config: dict | None, model: str | None) -> dict:
     cfg = dict(claude_config or {})
+    model = normalize_model_selector("claude", model, {"claude": cfg})
     env_group = claude_env_group_from_model(model)
     if env_group:
         cfg["env_active"] = env_group
@@ -61,6 +63,7 @@ def claude_config_for_model(claude_config: dict | None, model: str | None) -> di
 
 
 def claude_resolved_model(claude_config: dict | None, model: str | None) -> str | None:
+    model = normalize_model_selector("claude", model, {"claude": claude_config or {}})
     cli_model = claude_cli_model(model)
     if cli_model:
         return cli_model

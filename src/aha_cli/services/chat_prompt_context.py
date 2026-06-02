@@ -25,7 +25,14 @@ from aha_cli.store.filesystem import (
 )
 
 
-PROMPT_REDACTED_PROXY_FIELDS = {"preferred_http_proxy", "preferred_https_proxy", "preferred_no_proxy"}
+PROMPT_REDACTED_PROXY_FIELDS = {
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "preferred_http_proxy",
+    "preferred_https_proxy",
+    "preferred_no_proxy",
+}
 DELTA_PROMPT_SKIP_EVENT_TYPES = {
     "agent_command_finished",
     "agent_command_started",
@@ -127,6 +134,20 @@ def _current_message_sender_label(item: dict) -> str:
     if (item.get("display_sender") or item.get("display_target")) and recipient:
         return f"{sender} -> {recipient}"
     return sender
+
+
+def _recovery_context_for_prompt(item: dict) -> str:
+    context = str(item.get("recovery_context") or "").strip()
+    if not context:
+        return ""
+    return "\n".join(
+        [
+            "AHA recovery context for this backend turn:",
+            context,
+            "",
+            "Treat this as runtime context only; it is not part of the user's latest message.",
+        ]
+    )
 
 
 def _host_notes_for_prompt(root: Path, run_id: str, task_id: str, target: str, item: dict) -> list[str]:
@@ -407,6 +428,7 @@ def prompt_status_snapshot(root: Path, run_id: str, task_id: str | None, target:
         "updated_at": snapshot.get("updated_at"),
         "aha_root": snapshot.get("aha_root"),
         "main_agent": snapshot.get("main_agent"),
+        "proxy": snapshot.get("proxy"),
         "task_counts": _task_counts_for_prompt(tasks),
         "task_total": len(tasks),
         "hidden_task_count": sum(1 for task in tasks if task.get("hidden")),
@@ -524,6 +546,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         "prefix": prefix,
         "run_goal": plan.get("goal", ""),
         "user_message": item.get("message", ""),
+        "recovery_context": _recovery_context_for_prompt(item),
     }
     task_context = ""
     if task_id:
@@ -629,8 +652,19 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
                 role=item.get("role", ""),
                 workspace=detail["task"].get("workspace_path", ""),
                 collaboration_mode=detail["task"].get("collaboration_mode", "auto"),
+                workflow_template=detail["task"].get("workflow_template", "auto"),
                 delegation_policy=detail["task"].get("delegation_policy", "auto"),
                 max_sub_agents=detail["task"].get("max_sub_agents", 0),
+                preferred_sub_backend=(
+                    detail["task"].get("preferred_sub_backend")
+                    or detail["task"].get("preferred_backend")
+                    or "codex"
+                ),
+                preferred_sub_model=(
+                    detail["task"].get("preferred_sub_model")
+                    or detail["task"].get("preferred_model")
+                    or "default"
+                ),
                 current_agent=current_agent_constraints,
                 agents=visible_agent_constraints,
                 final_context=final_context.rstrip(),
@@ -677,6 +711,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             backend=(agent or {}).get("backend") or (task or {}).get("preferred_backend") or "codex",
             workspace=(agent or {}).get("workspace_path") or (task or {}).get("workspace_path") or "-",
             collaboration_mode=(task or {}).get("collaboration_mode") or "auto",
+            workflow_template=(task or {}).get("workflow_template") or "auto",
             delegation_policy=(task or {}).get("delegation_policy") or "auto",
             max_sub_agents=(task or {}).get("max_sub_agents") if task else "-",
             sandbox=(agent or {}).get("sandbox") or (task or {}).get("preferred_sandbox") or "-",
@@ -710,6 +745,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             run_goal=plan["goal"],
             sticky_context=sticky_context.rstrip(),
             recent_conversation=recent_conversation,
+            recovery_context=components["recovery_context"],
             sender=_current_message_sender_label(item),
             ts=item.get("ts", ""),
             message=item.get("message", ""),
@@ -753,6 +789,7 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         run_goal=plan["goal"],
         task_context=task_context or "Current task context: none",
         recent_conversation=recent_conversation,
+        recovery_context=components["recovery_context"],
         sender=_current_message_sender_label(item),
         ts=item.get("ts", ""),
         message=item.get("message", ""),

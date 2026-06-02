@@ -10,7 +10,18 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main
-from aha_cli.store.filesystem import append_event, inbox_path, iter_jsonl_from, read_json, run_dir, status_snapshot
+from aha_cli.services.run_retention import apply_run_retention
+from aha_cli.store.filesystem import (
+    append_event,
+    event_path,
+    inbox_path,
+    iter_jsonl_from,
+    read_json,
+    run_dir,
+    set_agent_status,
+    set_task_status,
+    status_snapshot,
+)
 from aha_cli.web.run_routes import handle_run_workspace_route
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -37,6 +48,10 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(body["config"]["backend"], "stub")
         self.assertEqual(body["config"]["default_parallel"], 10)
         self.assertEqual(body["config_backend_options"], ["codex", "claude"])
+        workflow_templates = body["workflow_templates"]
+        self.assertEqual(workflow_templates[0]["id"], "auto")
+        self.assertIn("fault-debug", {item["id"] for item in workflow_templates})
+        self.assertTrue(all({"id", "label", "description", "guidance", "order"} <= set(item) for item in workflow_templates))
         self.assertIn("default_workspace_path", body)
         self.assertEqual(body["default_run_id"], "")
         self.assertEqual(body["runs"], [])
@@ -58,6 +73,12 @@ class WebRunApiTests(unittest.TestCase):
                         "workspace_roots": [str(workspace_root)],
                         "codex": {
                             "model": "env:openai",
+                            "proxy": {
+                                "enabled": True,
+                                "http_proxy": "http://codex.proxy:7890",
+                                "https_proxy": "http://codex.proxy:7890",
+                                "no_proxy": "localhost,127.0.0.1",
+                            },
                             "env_active": "openai",
                             "env": [
                                 {
@@ -75,6 +96,12 @@ class WebRunApiTests(unittest.TestCase):
                         },
                         "claude": {
                             "model": "env:work",
+                            "proxy": {
+                                "enabled": False,
+                                "http_proxy": "http://claude.proxy:7890",
+                                "https_proxy": "http://claude.proxy:7890",
+                                "no_proxy": "localhost,127.0.0.1",
+                            },
                             "env_active": "work",
                             "env": [
                                 {
@@ -97,6 +124,11 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(cfg["default_parallel"], 2)
         self.assertEqual(cfg["default_mode"], "implementation")
         self.assertEqual(cfg["workspace_roots"], [str(workspace_root)])
+        self.assertIsNone(cfg["proxy"]["http_proxy"])
+        self.assertTrue(cfg["codex"]["proxy"]["enabled"])
+        self.assertEqual(cfg["codex"]["proxy"]["http_proxy"], "http://codex.proxy:7890")
+        self.assertFalse(cfg["claude"]["proxy"]["enabled"])
+        self.assertEqual(body["config"]["claude"]["proxy"]["https_proxy"], "http://claude.proxy:7890")
         self.assertEqual(cfg["codex"]["model"], "env:openai")
         self.assertEqual(cfg["codex"]["env_active"], "openai")
         self.assertEqual(cfg["codex"]["env"][0]["OPENAI_MODEL"], "gpt-5.5")
@@ -253,6 +285,7 @@ class WebRunApiTests(unittest.TestCase):
                         "mode": "research",
                         "backend": "codex",
                         "collaboration_mode": "team",
+                        "workflow_template": "EMBEDDED-DRIVER",
                         "proxy_enabled": True,
                         "http_proxy": "http://127.0.0.1:7890",
                         "https_proxy": "http://127.0.0.1:7890",
@@ -261,17 +294,175 @@ class WebRunApiTests(unittest.TestCase):
                 )
             )
             body = json_response_body(response)
-            plan = read_json(root / "runs" / body["run"]["id"] / "plan.json")
+            run_id = body["run"]["id"]
+            plan = read_json(root / "runs" / run_id / "plan.json")
             task = plan["tasks"][0]
+            snapshot = status_snapshot(root, run_id)
+            status_task = snapshot["tasks"][0]
+            status_proxy = snapshot["proxy"]
 
         self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
         self.assertEqual(task["collaboration_mode"], "team")
+        self.assertEqual(task["workflow_template"], "embedded-driver")
         self.assertEqual(task["max_sub_agents"], 2)
+        self.assertEqual(status_task["collaboration_mode"], "team")
+        self.assertEqual(status_task["workflow_template"], "embedded-driver")
+        self.assertEqual(status_task["max_sub_agents"], 2)
+        self.assertEqual(status_task["workspace_path"], task["workspace_path"])
+        self.assertEqual(status_task["preferred_sub_backend"], "codex")
+        self.assertEqual(plan["proxy"]["http_proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(plan["proxy"]["https_proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(plan["proxy"]["no_proxy"], "localhost,127.0.0.1")
+        self.assertEqual(status_proxy["http_proxy"], "http://127.0.0.1:7890")
         self.assertTrue(task["preferred_proxy_enabled"])
-        self.assertEqual(task["preferred_http_proxy"], "http://127.0.0.1:7890")
-        self.assertEqual(task["preferred_https_proxy"], "http://127.0.0.1:7890")
-        self.assertEqual(task["preferred_no_proxy"], "localhost,127.0.0.1")
+        self.assertIsNone(task["preferred_http_proxy"])
+        self.assertIsNone(task["preferred_https_proxy"])
+        self.assertIsNone(task["preferred_no_proxy"])
         self.assertTrue(task["agents"][0]["proxy_enabled"])
+
+    def test_api_run_creation_uses_core_proxy_default_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "proxy": {
+                            "enabled": True,
+                            "http_proxy": "http://core.proxy:7890",
+                            "https_proxy": "http://core.proxy:7890",
+                            "no_proxy": "localhost,127.0.0.1",
+                        },
+                    },
+                )
+            )
+            self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+            create_response = asyncio.run(fetch_ui_response(root, "", "/api/runs", method="POST", payload={"goal": "Core proxy"}))
+            body = json_response_body(create_response)
+            run_id = body["run"]["id"]
+            plan = read_json(root / "runs" / run_id / "plan.json")
+            snapshot = status_snapshot(root, run_id)
+
+        self.assertTrue(create_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(plan["tasks"][0]["preferred_proxy_enabled"])
+        self.assertIsNone(plan["proxy"]["http_proxy"])
+        self.assertEqual(snapshot["proxy"]["http_proxy"], "http://core.proxy:7890")
+        self.assertTrue(snapshot["tasks"][0]["run_proxy_configured"])
+
+    def test_api_run_creation_uses_backend_proxy_default_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "codex": {
+                            "proxy": {
+                                "enabled": False,
+                                "http_proxy": "http://codex.proxy:7890",
+                                "https_proxy": "http://codex.proxy:7890",
+                                "no_proxy": "localhost,127.0.0.1",
+                            },
+                        },
+                        "claude": {
+                            "proxy": {
+                                "enabled": True,
+                                "http_proxy": "http://claude.proxy:7890",
+                                "https_proxy": "http://claude.proxy:7890",
+                                "no_proxy": "localhost,127.0.0.1",
+                            },
+                        },
+                    },
+                )
+            )
+            self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+            claude_response = asyncio.run(fetch_ui_response(root, "", "/api/runs", method="POST", payload={"goal": "Claude proxy", "backend": "claude"}))
+            claude_body = json_response_body(claude_response)
+            claude_run_id = claude_body["run"]["id"]
+            claude_plan = read_json(root / "runs" / claude_run_id / "plan.json")
+            claude_snapshot = status_snapshot(root, claude_run_id)
+            codex_response = asyncio.run(fetch_ui_response(root, "", "/api/runs", method="POST", payload={"goal": "Codex proxy", "backend": "codex"}))
+            codex_body = json_response_body(codex_response)
+            codex_run_id = codex_body["run"]["id"]
+            codex_plan = read_json(root / "runs" / codex_run_id / "plan.json")
+            codex_snapshot = status_snapshot(root, codex_run_id)
+
+        self.assertTrue(claude_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(claude_plan["tasks"][0]["preferred_proxy_enabled"])
+        self.assertTrue(claude_snapshot["tasks"][0]["run_proxy_enabled"])
+        self.assertTrue(claude_snapshot["tasks"][0]["run_proxy_configured"])
+        self.assertTrue(codex_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertFalse(codex_plan["tasks"][0]["preferred_proxy_enabled"])
+        self.assertFalse(codex_snapshot["tasks"][0]["run_proxy_enabled"])
+        self.assertTrue(codex_snapshot["tasks"][0]["run_proxy_configured"])
+
+    def test_api_run_creation_rejects_unknown_execution_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            bad_mode = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/runs",
+                    method="POST",
+                    payload={"goal": "Bad run mode", "collaboration_mode": "crowd"},
+                )
+            )
+            bad_workflow = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/runs",
+                    method="POST",
+                    payload={"goal": "Bad run workflow", "workflow_template": "unknown"},
+                )
+            )
+
+        self.assertTrue(bad_mode.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("unknown collaboration mode: crowd", json_response_body(bad_mode)["error"])
+        self.assertTrue(bad_workflow.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("unknown workflow template: unknown", json_response_body(bad_workflow)["error"])
+
+    def test_api_run_proxy_updates_run_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            create_response = asyncio.run(
+                fetch_ui_response(root, "", "/api/runs", method="POST", payload={"goal": "Run proxy"})
+            )
+            run_id = json_response_body(create_response)["run"]["id"]
+
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    run_id,
+                    f"/api/runs/{run_id}/proxy",
+                    method="PATCH",
+                    payload={
+                        "proxy_enabled": True,
+                        "http_proxy": "http://proxy.local:8080",
+                        "https_proxy": "http://proxy.local:8080",
+                        "no_proxy": "localhost,127.0.0.1",
+                    },
+                )
+            )
+            body = json_response_body(response)
+            snapshot = status_snapshot(root, run_id)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["proxy"]["http_proxy"], "http://proxy.local:8080")
+        self.assertEqual(snapshot["proxy"]["https_proxy"], "http://proxy.local:8080")
+        self.assertTrue(snapshot["tasks"][0]["run_proxy_configured"])
 
     def test_api_run_creation_can_dispatch_initial_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -364,6 +555,7 @@ class WebRunApiTests(unittest.TestCase):
         self.assertTrue(create_response.startswith(b"HTTP/1.1 201 Created"))
         self.assertTrue(create_body["ok"])
         self.assertEqual(create_body["run"]["goal"], "Second session")
+        self.assertEqual(create_body["run"]["lifecycle_status"], "active")
         self.assertIn(create_body["run"]["id"], {item["id"] for item in updated_body["runs"]})
 
     def test_api_run_can_be_renamed(self) -> None:
@@ -392,6 +584,7 @@ class WebRunApiTests(unittest.TestCase):
         self.assertTrue(rename_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(rename_body["ok"])
         self.assertEqual(rename_body["run"]["goal"], "Renamed run")
+        self.assertEqual(rename_body["run"]["lifecycle_status"], "active")
         self.assertEqual(plan["goal"], "Renamed run")
         self.assertIn(run_id, {item["id"] for item in rename_body["runs"]})
         self.assertIn("Renamed run", {item["goal"] for item in runs_body["runs"]})
@@ -418,6 +611,35 @@ class WebRunApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
         self.assertEqual(plan["goal"], "Original run")
+
+    def test_api_run_delete_removes_non_current_run_and_rejects_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, first_output = self.run_cli("plan", "Current run", "--agents", "1")
+                self.assertEqual(code, 0)
+                current_run_id = first_output.splitlines()[0].split(": ", 1)[1]
+                code, old_output = self.run_cli("plan", "Old run", "--agents", "1")
+                self.assertEqual(code, 0)
+                old_run_id = old_output.splitlines()[0].split(": ", 1)[1]
+
+                delete_response = asyncio.run(
+                    fetch_ui_response(root, current_run_id, f"/api/runs/{old_run_id}", method="DELETE")
+                )
+                delete_body = json_response_body(delete_response)
+                current_response = asyncio.run(
+                    fetch_ui_response(root, current_run_id, f"/api/runs/{current_run_id}", method="DELETE")
+                )
+                current_body = json_response_body(current_response)
+
+        self.assertTrue(delete_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(delete_body["ok"])
+        self.assertEqual(delete_body["deleted"]["run_id"], old_run_id)
+        self.assertNotIn(old_run_id, {item["id"] for item in delete_body["runs"]})
+        self.assertFalse((root / ".aha" / "runs" / old_run_id).exists())
+        self.assertTrue(current_response.startswith(b"HTTP/1.1 409 Conflict"))
+        self.assertEqual(current_body["reason"], "current_run")
 
     def test_api_run_archive_exports_and_imports_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -482,14 +704,243 @@ class WebRunApiTests(unittest.TestCase):
         self.assertIn("aha-run-manifest.json", names)
         self.assertIn("run/plan.json", names)
         self.assertNotIn("run/logs/backend.log", names)
-        self.assertEqual(plan["tasks"][0]["preferred_http_proxy"], "<redacted>")
+        self.assertEqual(plan["proxy"]["http_proxy"], "<redacted>")
         self.assertNotIn("secret", json.dumps(plan))
         self.assertTrue(import_response.startswith(b"HTTP/1.1 201 Created"))
         self.assertEqual(import_body["source_run_id"], run_id)
         self.assertNotEqual(imported_run_id, run_id)
+        self.assertEqual(import_body["run"]["lifecycle_status"], "active")
         self.assertIn(imported_run_id, {item["id"] for item in import_body["runs"]})
         self.assertEqual(imported_status["tasks"][0]["agents"][0]["session_status"], "imported")
         self.assertIsNone(imported_status["tasks"][0]["agents"][0]["backend_session_id"])
+
+    def test_api_run_maintenance_visibility_is_read_only(self) -> None:
+        def stopped_backend(_root: Path, _run_id: str, target: str, task_id: str | None) -> dict:
+            return {
+                "status": "stopped",
+                "backend": "codex",
+                "target": target,
+                "task_id": task_id,
+                "last_pid": 1234,
+                "stopped_at": "2026-05-31T00:00:00+00:00",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.dict("os.environ", {"HOME": tmp}, clear=True), mock.patch(
+                "pathlib.Path.cwd",
+                return_value=root,
+            ):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Maintenance visibility", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                aha_home = root / ".aha"
+                task_id = "task-001"
+                set_task_status(aha_home, run_id, task_id, "running")
+                set_agent_status(aha_home, run_id, task_id, "main", "running")
+                log_file = run_dir(aha_home, run_id) / "logs" / "backend.log"
+                prompt_file = run_dir(aha_home, run_id) / "prompts" / "main.md"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                prompt_file.parent.mkdir(parents=True, exist_ok=True)
+                log_file.write_text("backend log", encoding="utf-8")
+                prompt_file.write_text("prompt", encoding="utf-8")
+
+                with mock.patch("aha_cli.services.run_recovery.backend_status", side_effect=stopped_backend):
+                    retention_response = asyncio.run(
+                        fetch_ui_response(aha_home, run_id, f"/api/runs/{run_id}/retention?top=1")
+                    )
+                    recovery_response = asyncio.run(
+                        fetch_ui_response(aha_home, run_id, f"/api/runs/{run_id}/recovery")
+                    )
+                    maintenance_response = asyncio.run(
+                        fetch_ui_response(aha_home, run_id, f"/api/runs/{run_id}/maintenance?top=1")
+                    )
+                task = status_snapshot(aha_home, run_id)["tasks"][0]
+                events_text = event_path(aha_home, run_id).read_text(encoding="utf-8")
+
+        retention_body = json_response_body(retention_response)
+        recovery_body = json_response_body(recovery_response)
+        maintenance_body = json_response_body(maintenance_response)
+        self.assertTrue(retention_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(retention_body["retention"]["dry_run"])
+        self.assertIn("logs/backend.log", {item["path"] for item in retention_body["retention"]["candidates"]})
+        self.assertTrue(recovery_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(recovery_body["recovery"]["dry_run"])
+        self.assertEqual(recovery_body["recovery"]["candidates"][0]["agent_id"], "main")
+        self.assertTrue(maintenance_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(maintenance_body["retention"]["run_id"], run_id)
+        self.assertEqual(maintenance_body["recovery"]["candidates"][0]["task_id"], task_id)
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["agents"][0]["status"], "running")
+        self.assertNotIn("agent_status_recovered", events_text)
+
+    def test_api_run_maintenance_actions_are_guarded(self) -> None:
+        def stopped_backend(_root: Path, _run_id: str, target: str, task_id: str | None) -> dict:
+            return {
+                "status": "stopped",
+                "backend": "codex",
+                "target": target,
+                "task_id": task_id,
+                "last_pid": 1234,
+                "stopped_at": "2026-05-31T00:00:00+00:00",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.dict("os.environ", {"HOME": tmp}, clear=True), mock.patch(
+                "pathlib.Path.cwd",
+                return_value=root,
+            ):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, current_output = self.run_cli("plan", "Current run", "--agents", "1")
+                self.assertEqual(code, 0)
+                current_run_id = current_output.splitlines()[0].split(": ", 1)[1]
+                code, old_output = self.run_cli("plan", "Old run", "--agents", "1")
+                self.assertEqual(code, 0)
+                old_run_id = old_output.splitlines()[0].split(": ", 1)[1]
+                aha_home = root / ".aha"
+                old_log = run_dir(aha_home, old_run_id) / "logs" / "backend.log"
+                old_prompt = run_dir(aha_home, old_run_id) / "prompts" / "main.md"
+                old_log.parent.mkdir(parents=True, exist_ok=True)
+                old_prompt.parent.mkdir(parents=True, exist_ok=True)
+                old_log.write_text("backend log", encoding="utf-8")
+                old_prompt.write_text("prompt", encoding="utf-8")
+
+                blocked_retention = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{old_run_id}/retention",
+                        method="POST",
+                        payload={"action": "archive"},
+                    )
+                )
+                archive_response = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{old_run_id}/retention",
+                        method="POST",
+                        payload={"action": "archive", "confirm": "archive"},
+                    )
+                )
+                archive_body = json_response_body(archive_response)
+                archive_path = Path(archive_body["retention"]["archive"]["path"])
+                archive_exists = archive_path.exists()
+                old_log.unlink()
+                restore_response = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{old_run_id}/retention-archive/restore",
+                        method="POST",
+                        payload={"archive": str(archive_path), "confirm": "restore archive"},
+                    )
+                )
+                old_log_restored = old_log.exists()
+
+                task_id = "task-001"
+                set_task_status(aha_home, current_run_id, task_id, "running")
+                set_agent_status(aha_home, current_run_id, task_id, "main", "running")
+                blocked_recovery = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{current_run_id}/recovery",
+                        method="POST",
+                        payload={"task_id": task_id, "agent_id": "main"},
+                    )
+                )
+                with (
+                    mock.patch("aha_cli.services.run_recovery.backend_status", side_effect=stopped_backend),
+                    mock.patch("aha_cli.web.status.backend_status", side_effect=stopped_backend),
+                ):
+                    recovery_response = asyncio.run(
+                        fetch_ui_response(
+                            aha_home,
+                            current_run_id,
+                            f"/api/runs/{current_run_id}/recovery",
+                            method="POST",
+                            payload={"task_id": task_id, "agent_id": "main", "confirm": "recover stale agent"},
+                        )
+                    )
+                recovered_task = status_snapshot(aha_home, current_run_id)["tasks"][0]
+
+        self.assertTrue(blocked_retention.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertEqual(json_response_body(blocked_retention)["reason"], "confirm_required")
+        self.assertTrue(archive_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(archive_exists)
+        self.assertTrue(restore_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(old_log_restored)
+        self.assertTrue(blocked_recovery.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertEqual(json_response_body(blocked_recovery)["reason"], "confirm_required")
+        self.assertTrue(recovery_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(recovery_response)["recovery"]["recovered_count"], 1)
+        self.assertEqual(recovered_task["status"], "awaiting_user")
+        self.assertEqual(recovered_task["agents"][0]["status"], "interrupted")
+
+    def test_api_retention_archive_inspect_and_restore_are_run_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, old_output = self.run_cli("plan", "Old run", "--agents", "1")
+                self.assertEqual(code, 0)
+                old_run_id = old_output.splitlines()[0].split(": ", 1)[1]
+                code, current_output = self.run_cli("plan", "Current run", "--agents", "1")
+                self.assertEqual(code, 0)
+                current_run_id = current_output.splitlines()[0].split(": ", 1)[1]
+                aha_home = root / ".aha"
+                log_file = run_dir(aha_home, old_run_id) / "logs" / "backend.log"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                log_file.write_text("backend log", encoding="utf-8")
+                retention = apply_run_retention(aha_home, old_run_id, force=True, now=100000)
+                archive_name = Path(retention["archive"]["path"]).name
+
+                list_response = asyncio.run(
+                    fetch_ui_response(aha_home, current_run_id, f"/api/runs/{old_run_id}/retention-archives")
+                )
+                inspect_response = asyncio.run(
+                    fetch_ui_response(aha_home, current_run_id, f"/api/runs/{old_run_id}/retention-archives/{archive_name}")
+                )
+                restore_response = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{old_run_id}/retention-archives/{archive_name}/restore",
+                        method="POST",
+                        payload={"confirm": "restore archive"},
+                    )
+                )
+                log_file_restored = log_file.exists()
+                current_restore_response = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        old_run_id,
+                        f"/api/runs/{old_run_id}/retention-archives/{archive_name}/restore",
+                        method="POST",
+                        payload={"confirm": "restore archive"},
+                    )
+                )
+                unsafe_response = asyncio.run(
+                    fetch_ui_response(aha_home, current_run_id, f"/api/runs/{old_run_id}/retention-archives/..%2F{archive_name}")
+                )
+
+        list_body = json_response_body(list_response)
+        inspect_body = json_response_body(inspect_response)
+        restore_body = json_response_body(restore_response)
+        unsafe_body = json_response_body(unsafe_response)
+        self.assertTrue(list_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(list_body["retention_archives"]["archives"][0]["name"], archive_name)
+        self.assertTrue(inspect_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(inspect_body["retention_archive"]["archive_name"], archive_name)
+        self.assertTrue(restore_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(restore_body["restore"]["restored"][0]["path"], "logs/backend.log")
+        self.assertTrue(log_file_restored)
+        self.assertTrue(current_restore_response.startswith(b"HTTP/1.1 409 Conflict"))
+        self.assertTrue(unsafe_response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertEqual(unsafe_body["reason"], "invalid_archive_name")
 
     def test_api_routes_can_target_non_default_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

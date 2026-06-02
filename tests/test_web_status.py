@@ -356,8 +356,9 @@ class WebStatusTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         start_backend.assert_called_once()
-        self.assertIn("工作异常中断", sent_text)
-        self.assertIn("用户当前发送的新消息：\n继续", sent_text)
+        self.assertEqual(sent_text, "继续")
+        self.assertIn("工作异常中断", messages[-1]["recovery_context"])
+        self.assertNotIn("用户当前发送的新消息", sent_text)
         self.assertEqual(consumed["agents"][0]["recovery_context"], "")
         self.assertIn("agent_recovery_context_consumed", event_log)
 
@@ -386,6 +387,7 @@ class WebStatusTests(unittest.TestCase):
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 event_log = event_path(root, run_id).read_text(encoding="utf-8")
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
 
         self.assertTrue(recovered)
         self.assertEqual(detail["status"], "running")
@@ -396,6 +398,42 @@ class WebStatusTests(unittest.TestCase):
         self.assertIn(sub["id"], messages[-1]["message"])
         self.assertIn("不要假设它已经完成", messages[-1]["message"])
         self.assertIn("task_recovery_context_recorded", event_log)
+        self.assertTrue(any(event.get("data", {}).get("message") == f"{sub['id']} backend 已停止。" for event in main_page["events"]))
+        self.assertFalse(any(message.get("coordination") == "subagents_complete" for message in messages))
+
+    def test_recovered_waited_sub_agent_requests_main_round_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub recovery wakes main", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+                stale_task = task_snapshot(root, run_id, "task-001")["task"]
+                stale_sub = next(agent for agent in stale_task["agents"] if agent["id"] == sub["id"])
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_main,
+                ):
+                    recovered = recover_stale_running_agent(
+                        root,
+                        run_id,
+                        stale_task,
+                        stale_sub,
+                        {"status": "stopped", "pid": None},
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+
+        self.assertTrue(recovered)
+        self.assertTrue(any(event.get("data", {}).get("message") == f"{sub['id']} backend 已停止。" for event in main_page["events"]))
+        self.assertTrue(any(message.get("coordination") == "subagents_complete" for message in messages))
+        start_main.assert_called_once()
 
     def test_recovered_idle_sub_agent_adds_context_to_next_main_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,8 +481,10 @@ class WebStatusTests(unittest.TestCase):
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
                 consumed = task_snapshot(root, run_id, "task-001")["task"]
 
-        self.assertIn(sub["id"], messages[-1]["message"])
-        self.assertIn("用户当前发送的新消息：\n继续", messages[-1]["message"])
+        self.assertEqual(messages[-1]["message"], "继续")
+        self.assertIn(sub["id"], messages[-1]["recovery_context"])
+        self.assertIn("不要假设它已经完成", messages[-1]["recovery_context"])
+        self.assertNotIn("用户当前发送的新消息", messages[-1]["message"])
         self.assertEqual(next(agent for agent in consumed["agents"] if agent["id"] == "main")["recovery_context"], "")
 
     def test_web_status_snapshot_keeps_outcome_during_active_followup(self) -> None:

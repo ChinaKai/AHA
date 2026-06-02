@@ -9,6 +9,8 @@ $run_goal
 
 $task_context
 
+$recovery_context
+
 Recent conversation:
 $recent_conversation
 

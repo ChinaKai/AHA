@@ -22,9 +22,33 @@ from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
+from aha_cli.services.run_cleanup import cleanup_temp_runs, format_cleanup_summary
+from aha_cli.services.run_delete import RunDeleteError, delete_run
+from aha_cli.services.run_diagnostics import diagnose_runs, format_run_diagnostics
+from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_run_lifecycle_status
+from aha_cli.services.run_recovery import RunRecoveryError, format_stale_runtime_recovery, run_stale_runtime_recovery
+from aha_cli.services.run_retention import (
+    RunRetentionError,
+    apply_run_retention,
+    format_retention_archive_inspect,
+    format_retention_archive_list,
+    format_retention_archive_restore,
+    format_retention_report,
+    inspect_retention_archive,
+    list_retention_archives,
+    restore_retention_archive,
+    run_retention_report,
+)
+from aha_cli.services.run_retention_policy import (
+    enforce_all_run_retention_policy,
+    enforce_run_retention_policy,
+    format_all_run_retention_policy_report,
+    write_retention_policy_report,
+)
 from aha_cli.services.run_tasks import run_pending_tasks
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
+from aha_cli.web.auth import bind_host_exposes_network, resolve_auth_token
 from aha_cli.store.filesystem import (
     add_agent,
     add_task,
@@ -126,11 +150,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
         backend=agent_backend_or_default(cfg.get("backend"), "stub"),
         workspace_path=workspace_path,
         workspace_id=workspace_id,
-        proxy_enabled=args.proxy_enabled or bool(args.http_proxy or args.https_proxy),
+        proxy_enabled=(args.proxy_enabled or bool(args.http_proxy or args.https_proxy)) if (args.proxy_enabled or args.http_proxy or args.https_proxy or args.no_proxy) else None,
         http_proxy=args.http_proxy,
         https_proxy=args.https_proxy,
         no_proxy=args.no_proxy,
         collaboration_mode=args.collaboration_mode,
+        workflow_template=args.workflow_template,
     )
     print(f"Created run: {plan['id']}")
     print(f"Plan file: {plan_path(root, plan['id'])}")
@@ -239,6 +264,228 @@ def cmd_list(args: argparse.Namespace) -> int:
         total = len(tasks)
         print(f"{plan['id']} [{done}/{total}] {plan['goal']}")
     return 0
+
+
+def cmd_runs(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    if args.runs_cmd == "diagnose":
+        result = diagnose_runs(
+            root,
+            current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+            stale_seconds=args.stale_seconds,
+            active_heartbeat_seconds=args.active_heartbeat_seconds,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(format_run_diagnostics(result), end="")
+        return 0
+    if args.runs_cmd == "lifecycle":
+        try:
+            run = set_run_lifecycle_status(
+                root,
+                args.run_id,
+                args.status,
+                current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+                active_heartbeat_seconds=args.active_heartbeat_seconds,
+            )
+        except RunLifecycleActionError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        payload = {"ok": True, "run": run}
+        if args.json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            print(f"{run['id']} lifecycle={run['lifecycle_status']}")
+        return 0
+    if args.runs_cmd == "cleanup":
+        result = cleanup_temp_runs(
+            root,
+            current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+            tmp_root=Path(args.tmp_root).expanduser() if args.tmp_root else None,
+            dry_run=not args.apply,
+            stale_seconds=args.stale_seconds,
+            active_heartbeat_seconds=args.active_heartbeat_seconds,
+            allow_non_temp_root=args.allow_non_temp_root,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(format_cleanup_summary(result), end="")
+        return 1 if result["errors"] else 0
+    if args.runs_cmd == "delete":
+        try:
+            result = delete_run(
+                root,
+                args.run_id,
+                current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+                force=args.force,
+                active_heartbeat_seconds=args.active_heartbeat_seconds,
+            )
+        except (RunDeleteError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        payload = {"ok": True, "deleted": result}
+        if args.json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            suffix = " (forced)" if args.force else ""
+            print(f"Deleted run {result['run_id']}{suffix}")
+        return 0
+    if args.runs_cmd == "retention":
+        if args.force and not (args.apply or args.apply_if_over_limit):
+            print("--force requires --apply or --apply-if-over-limit", file=sys.stderr)
+            return 2
+        if args.apply and args.apply_if_over_limit:
+            print("--apply and --apply-if-over-limit are mutually exclusive", file=sys.stderr)
+            return 2
+        if args.apply_if_over_limit and not any((args.max_total_bytes, args.max_candidate_bytes, args.min_candidate_files)):
+            print("--apply-if-over-limit requires at least one policy threshold", file=sys.stderr)
+            return 2
+        try:
+            if args.apply_if_over_limit:
+                result = enforce_run_retention_policy(
+                    root,
+                    args.run_id,
+                    apply=True,
+                    current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+                    active_heartbeat_seconds=args.active_heartbeat_seconds,
+                    archive_dir=Path(args.archive_dir).expanduser() if args.archive_dir else None,
+                    force=args.force,
+                    top=args.top,
+                    include_chat=args.include_chat,
+                    min_age_seconds=args.min_age_seconds,
+                    max_total_bytes=args.max_total_bytes,
+                    max_candidate_bytes=args.max_candidate_bytes,
+                    min_candidate_files=args.min_candidate_files,
+                )
+            elif args.apply:
+                result = apply_run_retention(
+                    root,
+                    args.run_id,
+                    current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+                    active_heartbeat_seconds=args.active_heartbeat_seconds,
+                    archive_dir=Path(args.archive_dir).expanduser() if args.archive_dir else None,
+                    force=args.force,
+                    top=args.top,
+                    include_chat=args.include_chat,
+                    min_age_seconds=args.min_age_seconds,
+                    max_total_bytes=args.max_total_bytes,
+                    max_candidate_bytes=args.max_candidate_bytes,
+                    min_candidate_files=args.min_candidate_files,
+                )
+            else:
+                result = run_retention_report(
+                    root,
+                    args.run_id,
+                    top=args.top,
+                    include_chat=args.include_chat,
+                    min_age_seconds=args.min_age_seconds,
+                    max_total_bytes=args.max_total_bytes,
+                    max_candidate_bytes=args.max_candidate_bytes,
+                    min_candidate_files=args.min_candidate_files,
+                )
+        except (FileNotFoundError, RunRetentionError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(format_retention_report(result), end="")
+        return 1 if result.get("errors") else 0
+    if args.runs_cmd == "retention-policy":
+        if args.force and not args.apply_if_over_limit:
+            print("--force requires --apply-if-over-limit", file=sys.stderr)
+            return 2
+        if args.apply_if_over_limit and not any((args.max_total_bytes, args.max_candidate_bytes, args.min_candidate_files)):
+            print("--apply-if-over-limit requires at least one policy threshold", file=sys.stderr)
+            return 2
+        try:
+            result = enforce_all_run_retention_policy(
+                root,
+                apply=args.apply_if_over_limit,
+                current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+                active_heartbeat_seconds=args.active_heartbeat_seconds,
+                archive_dir=Path(args.archive_dir).expanduser() if args.archive_dir else None,
+                force=args.force,
+                top=args.top,
+                include_chat=args.include_chat,
+                min_age_seconds=args.min_age_seconds,
+                max_total_bytes=args.max_total_bytes,
+                max_candidate_bytes=args.max_candidate_bytes,
+                min_candidate_files=args.min_candidate_files,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.write_report:
+            result = write_retention_policy_report(
+                root,
+                result,
+                report_dir=Path(args.report_dir).expanduser() if args.report_dir else None,
+            )
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(format_all_run_retention_policy_report(result), end="")
+        return 1 if result.get("errors") else 0
+    if args.runs_cmd == "retention-archive":
+        try:
+            if args.retention_archive_cmd == "list":
+                result = list_retention_archives(
+                    root,
+                    args.run_id,
+                    archive_dir=Path(args.archive_dir).expanduser() if args.archive_dir else None,
+                )
+                formatter = format_retention_archive_list
+            elif args.retention_archive_cmd == "inspect":
+                result = inspect_retention_archive(Path(args.archive))
+                formatter = format_retention_archive_inspect
+            elif args.retention_archive_cmd == "restore":
+                result = restore_retention_archive(
+                    root,
+                    Path(args.archive),
+                    run_id=args.run_id,
+                    current_run_id=args.current_run or os.environ.get("AHA_RUN_ID"),
+                    active_heartbeat_seconds=args.active_heartbeat_seconds,
+                    force=args.force,
+                )
+                formatter = format_retention_archive_restore
+            else:
+                raise SystemExit(f"Unknown retention archive command: {args.retention_archive_cmd}")
+        except (FileNotFoundError, RunRetentionError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(formatter(result), end="")
+        return 1 if result.get("errors") else 0
+    if args.runs_cmd == "recover":
+        if args.restart_backend and not args.apply:
+            print("--restart-backend requires --apply", file=sys.stderr)
+            return 2
+        try:
+            result = run_stale_runtime_recovery(
+                root,
+                args.run_id,
+                task_id=args.task_id,
+                agent_id=args.agent_id,
+                apply=args.apply,
+                restart_backend=args.restart_backend,
+            )
+        except RunRecoveryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(format_stale_runtime_recovery(result), end="")
+        return 0
+    raise SystemExit(f"Unknown runs command: {args.runs_cmd}")
 
 
 def cmd_workspace(args: argparse.Namespace) -> int:
@@ -361,11 +608,12 @@ def cmd_task(args: argparse.Namespace) -> int:
             workspace_id=workspace_id,
             sandbox=args.sandbox,
             approval=args.approval,
-            proxy_enabled=args.proxy_enabled or bool(args.http_proxy or args.https_proxy),
+            proxy_enabled=args.proxy_enabled,
             http_proxy=args.http_proxy,
             https_proxy=args.https_proxy,
             no_proxy=args.no_proxy,
             collaboration_mode=args.collaboration_mode,
+            workflow_template=args.workflow_template,
             delegation_policy=args.delegation_policy,
             max_sub_agents=args.max_sub_agents,
             preferred_sub_backend=args.preferred_sub_backend,
@@ -486,7 +734,21 @@ def cmd_ui(args: argparse.Namespace) -> int:
     if run_id:
         require_plan(root, run_id)
     try:
-        asyncio.run(run_ui_server(root, run_id, args.host, args.port, args.poll_interval))
+        auth_token = resolve_auth_token(
+            getattr(args, "auth_token", None) or os.environ.get("AHA_WEB_TOKEN"),
+            getattr(args, "auth_token_file", None) or os.environ.get("AHA_WEB_TOKEN_FILE"),
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if bind_host_exposes_network(args.host) and not auth_token and not getattr(args, "allow_unsafe_bind", False):
+        print(
+            "warning: AHA Web UI is bound to a network-visible host without --auth-token or --auth-token-file; "
+            "prefer --host 127.0.0.1 or enable token auth.",
+            file=sys.stderr,
+        )
+    try:
+        asyncio.run(run_ui_server(root, run_id, args.host, args.port, args.poll_interval, auth_token=auth_token))
     except KeyboardInterrupt:
         return 130
     return 0
@@ -607,6 +869,7 @@ def command_handlers() -> dict[str, object]:
         "collect": cmd_collect,
         "merge": cmd_merge,
         "list": cmd_list,
+        "runs": cmd_runs,
         "workspace": cmd_workspace,
         "watch": cmd_watch,
         "send": cmd_send,

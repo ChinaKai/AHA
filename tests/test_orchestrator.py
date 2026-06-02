@@ -17,6 +17,8 @@ from aha_cli.services.orchestrator import (
     monitor_task_coordination,
     record_sub_agent_report,
 )
+from aha_cli.store.event_views import conversation_events_page
+from aha_cli.store.io import write_json
 from aha_cli.store.filesystem import (
     add_agent,
     complete_task,
@@ -48,6 +50,17 @@ class OrchestratorTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def write_model_alias_config(self, root: Path) -> None:
+        groups = [{"name": "kimi-k2.6"}, {"name": "MiniMax-M2.7-highspeed"}]
+        write_json(
+            root / ".aha" / "config.json",
+            {
+                "backend": "codex",
+                "codex": {"env": groups},
+                "claude": {"model": "env:kimi-k2.6", "env": groups},
+            },
+        )
 
     def test_record_task_update_uses_current_lifecycle_round_after_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -300,6 +313,123 @@ class OrchestratorTests(unittest.TestCase):
         waiting_events = [row for row in rows if row["type"] == "task_waiting_for_subagents"]
         self.assertEqual(waiting_events[-1]["data"]["pending"], ["sub-001"])
 
+    def test_sub_agent_success_report_is_visible_in_main_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub success visible", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                append_message(root, run_id, sub["id"], "检查这块", sender="main", task_id="task-001", role="sub", from_agent="main", to_agent=sub["id"])
+                set_task_status(root, run_id, "task-001", "running")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "sub 检查完成", None)),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}),
+                ):
+                    code, output = self.run_cli(
+                        "codex-chat",
+                        run_id,
+                        sub["id"],
+                        "--sender",
+                        sub["id"],
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+
+        self.assertEqual(code, 0)
+        self.assertIn("sub 检查完成", output)
+        self.assertTrue(any(event.get("data", {}).get("message") == "sub 检查完成" for event in main_page["events"]))
+
+    def test_spawn_sub_start_failure_is_visible_and_requests_main_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub start failure", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps({"actions": [{"type": "spawn_sub", "title": "Inspect", "backend": "codex"}], "response": "delegating"})
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "failed"}):
+                    executed = execute_actions(root, run_id, "task-001", reply)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                sub = next(agent for agent in detail["agents"] if agent["role"] == "sub")
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertEqual(executed[0]["type"], "spawn_sub")
+        self.assertEqual(sub["status"], "failed")
+        self.assertTrue(any(event.get("data", {}).get("message") == f"{sub['id']} 后端启动失败。" for event in main_page["events"]))
+        self.assertTrue(any(message.get("coordination") == "subagents_complete" for message in main_messages))
+
+    def test_spawn_batch_failure_waits_for_remaining_sub_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub batch partial failure", "--agents", "2")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {"type": "spawn_sub", "title": "Inspect A", "backend": "codex"},
+                            {"type": "spawn_sub", "title": "Inspect B", "backend": "codex"},
+                        ],
+                        "response": "delegating",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", side_effect=[{"status": "failed"}, {"status": "running"}]):
+                    execute_actions(root, run_id, "task-001", reply)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                statuses = {agent["id"]: agent["status"] for agent in detail["agents"] if agent["role"] == "sub"}
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertEqual(statuses, {"sub-001": "failed", "sub-002": "pending"})
+        self.assertTrue(any(event.get("data", {}).get("message") == "sub-001 后端启动失败。" for event in main_page["events"]))
+        self.assertFalse(any(message.get("coordination") == "subagents_complete" for message in main_messages))
+
+    def test_sub_agent_execution_failure_is_visible_and_wakes_main_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub execution failure", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                append_message(root, run_id, sub["id"], "检查这块", sender="main", task_id="task-001", role="sub", from_agent="main", to_agent=sub["id"])
+                set_task_status(root, run_id, "task-001", "running")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(1, "", None)):
+                    code, _output = self.run_cli(
+                        "codex-chat",
+                        run_id,
+                        sub["id"],
+                        "--sender",
+                        sub["id"],
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == sub["id"])["status"], "failed")
+        self.assertTrue(any(event.get("data", {}).get("message") == f"{sub['id']} 执行失败。" for event in main_page["events"]))
+        self.assertTrue(any(message.get("coordination") == "subagents_complete" for message in main_messages))
+
     def test_execute_actions_spawn_sub_can_target_specific_existing_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -354,6 +484,44 @@ class OrchestratorTests(unittest.TestCase):
                 for row in rows
             )
         )
+
+    def test_spawn_sub_with_missing_agent_id_notifies_main_to_retry_without_agent_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Do not invent sub ids", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "agent_id": "sub-001",
+                                "title": "Inspect with invented id",
+                                "backend": "codex",
+                            }
+                        ],
+                        "response": "delegating",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend") as start_backend_mock:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+
+        self.assertEqual(executed, [])
+        self.assertFalse(any(agent.get("role") == "sub" for agent in detail["agents"]))
+        start_backend_mock.assert_not_called()
+        self.assertTrue(any(row["type"] == "action_skipped" and row["data"].get("target_agent_id") == "sub-001" for row in rows))
+        self.assertTrue(any("新建 sub-agent 时请省略 `agent_id`" in message.get("message", "") for message in browser_messages))
+        self.assertTrue(any("新建 sub-agent 时请省略 `agent_id`" in message.get("message", "") for message in main_messages))
+        self.assertTrue(any("新建 sub-agent 时请省略 `agent_id`" in event.get("data", {}).get("message", "") for event in main_page["events"]))
 
     def test_execute_actions_preserves_recovery_context_for_same_scope_reuse(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -626,6 +794,88 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(sub_agent["assignment"], "Inspect one slice")
                 self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
 
+    def test_spawn_sub_action_model_normalizes_selected_sub_agent_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                self.write_model_alias_config(root)
+                code, plan_output = self.run_cli("plan", "Spawn selected model sub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "Inspect with codex selected model",
+                                "backend": "codex",
+                                "model": "gpt5.5",
+                            },
+                            {
+                                "type": "spawn_sub",
+                                "title": "Inspect with claude selected model",
+                                "backend": "claude",
+                                "model": "kimi",
+                            }
+                        ],
+                        "response": "delegating",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                sub_one = next(agent for agent in detail["agents"] if agent["id"] == "sub-001")
+                sub_two = next(agent for agent in detail["agents"] if agent["id"] == "sub-002")
+
+        self.assertEqual(len(executed), 2)
+        self.assertEqual(sub_one["model"], "gpt-5.5")
+        self.assertEqual(sub_two["model"], "env:kimi-k2.6")
+        self.assertEqual([call.kwargs["model"] for call in start_backend.call_args_list], ["gpt-5.5", "env:kimi-k2.6"])
+
+    def test_fresh_scope_reuse_defaults_to_task_preferred_sub_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                self.write_model_alias_config(root)
+                code, plan_output = self.run_cli("plan", "Reuse selected model sub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                plan = require_plan(root, run_id)
+                plan["tasks"][0]["preferred_sub_model"] = "minimax"
+                save_plan(root, plan)
+                sub = add_agent(root, run_id, "task-001", backend="claude", role="sub", model="old-model", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "agent_id": sub["id"],
+                                "title": "Fresh modelled work",
+                                "backend": "claude",
+                            }
+                        ],
+                        "response": "reuse",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend:
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                updated_sub = next(agent for agent in detail["agents"] if agent["id"] == sub["id"])
+                updated_session = next(item for item in list_sessions(root, run_id, "task-001") if item["agent_id"] == sub["id"])
+
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(updated_sub["model"], "env:MiniMax-M2.7-highspeed")
+        self.assertEqual(updated_session["model"], "env:MiniMax-M2.7-highspeed")
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.kwargs["model"], "env:MiniMax-M2.7-highspeed")
+
     def test_main_routes_followup_to_responsible_sub_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -896,6 +1146,35 @@ class OrchestratorTests(unittest.TestCase):
                 detail = task_snapshot(root, run_id, "task-001")
                 sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
                 self.assertEqual(sub_agent["recovery_attempts"], 1)
+
+    def test_coordination_watchdog_failed_sub_agent_is_visible_and_wakes_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Watchdog failure", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                update_agent_runtime(root, run_id, "task-001", "sub-001", recovery_attempts=3)
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+                set_task_status(root, run_id, "task-001", "running")
+
+                with (
+                    mock.patch("aha_cli.services.orchestrator.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    actions = monitor_task_coordination(root, run_id)
+                detail = task_snapshot(root, run_id, "task-001")
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertIn({"type": "agent_failed", "task_id": "task-001", "agent_id": "sub-001"}, actions)
+        self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")["status"], "failed")
+        self.assertTrue(any(event.get("data", {}).get("message") == "sub-001 backend 多次恢复失败。" for event in main_page["events"]))
+        self.assertTrue(any(message.get("coordination") == "subagents_complete" for message in main_messages))
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
 
     def test_main_does_not_reply_to_sub_agent_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

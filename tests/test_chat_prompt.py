@@ -312,6 +312,35 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("请直接回复数字1", prompt)
         self.assertNotIn("让 main 下一轮只回复数字2", prompt)
 
+    def test_chat_prompt_keeps_recovery_context_out_of_user_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recovery prompt context", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                main_message = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "继续",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="browser",
+                    to_agent="main",
+                    recovery_context="上一轮 agent `main` 工作异常中断。",
+                )
+
+                prompt = chat_prompt(root, run_id, "main", main_message, "")
+
+        self.assertIn("AHA recovery context for this backend turn", prompt)
+        self.assertIn("上一轮 agent `main` 工作异常中断。", prompt)
+        self.assertIn("User message from browser", prompt)
+        self.assertIn("继续", prompt)
+        self.assertNotIn("用户当前发送的新消息", prompt)
+
     def test_chat_prompt_hides_supervision_host_from_main_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

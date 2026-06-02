@@ -10,27 +10,12 @@ from urllib.parse import parse_qs, urlparse
 
 from aha_cli.constants import WS_GUID
 from aha_cli.domain.models import utc_now
-from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position, run_dir
+from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position
+from aha_cli.web.realtime_debug import realtime_debug_log
 from aha_cli.web.status import web_tasks_snapshot
 
 WS_EVENTS_LIMIT = 500
 WS_HEARTBEAT_INTERVAL = 5.0
-
-
-def realtime_debug_log(source: str, **fields: object) -> None:
-    root = fields.pop("_root", None)
-    run_id = str(fields.get("run_id") or "")
-    payload = {"ts": utc_now(), "source": source, **fields}
-    line = "[aha realtime] " + json.dumps(payload, ensure_ascii=False, default=str)
-    print(line, flush=True)
-    if isinstance(root, Path) and run_id:
-        try:
-            log_dir = run_dir(root, run_id) / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            with (log_dir / "realtime-debug.log").open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-        except OSError:
-            pass
 
 
 async def ws_send_text(writer: asyncio.StreamWriter, message: str) -> None:

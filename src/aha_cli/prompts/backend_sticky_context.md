@@ -7,6 +7,7 @@ Current task constraints:
 - backend: $backend
 - workspace: $workspace
 - collaboration_mode: $collaboration_mode
+- workflow_template: $workflow_template
 - delegation_policy: $delegation_policy
 - max_sub_agents: $max_sub_agents
 - sandbox: $sandbox

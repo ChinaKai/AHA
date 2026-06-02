@@ -4,9 +4,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names
-from aha_cli.domain.models import TASK_COLLABORATION_MODES
 from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
+from aha_cli.services.proxy import backend_proxy_config
 from aha_cli.services.steward import apply_steward_decision, steward_decision_snapshot
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
@@ -30,6 +30,7 @@ from aha_cli.store.filesystem import (
     update_task_proxy_config,
     update_task_supervision_config,
 )
+from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import parse_json_body, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.task_actions import (
@@ -45,12 +46,6 @@ from aha_cli.web.task_actions import (
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
-
-
-def optional_int_payload(payload: dict, key: str) -> int | None:
-    if key not in payload or payload.get(key) in (None, ""):
-        return None
-    return int(payload.get(key))
 
 
 def route_result(payload: dict, status: str = "200 OK") -> dict:
@@ -132,6 +127,7 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             task = delete_task(root, run_id, task_id)
         elif action == "proxy":
             task = update_task_proxy_config(root, run_id, task_id, **parse_task_proxy_fields(parse_json_body(body)))
+            return route_result({"ok": True, "task": task, "proxy": backend_proxy_config(load_config(root), task.get("preferred_backend"), require_plan(root, run_id), task)})
         elif action == "context-management":
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(parse_json_body(body)))
         elif action == "supervision":
@@ -214,9 +210,10 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
         return route_result({"error": "title cannot be empty"}, "400 Bad Request")
     backend = str(payload.get("backend", "codex") or "codex")
     preferred_sub_backend = str(payload.get("preferred_sub_backend", "") or "") or None
-    collaboration_mode = str(payload.get("collaboration_mode", "") or "") or None
-    if collaboration_mode and collaboration_mode not in TASK_COLLABORATION_MODES:
-        return route_result({"error": f"unknown collaboration mode: {collaboration_mode}"}, "400 Bad Request")
+    try:
+        execution_fields = parse_execution_fields(payload, include_legacy_controls=True)
+    except ValueError as exc:
+        return route_result({"error": str(exc)}, "400 Bad Request")
     error = validate_backend_name(backend)
     if error:
         return route_result({"error": error}, "400 Bad Request")
@@ -252,13 +249,14 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
             workspace_id=workspace_id,
             sandbox=sandbox,
             approval=approval,
-            proxy_enabled=parse_optional_bool(payload.get("proxy_enabled", False), "proxy_enabled"),
+            proxy_enabled=parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None,
             http_proxy=str(payload.get("http_proxy", "") or "") or None,
             https_proxy=str(payload.get("https_proxy", "") or "") or None,
             no_proxy=str(payload.get("no_proxy", "") or "") or None,
-            collaboration_mode=collaboration_mode,
-            delegation_policy=str(payload.get("delegation_policy", "") or "") or None,
-            max_sub_agents=optional_int_payload(payload, "max_sub_agents"),
+            collaboration_mode=execution_fields["collaboration_mode"],
+            workflow_template=execution_fields["workflow_template"],
+            delegation_policy=execution_fields["delegation_policy"],
+            max_sub_agents=execution_fields["max_sub_agents"],
             preferred_sub_backend=preferred_sub_backend,
             preferred_sub_model=str(payload.get("preferred_sub_model", "") or "") or None,
             description=description,
@@ -349,6 +347,7 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
             task = update_task_supervision_config(root, run_id, task_id, **parse_task_supervision_fields(payload["supervision"]))
         else:
             task = update_task_proxy_config(root, run_id, task_id, **parse_task_proxy_fields(payload))
+            return route_result({"ok": True, "task": task, "proxy": backend_proxy_config(load_config(root), task.get("preferred_backend"), require_plan(root, run_id), task)})
         return route_result({"ok": True, "task": task})
     except (SystemExit, ValueError) as exc:
         return route_result({"error": str(exc)}, "404 Not Found")

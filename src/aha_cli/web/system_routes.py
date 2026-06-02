@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
+from aha_cli.services.app_version import aha_version
 from aha_cli.services.weixin import (
     WeixinError,
     fetch_updates,
@@ -16,8 +18,9 @@ from aha_cli.services.weixin_notifications import notification_status, set_notif
 from aha_cli.store.filesystem import append_event
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page, prompt_artifact_view
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
-from aha_cli.web.run_api import require_api_run_id
+from aha_cli.web.run_api import default_api_run_id, require_api_run_id
 from aha_cli.web.session_debug import realtime_debug_log
+from aha_cli.web.auth import bind_host_exposes_network
 from aha_cli.web.status import (
     cached_backend_status,
     recover_stale_running_agents,
@@ -81,6 +84,106 @@ def query_int(query: dict[str, list[str]], key: str, default: int) -> int:
 
 def selected_task_id(query: dict[str, list[str]]) -> str | None:
     return str(query.get("selected_task_id", [""])[0] or query.get("task_id", [""])[0] or "").strip() or None
+
+
+def service_health_payload(
+    root: Path,
+    default_run_id: str,
+    auth_required: bool = False,
+    bind_host: str | None = None,
+    bind_port: int | str | None = None,
+) -> dict:
+    selected_run_id = default_api_run_id(root, default_run_id)
+    bind_host_text = str(bind_host or "").strip()
+    bind_port_text = str(bind_port or "").strip()
+    return {
+        "ok": True,
+        "service": "aha-web",
+        "aha_home": str(root),
+        "aha_version": aha_version(root),
+        "auth_required": auth_required,
+        "bind_host": bind_host_text,
+        "bind_port": bind_port_text,
+        "bind_network_visible": bind_host_exposes_network(bind_host_text) if bind_host_text else False,
+        "initialized": (root / "config.json").exists(),
+        "default_run_id": selected_run_id,
+        "default_run_available": bool(selected_run_id),
+    }
+
+
+def _hostname_from_host_header(host_header: str) -> str:
+    host = str(host_header or "").strip()
+    if host.startswith("[") and "]" in host:
+        return host[1 : host.index("]")]
+    if host.count(":") == 1:
+        return host.rsplit(":", 1)[0]
+    return host
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    value = hostname.strip().lower()
+    if value in {"localhost", "localhost."}:
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_unspecified_hostname(hostname: str) -> bool:
+    try:
+        return ipaddress.ip_address(hostname.strip()).is_unspecified
+    except ValueError:
+        return False
+
+
+def access_control_payload(
+    headers: dict[str, str] | None = None,
+    auth_required: bool = False,
+    bind_host: str | None = None,
+    bind_port: int | str | None = None,
+) -> dict:
+    host_header = str((headers or {}).get("host") or "")
+    hostname = _hostname_from_host_header(host_header)
+    loopback = _is_loopback_hostname(hostname)
+    unspecified = _is_unspecified_hostname(hostname)
+    bind_host_text = str(bind_host or "").strip()
+    bind_port_text = str(bind_port or "").strip()
+    bind_hostname = _hostname_from_host_header(bind_host_text)
+    bind_network_visible = bind_host_exposes_network(bind_host_text) if bind_host_text else False
+    effective_network_visible = bind_network_visible or (not bind_host_text and bool(hostname) and not loopback)
+    if effective_network_visible:
+        risk_level = "high"
+        recommendation = (
+            "network-visible bind is protected by token auth; prefer 127.0.0.1 plus SSH/VPN/TLS proxy"
+            if auth_required
+            else "bind to 127.0.0.1 or enable token auth behind SSH/VPN/authenticated reverse proxy"
+        )
+    elif loopback or (bind_host_text and not bind_network_visible):
+        risk_level = "low"
+        recommendation = "local loopback access"
+    elif hostname:
+        risk_level = "high"
+        recommendation = "bind to 127.0.0.1 or put AHA behind SSH/VPN/authenticated reverse proxy"
+    else:
+        risk_level = "unknown"
+        recommendation = "verify the UI is not exposed to an untrusted network"
+    return {
+        "ok": True,
+        "auth_mode": "token" if auth_required else "none",
+        "token_required": auth_required,
+        "host_header": host_header,
+        "hostname": hostname,
+        "request_hostname": hostname,
+        "bind_host": bind_host_text,
+        "bind_port": bind_port_text,
+        "bind_hostname": bind_hostname,
+        "bind_network_visible": bind_network_visible,
+        "loopback": loopback,
+        "unspecified": unspecified,
+        "risk_level": risk_level,
+        "recommendation": recommendation,
+    }
 
 
 def request_web_restart(root: Path, run_id: str) -> dict:
@@ -190,7 +293,22 @@ def system_route_response(
     query: dict[str, list[str]],
     body: bytes = b"",
     headers: dict[str, str] | None = None,
+    auth_required: bool = False,
+    bind_host: str | None = None,
+    bind_port: int | str | None = None,
 ) -> bytes | None:
+    if method in {"GET", "HEAD"} and path == "/api/health":
+        return head_or_json(
+            method,
+            service_health_payload(root, default_run_id, auth_required=auth_required, bind_host=bind_host, bind_port=bind_port),
+            request_headers=headers,
+        )
+    if method in {"GET", "HEAD"} and path == "/api/access-control":
+        return head_or_json(
+            method,
+            access_control_payload(headers, auth_required=auth_required, bind_host=bind_host, bind_port=bind_port),
+            request_headers=headers,
+        )
     if method in {"GET", "HEAD"} and path == "/api/status":
         run_id = require_api_run_id(root, default_run_id, query)
         payload = web_status_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))

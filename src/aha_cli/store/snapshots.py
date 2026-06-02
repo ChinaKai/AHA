@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from aha_cli.domain.models import normalize_task_context_management, normalize_task_supervision
+from aha_cli.domain.models import task_metadata_projection
+from aha_cli.services.proxy import backend_has_proxy_config, backend_proxy_config
+from aha_cli.store.config import load_config
 from aha_cli.store.events import event_stream_position as default_event_stream_position
 from aha_cli.store.io import read_json, text_tail_page
 from aha_cli.store.journal import latest_final_artifact
@@ -20,6 +22,7 @@ def status_snapshot(
     ensure_session_func: Callable[..., dict] = default_ensure_session,
 ) -> dict:
     plan = require_plan(root, run_id)
+    cfg = load_config(root)
 
     def with_session(task: dict, agent: dict) -> dict:
         session = ensure_session_func(
@@ -42,6 +45,30 @@ def status_snapshot(
         merged["session_updated_at"] = session.get("updated_at")
         return merged
 
+    def task_status_item(task: dict) -> dict:
+        proxy_config = backend_proxy_config(cfg, task.get("preferred_backend"), plan, task)
+        return {
+            "id": task["id"],
+            "title": task["title"],
+            "description": task.get("description", ""),
+            **task_metadata_projection(task),
+            "run_proxy_enabled": bool(proxy_config.get("enabled")),
+            "run_proxy_configured": backend_has_proxy_config(cfg, task.get("preferred_backend"), plan, task),
+            "status": task["status"],
+            "exit_code": task["exit_code"],
+            "started_at": task["started_at"],
+            "finished_at": task["finished_at"],
+            "current_round_id": task.get("current_round_id"),
+            "round_sequence": task.get("round_sequence"),
+            "last_final_round_id": task.get("last_final_round_id"),
+            "last_final_at": task.get("last_final_at"),
+            "coordination": task.get("coordination"),
+            "hidden": bool(task.get("hidden")),
+            "hidden_at": task.get("hidden_at"),
+            "deleted_at": task.get("deleted_at"),
+            "agents": [with_session(task, agent) for agent in task.get("agents", [])],
+        }
+
     return {
         "run_id": run_id,
         "goal": plan["goal"],
@@ -49,41 +76,8 @@ def status_snapshot(
         "updated_at": plan["updated_at"],
         "aha_root": str(root),
         "main_agent": plan.get("main_agent"),
-        "tasks": [
-            {
-                "id": task["id"],
-                "title": task["title"],
-                "description": task.get("description", ""),
-                "workspace_path": task.get("workspace_path"),
-                "preferred_backend": task.get("preferred_backend"),
-                "preferred_model": task.get("preferred_model"),
-                "preferred_sandbox": task.get("preferred_sandbox"),
-                "preferred_approval": task.get("preferred_approval"),
-                "preferred_proxy_enabled": bool(task.get("preferred_proxy_enabled")),
-                "preferred_http_proxy": task.get("preferred_http_proxy"),
-                "preferred_https_proxy": task.get("preferred_https_proxy"),
-                "preferred_no_proxy": task.get("preferred_no_proxy"),
-                "delegation_policy": task.get("delegation_policy", "auto"),
-                "max_sub_agents": task.get("max_sub_agents", 3),
-                "supervision": normalize_task_supervision(task.get("supervision")),
-                "context_management": normalize_task_context_management(task.get("context_management")),
-                "status": task["status"],
-                "exit_code": task["exit_code"],
-                "started_at": task["started_at"],
-                "finished_at": task["finished_at"],
-                "current_round_id": task.get("current_round_id"),
-                "round_sequence": task.get("round_sequence"),
-                "last_final_round_id": task.get("last_final_round_id"),
-                "last_final_at": task.get("last_final_at"),
-                "coordination": task.get("coordination"),
-                "hidden": bool(task.get("hidden")),
-                "hidden_at": task.get("hidden_at"),
-                "deleted_at": task.get("deleted_at"),
-                "agents": [with_session(task, agent) for agent in task.get("agents", [])],
-            }
-            for task in plan["tasks"]
-            if not task.get("deleted_at")
-        ],
+        "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
+        "tasks": [task_status_item(task) for task in plan["tasks"] if not task.get("deleted_at")],
     }
 
 

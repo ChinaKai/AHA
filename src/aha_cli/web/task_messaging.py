@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
 from pathlib import Path
 
-from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
@@ -19,28 +17,12 @@ from aha_cli.web.status import (
     TERMINAL_TASK_STATUSES,
     consume_agent_recovery_context,
     invalidate_backend_status_cache,
-    merge_recovery_context_message,
 )
+from aha_cli.web.realtime_debug import realtime_debug_log
 
 CommandHandler = Callable[[Path, str, dict, str, str | None], tuple[bool, str | None, dict]]
 PreparedBackendStarter = Callable[[Path, str, dict | None], dict | None]
 DebugLogger = Callable[..., None]
-
-
-def realtime_debug_log(source: str, **fields: object) -> None:
-    root = fields.pop("_root", None)
-    run_id = str(fields.get("run_id") or "")
-    payload = {"ts": utc_now(), "source": source, **fields}
-    line = "[aha realtime] " + json.dumps(payload, ensure_ascii=False, default=str)
-    print(line, flush=True)
-    if isinstance(root, Path) and run_id:
-        try:
-            log_dir = run_dir(root, run_id) / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            with (log_dir / "realtime-debug.log").open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-        except OSError:
-            pass
 
 
 def _default_handle_slash_command(root: Path, run_id: str, payload: dict, message: str, task_id: str | None) -> tuple[bool, str | None, dict]:
@@ -130,6 +112,18 @@ def task_locked_for_messages(root: Path, run_id: str, task_id: str | None) -> st
     return status if status in TERMINAL_TASK_STATUSES else None
 
 
+def _active_supervision_host_review(root: Path, run_id: str, task_id: str, host_agent_id: str, host: dict | None) -> bool:
+    host_status = str((host or {}).get("status") or "").lower()
+    if host_status in {"running", "waiting"}:
+        return True
+    if host_status != "pending":
+        return False
+    if (host or {}).get("backend_session_id"):
+        return True
+    state = backend_status(root, run_id, host_agent_id, task_id=task_id)
+    return str(state.get("status") or "").lower() in {"running", "busy"}
+
+
 def task_host_review_message_blocker(root: Path, run_id: str, task_id: str | None, target_id: str) -> str | None:
     if not task_id:
         return None
@@ -149,8 +143,7 @@ def task_host_review_message_blocker(root: Path, run_id: str, task_id: str | Non
     host_agent_id = str(supervision.get("host_agent_id") or "host")
     agents = task.get("agents") if isinstance(task.get("agents"), list) else []
     host = next((agent for agent in agents if agent.get("id") == host_agent_id or agent.get("role") == "host"), None)
-    host_status = str((host or {}).get("status") or "").lower()
-    if host_status in {"pending", "running", "waiting"}:
+    if _active_supervision_host_review(root, run_id, task_id, host_agent_id, host):
         return "host_review"
     main = next((agent for agent in agents if agent.get("id") == "main"), None)
     if (
@@ -249,8 +242,6 @@ def handle_send_payload(
 
     message = agent_message or message
     recovery_context = consume_agent_recovery_context(root, run_id, task_id, target_id)
-    if recovery_context:
-        message = merge_recovery_context_message(recovery_context, message)
     sent = append_message(
         root,
         run_id,
@@ -264,6 +255,7 @@ def handle_send_payload(
         command_namespace=str(command_payload.get("command_namespace", "") or "") or None,
         original_command=str(command_payload.get("original_command", "") or "") or None,
         result_policy=str(command_payload.get("result_policy", "") or "") or None,
+        recovery_context=recovery_context or None,
     )
     response = {"ok": True, "message": sent}
     if supervision_host_message and task_id:

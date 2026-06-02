@@ -107,7 +107,7 @@ def ensure_task_supervision_host_agent(
                 "host",
                 "host",
                 host_backend,
-                status="pending",
+                status="stopped",
                 model=task.get("preferred_model"),
                 workspace_path=task.get("workspace_path"),
                 sandbox="read-only",

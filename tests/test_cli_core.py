@@ -20,6 +20,7 @@ from aha_cli.services.chat import chat_prompt
 from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
 from aha_cli.services.orchestrator import task_assignment_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
+from aha_cli.store.io import write_json
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
@@ -31,6 +32,7 @@ from aha_cli.store.filesystem import (
     read_json,
     set_agent_status,
     set_task_hidden,
+    set_task_status,
     status_snapshot,
     task_context_snapshot,
     task_final_snapshot,
@@ -42,12 +44,41 @@ from aha_cli.store.filesystem import (
 from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, workspace_options
 
 
+def write_cleanup_plan(run_path: Path, run_id: str, *, temporary: bool = False) -> None:
+    data = {
+        "id": run_id,
+        "goal": "Cleanup CLI test",
+        "mode": "research",
+        "created_at": "2026-05-30T00:00:00+00:00",
+        "updated_at": "2026-05-30T00:00:00+00:00",
+        "write_scopes": [],
+        "tasks": [],
+    }
+    if temporary:
+        data["temporary"] = True
+    write_json(run_path / "plan.json", data)
+
+
+def touch_tree(path: Path, mtime: float) -> None:
+    for item in [path, *path.rglob("*")]:
+        os.utime(item, (mtime, mtime))
+
+
 class CliCoreTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_global_version_option_reports_app_version(self) -> None:
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"AHA_VERSION": "20260531.test"}), mock.patch("sys.stdout", out):
+            with self.assertRaises(SystemExit) as raised:
+                main(["--version"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(out.getvalue().strip(), "aha 20260531.test")
 
     def test_plan_run_merge_with_stub_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +140,551 @@ class CliCoreTests(unittest.TestCase):
                 code, status = self.run_cli("--home", str(home), "status", run_id)
                 self.assertEqual(code, 0)
                 self.assertIn("Goal: Custom home", status)
+
+    def test_runs_cleanup_dry_run_lists_without_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            tmp_root = Path(tmp) / "tmp-root"
+            tmp_root.mkdir()
+            run_path = home / "runs" / "temp-run"
+            write_cleanup_plan(run_path, "temp-run", temporary=True)
+            (run_path / ".aha-temp-run").write_text("", encoding="utf-8")
+            touch_tree(run_path, 1000)
+
+            code, output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "cleanup",
+                "--dry-run",
+                "--json",
+                "--tmp-root",
+                str(tmp_root),
+                "--stale-seconds",
+                "60",
+            )
+            payload = json.loads(output)
+
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["deleted"][0]["action"], "would_delete")
+            self.assertTrue(run_path.exists())
+
+    def test_runs_cleanup_apply_deletes_stale_temp_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            tmp_root = Path(tmp) / "tmp-root"
+            tmp_root.mkdir()
+            run_path = home / "runs" / "temp-run"
+            write_cleanup_plan(run_path, "temp-run", temporary=True)
+            (run_path / ".aha-temp-run").write_text("", encoding="utf-8")
+            touch_tree(run_path, 1000)
+
+            code, output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "cleanup",
+                "--apply",
+                "--json",
+                "--tmp-root",
+                str(tmp_root),
+                "--stale-seconds",
+                "60",
+            )
+            payload = json.loads(output)
+
+            self.assertEqual(code, 0)
+            self.assertFalse(payload["dry_run"])
+            self.assertEqual(payload["deleted"][0]["action"], "deleted")
+            self.assertFalse(run_path.exists())
+
+    def test_runs_cleanup_rejects_non_temp_scan_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+
+            code, output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "cleanup",
+                "--dry-run",
+                "--json",
+                "--tmp-root",
+                str(Path.cwd()),
+            )
+            payload = json.loads(output)
+
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["errors"][0]["reason"], "unsafe_tmp_root")
+
+    def test_runs_delete_removes_non_current_run_and_rejects_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            old_run = home / "runs" / "old-run"
+            current_run = home / "runs" / "current-run"
+            write_cleanup_plan(old_run, "old-run")
+            write_cleanup_plan(current_run, "current-run")
+
+            delete_code, delete_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "delete",
+                "old-run",
+                "--json",
+                "--current-run",
+                "current-run",
+            )
+            current_code, _ = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "delete",
+                "current-run",
+                "--force",
+                "--current-run",
+                "current-run",
+            )
+            payload = json.loads(delete_output)
+
+            self.assertEqual(delete_code, 0)
+            self.assertEqual(payload["deleted"]["run_id"], "old-run")
+            self.assertFalse(old_run.exists())
+            self.assertEqual(current_code, 2)
+            self.assertTrue(current_run.exists())
+
+    def test_runs_delete_force_removes_active_heartbeat_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            run_path = home / "runs" / "active-run"
+            write_cleanup_plan(run_path, "active-run")
+            log = run_path / "logs" / "realtime-debug.log"
+            log.parent.mkdir(parents=True)
+            log.write_text('{"phase":"heartbeat_sent"}\n', encoding="utf-8")
+
+            blocked_code, _ = self.run_cli("--home", str(home), "runs", "delete", "active-run")
+            forced_code, forced_output = self.run_cli("--home", str(home), "runs", "delete", "active-run", "--force", "--json")
+            payload = json.loads(forced_output)
+
+            self.assertEqual(blocked_code, 2)
+            self.assertEqual(forced_code, 0)
+            self.assertEqual(payload["deleted"]["reason"], "forced")
+            self.assertFalse(run_path.exists())
+
+    def test_runs_retention_reports_run_usage_without_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            run_path = home / "runs" / "run-001"
+            write_cleanup_plan(run_path, "run-001")
+            log = run_path / "logs" / "backend.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("backend log", encoding="utf-8")
+
+            code, output = self.run_cli("--home", str(home), "runs", "retention", "run-001", "--json", "--top", "1")
+            payload = json.loads(output)
+
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["run_id"], "run-001")
+            self.assertTrue(run_path.exists())
+            self.assertEqual(payload["largest_files"][0]["path"], "plan.json")
+
+    def test_runs_retention_apply_archives_and_force_compacts_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            archive_dir = Path(tmp) / "archives"
+            run_path = home / "runs" / "run-001"
+            write_cleanup_plan(run_path, "run-001")
+            log = run_path / "logs" / "backend.log"
+            prompt = run_path / "prompts" / "main.md"
+            chat = run_path / "chat" / "main.md"
+            for path, text in ((log, "log"), (prompt, "prompt"), (chat, "chat")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+
+            apply_code, apply_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention",
+                "run-001",
+                "--apply",
+                "--json",
+                "--archive-dir",
+                str(archive_dir),
+            )
+            force_code, force_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention",
+                "run-001",
+                "--apply",
+                "--force",
+                "--json",
+                "--archive-dir",
+                str(archive_dir),
+            )
+            force_payload = json.loads(force_output)
+            archive_path = Path(json.loads(apply_output)["archive"]["path"])
+
+            self.assertEqual(apply_code, 0)
+            self.assertEqual(force_code, 0)
+            self.assertTrue(archive_path.exists())
+            self.assertFalse(log.exists())
+            self.assertFalse(prompt.exists())
+            self.assertTrue(chat.exists())
+            self.assertEqual({item["path"] for item in force_payload["deleted"]}, {"logs/backend.log", "prompts/main.md"})
+
+            list_code, list_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention-archive",
+                "list",
+                "run-001",
+                "--archive-dir",
+                str(archive_dir),
+                "--json",
+            )
+            inspect_code, inspect_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention-archive",
+                "inspect",
+                str(archive_path),
+                "--json",
+            )
+            restore_code, restore_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention-archive",
+                "restore",
+                str(archive_path),
+                "--json",
+            )
+            list_payload = json.loads(list_output)
+            inspect_payload = json.loads(inspect_output)
+            restore_payload = json.loads(restore_output)
+
+            self.assertEqual(list_code, 0)
+            self.assertEqual(inspect_code, 0)
+            self.assertEqual(restore_code, 0)
+            self.assertEqual(list_payload["archives"][0]["source_run_id"], "run-001")
+            self.assertEqual(inspect_payload["file_count"], 2)
+            self.assertEqual({item["path"] for item in restore_payload["restored"]}, {"logs/backend.log", "prompts/main.md"})
+            self.assertTrue(log.exists())
+            self.assertTrue(prompt.exists())
+
+    def test_runs_retention_apply_rejects_current_and_force_without_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            run_path = home / "runs" / "current-run"
+            write_cleanup_plan(run_path, "current-run")
+
+            force_code, _ = self.run_cli("--home", str(home), "runs", "retention", "current-run", "--force")
+            current_code, _ = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention",
+                "current-run",
+                "--apply",
+                "--force",
+                "--current-run",
+                "current-run",
+            )
+
+            self.assertEqual(force_code, 2)
+            self.assertEqual(current_code, 2)
+            self.assertTrue(run_path.exists())
+
+    def test_runs_retention_policy_reports_and_applies_only_safe_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            archive_dir = Path(tmp) / "archives"
+            old_run = home / "runs" / "old-run"
+            current_run = home / "runs" / "current-run"
+            write_cleanup_plan(old_run, "old-run")
+            write_cleanup_plan(current_run, "current-run")
+            old_log = old_run / "logs" / "backend.log"
+            current_log = current_run / "logs" / "backend.log"
+            for path, text in ((old_log, "large-old-log"), (current_log, "large-current-log")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+
+            report_code, report_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention-policy",
+                "--current-run",
+                "current-run",
+                "--max-candidate-bytes",
+                "1",
+                "--json",
+            )
+            apply_code, apply_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention-policy",
+                "--current-run",
+                "current-run",
+                "--max-candidate-bytes",
+                "1",
+                "--apply-if-over-limit",
+                "--force",
+                "--archive-dir",
+                str(archive_dir),
+                "--json",
+            )
+            report_payload = json.loads(report_output)
+            apply_payload = json.loads(apply_output)
+            applied_runs = {item["run_id"]: item for item in apply_payload["runs"]}
+
+            self.assertEqual(report_code, 0)
+            self.assertEqual(apply_code, 0)
+            self.assertTrue(report_payload["dry_run"])
+            self.assertEqual(report_payload["summary"]["eligible_runs"], 1)
+            self.assertFalse(old_log.exists())
+            self.assertTrue(current_log.exists())
+            self.assertIsNotNone(applied_runs["old-run"]["archive"])
+            self.assertIsNone(applied_runs["current-run"]["archive"])
+            self.assertEqual(applied_runs["current-run"]["guard"]["reason"], "current_run")
+
+    def test_runs_retention_policy_can_persist_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            report_dir = Path(tmp) / "reports"
+            run_path = home / "runs" / "run-001"
+            write_cleanup_plan(run_path, "run-001")
+            log = run_path / "logs" / "backend.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text("large-log", encoding="utf-8")
+
+            code, output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "retention-policy",
+                "--max-candidate-bytes",
+                "1",
+                "--write-report",
+                "--report-dir",
+                str(report_dir),
+                "--json",
+            )
+            payload = json.loads(output)
+            scheduled = payload["scheduled_report"]
+
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["summary"]["over_limit_runs"], 1)
+            self.assertTrue(Path(scheduled["path"]).exists())
+            self.assertTrue((report_dir / "latest.json").exists())
+
+    def test_runs_diagnose_json_uses_read_only_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            diagnostic = {
+                "aha_home": str(home),
+                "current_run_id": "current-run",
+                "visible_runs": [],
+                "active_heartbeat_runs": [],
+                "runs": [],
+                "cleanup": {"candidates": []},
+                "services": {"listeners": [], "processes": [], "service_units": []},
+            }
+            with mock.patch("aha_cli.cli.diagnose_runs", return_value=diagnostic) as diagnose:
+                code, output = self.run_cli(
+                    "--home",
+                    str(home),
+                    "runs",
+                    "diagnose",
+                    "--json",
+                    "--current-run",
+                    "current-run",
+                    "--stale-seconds",
+                    "60",
+                    "--active-heartbeat-seconds",
+                    "30",
+                )
+
+            payload = json.loads(output)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["current_run_id"], "current-run")
+            diagnose.assert_called_once()
+            args, kwargs = diagnose.call_args
+            self.assertEqual(args[0], home)
+            self.assertEqual(kwargs["current_run_id"], "current-run")
+            self.assertEqual(kwargs["stale_seconds"], 60)
+            self.assertEqual(kwargs["active_heartbeat_seconds"], 30)
+
+    def test_runs_diagnose_text_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            diagnostic = {
+                "aha_home": str(home),
+                "current_run_id": "current-run",
+                "visible_runs": [{"id": "current-run"}],
+                "active_heartbeat_runs": ["current-run"],
+                "runs": [
+                    {
+                        "run_id": "current-run",
+                        "lifecycle_status": "active",
+                        "active_heartbeat": True,
+                        "cleanup": {"dry_run_action": "protect", "reason": "current_run"},
+                    }
+                ],
+                "cleanup": {"candidates": []},
+                "services": {
+                    "listeners": [{"port": "8788", "process": "python3", "pid": "123"}],
+                    "processes": [{"pid": "123", "stat": "Sl", "command": "python3 -m aha_cli ui"}],
+                    "service_units": [{"unit": "aha.service", "active": "active", "sub": "running"}],
+                },
+            }
+            with mock.patch("aha_cli.cli.diagnose_runs", return_value=diagnostic):
+                code, output = self.run_cli("--home", str(home), "runs", "diagnose")
+
+            self.assertEqual(code, 0)
+            self.assertIn("AHA runs diagnose", output)
+            self.assertIn("current_run: current-run", output)
+            self.assertIn("current-run: protect (current_run)", output)
+
+    def test_runs_recover_dry_run_and_apply_stale_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover stale runtime", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                stopped = {"status": "stopped", "pid": None, "backend": "codex"}
+                with mock.patch("aha_cli.services.run_recovery.backend_status", return_value=stopped):
+                    dry_code, dry_output = self.run_cli("runs", "recover", run_id, "--json")
+                with (
+                    mock.patch("aha_cli.services.run_recovery.backend_status", return_value=stopped),
+                    mock.patch("aha_cli.web.status.backend_status", return_value=stopped),
+                ):
+                    apply_code, apply_output = self.run_cli(
+                        "runs",
+                        "recover",
+                        run_id,
+                        "--task-id",
+                        "task-001",
+                        "--agent-id",
+                        "main",
+                        "--apply",
+                        "--json",
+                    )
+                task = task_snapshot(root, run_id, "task-001")["task"]
+
+            dry_payload = json.loads(dry_output)
+            apply_payload = json.loads(apply_output)
+
+        self.assertEqual(dry_code, 0)
+        self.assertTrue(dry_payload["dry_run"])
+        self.assertEqual(dry_payload["candidates"][0]["agent_id"], "main")
+        self.assertEqual(apply_code, 0)
+        self.assertEqual(apply_payload["recovered_count"], 1)
+        self.assertEqual(task["status"], "awaiting_user")
+        self.assertEqual(task["agents"][0]["status"], "interrupted")
+
+    def test_runs_recover_apply_requires_exact_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover stale runtime", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+                with mock.patch("aha_cli.services.run_recovery.backend_status", return_value={"status": "stopped"}):
+                    apply_code, _ = self.run_cli("runs", "recover", run_id, "--apply")
+
+        self.assertEqual(apply_code, 2)
+
+    def test_runs_lifecycle_hides_archives_and_restores_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            run_path = home / "runs" / "old-run"
+            write_cleanup_plan(run_path, "old-run")
+
+            hide_code, hide_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "lifecycle",
+                "old-run",
+                "hidden",
+                "--json",
+                "--current-run",
+                "current-run",
+            )
+            archive_code, _ = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "lifecycle",
+                "old-run",
+                "archived",
+                "--current-run",
+                "current-run",
+            )
+            restore_code, restore_output = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "lifecycle",
+                "old-run",
+                "active",
+                "--current-run",
+                "current-run",
+            )
+            hidden_payload = json.loads(hide_output)
+            plan = read_json(run_path / "plan.json")
+
+            self.assertEqual(hide_code, 0)
+            self.assertEqual(hidden_payload["run"]["lifecycle_status"], "hidden")
+            self.assertEqual(archive_code, 0)
+            self.assertEqual(restore_code, 0)
+            self.assertIn("old-run lifecycle=active", restore_output)
+            self.assertEqual(plan["lifecycle_status"], "active")
+            self.assertFalse(plan["hidden"])
+            self.assertFalse(plan["archived"])
+
+    def test_runs_lifecycle_rejects_current_missing_and_active_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            write_cleanup_plan(home / "runs" / "current-run", "current-run")
+            write_cleanup_plan(home / "runs" / "old-run", "old-run")
+
+            current_code, _ = self.run_cli(
+                "--home",
+                str(home),
+                "runs",
+                "lifecycle",
+                "current-run",
+                "hidden",
+                "--current-run",
+                "current-run",
+            )
+            missing_code, _ = self.run_cli("--home", str(home), "runs", "lifecycle", "missing-run", "hidden")
+            with mock.patch("aha_cli.services.run_lifecycle_actions.run_has_active_heartbeat", return_value=True):
+                heartbeat_code, _ = self.run_cli("--home", str(home), "runs", "lifecycle", "old-run", "archived")
+
+            self.assertEqual(current_code, 2)
+            self.assertEqual(missing_code, 2)
+            self.assertEqual(heartbeat_code, 2)
 
     def test_init_uses_aha_home_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,8 +765,8 @@ class CliCoreTests(unittest.TestCase):
                 self.assertEqual(plan["tasks"][0]["workspace_path"], str(workspace))
 
     def test_ui_can_start_without_existing_run(self) -> None:
-        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int) -> None:
-            calls.append((root, run_id, host, port, poll_interval))
+        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int, auth_token: str = "") -> None:
+            calls.append((root, run_id, host, port, poll_interval, auth_token))
 
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "aha-home"
@@ -200,11 +776,11 @@ class CliCoreTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertFalse((home / "config.json").exists())
-            self.assertEqual(calls, [(home, "", "127.0.0.1", 0, 1000)])
+            self.assertEqual(calls, [(home, "", "127.0.0.1", 0, 1000, "")])
 
     def test_empty_command_defaults_to_ui(self) -> None:
-        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int) -> None:
-            calls.append((root, run_id, host, port, poll_interval))
+        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int, auth_token: str = "") -> None:
+            calls.append((root, run_id, host, port, poll_interval, auth_token))
 
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "aha-home"
@@ -214,7 +790,32 @@ class CliCoreTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertFalse((home / "config.json").exists())
-            self.assertEqual(calls, [(home, "", "0.0.0.0", 8766, 1000)])
+            self.assertEqual(calls, [(home, "", "127.0.0.1", 8766, 1000, "")])
+
+    def test_ui_reads_auth_token_file(self) -> None:
+        async def fake_ui_server(root: Path, run_id: str, host: str, port: int, poll_interval: int, auth_token: str = "") -> None:
+            calls.append((root, run_id, host, port, poll_interval, auth_token))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            token_file = Path(tmp) / "web-token"
+            token_file.write_text("secret-token\n", encoding="utf-8")
+            calls: list[tuple[Path, str, str, int, int, str]] = []
+            with mock.patch("aha_cli.cli.run_ui_server", side_effect=fake_ui_server):
+                code, _ = self.run_cli(
+                    "--home",
+                    str(home),
+                    "ui",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "0",
+                    "--auth-token-file",
+                    str(token_file),
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(calls, [(home, "", "127.0.0.1", 0, 1000, "secret-token")])
 
     def test_explicit_tasks_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,8 +882,12 @@ class CliCoreTests(unittest.TestCase):
                 "max_sub_agents": 2,
                 "delegation_policy": "auto",
                 "preferred_backend": "codex",
+                "preferred_sub_model": "env:work",
+                "workflow_template": "fault-debug",
             }
         )
+        self.assertIn("Preferred sub-agent model:", assignment_prompt)
+        self.assertIn("env:work", assignment_prompt)
         self.assertIn("Commit ownership policy:", assignment_prompt)
         self.assertIn("route it to that sub-agent with `route_to_agent`", assignment_prompt)
         self.assertIn("Never ask a sub-agent to commit files outside its assignment", assignment_prompt)
@@ -294,8 +899,12 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn('"actions"', assignment_prompt)
         self.assertIn("Completed, stopped, failed, interrupted, or blocked", assignment_prompt)
         self.assertIn("Include a stable `scope_id`", assignment_prompt)
-        self.assertIn("include `agent_id` in that `spawn_sub` action", assignment_prompt)
+        self.assertIn("For a brand-new sub-agent, omit `agent_id`", assignment_prompt)
+        self.assertIn("Include `agent_id` in `spawn_sub` only when intentionally reusing", assignment_prompt)
         self.assertIn("Collaboration mode:", assignment_prompt)
+        self.assertIn("Workflow template:", assignment_prompt)
+        self.assertIn("fault-debug", assignment_prompt)
+        self.assertIn("Fault debug:", assignment_prompt)
         self.assertIn("agent owns the efficiency decision", assignment_prompt)
         self.assertIn("never split work just to use more agents", assignment_prompt)
         self.assertIn("Spend the first 60 seconds decomposing", assignment_prompt)
@@ -336,6 +945,8 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("Completed, stopped, failed, interrupted, or blocked", main_prompt)
                 self.assertIn("Include a stable `scope_id`", main_prompt)
                 self.assertIn("Spawn/reassign format:", main_prompt)
+                self.assertIn("- preferred_sub_model:", main_prompt)
+                self.assertIn('"model": null', main_prompt)
                 self.assertIn("spend the first 60 seconds decomposing", main_prompt)
                 self.assertIn("optimize for end-to-end efficiency", main_prompt)
                 self.assertIn("reduce the critical path", main_prompt)
@@ -371,12 +982,15 @@ class CliCoreTests(unittest.TestCase):
                     "Pair task",
                     "--collaboration-mode",
                     "pair",
+                    "--workflow-template",
+                    "fault-debug",
                     "--no-dispatch",
                 )
                 self.assertEqual(code, 0)
                 task = json.loads(task_output)
 
         self.assertEqual(task["collaboration_mode"], "pair")
+        self.assertEqual(task["workflow_template"], "fault-debug")
         self.assertEqual(task["delegation_policy"], "auto")
         self.assertEqual(task["max_sub_agents"], 1)
 
@@ -525,13 +1139,15 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("agent-target", html)
                 self.assertIn("workspace-select", html)
                 self.assertIn("workspace-custom", html)
-                self.assertIn("show-hidden", html)
+                self.assertIn("task-visibility-filter", html)
+                self.assertNotIn("show-hidden", html)
                 self.assertIn('id="task-model"', html)
                 self.assertIn('id="task-sandbox"', html)
                 self.assertIn('id="task-approval"', html)
-                self.assertIn('id="task-http-proxy"', html)
-                self.assertIn('id="task-https-proxy"', html)
-                self.assertIn('id="task-no-proxy"', html)
+                self.assertNotIn('id="run-http-proxy"', html)
+                bootstrap_script = Path(__file__).resolve().parents[1].joinpath("src/aha_cli/web/static/bootstrap_config.js").read_text(encoding="utf-8")
+                self.assertIn('bootstrapProxyFieldsHtml("codex"', bootstrap_script)
+                self.assertIn('bootstrapProxyFieldsHtml("claude"', bootstrap_script)
                 self.assertIn('id="task-proxy-editor"', html)
                 self.assertIn("selected-task-meta", html)
                 self.assertIn("selected-agent-info", html)
@@ -612,7 +1228,7 @@ class CliCoreTests(unittest.TestCase):
                     self.fail(f"one-bin UI did not start\nstdout={stdout}\nstderr={stderr}")
                 self.assertIn('id="run-export"', html)
 
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/static/app.js", timeout=1) as response:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/static/app_runtime_wiring.js", timeout=1) as response:
                     script = response.read().decode("utf-8")
                 self.assertIn("runExportEl", script)
             finally:
@@ -734,6 +1350,7 @@ class CliCoreTests(unittest.TestCase):
             mode_instruction="reply",
             run_goal="goal",
             sticky_context="context",
+            recovery_context="",
             recent_conversation="conversation",
             sender="browser",
             ts="2026-01-01T00:00:00+00:00",

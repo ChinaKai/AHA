@@ -61,11 +61,17 @@ def http_response(
     return ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii") + response_body
 
 
-def json_response(data: dict, status: str = "200 OK", request_headers: dict[str, str] | None = None) -> bytes:
+def json_response(
+    data: dict,
+    status: str = "200 OK",
+    request_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> bytes:
     return http_response(
         status,
         json.dumps(data, ensure_ascii=False).encode("utf-8"),
         "application/json; charset=utf-8",
+        headers=headers,
         request_headers=request_headers,
     )
 

@@ -12,7 +12,7 @@ import zipfile
 
 from aha_cli.backends.claude import apply_claude_environment, claude_cli_model, claude_config_for_model, claude_resolved_model
 from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
-from aha_cli.backends.registry import resolve_model
+from aha_cli.backends.registry import normalize_model_selector, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.context_pressure import context_pressure
@@ -522,7 +522,7 @@ def _backend_proxy_env(root: Path, run_id: str, target: str, task_id: str | None
     agent = next((item for item in task.get("agents", []) if item.get("id") == target), None)
     if not agent:
         return None
-    return proxy_env_for_agent(agent, task)
+    return proxy_env_for_agent(agent, task, plan, load_config(root))
 
 
 def _backend_process_env(
@@ -598,6 +598,7 @@ def start_backend(
     if backend == "claude" and not model:
         model = (cfg.get("claude", {}) or {}).get("model")
     requested_model = model
+    model = normalize_model_selector(backend, model, cfg)
     codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend == "codex" else None
     claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend == "claude" else None
     command_model = (

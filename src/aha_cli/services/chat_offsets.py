@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.orchestrator import task_has_incomplete_sub_agents
+from aha_cli.services.subagent_state import task_has_incomplete_sub_agents
 from aha_cli.store.filesystem import iter_jsonl_from, read_json, task_snapshot, write_json
 
 

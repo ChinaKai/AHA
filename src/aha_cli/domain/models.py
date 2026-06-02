@@ -3,7 +3,15 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
+from aha_cli.domain.workflow_templates import (
+    WORKFLOW_TEMPLATE_GUIDANCE as TASK_WORKFLOW_TEMPLATE_GUIDANCE,
+    WORKFLOW_TEMPLATE_IDS as TASK_WORKFLOW_TEMPLATES,
+    normalize_workflow_template,
+    workflow_template_guidance,
+)
 from aha_cli.services.prompt_templates import render_prompt_template
+
+DEFAULT_RETENTION_POLICY_REPORT_INTERVAL_SECONDS = 6 * 60 * 60
 
 
 def utc_now() -> str:
@@ -15,6 +23,18 @@ def new_run_id() -> str:
     return f"{stamp}-{uuid.uuid4().hex[:6]}"
 
 
+def default_retention_policy_config() -> dict:
+    return {
+        "scheduled_report_enabled": True,
+        "report_interval_seconds": DEFAULT_RETENTION_POLICY_REPORT_INTERVAL_SECONDS,
+        "max_total_bytes": 0,
+        "max_candidate_bytes": 0,
+        "min_candidate_files": 0,
+        "min_age_seconds": 0,
+        "include_chat": False,
+    }
+
+
 def default_config() -> dict:
     return {
         "backend": "stub",
@@ -23,7 +43,14 @@ def default_config() -> dict:
         "default_mode": "research",
         "workspace_roots": [],
         "webgame_workspace": None,
+        "proxy": {
+            "enabled": False,
+            "http_proxy": None,
+            "https_proxy": None,
+            "no_proxy": None,
+        },
         "context_windows": {},
+        "retention_policy": default_retention_policy_config(),
         "codex": {
             "bin": "codex",
             "model": None,
@@ -33,6 +60,12 @@ def default_config() -> dict:
             "session_policy": "sticky",
             "env_active": None,
             "env": [],
+            "proxy": {
+                "enabled": False,
+                "http_proxy": None,
+                "https_proxy": None,
+                "no_proxy": None,
+            },
         },
         "claude": {
             "bin": "claude",
@@ -42,6 +75,12 @@ def default_config() -> dict:
             "session_policy": "sticky",
             "env_active": None,
             "env": [],
+            "proxy": {
+                "enabled": False,
+                "http_proxy": None,
+                "https_proxy": None,
+                "no_proxy": None,
+            },
         },
     }
 
@@ -210,6 +249,39 @@ def normalize_task_context_management(value: object | None = None) -> dict:
     return context
 
 
+def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict:
+    preferred_backend = task.get("preferred_backend") or default_backend
+    preferred_model = task.get("preferred_model")
+    collaboration_mode, delegation_policy, max_sub_agents = resolve_task_collaboration(
+        task.get("collaboration_mode"),
+        task.get("delegation_policy"),
+        task.get("max_sub_agents"),
+    )
+    preferred_sub_model = task.get("preferred_sub_model")
+    if preferred_sub_model is None:
+        preferred_sub_model = preferred_model
+    return {
+        "workspace_id": task.get("workspace_id"),
+        "workspace_path": task.get("workspace_path"),
+        "preferred_backend": preferred_backend,
+        "preferred_model": preferred_model,
+        "preferred_sandbox": task.get("preferred_sandbox"),
+        "preferred_approval": task.get("preferred_approval"),
+        "preferred_proxy_enabled": bool(task.get("preferred_proxy_enabled")),
+        "preferred_http_proxy": task.get("preferred_http_proxy"),
+        "preferred_https_proxy": task.get("preferred_https_proxy"),
+        "preferred_no_proxy": task.get("preferred_no_proxy"),
+        "preferred_sub_backend": task.get("preferred_sub_backend") or preferred_backend,
+        "preferred_sub_model": preferred_sub_model,
+        "collaboration_mode": collaboration_mode,
+        "workflow_template": normalize_workflow_template(task.get("workflow_template")),
+        "delegation_policy": delegation_policy,
+        "max_sub_agents": max_sub_agents,
+        "supervision": normalize_task_supervision(task.get("supervision")),
+        "context_management": normalize_task_context_management(task.get("context_management")),
+    }
+
+
 def default_tasks(goal: str, agents: int, mode: str) -> list[str]:
     research = [
         "Map the relevant files, concepts, and terminology for the goal.",
@@ -283,6 +355,7 @@ def make_task(
     https_proxy: str | None = None,
     no_proxy: str | None = None,
     collaboration_mode: str | None = None,
+    workflow_template: str | None = None,
     delegation_policy: str | None = "auto",
     max_sub_agents: int | None = 3,
     preferred_sub_backend: str | None = None,
@@ -313,6 +386,7 @@ def make_task(
         "preferred_sub_backend": preferred_sub_backend or backend,
         "preferred_sub_model": preferred_sub_model if preferred_sub_model is not None else model,
         "collaboration_mode": resolved_collaboration_mode,
+        "workflow_template": normalize_workflow_template(workflow_template),
         "delegation_policy": resolved_delegation_policy,
         "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
@@ -483,22 +557,7 @@ def enrich_plan(plan: dict, backend: str = "codex") -> dict:
         task.setdefault("hidden", False)
         task.setdefault("hidden_at", None)
         task.setdefault("deleted_at", None)
-        task.setdefault("preferred_sandbox", None)
-        task.setdefault("preferred_approval", None)
-        task.setdefault("preferred_proxy_enabled", False)
-        task.setdefault("preferred_http_proxy", None)
-        task.setdefault("preferred_https_proxy", None)
-        task.setdefault("preferred_no_proxy", None)
-        collaboration_mode, delegation_policy, max_sub_agents = resolve_task_collaboration(
-            task.get("collaboration_mode"),
-            task.get("delegation_policy"),
-            task.get("max_sub_agents"),
-        )
-        task["collaboration_mode"] = collaboration_mode
-        task["delegation_policy"] = delegation_policy
-        task["max_sub_agents"] = max_sub_agents
-        task["supervision"] = normalize_task_supervision(task.get("supervision"))
-        task["context_management"] = normalize_task_context_management(task.get("context_management"))
+        task.update(task_metadata_projection(task, backend))
         ensure_task_agents(task, backend)
     plan.setdefault("main_agent", make_agent("main", "run-main", backend, status="active"))
     return plan

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -10,6 +11,7 @@ from urllib.parse import parse_qs
 
 from aha_cli.cli import append_message, main
 from aha_cli.store.filesystem import append_event, event_path, iter_jsonl_from
+from aha_cli.web.run_api import ApiRunNotFound
 from aha_cli.web.system_routes import consume_web_restart_requested, system_route_response
 from tests.helpers import json_response_body
 
@@ -20,6 +22,87 @@ class WebSystemRoutesTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_health_route_does_not_require_a_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            with mock.patch("aha_cli.web.system_routes.aha_version", return_value="20260531.abcdef0"):
+                response = system_route_response(root, "", "GET", "/api/health", {})
+                head_response = system_route_response(root, "", "HEAD", "/api/health", {})
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 200 OK"))
+        body = json_response_body(response)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["service"], "aha-web")
+        self.assertEqual(body["aha_home"], str(root))
+        self.assertEqual(body["aha_version"], "20260531.abcdef0")
+        self.assertEqual(body["bind_port"], "")
+        self.assertFalse(body["initialized"])
+        self.assertEqual(body["default_run_id"], "")
+        self.assertFalse(body["default_run_available"])
+        self.assertTrue(head_response and head_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(head_response.split(b"\r\n\r\n", 1)[1], b"")
+
+    def test_access_control_route_reports_bind_risk_from_host_header(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            local = system_route_response(root, "", "GET", "/api/access-control", {}, headers={"host": "127.0.0.1:8788"})
+            remote = system_route_response(root, "", "GET", "/api/access-control", {}, headers={"host": "192.168.1.10:8788"})
+
+        self.assertTrue(local and local.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(remote and remote.startswith(b"HTTP/1.1 200 OK"))
+        local_body = json_response_body(local)
+        remote_body = json_response_body(remote)
+        self.assertEqual(local_body["auth_mode"], "none")
+        self.assertEqual(local_body["risk_level"], "low")
+        self.assertTrue(local_body["loopback"])
+        self.assertEqual(remote_body["risk_level"], "high")
+        self.assertFalse(remote_body["loopback"])
+        self.assertIn("authenticated reverse proxy", remote_body["recommendation"])
+
+    def test_access_control_route_reports_configured_network_visible_bind(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            response = system_route_response(
+                root,
+                "",
+                "GET",
+                "/api/access-control",
+                {},
+                headers={"host": "127.0.0.1:8788"},
+                auth_required=True,
+                bind_host="0.0.0.0",
+                bind_port=8788,
+            )
+            health = system_route_response(
+                root,
+                "",
+                "GET",
+                "/api/health",
+                {},
+                headers={"host": "127.0.0.1:8788"},
+                auth_required=True,
+                bind_host="0.0.0.0",
+                bind_port=8788,
+            )
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 200 OK"))
+        body = json_response_body(response)
+        self.assertEqual(body["auth_mode"], "token")
+        self.assertEqual(body["hostname"], "127.0.0.1")
+        self.assertEqual(body["bind_host"], "0.0.0.0")
+        self.assertEqual(body["bind_port"], "8788")
+        self.assertTrue(body["bind_network_visible"])
+        self.assertEqual(body["risk_level"], "high")
+        self.assertIn("protected by token auth", body["recommendation"])
+        self.assertTrue(health and health.startswith(b"HTTP/1.1 200 OK"))
+        health_body = json_response_body(health)
+        self.assertEqual(health_body["bind_host"], "0.0.0.0")
+        self.assertEqual(health_body["bind_port"], "8788")
+        self.assertTrue(health_body["bind_network_visible"])
 
     def test_system_routes_return_status_backend_and_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,6 +204,23 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertIn('"seq": 7', log_text)
         self.assertNotIn("ignored", log_text)
         self.assertTrue(any(event["type"] == "web_restart_requested" for event in events))
+
+    def test_realtime_debug_rejects_deleted_run_without_recreating_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Deleted debug", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                run_path = root / ".aha" / "runs" / run_id
+                shutil.rmtree(run_path)
+                debug_body = json.dumps({"run_id": run_id, "seq": 8}).encode("utf-8")
+
+                with self.assertRaises(ApiRunNotFound):
+                    system_route_response(root, "", "POST", "/api/debug/realtime", {}, debug_body)
+
+            self.assertFalse(run_path.exists())
 
     def test_system_routes_handle_weixin_console_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

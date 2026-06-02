@@ -6,8 +6,11 @@ from pathlib import Path
 import threading
 
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
-from aha_cli.domain.models import enrich_plan
+from aha_cli.domain.models import enrich_plan, utc_now
+from aha_cli.domain.run_lifecycle import apply_run_lifecycle_status, run_lifecycle_projection
+from aha_cli.services.proxy import backend_proxy_config
 from aha_cli.store.config import load_config
+from aha_cli.store.events import append_event
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, plan_path, run_dir
 
@@ -51,7 +54,9 @@ def run_exists(root: Path, run_id: str) -> bool:
 
 
 def run_summary_from_plan(root: Path, plan: dict) -> dict:
+    cfg = load_config(root)
     tasks = [task for task in plan.get("tasks", []) if not task.get("deleted_at")]
+    lifecycle = run_lifecycle_projection(plan)
     completed = sum(1 for task in tasks if task.get("status") == "completed")
     failed = any(task.get("status") == "failed" for task in tasks)
     blocked = any(task.get("status") == "blocked" for task in tasks)
@@ -76,6 +81,13 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
         "task_count": len(tasks),
         "completed_count": completed,
         "hidden_count": sum(1 for task in tasks if task.get("hidden")),
+        "lifecycle": lifecycle,
+        "lifecycle_status": lifecycle["status"],
+        "hidden": lifecycle["hidden"],
+        "hidden_at": lifecycle["hidden_at"],
+        "archived": lifecycle["archived"],
+        "archived_at": lifecycle["archived_at"],
+        "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
         "path": str(plan_path(root, plan["id"])),
     }
 
@@ -83,6 +95,26 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
 def run_summary(root: Path, run_id: str) -> dict:
     plan = enrich_plan(read_json(plan_path(root, run_id)), load_config(root).get("backend", "codex"))
     return run_summary_from_plan(root, plan)
+
+
+def update_run_lifecycle(root: Path, run_id: str, status: object) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        previous = run_lifecycle_projection(plan)["status"]
+        now = utc_now()
+        lifecycle = apply_run_lifecycle_status(plan, status, timestamp=now)
+        plan["updated_at"] = now
+        save_plan(root, plan)
+        append_event(
+            root,
+            run_id,
+            "run_lifecycle_updated",
+            {
+                "previous_status": previous,
+                "status": lifecycle["status"],
+            },
+        )
+        return run_summary_from_plan(root, plan)
 
 
 def list_run_summaries(root: Path) -> list[dict]:

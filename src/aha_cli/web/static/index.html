@@ -33,6 +33,11 @@
           <input id="new-run-goal" placeholder="New run name">
           <button type="submit">新建</button>
         </form>
+        <div class="run-lifecycle-panel">
+          <div id="run-lifecycle-filter" class="run-lifecycle-filters"></div>
+          <div id="run-lifecycle-actions" class="run-lifecycle-actions"></div>
+          <div id="run-lifecycle-state" class="meta"></div>
+        </div>
         <div class="run-archive">
           <div class="run-archive-actions">
             <button id="run-export" type="button">导出</button>
@@ -48,12 +53,25 @@
         <div class="web-service-actions">
           <button id="aha-settings" type="button" aria-controls="settings-dialog">Settings</button>
           <button id="web-restart" type="button">重启 Web</button>
+          <button id="auth-logout" class="hidden" type="button">退出登录</button>
+          <button id="run-maintenance-console" type="button" aria-controls="run-maintenance-popover" aria-expanded="false">诊断</button>
           <button id="weixin-console" type="button" aria-controls="weixin-console-popover" aria-expanded="false">微信操作台</button>
           <button id="play-console" type="button" aria-controls="play-console-popover" aria-expanded="false">玩了个玩</button>
         </div>
+        <div id="access-control-status" class="access-control-status"></div>
+        <div id="run-maintenance-popover" class="run-maintenance-popover" hidden>
+          <div class="run-maintenance">
+            <div class="run-maintenance-actions">
+              <button id="run-maintenance-refresh" type="button">刷新诊断</button>
+              <button id="run-maintenance-close" type="button">关闭</button>
+              <div id="run-maintenance-summary" class="meta"></div>
+            </div>
+            <div id="run-maintenance-detail" class="run-maintenance-detail"></div>
+          </div>
+        </div>
         <div id="play-console-popover" class="play-console-popover" hidden></div>
         <div id="web-restart-state" class="meta"></div>
-        <div id="session-detail" class="meta"><span id="session-detail-text">Run 详情</span><code id="web-service-address">0.0.0.0:8766</code><code id="run-id"></code></div>
+        <div id="session-detail" class="meta"><span id="session-detail-text">Run 详情</span><span id="run-lifecycle" class="run-lifecycle status run-lifecycle-active">active</span><code id="web-service-address">当前访问地址</code><code id="run-id"></code></div>
       </div>
     </div>
     <button id="mobile-task-summary" class="mobile-task-summary" type="button" aria-controls="overview-sidebar" aria-expanded="false">
@@ -61,6 +79,20 @@
       <span id="mobile-task-status" class="status pending">pending</span>
     </button>
   </header>
+  <section id="login-view" class="login-view hidden" aria-labelledby="login-title">
+    <form id="login-form" class="login-panel">
+      <div>
+        <h2 id="login-title">AHA 登录</h2>
+        <p>输入当前 Web token 继续访问。</p>
+      </div>
+      <label class="field-label">
+        <span>Token</span>
+        <input id="login-token" type="password" autocomplete="current-password" autofocus>
+      </label>
+      <button class="primary" type="submit">登录</button>
+      <div id="login-state" class="meta" aria-live="polite"></div>
+    </form>
+  </section>
   <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop" hidden></div>
   <main>
     <aside id="overview-sidebar" class="sidebar">
@@ -75,30 +107,15 @@
         <button id="open-task-create" class="task-create-trigger" type="button">New Task</button>
       </div>
       <div class="task-list-tools">
-        <label>
-          <input id="show-hidden" type="checkbox">
-          <span>Show hidden tasks</span>
-        </label>
+        <div id="task-visibility-filter" class="task-list-filters" role="group" aria-label="Task visibility filter"></div>
         <details id="task-proxy-editor" class="task-proxy-editor">
           <summary>Task proxy</summary>
           <form id="task-proxy-form" class="proxy-form">
-            <label class="field-label">
-              <span>HTTP proxy</span>
-              <input id="selected-task-http-proxy" placeholder="http://127.0.0.1:7890">
-            </label>
-            <label class="field-label">
-              <span>HTTPS proxy</span>
-              <input id="selected-task-https-proxy" placeholder="http://127.0.0.1:7890">
-            </label>
-            <label class="field-label">
-              <span>NO_PROXY</span>
-              <input id="selected-task-no-proxy" placeholder="localhost,127.0.0.1,::1">
-            </label>
             <label class="checkbox-line">
               <input id="selected-task-proxy-enabled" type="checkbox">
-              <span>Enable by default for new agents</span>
+              <span>Use Core proxy for new agents</span>
             </label>
-            <button type="submit">Save Proxy</button>
+            <button type="submit">Save Switch</button>
             <div id="task-proxy-state" class="meta"></div>
           </form>
         </details>
@@ -264,19 +281,32 @@
           </div>
           <div class="field-row">
             <label class="field-label">
-              <span>Collaboration</span>
+              <span>Execution</span>
               <select id="collaboration-mode">
                 <option value="auto">auto</option>
-                <option value="solo">solo</option>
-                <option value="pair">pair</option>
-                <option value="team">team</option>
               </select>
               <div id="collaboration-mode-help" class="collaboration-help"></div>
             </label>
+            <label class="field-label">
+              <span>Workflow</span>
+              <select id="workflow-template">
+                <option value="auto">auto detect</option>
+                <option value="bugfix">bugfix</option>
+                <option value="feature">feature</option>
+                <option value="review">review</option>
+                <option value="embedded-driver">embedded driver</option>
+                <option value="fault-debug">fault debug</option>
+                <option value="hil-regression">HIL regression</option>
+                <option value="release">release</option>
+              </select>
+              <div id="workflow-template-help" class="collaboration-help"></div>
+            </label>
+          </div>
+          <div class="field-row">
             <label id="max-sub-agents-field" class="field-label">
-              <span>Max auto sub-agents</span>
+              <span>Max sub-agents</span>
               <input id="max-sub-agents" type="number" min="1" max="16" value="3">
-              <div class="field-help">只限制 auto 模式下最多能启用几个 sub-agent，不代表一定会启用。</div>
+              <div class="field-help">并发/成本上限，不代表一定会启用；AHA 只在能节省时间时拆分。</div>
             </label>
           </div>
           <div class="field-row">
@@ -299,25 +329,11 @@
             <div id="task-supervision-ask-user-gates" class="supervision-gate-list"></div>
           </fieldset>
           <div class="field-row">
-            <label class="field-label">
-              <span>HTTP proxy</span>
-              <input id="task-http-proxy" placeholder="http://127.0.0.1:7890">
-            </label>
-            <label class="field-label">
-              <span>HTTPS proxy</span>
-              <input id="task-https-proxy" placeholder="http://127.0.0.1:7890">
-            </label>
-          </div>
-          <div class="field-row">
-            <label class="field-label">
-              <span>NO_PROXY</span>
-              <input id="task-no-proxy" placeholder="localhost,127.0.0.1,::1">
-            </label>
             <label class="field-label checkbox-field">
-              <span>Proxy default</span>
+              <span>Proxy</span>
               <span class="checkbox-line">
                 <input id="task-proxy-enabled" type="checkbox">
-                <span>Enable for new agents</span>
+                <span>Enable proxy for this task's agents</span>
               </span>
             </label>
           </div>
@@ -355,6 +371,19 @@
       </div>
     </form>
   </dialog>
+  <dialog id="action-confirm" class="confirm-dialog" aria-labelledby="action-confirm-title">
+    <form method="dialog" class="confirm-dialog-panel">
+      <div class="confirm-dialog-head">
+        <h2 id="action-confirm-title">Confirm action?</h2>
+        <p id="action-confirm-message"></p>
+      </div>
+      <dl id="action-confirm-details" class="confirm-dialog-details"></dl>
+      <div id="action-confirm-actions" class="confirm-dialog-actions">
+        <button type="submit" value="cancel">Cancel</button>
+        <button class="primary" type="submit" value="confirm">Confirm</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="settings-dialog" class="task-dialog settings-dialog" aria-labelledby="settings-title">
     <div class="task-dialog-panel">
       <div class="task-dialog-head">
@@ -367,6 +396,64 @@
       <div id="settings-content"></div>
     </div>
   </dialog>
+  <script src="/static/time_format.js"></script>
+  <script src="/static/app_helpers.js"></script>
+  <script src="/static/task_metadata.js"></script>
+  <script src="/static/bootstrap_config.js"></script>
+  <script src="/static/bootstrap_controller.js"></script>
+  <script src="/static/task_form.js"></script>
+  <script src="/static/task_config_controller.js"></script>
+  <script src="/static/run_metadata.js"></script>
+  <script src="/static/run_lifecycle_view.js"></script>
+  <script src="/static/run_maintenance.js"></script>
+  <script src="/static/agent_metadata.js"></script>
+  <script src="/static/task_list.js"></script>
+  <script src="/static/task_controller.js"></script>
+  <script src="/static/agent_controller.js"></script>
+    <script src="/static/conversation_metadata.js"></script>
+    <script src="/static/conversation_state.js"></script>
+    <script src="/static/conversation_panel.js"></script>
+    <script src="/static/conversation_controller.js"></script>
+    <script src="/static/compact_reset.js"></script>
+    <script src="/static/timeline_view.js"></script>
+    <script src="/static/optimistic_events.js"></script>
+  <script src="/static/task_timing.js"></script>
+  <script src="/static/selection_state.js"></script>
+  <script src="/static/app_selectors.js"></script>
+  <script src="/static/prompt_metrics.js"></script>
+  <script src="/static/prompt_metrics_view.js"></script>
+  <script src="/static/prompt_metrics_popover.js"></script>
+  <script src="/static/api_client.js"></script>
+  <script src="/static/access_control.js"></script>
+  <script src="/static/play_console.js"></script>
+  <script src="/static/weixin_console.js"></script>
+  <script src="/static/runtime_config.js"></script>
+  <script src="/static/agent_config_controller.js"></script>
+  <script src="/static/event_cursor_store.js"></script>
+  <script src="/static/realtime_state.js"></script>
+  <script src="/static/realtime_client.js"></script>
+  <script src="/static/ui_shell.js"></script>
+  <script src="/static/auth_controller.js"></script>
+  <script src="/static/backend_status.js"></script>
+  <script src="/static/message_composer.js"></script>
+  <script src="/static/event_bindings.js"></script>
+  <script src="/static/panel_controller.js"></script>
+  <script src="/static/render_orchestrator.js"></script>
+  <script src="/static/status_store.js"></script>
+  <script src="/static/status_controller.js"></script>
+  <script src="/static/run_actions.js"></script>
+  <script src="/static/app_actions.js"></script>
+  <script src="/static/task_create_controller.js"></script>
+  <script src="/static/settings_controller.js"></script>
+  <script src="/static/run_controller.js"></script>
+  <script src="/static/message_flow.js"></script>
+  <script src="/static/render_scheduler.js"></script>
+  <script src="/static/confirm_dialog.js"></script>
+  <script src="/static/controller_registry.js"></script>
+  <script src="/static/app_bridge.js"></script>
+  <script src="/static/app_controller_factory.js"></script>
+  <script src="/static/app_runtime_setup.js"></script>
+  <script src="/static/app_runtime_wiring.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

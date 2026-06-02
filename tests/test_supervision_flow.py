@@ -323,6 +323,212 @@ class SupervisionFlowTests(unittest.TestCase):
         self.assertEqual(applied[-1]["data"]["effect"], "await_user")
         self.assertEqual(task_status, "awaiting_user")
 
+    def test_recovery_notice_reply_skips_supervision_host_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recovery notice supervision", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "上一轮 agent `main` 工作异常中断。",
+                    sender="aha",
+                    task_id="task-001",
+                    role="main",
+                    from_agent="aha",
+                    to_agent="main",
+                    reply_target="browser",
+                    coordination="agent_recovery_notice",
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "已记录恢复状态。", None)),
+                    mock.patch("aha_cli.services.chat.apply_supervision_stub") as supervision_stub,
+                    mock.patch("aha_cli.services.chat.apply_supervision_real_host") as supervision_host,
+                ):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(code, 0)
+        self.assertIn("main -> browser: 已记录恢复状态。", output)
+        supervision_stub.assert_not_called()
+        supervision_host.assert_not_called()
+        self.assertFalse(any(row["type"] == "main_reported_to_host" for row in rows))
+
+    def test_host_record_task_update_decision_answers_main_host_in_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Record update visibility", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                host_reply = json.dumps(
+                    {
+                        "decision": "record_task_update",
+                        "reason": "",
+                        "response": "",
+                        "actions": [{"type": "record_task_update", "summary": "本轮已完成在线验证"}],
+                    }
+                )
+
+                result = apply_supervision_host_decision(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    host_reply=host_reply,
+                    exit_code=0,
+                )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20, categories={"chat"})
+
+        self.assertEqual(result["executed"][0]["type"], "record_task_update")
+        self.assertTrue(any(event.get("data", {}).get("message") == "host 已记录本轮任务更新。" for event in main_page["events"]))
+        self.assertTrue(any(event.get("data", {}).get("message") == "host 已记录本轮任务更新。" for event in host_page["events"]))
+        visible = [
+            row["data"]
+            for row in rows
+            if row["type"] == "message" and row["data"].get("coordination") == "host_decision"
+        ]
+        self.assertEqual(visible[-1]["target"], "browser")
+        self.assertEqual(visible[-1]["display_sender"], "host")
+        self.assertEqual(visible[-1]["display_target"], "main")
+        self.assertFalse(any("record_task_update" in event.get("data", {}).get("message", "") for event in main_page["events"]))
+
+    def test_host_wait_decision_answers_main_host_in_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Wait visibility", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+
+                result = apply_supervision_host_decision(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    host_reply=json.dumps({"decision": "wait", "reason": "", "response": "", "actions": []}),
+                    exit_code=0,
+                )
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20, categories={"chat"})
+
+        self.assertTrue(result["waiting"])
+        self.assertTrue(any(event.get("data", {}).get("message") == "host 决定等待子任务完成。" for event in main_page["events"]))
+        self.assertTrue(any(event.get("data", {}).get("message") == "host 决定等待子任务完成。" for event in host_page["events"]))
+
+    def test_host_continue_without_response_still_answers_and_routes_to_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Continue visibility", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+
+                with mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main:
+                    result = apply_supervision_host_decision(
+                        root,
+                        run_id,
+                        "task-001",
+                        host_agent_id="host",
+                        host_reply=json.dumps({"decision": "continue", "reason": "", "response": "", "actions": []}),
+                        exit_code=0,
+                    )
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20, categories={"chat"})
+
+        start_main.assert_called_once()
+        self.assertTrue(result["routed_to_main"])
+        self.assertTrue(any(event.get("data", {}).get("message") == "host decision: continue。" for event in main_page["events"]))
+        self.assertTrue(any(event.get("data", {}).get("message") == "host decision: continue。" for event in host_page["events"]))
+
+    def test_host_ask_user_decision_answers_main_chat_without_routing_main_inbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Ask user visibility", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+
+                result = apply_supervision_host_decision(
+                    root,
+                    run_id,
+                    "task-001",
+                    host_agent_id="host",
+                    host_reply=json.dumps({"decision": "ask_user", "reason": "", "response": "需要用户确认下一步。", "actions": []}),
+                    exit_code=0,
+                )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
+                host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20, categories={"chat"})
+
+        self.assertTrue(result["routed_to_browser"])
+        self.assertFalse(result["routed_to_main"])
+        self.assertTrue(any(event.get("data", {}).get("message") == "需要用户确认下一步。" for event in main_page["events"]))
+        self.assertTrue(any(event.get("data", {}).get("message") == "需要用户确认下一步。" for event in host_page["events"]))
+        self.assertFalse(
+            any(
+                row["type"] == "message"
+                and row["data"].get("target") == "main"
+                and row["data"].get("display_sender") == "host"
+                for row in rows
+            )
+        )
+
     def test_codex_chat_records_claude_supervision_host_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -880,11 +1086,20 @@ class SupervisionFlowTests(unittest.TestCase):
         start_main.assert_not_called()
         self.assertEqual(task["status"], "running")
         self.assertEqual(next(agent for agent in task["agents"] if agent["id"] == "main")["status"], "waiting")
-        self.assertFalse(
+        self.assertTrue(
             any(
                 row["type"] == "message"
                 and row["data"].get("display_sender") == "host"
                 and row["data"].get("display_target") == "main"
+                and row["data"].get("message") == "host 决定等待子任务完成。 waiting for sub"
+                for row in rows
+            )
+        )
+        self.assertFalse(
+            any(
+                row["type"] == "message"
+                and row["data"].get("target") == "main"
+                and row["data"].get("display_sender") == "host"
                 for row in rows
             )
         )
@@ -953,7 +1168,7 @@ class SupervisionFlowTests(unittest.TestCase):
             for row in rows
             if row["type"] == "message" and row["data"].get("sender") == "host" and row["data"].get("target") == "browser"
         ]
-        self.assertEqual(browser_messages[-1]["message"], "host backend failed; defaulting to user confirmation")
+        self.assertEqual(browser_messages[-1]["message"], "host 执行失败，AHA 转为询问用户确认。")
 
     def test_codex_chat_empty_main_reply_waits_when_sub_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1061,9 +1276,12 @@ class SupervisionFlowTests(unittest.TestCase):
             and row["data"].get("message") == "你要继续改代码吗？"
         ]
         self.assertEqual(len(host_browser_messages), 1)
+        self.assertEqual(host_browser_messages[0]["sender"], "host")
+        self.assertEqual(host_browser_messages[0]["from_agent"], "host")
+        self.assertEqual(host_browser_messages[0]["to_agent"], "browser")
         self.assertEqual(host_browser_messages[0]["display_sender"], "host")
         self.assertEqual(host_browser_messages[0]["display_target"], "browser")
-        self.assertEqual(host_browser_messages[0]["agent_id"], "main")
+        self.assertEqual(host_browser_messages[0]["agent_id"], "host")
         self.assertTrue(any(event.get("data", {}).get("message") == "你要继续改代码吗？" for event in main_page["events"]))
         self.assertTrue(any(event.get("data", {}).get("message") == "你要继续改代码吗？" for event in host_page["events"]))
         host_decisions = [row for row in rows if row["type"] == "host_decision"]
@@ -1382,8 +1600,12 @@ class SupervisionFlowTests(unittest.TestCase):
             and row["data"].get("message") == "没问题，这轮可以结束。"
         ]
         self.assertEqual(len(host_browser_messages), 1)
+        self.assertEqual(host_browser_messages[0]["sender"], "host")
+        self.assertEqual(host_browser_messages[0]["from_agent"], "host")
+        self.assertEqual(host_browser_messages[0]["to_agent"], "browser")
         self.assertEqual(host_browser_messages[0]["display_sender"], "host")
         self.assertEqual(host_browser_messages[0]["display_target"], "browser")
+        self.assertEqual(host_browser_messages[0]["agent_id"], "host")
         host_main_messages = [
             row["data"]
             for row in rows

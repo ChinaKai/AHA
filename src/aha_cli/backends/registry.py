@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 CODEX_DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_MODEL_OPTION = {"name": "", "label": "default"}
 
@@ -42,6 +44,74 @@ def resolve_model(backend: str, model: str | None) -> str | None:
     if backend == "codex" and normalized in {"", "default"}:
         return CODEX_DEFAULT_MODEL
     return normalized or None
+
+
+def _model_alias_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _candidate_model_values(backend: str, model: str) -> list[str]:
+    values = [model]
+    lowered = model.lower()
+    prefix = f"{backend.lower()}-"
+    if lowered.startswith(prefix):
+        values.append(model[len(prefix) :])
+    return values
+
+
+def _configured_env_group_names(backend: str, config: dict | None) -> list[str]:
+    section = (config or {}).get(backend) if isinstance(config, dict) else {}
+    groups = section.get("env") if isinstance(section, dict) else []
+    if not isinstance(groups, list):
+        return []
+    names: list[str] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        name = str(group.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _matching_env_group_name(backend: str, model: str, config: dict | None) -> str | None:
+    names = _configured_env_group_names(backend, config)
+    if not names:
+        return None
+    for candidate in _candidate_model_values(backend, model):
+        lowered = candidate.lower()
+        key = _model_alias_key(candidate)
+        for name in names:
+            if lowered == name.lower() or key == _model_alias_key(name):
+                return name
+        fuzzy = [name for name in names if key and key in _model_alias_key(name)]
+        if len(fuzzy) == 1:
+            return fuzzy[0]
+    return None
+
+
+def normalize_model_selector(backend: str, model: object, config: dict | None = None) -> str | None:
+    raw = str(model or "").strip()
+    if not raw or raw.lower() == "default":
+        return None
+    if raw.lower().startswith("env:"):
+        env_name = raw.split(":", 1)[1].strip()
+        matched = _matching_env_group_name(backend, env_name, config)
+        return f"env:{matched}" if matched else raw
+
+    for candidate in _candidate_model_values(backend, raw):
+        key = _model_alias_key(candidate)
+        for option in model_options(backend):
+            name = str(option.get("name") or "").strip()
+            label = str(option.get("label") or "").strip()
+            if not name:
+                continue
+            if candidate == name or key in {_model_alias_key(name), _model_alias_key(label)}:
+                return name
+        matched = _matching_env_group_name(backend, candidate, config)
+        if matched:
+            return f"env:{matched}"
+    return raw
 
 
 def backend_names() -> list[str]:
