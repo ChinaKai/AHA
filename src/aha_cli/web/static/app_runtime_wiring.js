@@ -648,6 +648,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   setSelectedTaskId: value => { selectedTaskId = value || null; },
   setSessionMenu,
   setWeixinConsoleOpen,
+  syncCreateTaskSupervisionModeFields,
   syncBootstrapModelOptions,
   syncBootstrapProxyDefaultsForInput: bootstrapConfigHelpers.syncBootstrapProxyDefaultsForInput,
   syncMobileComposerToggle: hasMessage => uiShell.syncMobileComposerToggle(hasMessage),

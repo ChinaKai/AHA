@@ -418,8 +418,20 @@
             </label>
           </div>
         </details>
+        <div class="task-draft-box">
+          <label class="field-label task-draft-select-field">
+            <span data-i18n="task.draft_box">Draft box</span>
+            <select id="task-draft-select" aria-label="Task draft box" data-i18n-aria-label="task.draft_box"></select>
+          </label>
+          <div class="task-draft-actions">
+            <button id="restore-task-draft" type="button" data-i18n="task.restore_draft">Restore Draft</button>
+            <button id="delete-task-draft" type="button" data-i18n="task.delete_draft">Delete Draft</button>
+          </div>
+        </div>
+        <div id="task-draft-state" class="meta task-draft-state" aria-live="polite"></div>
         <div class="task-dialog-actions">
           <button id="cancel-task-create" type="button" data-i18n="task.cancel_create">Cancel</button>
+          <button id="save-task-draft" type="button" data-i18n="task.save_draft">Save Draft</button>
           <button class="primary" type="submit" data-i18n="task.create">Create Task</button>
         </div>
       </form>

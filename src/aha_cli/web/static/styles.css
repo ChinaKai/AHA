@@ -1196,6 +1196,23 @@ body.auth-required .login-view:not(.hidden) {
 .task-description-field textarea {
   min-height: 92px;
 }
+.task-draft-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: end;
+}
+.task-draft-actions {
+  display: flex;
+  gap: 8px;
+}
+.task-draft-actions button {
+  min-height: 36px;
+  padding: 0 10px;
+}
+.task-draft-state {
+  min-height: 16px;
+}
 .task-defaults-grid {
   grid-template-columns: 1fr;
 }
@@ -3971,6 +3988,7 @@ body.empty-run .panel {
     box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
   }
   .field-row,
+  .task-draft-box,
   .agent-config-fields {
     grid-template-columns: 1fr;
   }
