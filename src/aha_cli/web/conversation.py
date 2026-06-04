@@ -30,12 +30,14 @@ def conversation_turn_events(root: Path, run_id: str, task_id: str, target: str,
         if (
             str(event.get("type") or "") in {
                 "agent_started",
+                "agent_error",
                 "agent_prompt_metrics",
                 "agent_usage",
                 "agent_context_overflow",
                 "agent_thread",
                 "agent_finished",
                 "agent_status_changed",
+                "backend_stopped",
             }
             and event_task_id(event) == task_id
             and target in event_agent_refs(event)

@@ -215,6 +215,8 @@
     let latestStatusEvent = null;
     let terminalStatusEvent = null;
     let agentFinishedEvent = null;
+    let agentErrorEvent = null;
+    let backendStoppedEvent = null;
     for (let index = startIndex + 1; index < events.length; index += 1) {
       const data = eventData(events[index]);
       if (events[index].type === "agent_status_changed") {
@@ -222,21 +224,36 @@
         if (terminalAgentStatuses.has(data.status || "")) terminalStatusEvent = events[index];
       } else if (events[index].type === "agent_finished") {
         agentFinishedEvent = events[index];
+      } else if (events[index].type === "agent_error") {
+        agentErrorEvent = events[index];
+      } else if (events[index].type === "backend_stopped") {
+        backendStoppedEvent = events[index];
       }
     }
     const latestStatus = eventData(latestStatusEvent || {}).status || agentLifecycleStatus(agent);
+    const agentFinishedData = eventData(agentFinishedEvent || {});
+    const finishedWithNonZeroExit = Boolean(agentFinishedEvent && agentFinishedData.exit_code != null && Number(agentFinishedData.exit_code) !== 0);
     let finishedAt = terminalStatusEvent ? eventTimestamp(terminalStatusEvent) : null;
+    const errorWithStoppedBackend = Boolean(agentErrorEvent && backendStoppedEvent);
+    if (!finishedAt && errorWithStoppedBackend) {
+      finishedAt = eventTimestamp(backendStoppedEvent) || eventTimestamp(agentErrorEvent);
+    }
+    if (!finishedAt && finishedWithNonZeroExit) {
+      finishedAt = eventTimestamp(agentFinishedEvent);
+    }
     if (!finishedAt && !["running", "waiting"].includes(latestStatus) && agentFinishedEvent) {
       finishedAt = eventTimestamp(agentFinishedEvent);
     }
     if (!finishedAt && terminalAgentStatuses.has(agent?.status || "")) {
       finishedAt = parseTimestamp(agent.finished_at) || parseTimestamp(agent.last_active_at) || parseTimestamp(task?.finished_at) || startedAt;
     }
-    const running = !finishedAt || latestStatus === "waiting";
+    const running = !finishedAt || (!errorWithStoppedBackend && latestStatus === "waiting");
     const endAt = running ? contextNow(context) : finishedAt;
-    const finishedData = eventData(terminalStatusEvent || agentFinishedEvent || {});
+    const finishedData = eventData(terminalStatusEvent || agentFinishedEvent || backendStoppedEvent || {});
     const exitCode = finishedData.exit_code;
-    const status = running ? latestStatus || "running" : finishedData.status || agent?.status || (exitCode === 0 ? "completed" : "failed");
+    const status = running
+      ? latestStatus || "running"
+      : finishedData.status || (errorWithStoppedBackend || finishedWithNonZeroExit ? "failed" : agent?.status || (exitCode === 0 ? "completed" : "failed"));
     const waitingReason = status === "waiting" ? (eventData(latestStatusEvent || {}).waiting_reason || agentWaitingReason(agent) || "") : "";
     return {
       startedAt,

@@ -44,6 +44,7 @@ TIMELINE_EVENT_TYPES = {
     "agent_created",
     "agent_config_updated",
     "agent_finished",
+    "backend_stopped",
     "main_reported_to_host",
     "host_decision",
     "main_applied_decision",
@@ -103,6 +104,10 @@ def event_agent_refs(event: dict) -> set[str]:
         add(data.get("sender"))
         if any(str(data.get(key) or "").lower() == "aha" for key in ("role", "from_agent", "to_agent", "sender", "target")):
             refs.add("main")
+    if event_type == "agent_error":
+        error_target = str(data.get("target") or data.get("agent_id") or "").strip()
+        if error_target.startswith("sub-"):
+            refs.add("main")
     if not refs and (
         event_type.startswith("agent_")
         or event_type.startswith("task_")
@@ -142,7 +147,7 @@ def task_event_log_page(root: Path, run_id: str, task_id: str, limit: int = 200,
 
 
 def conversation_event_category(event_type: str) -> str:
-    if event_type == "agent_message":
+    if event_type in {"agent_error", "agent_message"}:
         return "chat"
     if event_type in {"agent_usage", "agent_prompt_metrics"}:
         return "usage"
@@ -191,9 +196,19 @@ def _host_browser_message_visible_to_main(event: dict) -> bool:
     )
 
 
+def _sub_agent_error_visible_to_main(event: dict) -> bool:
+    if event.get("type") != "agent_error":
+        return False
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    target = _message_endpoint(data, "target", "agent_id")
+    return target.startswith("sub-")
+
+
 def _conversation_event_refs(event: dict) -> set[str]:
     refs = set(event_agent_refs(event))
     if _host_browser_message_visible_to_main(event):
+        refs.add("main")
+    if _sub_agent_error_visible_to_main(event):
         refs.add("main")
     return refs
 

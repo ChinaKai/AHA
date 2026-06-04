@@ -10,6 +10,7 @@ from unittest import mock
 from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
+    add_agent,
     complete_task,
     event_path,
     inbox_path,
@@ -196,6 +197,74 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertEqual(detail["status"], "awaiting_user")
         self.assertEqual(detail["agents"][0]["status"], "interrupted")
         self.assertTrue(any(event["type"] == "agent_status_recovered" for event in events))
+
+    def test_interrupt_last_waited_sub_agent_requests_main_round_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+            set_agent_status(root, run_id, "task-001", sub["id"], "running")
+            append_message(root, run_id, sub["id"], "in-flight", sender="main", task_id="task-001", role="sub")
+
+            with (
+                mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "running", "pid": 1234}),
+                mock.patch(
+                    "aha_cli.web.task_command_actions.stop_backend",
+                    return_value={"status": "stopped", "pid": None, "target": sub["id"]},
+                ) as stop_backend,
+                mock.patch("aha_cli.services.orchestrator.backend_status", return_value={"status": "stopped"}),
+                mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_main,
+            ):
+                message, payload = interrupt_selected_agent(root, run_id, "task-001", sub["id"])
+
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertIn(f"Interrupted {sub['id']}", message)
+        self.assertTrue(payload["interrupted"])
+        stop_backend.assert_called_once()
+        start_main.assert_called_once()
+        self.assertEqual(detail["status"], "running")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == sub["id"])["status"], "interrupted")
+        self.assertTrue(any(message.get("coordination") == "subagents_complete" for message in main_messages))
+        self.assertTrue(any(event["type"] == "task_round_summary_requested" for event in events))
+
+    def test_interrupt_one_waited_sub_agent_keeps_main_waiting_for_remaining_subs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            sub_one = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+            sub_two = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+            set_agent_status(root, run_id, "task-001", sub_one["id"], "running")
+            set_agent_status(root, run_id, "task-001", sub_two["id"], "running")
+
+            with (
+                mock.patch("aha_cli.web.task_command_actions.backend_status", return_value={"status": "running", "pid": 1234}),
+                mock.patch(
+                    "aha_cli.web.task_command_actions.stop_backend",
+                    return_value={"status": "stopped", "pid": None, "target": sub_one["id"]},
+                ),
+                mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_main,
+            ):
+                _message, payload = interrupt_selected_agent(root, run_id, "task-001", sub_one["id"])
+
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+            main_agent = next(agent for agent in detail["agents"] if agent["id"] == "main")
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(payload["interrupted"])
+        self.assertEqual(detail["status"], "running")
+        self.assertEqual(main_agent["status"], "waiting")
+        self.assertEqual(main_agent["waiting_reason"], "subagents")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == sub_one["id"])["status"], "interrupted")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == sub_two["id"])["status"], "running")
+        self.assertFalse(any(message.get("coordination") == "subagents_complete" for message in main_messages))
+        start_main.assert_not_called()
 
     def test_interrupt_selected_host_clears_main_host_wait_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

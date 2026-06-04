@@ -163,6 +163,21 @@ class WebEventsApiTests(unittest.TestCase):
         )
         self.assertEqual(sub_page["events"], [])
 
+    def test_conversation_events_page_shows_sub_agent_error_to_main_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(root, run_id, "agent_error", {"task_id": "task-001", "target": "sub-001", "message": "sub failed"})
+
+            main_page = conversation_events_page(root, run_id, "task-001", "main", limit=10, categories={"chat"})
+            sub_page = conversation_events_page(root, run_id, "task-001", "sub-001", limit=10, categories={"chat"})
+            other_sub_page = conversation_events_page(root, run_id, "task-001", "sub-002", limit=10, categories={"chat"})
+
+        self.assertEqual([event["type"] for event in main_page["events"]], ["agent_error"])
+        self.assertEqual(main_page["events"][0]["data"]["target"], "sub-001")
+        self.assertEqual([event["type"] for event in sub_page["events"]], ["agent_error"])
+        self.assertEqual(other_sub_page["events"], [])
+
     def test_conversation_events_page_shares_host_forwarding_but_hides_aha_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -494,6 +509,8 @@ class WebEventsApiTests(unittest.TestCase):
                 )
                 append_event(root, run_id, "agent_thread", {"task_id": "task-001", "target": "main", "thread_id": "thread-1"})
                 append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 99999999}})
+                append_event(root, run_id, "agent_error", {"task_id": "task-001", "target": "main", "message": "backend failed"})
+                append_event(root, run_id, "backend_stopped", {"task_id": "task-001", "target": "main", "pid": 123})
                 append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
                 for index in range(10):
                     append_event(
@@ -509,7 +526,7 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertNotIn("agent_prompt_metrics", [event["type"] for event in body["events"]])
         turn_event_types = [event["type"] for event in body["turn_events"]]
-        self.assertEqual(turn_event_types, ["agent_started", "agent_prompt_metrics", "agent_thread", "agent_usage", "agent_finished"])
+        self.assertEqual(turn_event_types, ["agent_started", "agent_prompt_metrics", "agent_thread", "agent_usage", "agent_error", "backend_stopped", "agent_finished"])
         metrics = next(event for event in body["turn_events"] if event["type"] == "agent_prompt_metrics")
         self.assertEqual(metrics["data"]["total"]["chars"], 1234)
         pressure = body["backend_session"]["context_pressure"]
@@ -532,6 +549,7 @@ class WebEventsApiTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 append_message(root, run_id, "main", "hello", sender="browser", task_id="task-001", role="main")
+                append_event(root, run_id, "agent_error", {"task_id": "task-001", "target": "main", "message": "backend failed"})
                 append_event(root, run_id, "agent_command_started", {"task_id": "task-001", "target": "main", "command": "pwd"})
                 append_event(root, run_id, "agent_command_finished", {"task_id": "task-001", "target": "main", "command": "pwd", "exit_code": 0, "output_tail": "large output"})
                 append_event(root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
@@ -546,10 +564,10 @@ class WebEventsApiTests(unittest.TestCase):
         command_body = json_response_body(command_response)
         full_command_body = json_response_body(full_command_response)
         none_body = json_response_body(none_response)
-        self.assertEqual([event["type"] for event in chat_body["events"]], ["message"])
+        self.assertEqual([event["type"] for event in chat_body["events"]], ["message", "agent_error"])
         self.assertEqual(
             [event["type"] for event in command_body["events"]],
-            ["message", "agent_command_started", "agent_command_finished"],
+            ["message", "agent_error", "agent_command_started", "agent_command_finished"],
         )
         finished = command_body["events"][-1]["data"]
         self.assertNotIn("output_tail", finished)

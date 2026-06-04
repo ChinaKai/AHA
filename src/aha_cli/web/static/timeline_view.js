@@ -149,6 +149,7 @@
       if (event.type === "main_applied_decision") return renderTimelineStatus("main applied host decision", `${data.decision || "-"} effect=${data.effect || "noop"}`, data.applied ? "running" : "session", ts);
       if (event.type === "agent_thread") return renderTimelineStatus(`${data.source || "backend"} session`, data.thread_id || "-", "session", ts);
       if (event.type === "agent_finished") return renderTimelineStatus("agent finished", `exit=${data.exit_code ?? "-"}`, data.exit_code === 0 ? "completed" : "failed", ts);
+      if (event.type === "backend_stopped") return renderTimelineStatus("backend stopped", `${data.target || "main"} pid=${data.pid ?? "-"}`, "session", ts);
       if (event.type === "task_dispatched") return renderTimelineStatus("task dispatched", `target=${data.target || "-"}`, "session", ts);
       if (event.type === "agent_created") return renderTimelineStatus("sub-agent created", `${data.agent_id || "-"} backend=${data.backend || "-"}`, "session", ts);
       if (event.type === "agent_delegated") return renderTimelineStatus("delegated", `${data.count || 0} action(s)`, "session", ts);

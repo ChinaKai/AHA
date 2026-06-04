@@ -4,7 +4,9 @@ from pathlib import Path
 
 from aha_cli.services.backend_runtime import backend_status, stop_backend
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
+from aha_cli.services.orchestrator import request_round_summary_if_ready
 from aha_cli.services.session_compact import compact_reset_backend_session
+from aha_cli.services.subagent_state import pending_current_round_sub_agents
 from aha_cli.store.filesystem import (
     append_event,
     append_task_round,
@@ -89,6 +91,14 @@ def _main_waiting_for_host(task: dict) -> bool:
     )
 
 
+def _main_waiting_for_subagents(task: dict) -> bool:
+    main_agent = _agent_by_id(task, "main")
+    return (
+        str(main_agent.get("status") or "").lower() == "waiting"
+        and str(main_agent.get("waiting_reason") or "").lower() == "subagents"
+    )
+
+
 def _can_logically_interrupt_stopped_host(task: dict, agent_id: str) -> bool:
     if not _is_host_agent(task, agent_id):
         return False
@@ -99,6 +109,21 @@ def _can_logically_interrupt_stopped_host(task: dict, agent_id: str) -> bool:
 def _clear_main_host_wait_if_needed(root: Path, run_id: str, task_id: str, task: dict, interrupted_agent_id: str) -> None:
     if _is_host_agent(task, interrupted_agent_id) and _main_waiting_for_host(task):
         set_agent_status(root, run_id, task_id, "main", "completed")
+
+
+def _settle_main_subagent_wait_after_interrupt(root: Path, run_id: str, task_id: str, task: dict, interrupted_agent_id: str) -> bool:
+    interrupted_agent = _agent_by_id(task, interrupted_agent_id)
+    if str(interrupted_agent.get("role") or "") != "sub" or not _main_waiting_for_subagents(task):
+        return False
+    fresh_task = task_snapshot(root, run_id, task_id)["task"]
+    if pending_current_round_sub_agents(fresh_task):
+        set_task_status(root, run_id, task_id, "running")
+        return True
+    if request_round_summary_if_ready(root, run_id, task_id):
+        set_task_status(root, run_id, task_id, "running")
+        return True
+    set_agent_status(root, run_id, task_id, "main", "completed")
+    return False
 
 
 def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, target: str) -> tuple[str, dict]:
@@ -140,7 +165,9 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
     save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
     set_agent_status(root, run_id, task_id, agent_id, "interrupted")
     _clear_main_host_wait_if_needed(root, run_id, task_id, task, agent_id)
-    set_task_status(root, run_id, task_id, "awaiting_user")
+    task_status_managed = _settle_main_subagent_wait_after_interrupt(root, run_id, task_id, task, agent_id)
+    if not task_status_managed:
+        set_task_status(root, run_id, task_id, "awaiting_user")
     append_event(
         root,
         run_id,

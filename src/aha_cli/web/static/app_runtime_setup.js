@@ -554,12 +554,14 @@ const conversationFilters = {
 let taskVisibilityFilter = "active";
 const turnEventTypes = new Set([
   "agent_started",
+  "agent_error",
   "agent_prompt_metrics",
   "agent_usage",
   "agent_context_overflow",
   "agent_thread",
   "agent_finished",
-  "agent_status_changed"
+  "agent_status_changed",
+  "backend_stopped"
 ]);
 const backendSessionRefreshEventTypes = new Set([
   "agent_started",

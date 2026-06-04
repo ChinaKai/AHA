@@ -52,6 +52,7 @@
     "agent_backend_restarted",
     "agent_finished",
     "agent_interrupted",
+    "backend_stopped",
     "workspace_missing"
   ]);
 
@@ -108,6 +109,7 @@
       if (["role", "from_agent", "to_agent", "sender", "target"].some(key => String(data[key] || "").toLowerCase() === "aha")) refs.add("main");
     }
     if (hostBrowserMessageVisibleToMain(event)) refs.add("main");
+    if (subAgentErrorVisibleToMain(event)) refs.add("main");
     if (!refs.size && (
       String(event?.type || "").startsWith("agent_") ||
       String(event?.type || "").startsWith("task_") ||
@@ -146,6 +148,13 @@
       sender !== "main" &&
       target === "browser"
     );
+  }
+
+  function subAgentErrorVisibleToMain(event) {
+    if (event?.type !== "agent_error") return false;
+    const data = eventData(event);
+    const target = normalizedMessageEndpoint(data?.target || data?.agent_id);
+    return target.startsWith("sub-");
   }
 
   function messageTimelineDisplay(data) {
@@ -272,7 +281,7 @@
   }
 
   function conversationEventCategory(event) {
-    if (event?.type === "agent_message") return "chat";
+    if (event?.type === "agent_error" || event?.type === "agent_message") return "chat";
     if (event?.type === "agent_usage" || event?.type === "agent_prompt_metrics") return "usage";
     if (event?.type === "agent_command_started" || event?.type === "agent_command_finished") return "commands";
     if (event?.type === "message") return "chat";
@@ -321,6 +330,7 @@
     normalizedMessageEndpoint,
     messageDisplaySender,
     messageDisplayTarget,
+    subAgentErrorVisibleToMain,
     messageTimelineDisplay,
     isMainBrowserMessage,
     supervisionMainLatestReply,
