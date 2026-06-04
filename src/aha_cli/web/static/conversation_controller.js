@@ -222,7 +222,12 @@
     function captureContextScrollState() {
       const rawPrompt = panelEl.querySelector(".raw-prompt-body");
       const metricsDetails = panelEl.querySelector(".compact-metrics-details");
+      const breakdownOpen = {};
+      panelEl.querySelectorAll("[data-metrics-breakdown]").forEach(details => {
+        if (details instanceof HTMLDetailsElement) breakdownOpen[details.dataset.metricsBreakdown || ""] = details.open;
+      });
       return {
+        breakdownOpen,
         hasContextView: Boolean(panelEl.querySelector(".context-view")),
         panelTop: panelEl.scrollTop,
         rawPromptTop: rawPrompt ? rawPrompt.scrollTop : 0,
@@ -234,7 +239,17 @@
       if (!scrollState?.hasContextView) return;
       const rawPrompt = panelEl.querySelector(".raw-prompt-body");
       const metricsDetails = panelEl.querySelector(".compact-metrics-details");
-      if (metricsDetails instanceof HTMLDetailsElement) metricsDetails.open = scrollState.metricsOpen;
+      const breakdownOpen = scrollState.breakdownOpen || {};
+      const restoredBreakdowns = new Set();
+      Object.entries(breakdownOpen).forEach(([key, open]) => {
+        const breakdown = Array.from(panelEl.querySelectorAll("[data-metrics-breakdown]"))
+          .find(item => item instanceof HTMLDetailsElement && item.dataset.metricsBreakdown === key);
+        if (breakdown instanceof HTMLDetailsElement) {
+          breakdown.open = Boolean(open);
+          restoredBreakdowns.add(key);
+        }
+      });
+      if (!restoredBreakdowns.has("compact") && metricsDetails instanceof HTMLDetailsElement) metricsDetails.open = scrollState.metricsOpen;
       panelEl.scrollTop = scrollState.panelTop;
       if (rawPrompt) rawPrompt.scrollTop = scrollState.rawPromptTop;
     }

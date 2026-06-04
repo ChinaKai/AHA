@@ -81,6 +81,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   normalizeTaskContextThreshold,
   panelEl,
   parseTimestamp,
+  promptMetricsState,
   renderContextPanelHtml,
   renderConversation,
   renderConversationFilters,
