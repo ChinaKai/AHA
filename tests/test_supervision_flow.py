@@ -10,6 +10,7 @@ from unittest import mock
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import apply_supervision_host_decision, chat_prompt
 from aha_cli.services.chat_supervision import (
+    apply_supervision_real_host,
     parse_supervision_exchange_message,
     supervision_exchange_message,
     supervision_host_context,
@@ -25,6 +26,7 @@ from aha_cli.store.filesystem import (
     inbox_path,
     iter_jsonl_from,
     list_sessions,
+    run_dir,
     save_session,
     set_agent_status,
     set_task_status,
@@ -528,6 +530,60 @@ class SupervisionFlowTests(unittest.TestCase):
                 for row in rows
             )
         )
+
+    def test_real_host_route_cancelled_when_supervision_disabled_before_host_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Cancel host route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                    max_rounds=5,
+                )
+
+                def append_then_disable(*args: object, **kwargs: object) -> dict:
+                    message = append_message(*args, **kwargs)
+                    update_task_supervision_config(
+                        root,
+                        run_id,
+                        "task-001",
+                        mode="manual",
+                        host_backend="stub",
+                        real_agent_enabled=False,
+                    )
+                    return message
+
+                with (
+                    mock.patch("aha_cli.services.chat_supervision.append_message", side_effect=append_then_disable),
+                    mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
+                ):
+                    result = apply_supervision_real_host(
+                        root,
+                        run_id,
+                        "task-001",
+                        source_agent="main",
+                        reply_text="main 已完成。",
+                        cfg={"codex": {"model": "gpt-5.5"}},
+                        run=run_dir(root, run_id),
+                    )
+                task = status_snapshot(root, run_id)["tasks"][0]
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+
+        main = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertFalse(result["routed_to_host"])
+        self.assertTrue(result["cancelled"])
+        start_host.assert_not_called()
+        self.assertNotEqual(main["status"], "waiting")
+        self.assertNotIn("waiting_reason", main)
+        self.assertTrue(any(row["type"] == "supervision_route_cancelled" for row in rows))
 
     def test_codex_chat_records_claude_supervision_host_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -121,6 +121,11 @@ from aha_cli.store.workspaces import add_workspace, get_workspace, list_workspac
 UNSET = object()
 
 
+def _model_value(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
     event = _append_event(root, run_id, event_type, data, ts=utc_now())
     try:
@@ -487,12 +492,16 @@ def ensure_task_supervision_host_agent(
     task_id: str,
     *,
     backend: str | None = None,
+    model: object = UNSET,
+    proxy_enabled: object = UNSET,
 ) -> dict:
     return _ensure_task_supervision_host_agent(
         root,
         run_id,
         task_id,
         backend=backend,
+        model=model,
+        proxy_enabled=proxy_enabled,
         now_func=utc_now,
         append_event_func=append_event,
         ensure_session_func=ensure_session,
@@ -678,25 +687,46 @@ def update_task_supervision_config(
     *,
     mode: object = UNSET,
     host_backend: object = UNSET,
+    host_model: object = UNSET,
+    host_proxy_enabled: object = UNSET,
     real_agent_enabled: object = UNSET,
     max_rounds: object = UNSET,
     ask_user_gates: object = UNSET,
 ) -> dict:
     should_ensure_host = False
+    cleared_main_host_wait = False
+    cleared_at = ""
     host_agent_id = "host"
     previous_host_backend = ""
+    previous_host_model: str | None = None
+    previous_host_proxy_enabled = False
     desired_host_backend = ""
+    desired_host_model: str | None = None
+    desired_host_proxy_enabled = False
     host_agent_exists = False
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
         if task is None or task.get("deleted_at"):
             raise SystemExit(f"Task not found: {task_id}")
-        supervision = normalize_task_supervision(task.get("supervision"))
+        raw_supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+        host_model_configured = "host_model" in raw_supervision or "model" in raw_supervision
+        host_proxy_configured = "host_proxy_enabled" in raw_supervision or "proxy_enabled" in raw_supervision
+        supervision = normalize_task_supervision(raw_supervision)
+        previous_supervision_host_backend = str(supervision.get("host_backend") or "")
+        host_backend_changed_in_payload = False
         if mode is not UNSET:
             supervision["mode"] = str(mode or "").strip().lower()
         if host_backend is not UNSET:
-            supervision["host_backend"] = str(host_backend or "").strip().lower()
+            next_host_backend = str(host_backend or "").strip().lower()
+            supervision["host_backend"] = next_host_backend
+            host_backend_changed_in_payload = next_host_backend != previous_supervision_host_backend
+            if host_model is UNSET and host_backend_changed_in_payload:
+                supervision["host_model"] = None
+        if host_model is not UNSET:
+            supervision["host_model"] = _model_value(host_model)
+        if host_proxy_enabled is not UNSET:
+            supervision["host_proxy_enabled"] = bool(host_proxy_enabled)
         if real_agent_enabled is not UNSET:
             supervision["real_agent_enabled"] = bool(real_agent_enabled)
         elif supervision.get("mode") == "assisted" and supervision.get("host_backend") != "stub":
@@ -711,8 +741,30 @@ def update_task_supervision_config(
             and task["supervision"].get("real_agent_enabled")
             and task["supervision"].get("host_backend") != "stub"
         )
+        if not should_ensure_host:
+            main_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == "main"), None)
+            if (
+                main_agent
+                and main_agent.get("status") == "waiting"
+                and str(main_agent.get("waiting_reason") or "").lower() == "host"
+            ):
+                cleared_at = utc_now()
+                main_agent["status"] = "completed"
+                main_agent.pop("waiting_reason", None)
+                main_agent["last_active_at"] = cleared_at
+                main_agent["status_started_at"] = cleared_at
+                main_agent["finished_at"] = cleared_at
+                main_agent["exit_code"] = None
+                if task.get("status") == "running":
+                    task["status"] = "awaiting_user"
+                    task["started_at"] = task.get("started_at") or cleared_at
+                    task["finished_at"] = None
+                    task["exit_code"] = None
+                cleared_main_host_wait = True
         host_agent_id = str(task["supervision"].get("host_agent_id") or "host")
         desired_host_backend = str(task["supervision"].get("host_backend") or "")
+        desired_host_model = _model_value(task["supervision"].get("host_model"))
+        desired_host_proxy_enabled = bool(task["supervision"].get("host_proxy_enabled"))
         host_agent = next(
             (
                 agent
@@ -723,21 +775,37 @@ def update_task_supervision_config(
         )
         host_agent_exists = host_agent is not None
         previous_host_backend = str((host_agent or {}).get("backend") or "")
+        previous_host_model = _model_value((host_agent or {}).get("model"))
+        previous_host_proxy_enabled = bool((host_agent or {}).get("proxy_enabled"))
+        if host_agent_exists and host_model is UNSET and not host_model_configured and not host_backend_changed_in_payload:
+            task["supervision"]["host_model"] = previous_host_model
+            desired_host_model = previous_host_model
+        if host_agent_exists and host_proxy_enabled is UNSET and not host_proxy_configured:
+            task["supervision"]["host_proxy_enabled"] = previous_host_proxy_enabled
+            desired_host_proxy_enabled = previous_host_proxy_enabled
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
     if should_ensure_host:
-        if host_agent_exists and previous_host_backend and previous_host_backend != desired_host_backend:
+        backend_changed = host_agent_exists and previous_host_backend and previous_host_backend != desired_host_backend
+        model_changed = host_agent_exists and host_model is not UNSET and previous_host_model != desired_host_model
+        proxy_changed = host_agent_exists and host_proxy_enabled is not UNSET and previous_host_proxy_enabled != desired_host_proxy_enabled
+        if backend_changed or model_changed:
             from aha_cli.services.agent_backend_switch import switch_agent_backend
 
-            switch_agent_backend(root, run_id, task_id, host_agent_id, backend=desired_host_backend)
+            switch_agent_backend(root, run_id, task_id, host_agent_id, backend=desired_host_backend, model=desired_host_model)
             task = task_snapshot(root, run_id, task_id)["task"]
-        else:
+        if proxy_changed:
+            update_agent_config(root, run_id, task_id, host_agent_id, proxy_enabled=desired_host_proxy_enabled)
+            task = task_snapshot(root, run_id, task_id)["task"]
+        if not host_agent_exists:
             task = ensure_task_supervision_host_agent(
                 root,
                 run_id,
                 task_id,
                 backend=desired_host_backend or "codex",
+                model=desired_host_model,
+                proxy_enabled=desired_host_proxy_enabled,
             )["task"]
     append_event(
         root,
@@ -747,12 +815,47 @@ def update_task_supervision_config(
             "task_id": task_id,
             "mode": task["supervision"].get("mode"),
             "host_backend": task["supervision"].get("host_backend"),
+            "host_model": task["supervision"].get("host_model"),
+            "host_proxy_enabled": task["supervision"].get("host_proxy_enabled"),
             "host_agent_id": task["supervision"].get("host_agent_id"),
             "real_agent_enabled": task["supervision"].get("real_agent_enabled"),
             "max_rounds": task["supervision"].get("max_rounds"),
             "ask_user_gates": task["supervision"].get("ask_user_gates"),
         },
     )
+    if cleared_main_host_wait:
+        append_event(
+            root,
+            run_id,
+            "task_supervision_host_wait_cleared",
+            {
+                "task_id": task_id,
+                "reason": "supervision_disabled",
+            },
+        )
+        append_event(
+            root,
+            run_id,
+            "agent_status_changed",
+            {
+                "task_id": task_id,
+                "agent_id": "main",
+                "status": "completed",
+                "waiting_reason": "",
+                "exit_code": None,
+                "status_started_at": cleared_at,
+            },
+        )
+        append_event(
+            root,
+            run_id,
+            "task_status_changed",
+            {
+                "task_id": task_id,
+                "status": task.get("status"),
+                "exit_code": task.get("exit_code"),
+            },
+        )
     return task
 
 

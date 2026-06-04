@@ -2,8 +2,12 @@
   function bindTabButtons(elements = {}, handlers = {}) {
     const documentRef = elements.documentRef || document;
     const activateTab = handlers.activateTab || (() => {});
-    documentRef.querySelectorAll(".tab").forEach(button => {
-      button.addEventListener("click", () => activateTab(button.dataset.tab));
+    documentRef.addEventListener("click", event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest(".tab[data-tab]");
+      if (!button) return;
+      event.preventDefault();
+      activateTab(button.dataset.tab);
     });
   }
 

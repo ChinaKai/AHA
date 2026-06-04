@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -202,7 +203,9 @@ def handle_claude_event(
             item_type = item.get("type")
             if item_type == "text" and item.get("text"):
                 text = str(item.get("text") or "")
-                append_event_to_file(events_file, run_id, "agent_message", data | {"item_type": "agent_message", "text": text})
+                message_data = data | {"item_type": "agent_message", "text": text}
+                append_event_to_file(events_file, run_id, "agent_message", message_data)
+                result.setdefault("events", []).append(("agent_message", message_data))
                 if target == "main" and text_claims_subagent_created(text):
                     append_event_to_file(
                         events_file,
@@ -234,7 +237,7 @@ def handle_claude_event(
                     events_file,
                     run_id,
                     "agent_command_started",
-                    data
+                    command_data := data
                     | {
                         "item_type": "tool_use",
                         "tool_use_id": item.get("id"),
@@ -244,6 +247,7 @@ def handle_claude_event(
                         "exit_code": None,
                     },
                 )
+                result.setdefault("events", []).append(("agent_command_started", command_data))
     elif raw_type == "user":
         message = event.get("message") if isinstance(event.get("message"), dict) else event
         for item in _content_items(message):
@@ -257,7 +261,7 @@ def handle_claude_event(
                 events_file,
                 run_id,
                 "agent_command_finished",
-                data
+                command_data := data
                 | {
                     "item_type": "tool_result",
                     "tool_use_id": item.get("tool_use_id"),
@@ -266,6 +270,7 @@ def handle_claude_event(
                     "output_tail": tail_text(content),
                 },
             )
+            result.setdefault("events", []).append(("agent_command_finished", command_data))
     elif raw_type == "result":
         session_id = event.get("session_id")
         if session is not None and session_id:
@@ -301,6 +306,7 @@ def run_claude_exec(
     session: dict | None = None,
     proxy_env: dict[str, str] | None = None,
     claude_config: dict | None = None,
+    event_callback: Callable[[str, dict], None] | None = None,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     session_id = session.get("backend_session_id") if session else None
@@ -371,6 +377,9 @@ def run_claude_exec(
             target=target,
             session=session,
         )
+        if event_callback:
+            for event_type, event_data in parsed.get("events", []):
+                event_callback(str(event_type), event_data)
         assistant_texts.extend(parsed.get("assistant_texts", []))
         if parsed.get("result_text"):
             result_text = str(parsed["result_text"])

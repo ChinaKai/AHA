@@ -33,12 +33,13 @@ from aha_cli.web.status import (
     web_agents_runtime_snapshot,
     web_tasks_snapshot,
 )
+from tests.helpers import isolated_cli_environment
 
 
 class WebStatusTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
-        with mock.patch("sys.stdout", out):
+        with isolated_cli_environment(), mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
 

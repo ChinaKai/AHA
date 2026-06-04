@@ -12,17 +12,31 @@
     const escapeHtml = options.escapeHtml || escapeFallback;
     const localizeTimestampText = options.localizeTimestampText || (value => String(value || ""));
 
-    function renderConversationFiltersHtml({ active, filters, counts, filterOptions }) {
+    function renderConversationFiltersHtml({ active, filters, counts, filterOptions, open = false }) {
       if (!active) return "";
+      const options = filterOptions || [];
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const label = t("conversation.filters", "Filters");
       return `
-        <span>Show</span>
-        ${(filterOptions || []).map(item => `
-          <label class="filter-chip ${filters?.[item.key] ? "active" : ""}">
-            <input type="checkbox" data-conversation-filter="${escapeHtml(item.key)}" ${filters?.[item.key] ? "checked" : ""}>
-            <span>${escapeHtml(item.label)}</span>
-            <code>${escapeHtml(counts?.[item.key] ?? 0)}</code>
-          </label>
-        `).join("")}
+        <details id="conversation-filter-details" class="conversation-filter-popover" ${open ? "open" : ""}>
+          <summary id="conversation-filter-toggle" class="conversation-filter-trigger" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+            <svg class="conversation-filter-icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M4 6h16l-6 7v5l-4 2v-7z"></path>
+            </svg>
+            <span class="sr-only">${escapeHtml(label)}</span>
+          </summary>
+          <div class="conversation-filter-menu">
+            <div class="conversation-filter-chips" aria-label="${escapeHtml(label)}">
+              ${options.map(item => `
+                <label class="filter-chip ${filters?.[item.key] ? "active" : ""}">
+                  <input type="checkbox" data-conversation-filter="${escapeHtml(item.key)}" ${filters?.[item.key] ? "checked" : ""}>
+                  <span>${escapeHtml(t(`conversation.filter_${item.key}`, item.label))}</span>
+                  <code>${escapeHtml(counts?.[item.key] ?? 0)}</code>
+                </label>
+              `).join("")}
+            </div>
+          </div>
+        </details>
       `;
     }
 

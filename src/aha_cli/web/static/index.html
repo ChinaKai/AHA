@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=overlays-content">
@@ -14,64 +14,62 @@
       <div id="run-state" class="meta"></div>
     </div>
     <div id="session-control" class="session-control">
-      <button id="session-toggle" class="session-toggle" type="button" aria-label="Run 操作台" title="Run 操作台" aria-controls="session-menu" aria-expanded="false">
+      <button id="session-toggle" class="session-toggle" type="button" aria-label="AHA console" title="AHA console" aria-controls="session-menu" aria-expanded="false" data-i18n-aria-label="aha.console" data-i18n-title="aha.console">
         <span class="session-icon" aria-hidden="true">⋯</span>
-        <strong id="session-title" class="sr-only">加载中...</strong>
+        <strong id="session-title" class="sr-only" data-i18n="run.select_loading">Loading...</strong>
       </button>
       <div id="session-menu" class="session-menu hidden">
         <div class="session-menu-head">
-          <span>Run 操作台</span>
-          <button id="session-refresh" type="button">刷新</button>
+          <span data-i18n="aha.console">AHA console</span>
+          <button id="session-refresh" type="button" data-i18n="common.refresh">Refresh</button>
         </div>
-        <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
-        <select id="run-select"></select>
-        <form id="run-rename-form" class="session-rename">
-          <input id="rename-run-name" placeholder="Current run name">
-          <button type="submit">重命名</button>
-        </form>
-        <form id="run-create-form" class="session-create">
-          <input id="new-run-goal" placeholder="New run name">
-          <button type="submit">新建</button>
-        </form>
-        <div class="run-lifecycle-panel">
-          <div id="run-lifecycle-filter" class="run-lifecycle-filters"></div>
-          <div id="run-lifecycle-actions" class="run-lifecycle-actions"></div>
-          <div id="run-lifecycle-state" class="meta"></div>
-        </div>
-        <div class="run-archive">
-          <div class="run-archive-actions">
-            <button id="run-export" type="button">导出</button>
-            <button id="run-import" type="button">导入</button>
-            <label class="run-archive-logs">
-              <input id="run-export-logs" type="checkbox">
-              <span>包含日志</span>
-            </label>
-          </div>
-          <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
-          <div id="run-archive-state" class="meta"></div>
-        </div>
-        <div class="web-service-actions">
-          <button id="aha-settings" type="button" aria-controls="settings-dialog">Settings</button>
-          <button id="web-restart" type="button">重启 Web</button>
-          <button id="auth-logout" class="hidden" type="button">退出登录</button>
-          <button id="run-maintenance-console" type="button" aria-controls="run-maintenance-popover" aria-expanded="false">诊断</button>
-          <button id="weixin-console" type="button" aria-controls="weixin-console-popover" aria-expanded="false">微信操作台</button>
-          <button id="play-console" type="button" aria-controls="play-console-popover" aria-expanded="false">玩了个玩</button>
-        </div>
-        <div id="access-control-status" class="access-control-status"></div>
-        <div id="run-maintenance-popover" class="run-maintenance-popover" hidden>
-          <div class="run-maintenance">
-            <div class="run-maintenance-actions">
-              <button id="run-maintenance-refresh" type="button">刷新诊断</button>
-              <button id="run-maintenance-close" type="button">关闭</button>
-              <div id="run-maintenance-summary" class="meta"></div>
+        <label class="language-switch">
+          <span data-i18n="language.label">Language</span>
+          <select id="language-select" data-language-select aria-label="Language" data-i18n-aria-label="language.label">
+            <option value="en-US" data-i18n="language.english">English</option>
+            <option value="zh-CN" data-i18n="language.chinese">Chinese</option>
+          </select>
+        </label>
+        <section class="run-menu-section run-current-section">
+          <span class="run-actions-label" data-i18n="run.section_current">Current run</span>
+          <div id="session-detail" class="meta"><span id="session-detail-text" data-i18n="run.details">Run details</span><span id="run-lifecycle" class="run-lifecycle status run-lifecycle-active">active</span><code id="web-service-address" data-i18n="run.current_address">Current address</code><code id="run-id"></code></div>
+        </section>
+        <div id="run-more-tools" class="run-more-tools-body">
+          <div class="run-actions-section run-data-section">
+            <span class="run-actions-label" data-i18n="run.section_data">Data</span>
+            <div class="run-archive">
+              <div class="run-archive-actions">
+                <button id="run-export" type="button" data-i18n="run.archive_export">Export</button>
+                <button id="run-import" type="button" data-i18n="run.archive_import">Import</button>
+                <label class="run-archive-logs">
+                  <input id="run-export-logs" type="checkbox">
+                  <span data-i18n="run.archive_include_logs">Include logs</span>
+                </label>
+              </div>
+              <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
+              <div id="run-archive-state" class="meta"></div>
             </div>
-            <div id="run-maintenance-detail" class="run-maintenance-detail"></div>
+          </div>
+          <div class="run-actions-section run-system-section">
+            <span class="run-actions-label" data-i18n="run.section_system">System</span>
+            <div class="run-admin-actions">
+              <button id="aha-settings" type="button" aria-controls="settings-dialog" data-i18n="common.settings">Settings</button>
+              <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
+              <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
+            </div>
+            <div id="access-control-status" class="access-control-status"></div>
+            <div id="web-restart-state" class="meta"></div>
+          </div>
+          <div class="run-actions-section run-actions-section-secondary run-integrations-section">
+            <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
+            <div class="web-service-actions">
+              <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
+              <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
+            </div>
+            <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
+            <div id="play-console-popover" class="play-console-popover" hidden></div>
           </div>
         </div>
-        <div id="play-console-popover" class="play-console-popover" hidden></div>
-        <div id="web-restart-state" class="meta"></div>
-        <div id="session-detail" class="meta"><span id="session-detail-text">Run 详情</span><span id="run-lifecycle" class="run-lifecycle status run-lifecycle-active">active</span><code id="web-service-address">当前访问地址</code><code id="run-id"></code></div>
       </div>
     </div>
     <button id="mobile-task-summary" class="mobile-task-summary" type="button" aria-controls="overview-sidebar" aria-expanded="false">
@@ -82,14 +80,14 @@
   <section id="login-view" class="login-view hidden" aria-labelledby="login-title">
     <form id="login-form" class="login-panel">
       <div>
-        <h2 id="login-title">AHA 登录</h2>
-        <p>输入当前 Web token 继续访问。</p>
+        <h2 id="login-title" data-i18n="auth.login_title">AHA Login</h2>
+        <p data-i18n="auth.login_hint">Enter the current Web token to continue.</p>
       </div>
       <label class="field-label">
-        <span>Token</span>
+        <span data-i18n="common.token">Token</span>
         <input id="login-token" type="password" autocomplete="current-password" autofocus>
       </label>
-      <button class="primary" type="submit">登录</button>
+      <button class="primary" type="submit" data-i18n="auth.login">Log in</button>
       <div id="login-state" class="meta" aria-live="polite"></div>
     </form>
   </section>
@@ -97,120 +95,191 @@
   <main>
     <aside id="overview-sidebar" class="sidebar">
       <button id="overview-rail-toggle" class="side-rail-toggle" type="button" aria-controls="overview-sidebar" aria-expanded="false">Overview</button>
-      <div class="run-summary">
-        <div class="panel-title-row">
-          <h2>Run Overview</h2>
-          <button id="collapse-overview" class="panel-collapse" type="button" aria-controls="overview-sidebar" aria-expanded="true">Hide</button>
-          <button id="close-tasks-sheet" class="mobile-sheet-close" type="button" aria-controls="overview-sidebar">Close</button>
+      <section id="run-manager" class="run-manager run-manager-collapsed" aria-labelledby="run-manager-title">
+        <div class="run-manager-head panel-title-row">
+          <h2 id="run-manager-title" class="sr-only" data-i18n="run.manager">Run manager</h2>
+          <select id="run-select" class="run-manager-select" aria-label="Run list" data-i18n-aria-label="run.section_runs"></select>
+          <div class="run-manager-title-actions">
+            <button id="run-manager-toggle" class="run-manager-toggle" type="button" aria-controls="run-manager-body" aria-expanded="false" aria-label="Expand run management" title="Expand run management" data-i18n-aria-label="run.manager_expand" data-i18n-title="run.manager_expand">▸</button>
+            <button id="collapse-overview" class="panel-collapse panel-collapse-overview" type="button" aria-controls="overview-sidebar" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar" data-i18n-aria-label="common.collapse_sidebar" data-i18n-title="common.collapse_sidebar">&lsaquo;</button>
+            <button id="close-tasks-sheet" class="mobile-sheet-close" type="button" aria-controls="overview-sidebar" data-i18n="task.close_sheet">Close</button>
+          </div>
         </div>
-        <div id="summary" class="meta">Loading...</div>
-        <button id="open-task-create" class="task-create-trigger" type="button">New Task</button>
+        <div id="summary" class="run-manager-summary sr-only" data-i18n="run.summary_loading">Loading...</div>
+        <div id="run-manager-body" class="run-manager-body">
+          <div class="run-create-row">
+            <button id="open-run-create" class="task-create-trigger" type="button" data-i18n="run.new">New Run</button>
+          </div>
+          <section class="run-menu-section run-switcher-section">
+            <div class="run-lifecycle-panel">
+              <div id="run-lifecycle-filter" class="run-lifecycle-filters"></div>
+              <div id="run-lifecycle-actions" class="run-lifecycle-actions"></div>
+              <div id="run-lifecycle-state" class="meta"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section id="run-settings-panel" class="run-settings-panel hidden" aria-labelledby="run-settings-title" hidden>
+        <div class="run-settings-header">
+          <div>
+            <h3 id="run-settings-title" data-i18n="run.settings">Run settings</h3>
+            <div id="run-settings-subtitle" class="meta"></div>
+          </div>
+          <button id="run-settings-close" class="run-settings-close" type="button" data-i18n="common.close">Close</button>
+        </div>
+        <div class="run-settings-body">
+          <form id="run-rename-form" class="session-rename run-rename-inline">
+            <input id="rename-run-name" placeholder="Current run name" data-i18n-placeholder="run.rename_placeholder">
+            <button type="submit" data-i18n="run.rename">Rename</button>
+          </form>
+          <div id="run-settings-actions" class="run-lifecycle-buttons"></div>
+          <div id="run-settings-protection" class="run-lifecycle-protection"></div>
+          <div id="run-maintenance-popover" class="run-maintenance-popover" hidden>
+            <div class="run-maintenance">
+              <div class="run-maintenance-actions">
+                <button id="run-maintenance-refresh" type="button" data-i18n="run.maintenance_refresh">Refresh diagnostics</button>
+                <button id="run-maintenance-close" type="button" data-i18n="run.maintenance_close">Close</button>
+                <div id="run-maintenance-summary" class="meta"></div>
+              </div>
+              <div id="run-maintenance-detail" class="run-maintenance-detail"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div class="task-create-row">
+        <button id="open-task-create" class="task-create-trigger" type="button" data-i18n="task.new">New Task</button>
       </div>
-      <div class="task-list-tools">
+      <div class="task-list-controls">
         <div id="task-visibility-filter" class="task-list-filters" role="group" aria-label="Task visibility filter"></div>
-        <details id="task-proxy-editor" class="task-proxy-editor">
-          <summary>Task proxy</summary>
-          <form id="task-proxy-form" class="proxy-form">
-            <label class="checkbox-line">
-              <input id="selected-task-proxy-enabled" type="checkbox">
-              <span>Use Core proxy for new agents</span>
-            </label>
-            <button type="submit">Save Switch</button>
-            <div id="task-proxy-state" class="meta"></div>
-          </form>
-        </details>
-        <details id="task-supervision-editor" class="task-supervision-editor">
-          <summary>Task supervision</summary>
-          <form id="task-supervision-form" class="supervision-form">
-            <label class="field-label">
-              <span>Mode</span>
-              <select id="selected-task-supervision-mode">
-                <option value="manual">manual</option>
-                <option value="assisted_stub">assisted stub</option>
-                <option value="assisted_codex">assisted Codex host</option>
-                <option value="assisted_claude">assisted Claude host</option>
-              </select>
-            </label>
-            <label id="selected-task-supervision-max-rounds-field" class="field-label">
-              <span>Max rounds</span>
-              <input id="selected-task-supervision-max-rounds" type="number" min="1" max="100" value="99">
-            </label>
-            <fieldset id="selected-task-supervision-ask-user-field" class="supervision-gates">
-              <legend>Ask user when</legend>
-              <div id="selected-task-supervision-ask-user-gates" class="supervision-gate-list"></div>
-            </fieldset>
-            <button type="submit">Save Supervision</button>
-            <div id="task-supervision-state" class="meta"></div>
-          </form>
-        </details>
-        <details id="task-context-editor" class="task-context-editor">
-          <summary>Context management</summary>
-          <form id="task-context-form" class="context-form">
-            <label class="checkbox-line">
-              <input id="selected-task-context-auto-compact-enabled" type="checkbox">
-              <span>Agent context 自动整理</span>
-            </label>
-            <label id="selected-task-context-threshold-field" class="field-label" hidden>
-              <span>触发百分比</span>
-              <input id="selected-task-context-threshold" type="number" min="1" max="99" value="75">
-            </label>
-            <button type="submit">Save Context</button>
-            <div id="task-context-state" class="meta"></div>
-          </form>
-        </details>
       </div>
       <div id="tasks" class="task-list"></div>
+      <section id="task-settings-panel" class="task-settings-panel hidden" aria-labelledby="task-settings-title">
+        <div class="task-settings-header">
+          <div>
+            <h3 id="task-settings-title" data-i18n="task.settings">Task settings</h3>
+            <div id="task-settings-subtitle" class="meta"></div>
+          </div>
+          <button id="task-settings-close" class="task-settings-close" type="button" data-i18n="common.close">Close</button>
+        </div>
+        <div class="task-settings-body">
+          <section id="task-proxy-editor" class="task-detail-section task-proxy-editor">
+            <h3 data-i18n="task.proxy">Task proxy</h3>
+            <form id="task-proxy-form" class="proxy-form">
+              <label class="checkbox-line">
+                <input id="selected-task-proxy-enabled" type="checkbox">
+                <span data-i18n="task.agent_proxy">Use Core proxy for new agents</span>
+              </label>
+              <button type="submit" data-i18n="task.proxy_save">Save Switch</button>
+              <div id="task-proxy-state" class="meta"></div>
+            </form>
+          </section>
+          <section id="task-supervision-editor" class="task-detail-section task-supervision-editor">
+            <h3 data-i18n="task.supervision">Task supervision</h3>
+            <form id="task-supervision-form" class="supervision-form">
+              <label class="field-label">
+                <span data-i18n="task.supervision_mode">Mode</span>
+                <select id="selected-task-supervision-mode">
+                  <option value="manual">manual</option>
+                  <option value="assisted_stub">assisted stub</option>
+                  <option value="assisted_codex">assisted Codex host</option>
+                  <option value="assisted_claude">assisted Claude host</option>
+                </select>
+              </label>
+              <label id="selected-task-supervision-host-model-field" class="field-label" hidden>
+                <span data-i18n="task.supervision_host_model">Host model</span>
+                <select id="selected-task-supervision-host-model"></select>
+              </label>
+              <label id="selected-task-supervision-host-proxy-field" class="field-label checkbox-field" hidden>
+                <span>Proxy</span>
+                <span class="checkbox-line">
+                  <input id="selected-task-supervision-host-proxy-enabled" type="checkbox">
+                  <span data-i18n="task.supervision_host_proxy">Enable proxy for supervision host</span>
+                </span>
+              </label>
+              <label id="selected-task-supervision-max-rounds-field" class="field-label">
+                <span data-i18n="task.supervision_max_rounds">Max rounds</span>
+                <input id="selected-task-supervision-max-rounds" type="number" min="1" max="100" value="99">
+              </label>
+              <fieldset id="selected-task-supervision-ask-user-field" class="supervision-gates">
+                <legend data-i18n="task.ask_user_when">Ask user when</legend>
+                <div id="selected-task-supervision-ask-user-gates" class="supervision-gate-list"></div>
+              </fieldset>
+              <button type="submit" data-i18n="task.supervision_save">Save Supervision</button>
+              <div id="task-supervision-state" class="meta"></div>
+            </form>
+          </section>
+          <section id="task-context-editor" class="task-detail-section task-context-editor">
+            <h3 data-i18n="task.context_management">Context management</h3>
+            <form id="task-context-form" class="context-form">
+              <label class="checkbox-line">
+                <input id="selected-task-context-auto-compact-enabled" type="checkbox">
+                <span data-i18n="task.context_auto">Agent context auto compact</span>
+              </label>
+              <label id="selected-task-context-threshold-field" class="field-label" hidden>
+                <span data-i18n="task.context_threshold">Trigger percent</span>
+                <input id="selected-task-context-threshold" type="number" min="1" max="99" value="75">
+              </label>
+              <button type="submit" data-i18n="task.context_save">Save Context</button>
+              <div id="task-context-state" class="meta"></div>
+            </form>
+          </section>
+        </div>
+        <section class="task-detail-section task-settings-danger-zone">
+          <h3 data-i18n="task.settings_actions">Task actions</h3>
+          <div id="task-settings-actions" class="task-actions">
+            <button class="task-action" type="button" data-task-settings-role="completion" data-task-settings-action="final">Final</button>
+            <button class="task-action" type="button" data-task-settings-role="visibility" data-task-settings-action="hide">Hide</button>
+            <button class="task-action danger" type="button" data-task-settings-role="delete" data-task-settings-action="delete">Delete</button>
+          </div>
+        </section>
+      </section>
     </aside>
     <section class="workspace">
       <div class="task-header">
         <div class="task-header-top">
           <div>
             <div id="selected-id" class="meta"></div>
-            <h2 id="selected-title" class="task-heading">Select a task</h2>
+            <h2 id="selected-title" class="task-heading" data-i18n="task.select_title">Select a task</h2>
             <div id="selected-task-meta" class="meta"></div>
           </div>
           <span id="selected-status" class="status pending">pending</span>
         </div>
         <div class="mobile-context-actions">
-          <button id="open-tasks-sheet" type="button" aria-controls="overview-sidebar" aria-expanded="false">Tasks</button>
-          <button id="open-agents-sheet" type="button" aria-controls="agents-sidebar" aria-expanded="false">Agents</button>
+          <button id="open-tasks-sheet" type="button" aria-controls="overview-sidebar" aria-expanded="false" data-i18n="task.open">Tasks</button>
+          <button id="open-agents-sheet" type="button" aria-controls="agents-sidebar" aria-expanded="false" data-i18n="agents.open">Agents</button>
         </div>
       </div>
-      <div class="tabs">
-        <button class="tab active" data-tab="conversation">Conversation</button>
-        <button class="tab" data-tab="final">Final</button>
-        <button class="tab" data-tab="logs">Logs</button>
-        <button class="tab" data-tab="context">Context</button>
-      </div>
-      <div id="conversation-filters" class="conversation-filters"></div>
       <div id="panel" class="panel"></div>
       <div id="selected-agent-info" class="selected-agent-info"></div>
       <div id="backend-status" class="backend-status"></div>
       <div id="pending-messages" class="pending-messages hidden"></div>
       <div id="command-menu" class="command-menu hidden"></div>
       <div id="mobile-action-panel" class="mobile-action-panel" hidden>
-        <button type="button" data-mobile-action="conversation">Chat</button>
-        <button type="button" data-mobile-action="final">Final</button>
-        <button type="button" data-mobile-action="logs">Logs</button>
-        <button type="button" data-mobile-action="context">Context</button>
-        <button type="button" data-mobile-action="tasks">Tasks</button>
-        <button type="button" data-mobile-action="agents">Agents</button>
-        <button type="button" data-mobile-action="add-task">Add Task</button>
+        <button type="button" data-mobile-action="conversation" data-i18n="conversation.chat">Chat</button>
+        <button type="button" data-mobile-action="final" data-i18n="conversation.final">Final</button>
+        <button type="button" data-mobile-action="logs" data-i18n="conversation.logs">Logs</button>
+        <button type="button" data-mobile-action="context" data-i18n="conversation.context">Context</button>
+        <button type="button" data-mobile-action="tasks" data-i18n="task.open">Tasks</button>
+        <button type="button" data-mobile-action="agents" data-i18n="agents.open">Agents</button>
+        <button type="button" data-mobile-action="add-task" data-i18n="mobile.add_task">Add Task</button>
       </div>
       <form id="send-form" class="composer">
-        <select id="agent-target"></select>
-        <textarea id="message" rows="1" placeholder="Message in the selected task context" autocomplete="off" enterkeyhint="enter"></textarea>
+        <div class="composer-target-wrap">
+          <select id="agent-target"></select>
+          <div id="conversation-filters" class="conversation-filters"></div>
+        </div>
+        <textarea id="message" rows="1" placeholder="Message in the selected task context" data-i18n-placeholder="conversation.message_placeholder" autocomplete="off" enterkeyhint="enter"></textarea>
         <button id="mobile-actions-toggle" class="mobile-actions-toggle" type="button" aria-controls="mobile-action-panel" aria-expanded="false">+</button>
-        <button class="send" type="submit">Send</button>
+        <button class="send" type="submit" data-i18n="conversation.send">Send</button>
       </form>
     </section>
     <aside id="agents-sidebar" class="agentbar">
       <button id="agents-rail-toggle" class="side-rail-toggle" type="button" aria-controls="agents-sidebar" aria-expanded="false">Agents</button>
       <div class="agent-panel">
         <div class="panel-title-row">
-          <h2>Agents</h2>
-          <button id="collapse-agents" class="panel-collapse" type="button" aria-controls="agents-sidebar" aria-expanded="true">Hide</button>
-          <button id="close-agents-sheet" class="mobile-sheet-close" type="button" aria-controls="agents-sidebar">Close</button>
+          <h2 data-i18n="agents.title">Agents</h2>
+          <button id="collapse-agents" class="panel-collapse panel-collapse-agents" type="button" aria-controls="agents-sidebar" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar" data-i18n-aria-label="common.collapse_sidebar" data-i18n-title="common.collapse_sidebar">&rsaquo;</button>
+          <button id="close-agents-sheet" class="mobile-sheet-close" type="button" aria-controls="agents-sidebar" data-i18n="agents.close">Close</button>
         </div>
         <div id="agents"></div>
       </div>
@@ -220,49 +289,49 @@
     <div class="task-dialog-panel">
       <div class="task-dialog-head">
         <div>
-          <h2 id="task-create-title">New Task</h2>
-          <p>Create a task and dispatch its backend agent.</p>
+          <h2 id="task-create-title" data-i18n="task.new">New Task</h2>
+          <p data-i18n="task.create_hint">Create a task and dispatch its backend agent.</p>
         </div>
-        <button id="close-task-create" class="task-dialog-close" type="button" aria-label="Close task form">×</button>
+        <button id="close-task-create" class="task-dialog-close" type="button" aria-label="Close task form" data-i18n-aria-label="common.close">×</button>
       </div>
       <form id="task-form" class="stack-form task-create-form">
-        <div id="task-run-context" class="task-run-context meta">当前 Run 加载中...</div>
+        <div id="task-run-context" class="task-run-context meta" data-i18n="task.run_context_loading">Current run loading...</div>
         <fieldset class="form-section">
-          <legend>Task</legend>
+          <legend data-i18n="task.task">Task</legend>
           <div class="task-primary-fields">
             <label class="field-label task-title-field">
-              <span>Title</span>
-              <input id="new-task-title" placeholder="New task title">
+              <span data-i18n="task.title">Title</span>
+              <input id="new-task-title" placeholder="New task title" data-i18n-placeholder="task.title_placeholder">
             </label>
             <label class="field-label task-description-field">
-              <span>Description</span>
-              <textarea id="new-task-description" rows="4" placeholder="Additional context, requirements, constraints, or links"></textarea>
+              <span data-i18n="task.description">Description</span>
+              <textarea id="new-task-description" rows="4" placeholder="Additional context, requirements, constraints, or links" data-i18n-placeholder="task.description_placeholder"></textarea>
             </label>
           </div>
         </fieldset>
         <fieldset class="form-section">
-          <legend>Defaults</legend>
+          <legend data-i18n="task.defaults">Defaults</legend>
           <div class="field-row task-defaults-grid">
             <label class="field-label task-workspace-field">
-              <span>Workspace</span>
+              <span data-i18n="common.workspace">Workspace</span>
               <select id="workspace-select" aria-label="Workspace"></select>
-              <input id="workspace-custom" class="hidden" placeholder="Custom workspace path">
+              <input id="workspace-custom" class="hidden" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder">
             </label>
             <label class="field-label">
-              <span>Default backend</span>
+              <span data-i18n="task.backend">Default backend</span>
               <select id="task-backend"></select>
             </label>
             <label class="field-label">
-              <span>Model</span>
+              <span data-i18n="task.model">Model</span>
               <select id="task-model"></select>
             </label>
           </div>
         </fieldset>
         <details class="form-section advanced-task-options">
-          <summary>Advanced</summary>
+          <summary data-i18n="task.advanced">Advanced</summary>
           <div class="field-row">
             <label class="field-label">
-              <span>Default sandbox</span>
+              <span data-i18n="task.sandbox">Default sandbox</span>
               <select id="task-sandbox">
                 <option value="workspace-write">workspace-write</option>
                 <option value="read-only">read-only</option>
@@ -270,7 +339,7 @@
               </select>
             </label>
             <label class="field-label">
-              <span>Default approval</span>
+              <span data-i18n="task.approval">Default approval</span>
               <select id="task-approval">
                 <option value="never">never</option>
                 <option value="on-failure">on-failure</option>
@@ -281,14 +350,14 @@
           </div>
           <div class="field-row">
             <label class="field-label">
-              <span>Execution</span>
+              <span data-i18n="task.execution">Execution</span>
               <select id="collaboration-mode">
                 <option value="auto">auto</option>
               </select>
               <div id="collaboration-mode-help" class="collaboration-help"></div>
             </label>
             <label class="field-label">
-              <span>Workflow</span>
+              <span data-i18n="task.workflow">Workflow</span>
               <select id="workflow-template">
                 <option value="auto">auto detect</option>
                 <option value="bugfix">bugfix</option>
@@ -304,14 +373,14 @@
           </div>
           <div class="field-row">
             <label id="max-sub-agents-field" class="field-label">
-              <span>Max sub-agents</span>
+              <span data-i18n="task.max_sub_agents">Max sub-agents</span>
               <input id="max-sub-agents" type="number" min="1" max="16" value="3">
-              <div class="field-help">并发/成本上限，不代表一定会启用；AHA 只在能节省时间时拆分。</div>
+              <div class="field-help" data-i18n="task.max_sub_agents_help">Concurrency/cost limit. AHA only splits work when it saves time.</div>
             </label>
           </div>
           <div class="field-row">
             <label class="field-label">
-              <span>Supervision</span>
+              <span data-i18n="task.supervision">Supervision</span>
               <select id="task-supervision-mode">
                 <option value="manual">manual</option>
                 <option value="assisted_stub">assisted stub</option>
@@ -319,13 +388,24 @@
                 <option value="assisted_claude">assisted Claude host</option>
               </select>
             </label>
+            <label id="task-supervision-host-model-field" class="field-label" hidden>
+              <span data-i18n="task.supervision_host_model">Host model</span>
+              <select id="task-supervision-host-model"></select>
+            </label>
+            <label id="task-supervision-host-proxy-field" class="field-label checkbox-field" hidden>
+              <span>Proxy</span>
+              <span class="checkbox-line">
+                <input id="task-supervision-host-proxy-enabled" type="checkbox">
+                <span data-i18n="task.supervision_host_proxy">Enable proxy for supervision host</span>
+              </span>
+            </label>
             <label id="task-supervision-max-rounds-field" class="field-label">
-              <span>Supervision max rounds</span>
+              <span data-i18n="task.supervision_max_rounds">Supervision max rounds</span>
               <input id="task-supervision-max-rounds" type="number" min="1" max="100" value="99">
             </label>
           </div>
           <fieldset id="task-supervision-ask-user-field" class="supervision-gates">
-            <legend>Ask user when</legend>
+            <legend data-i18n="task.ask_user_when">Ask user when</legend>
             <div id="task-supervision-ask-user-gates" class="supervision-gate-list"></div>
           </fieldset>
           <div class="field-row">
@@ -333,14 +413,38 @@
               <span>Proxy</span>
               <span class="checkbox-line">
                 <input id="task-proxy-enabled" type="checkbox">
-                <span>Enable proxy for this task's agents</span>
+                <span data-i18n="task.proxy_enable">Enable proxy for this task's agents</span>
               </span>
             </label>
           </div>
         </details>
         <div class="task-dialog-actions">
-          <button id="cancel-task-create" type="button">Cancel</button>
-          <button class="primary" type="submit">Create Task</button>
+          <button id="cancel-task-create" type="button" data-i18n="task.cancel_create">Cancel</button>
+          <button class="primary" type="submit" data-i18n="task.create">Create Task</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+  <dialog id="run-create-dialog" class="task-dialog run-create-dialog" aria-labelledby="run-create-title">
+    <div class="task-dialog-panel">
+      <div class="task-dialog-head">
+        <div>
+          <h2 id="run-create-title" data-i18n="run.new">New Run</h2>
+          <p data-i18n="run.create_hint">Create a run without taking space in the sidebar.</p>
+        </div>
+        <button id="close-run-create" class="task-dialog-close" type="button" aria-label="Close run form" data-i18n-aria-label="common.close">×</button>
+      </div>
+      <form id="run-create-form" class="stack-form run-create-form">
+        <fieldset class="form-section">
+          <legend>Run</legend>
+          <label class="field-label run-title-field">
+            <span data-i18n="task.title">Title</span>
+            <input id="new-run-goal" placeholder="New run name" data-i18n-placeholder="run.create_placeholder">
+          </label>
+        </fieldset>
+        <div class="task-dialog-actions">
+          <button id="cancel-run-create" type="button" data-i18n="common.cancel">Cancel</button>
+          <button class="primary" type="submit" data-i18n="run.create">Create</button>
         </div>
       </form>
     </div>
@@ -348,26 +452,26 @@
   <dialog id="task-create-confirm" class="confirm-dialog" aria-labelledby="task-create-confirm-title">
     <form method="dialog" class="confirm-dialog-panel">
       <div class="confirm-dialog-head">
-        <h2 id="task-create-confirm-title">Create Task?</h2>
-        <p>Confirm the task settings before dispatching a backend agent.</p>
+        <h2 id="task-create-confirm-title" data-i18n="task.create_confirm">Create Task?</h2>
+        <p data-i18n="task.create_confirm_hint">Confirm the task settings before dispatching a backend agent.</p>
       </div>
       <dl id="task-create-confirm-details" class="confirm-dialog-details"></dl>
       <div class="confirm-dialog-actions">
-        <button type="submit" value="cancel">Cancel</button>
-        <button class="primary" type="submit" value="confirm">Create Task</button>
+        <button type="submit" value="cancel" data-i18n="common.cancel">Cancel</button>
+        <button class="primary" type="submit" value="confirm" data-i18n="task.create">Create Task</button>
       </div>
     </form>
   </dialog>
   <dialog id="agent-runtime-confirm" class="confirm-dialog" aria-labelledby="agent-runtime-confirm-title">
     <form method="dialog" class="confirm-dialog-panel">
       <div class="confirm-dialog-head">
-        <h2 id="agent-runtime-confirm-title">Apply runtime change?</h2>
-        <p id="agent-runtime-confirm-message">This change affects backend startup.</p>
+        <h2 id="agent-runtime-confirm-title" data-i18n="agent.apply_runtime_change">Apply runtime change?</h2>
+        <p id="agent-runtime-confirm-message" data-i18n="agent.runtime_change_hint">This change affects backend startup.</p>
       </div>
       <div class="confirm-dialog-actions">
-        <button type="submit" value="cancel">Cancel</button>
-        <button type="submit" value="next">Save for next start</button>
-        <button class="primary" type="submit" value="restart">Save & restart backend</button>
+        <button type="submit" value="cancel" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" value="next" data-i18n="agent.save_next_start">Save for next start</button>
+        <button class="primary" type="submit" value="restart" data-i18n="agent.save_restart">Save & restart backend</button>
       </div>
     </form>
   </dialog>
@@ -379,8 +483,8 @@
       </div>
       <dl id="action-confirm-details" class="confirm-dialog-details"></dl>
       <div id="action-confirm-actions" class="confirm-dialog-actions">
-        <button type="submit" value="cancel">Cancel</button>
-        <button class="primary" type="submit" value="confirm">Confirm</button>
+        <button type="submit" value="cancel" data-i18n="common.cancel">Cancel</button>
+        <button class="primary" type="submit" value="confirm" data-i18n="common.confirm">Confirm</button>
       </div>
     </form>
   </dialog>
@@ -388,15 +492,16 @@
     <div class="task-dialog-panel">
       <div class="task-dialog-head">
         <div>
-          <h2 id="settings-title">AHA Settings</h2>
-          <p>Edit the global `.aha/config.json` defaults used by new runs and agents.</p>
+          <h2 id="settings-title" data-i18n="settings.title">AHA Settings</h2>
+          <p data-i18n="settings.description">Edit the global `.aha/config.json` defaults used by new runs and agents.</p>
         </div>
-        <button id="close-settings" class="task-dialog-close" type="button" aria-label="Close settings">×</button>
+        <button id="close-settings" class="task-dialog-close" type="button" aria-label="Close settings" data-i18n-aria-label="common.close">×</button>
       </div>
       <div id="settings-content"></div>
     </div>
   </dialog>
   <script src="/static/time_format.js"></script>
+  <script src="/static/i18n.js"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js"></script>
   <script src="/static/bootstrap_config.js"></script>

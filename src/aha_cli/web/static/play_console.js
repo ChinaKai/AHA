@@ -10,19 +10,20 @@
 
   function renderPlayConsole(state = {}, options = {}) {
     const escapeHtml = options.escapeHtml || escapeFallback;
+    const t = window.AHAI18n?.t || ((_, fallback) => fallback);
     const games = Array.isArray(state.games) ? state.games : [];
     const content = (() => {
       if (state.loading && !state.loaded) {
-        return `<p class="play-console-empty">正在加载小游戏...</p>`;
+        return `<p class="play-console-empty">${escapeHtml(t("play.console_loading", "Loading games..."))}</p>`;
       }
       if (state.error) {
         return `<p class="play-console-error">${escapeHtml(state.error)}</p>`;
       }
       if (!games.length) {
-        return `<p class="play-console-empty">暂无可用小游戏。</p>`;
+        return `<p class="play-console-empty">${escapeHtml(t("play.console_empty", "No games available."))}</p>`;
       }
       return games.map(game => {
-        const title = game?.title || game?.id || "未命名游戏";
+        const title = game?.title || game?.id || t("play.unnamed", "Untitled game");
         const description = game?.description || game?.id || "";
         const href = game?.href || (game?.id ? `/games/${encodeURIComponent(game.id)}/` : "");
         if (!game?.available || !href) {
@@ -30,9 +31,9 @@
           <div class="play-game-card unavailable" aria-disabled="true">
             <div>
               <strong>${escapeHtml(title)}</strong>
-              <p>${escapeHtml(description || "入口文件不可用")}</p>
+              <p>${escapeHtml(description || t("play.entry_unavailable", "Entry file unavailable"))}</p>
             </div>
-            <span>不可用</span>
+            <span>${escapeHtml(t("play.unavailable", "Unavailable"))}</span>
           </div>
         `;
         }
@@ -40,9 +41,9 @@
         <a class="play-game-card" href="${escapeHtml(href)}" target="_blank" rel="noopener">
           <div>
             <strong>${escapeHtml(title)}</strong>
-            <p>${escapeHtml(description || "来自 webgame_workspace")}</p>
+            <p>${escapeHtml(description || t("play.source", "from webgame_workspace"))}</p>
           </div>
-          <span>在线玩</span>
+          <span>${escapeHtml(t("play.open", "Play"))}</span>
         </a>
       `;
       }).join("");
@@ -51,8 +52,8 @@
     <div class="play-console">
       <div class="play-console-head">
         <div>
-          <h3>玩了个玩</h3>
-          <p>小游戏来自 webgame_workspace，点击后动态加载。</p>
+          <h3>${escapeHtml(t("play.title", "Play console"))}</h3>
+          <p>${escapeHtml(t("play.console_hint", "Games come from webgame_workspace and load dynamically."))}</p>
         </div>
       </div>
       <div class="play-game-list">${content}</div>
@@ -87,12 +88,12 @@
       state.loading = true;
       if (!options.silent) renderPopover();
       try {
-        const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/games"), {}, "加载小游戏失败");
+        const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/games"), {}, window.AHAI18n?.t?.("play.load_failed", "Failed to load games") || "Failed to load games");
         state.games = Array.isArray(payload?.games) ? payload.games : [];
         state.loaded = true;
         state.error = "";
       } catch (err) {
-        state.error = err?.message || String(err || "加载小游戏失败");
+        state.error = err?.message || String(err || (window.AHAI18n?.t?.("play.load_failed", "Failed to load games") || "Failed to load games"));
       } finally {
         state.loading = false;
         if (open) renderPopover();

@@ -100,7 +100,7 @@ Current user message
 
 Each task also records a `workspace_path`. Backend agents execute from that workspace when starting a new scoped session, so task context points at the project being worked on rather than the AHA tool repository.
 
-Core proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are stored in `.aha/config.json` under `codex.proxy` and `claude.proxy`, so each backend can use the right provider/network endpoint. Tasks and agents store only `proxy_enabled` switches. Backend launches and per-turn executions read the proxy values for the selected backend and apply them only when the selected task/agent switch is enabled. Older global/run/task proxy fields remain a compatibility fallback for existing configs, archives, and runs.
+Core proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are stored in `.aha/config.json` under `codex.proxy` and `claude.proxy`, so each backend can use the right provider/network endpoint. Tasks and agents store only `proxy_enabled` switches. Assisted-supervision hosts keep their own `host_proxy_enabled` switch in the supervision policy, separate from the task default for main and future sub-agents. Backend launches and per-turn executions read the proxy values for the selected backend and apply them only when the selected task/agent switch is enabled. Older global/run/task proxy fields remain a compatibility fallback for existing configs, archives, and runs.
 
 Agent `sandbox`, `approval`, and `proxy_enabled` are backend startup settings. Updating them does not mutate a running child process. The UI therefore lets users either save the new value for the next backend start or save and restart the current backend immediately.
 
@@ -172,7 +172,7 @@ In a one-bin zipapp it launches the current one-bin artifact instead, so a packa
 
 Codex and Claude use the same AHA task/session model. Their Model selectors can point at an official model or at a custom env group. Env-group selections are stored as `env:<group-name>`. Codex env groups target OpenAI-compatible Responses providers: AHA passes the selected group's `OPENAI_MODEL` to Codex, adds a temporary Codex `model_provider` override for `OPENAI_BASE_URL`, and uses `CODEX_WIRE_API=responses` plus `CODEX_ENV_KEY` for provider-specific authentication. Chat Completions-only endpoints are not supported by current Codex CLI provider config. Claude env groups inject `ANTHROPIC_*` / `CLAUDE_*` values and launch Claude without a CLI `--model` argument, so `ANTHROPIC_MODEL` is the effective model. Secrets must not be written to task journals, exported documentation, or user-visible logs.
 
-Changing a task `main`, `sub-*`, or assisted-supervision `host` backend or model is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend/model, appends a handoff message for the new backend, and restarts the new backend when the old one was active. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
+Changing a task `main`, `sub-*`, or assisted-supervision `host` backend or model is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend/model, appends a handoff message for the new backend, and restarts the new backend when the old one was active. The supervision policy stores the host's selected `host_model`, so a Codex/Claude host does not have to inherit the task-main model. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
 
 ## Distribution And Portability
 
@@ -307,6 +307,16 @@ can show the current access address from `window.location.host` alongside the
 actual bind address, so side-by-side source and onebin dashboards do not display
 the same stale endpoint. It can also surface local vs network-exposed bind risk
 without storing secrets.
+Dashboard state that should survive browser/device changes lives outside the
+plan protocol. `.aha/ui_state.json` stores `last_selected_run_id`, while
+`.aha/runs/<run-id>/ui_state.json` stores that run's `last_selected_task_id`.
+`GET /api/ui-state` returns the global state, and `GET
+/api/ui-state?run_id=<run-id>` includes the run-scoped task selection.
+`PATCH /api/ui-state` updates either field, using the same run-scoped `run_id`
+query or JSON body convention for task selection that the rest of the UI APIs
+use. The browser still keeps a localStorage fallback for offline or legacy
+task state, but URL run/task parameters remain the highest-priority selection.
+
 When token auth is enabled, `GET /` and `GET /static/*` remain readable so the
 browser can render the login shell. Data APIs and WebSocket handshakes still
 require the token. `POST /api/login` validates the configured Web token and

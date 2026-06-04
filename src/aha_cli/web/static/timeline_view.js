@@ -185,21 +185,20 @@
           ? "Agent is idle"
           : `Agent turn ${timing.status}`;
       const label = timing.status === "idle" ? "" : (timing.running ? "elapsed" : "duration");
-      const details = [
-        label ? `${label} ${deps.formatDuration?.(timing.elapsedMs)}` : "",
-        `status ${timing.status}`,
-        timing.waitingReason ? `waiting ${timing.waitingReason}` : "",
-        `target ${timing.target}`,
-        agent ? `agent ${deps.agentLifecycleDisplay?.(agent)}` : "",
-        timing.startedAt ? `started ${deps.formatClock?.(timing.startedAt)}` : "",
-        timing.finishedAt ? `finished ${deps.formatClock?.(timing.finishedAt)}` : ""
-      ].filter(Boolean).join(" | ");
+      const details = timing.status === "idle" && !timing.running
+        ? ""
+        : [
+          label ? `${label} ${deps.formatDuration?.(timing.elapsedMs)}` : "",
+          timing.waitingReason ? `waiting ${timing.waitingReason}` : "",
+          timing.startedAt ? `started ${deps.formatClock?.(timing.startedAt)}` : "",
+          timing.finishedAt ? `finished ${deps.formatClock?.(timing.finishedAt)}` : ""
+        ].filter(Boolean).join(" | ");
       const visualStatus = timing.running && !["waiting", "busy"].includes(timing.status) ? "running" : timing.status;
       return `
         <div class="turn-timer ${deps.escapeHtml?.(visualStatus)}">
           <span class="activity-dot"></span>
           <strong>${deps.escapeHtml?.(title)}</strong>
-          <code>${deps.escapeHtml?.(details)}</code>
+          ${details ? `<code>${deps.escapeHtml?.(details)}</code>` : ""}
           ${deps.renderPromptMetricsPopover?.(taskId)}
         </div>
       `;

@@ -28,6 +28,8 @@
     const getEventTailInitialized = state.eventTailInitialized || (() => false);
     const setEventTailInitialized = state.setEventTailInitialized || (() => {});
     const getOpenPromptMetricsKey = state.openPromptMetricsKey || (() => "");
+    const documentRef = state.documentRef || deps.documentRef || document;
+    let conversationFiltersOpen = false;
 
     function promptMetricsKey(taskId, target = backendTarget()) {
       return `${taskId || ""}:${target || ""}`;
@@ -856,17 +858,50 @@
 
     function renderConversationFilters() {
       if (!conversationFiltersEl) return;
-      conversationFiltersEl.classList.toggle("hidden", getActiveTab() !== "conversation");
-      if (getActiveTab() !== "conversation") return;
+      const active = getActiveTab() === "conversation";
+      conversationFiltersEl.classList.toggle("hidden", !active);
+      if (!active) return;
       const task = deps.selectedTask();
       const counts = task ? deps.conversationFilterCounts(task.id) : {};
-      conversationFiltersEl.innerHTML = deps.renderConversationFiltersHtml({
+      const previousDetails = conversationFiltersEl.querySelector?.("#conversation-filter-details");
+      if (previousDetails instanceof HTMLDetailsElement) conversationFiltersOpen = previousDetails.open;
+      const html = deps.renderConversationFiltersHtml({
         active: true,
         filters: conversationFilters,
         counts,
-        filterOptions: deps.conversationFilterOptions
+        filterOptions: deps.conversationFilterOptions,
+        open: conversationFiltersOpen
       });
+      conversationFiltersEl.innerHTML = html;
+      conversationFiltersEl.classList.toggle("empty", !html.trim());
+      const details = conversationFiltersEl.querySelector?.("#conversation-filter-details");
+      details?.addEventListener("toggle", () => {
+        conversationFiltersOpen = Boolean(details.open);
+        if (conversationFiltersOpen) syncConversationFilterMenuOffset();
+      });
+      if (details?.open) syncConversationFilterMenuOffset();
     }
+
+    function syncConversationFilterMenuOffset() {
+      const composer = conversationFiltersEl?.closest?.(".composer");
+      if (!composer || typeof composer.getBoundingClientRect !== "function") return;
+      const rect = composer.getBoundingClientRect();
+      const offset = Math.max(50, Math.ceil(rect.height) + 8);
+      conversationFiltersEl.style.setProperty("--conversation-filter-menu-bottom", `${offset}px`);
+    }
+
+    function closeConversationFilters() {
+      conversationFiltersOpen = false;
+      const details = conversationFiltersEl?.querySelector?.("#conversation-filter-details");
+      if (details instanceof HTMLDetailsElement) details.open = false;
+    }
+
+    documentRef.addEventListener?.("pointerdown", event => {
+      if (!conversationFiltersOpen) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target && conversationFiltersEl?.contains(target)) return;
+      closeConversationFilters();
+    });
 
     function renderConversation(taskId) {
       copyTextByKey.clear();

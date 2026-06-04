@@ -1,12 +1,56 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
+import tempfile
+from unittest import mock
 
 from aha_cli.store.filesystem import append_jsonl, set_agent_status, set_task_status
 from aha_cli.web.server import handle_ui_client
 from aha_cli.websocket.server import handle_ws_client, ws_read_text
+
+AHA_RUNTIME_ENV_KEYS = (
+    "AHA_HOME",
+    "AHA_ROOT",
+    "AHA_RUN_ID",
+    "AHA_TASK_ID",
+    "AHA_AGENT_ID",
+    "AHA_BACKEND",
+    "AHA_MODEL",
+    "AHA_GENERATED_BY",
+)
+
+
+def _is_temp_path(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        path = Path(value).expanduser().resolve(strict=False)
+        temp_root = Path(tempfile.gettempdir()).resolve(strict=False)
+    except (OSError, RuntimeError):
+        return False
+    return path == temp_root or temp_root in path.parents
+
+
+@contextmanager
+def isolated_cli_environment(*, allow_temp_aha_home: bool = True, allow_aha_keys: Iterable[str] = ()):
+    allowed_keys = set(allow_aha_keys)
+    env = {}
+    for key, value in os.environ.items():
+        if not key.startswith("AHA_"):
+            env[key] = value
+        elif key in allowed_keys:
+            env[key] = value
+        elif key == "AHA_VERSION":
+            env[key] = value
+        elif allow_temp_aha_home and key in {"AHA_HOME", "AHA_ROOT"} and _is_temp_path(value):
+            env[key] = value
+    with mock.patch.dict(os.environ, env, clear=True):
+        yield
 
 
 def write_plan_statuses(root_path: str, run_id: str, task_id: str, agent_id: str, iterations: int) -> None:

@@ -6,6 +6,10 @@
     let message = "";
     let messageIsError = false;
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
     function renderLoginState(nextMessage = message, isError = messageIsError) {
       required = true;
       message = nextMessage || "";
@@ -59,22 +63,22 @@
       if (loginInFlight) return;
       const token = String(elements.loginTokenEl?.value || "").trim();
       if (!token) {
-        renderLoginState("请输入 token。", true);
+        renderLoginState(t("auth.token_required", "Enter a token."), true);
         return;
       }
       loginInFlight = true;
-      renderLoginState("正在登录...");
+      renderLoginState(t("auth.logging_in", "Logging in..."));
       try {
         await options.fetchJson?.("/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token })
-        }, "登录失败");
+        }, t("auth.login_failed", "Login failed"));
         if (elements.loginTokenEl) elements.loginTokenEl.value = "";
         clearLoginState();
         await options.afterLogin?.();
       } catch (err) {
-        const text = options.isAuthRequiredError?.(err) ? "Token 不正确。" : (err?.message || String(err || "登录失败"));
+        const text = options.isAuthRequiredError?.(err) ? t("auth.token_invalid", "Token is incorrect.") : (err?.message || String(err || t("auth.login_failed", "Login failed")));
         renderLoginState(text, true);
       } finally {
         loginInFlight = false;
@@ -84,12 +88,12 @@
 
     async function logoutAuthSession() {
       try {
-        await options.fetchJson?.("/api/logout", { method: "POST" }, "退出登录失败");
+        await options.fetchJson?.("/api/logout", { method: "POST" }, t("auth.logout_failed", "Logout failed"));
       } catch (_err) {
         // The local cookie should still be considered invalid for this page session.
       }
       options.afterLogout?.();
-      renderLoginState("已退出登录。");
+      renderLoginState(t("auth.logged_out", "Logged out."));
     }
 
     return Object.freeze({

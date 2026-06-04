@@ -641,7 +641,50 @@ def cmd_task(args: argparse.Namespace) -> int:
             print(f"Backend: {backend.get('status')} pid={backend.get('pid') or '-'}")
     elif args.task_cmd == "reopen":
         reopen_task(root, run_id, args.task_id)
-        print(f"{args.task_id} reopened. Follow-up messages are allowed again.")
+        recovery = run_stale_runtime_recovery(root, run_id, task_id=args.task_id, apply=False)
+        recovered_count = 0
+        for candidate in recovery.get("candidates") or []:
+            try:
+                applied = run_stale_runtime_recovery(
+                    root,
+                    run_id,
+                    task_id=args.task_id,
+                    agent_id=str(candidate.get("agent_id") or ""),
+                    apply=True,
+                )
+            except RunRecoveryError:
+                continue
+            recovered_count += int(applied.get("recovered_count") or 0)
+        suffix = f" Recovered {recovered_count} stale agent(s)." if recovered_count else ""
+        print(f"{args.task_id} reopened. Follow-up messages are allowed again.{suffix}")
+    elif args.task_cmd == "recover":
+        if args.restart_backend and not args.apply:
+            print("--restart-backend requires --apply", file=sys.stderr)
+            return 2
+        try:
+            agent_id = args.agent_id
+            if args.apply and not agent_id:
+                dry = run_stale_runtime_recovery(root, run_id, task_id=args.task_id, apply=False)
+                candidates = dry.get("candidates") or []
+                if len(candidates) != 1:
+                    print("Apply without --agent-id requires exactly one stale candidate", file=sys.stderr)
+                    return 2
+                agent_id = str(candidates[0].get("agent_id") or "")
+            result = run_stale_runtime_recovery(
+                root,
+                run_id,
+                task_id=args.task_id,
+                agent_id=agent_id,
+                apply=args.apply,
+                restart_backend=args.restart_backend,
+            )
+        except RunRecoveryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(format_stale_runtime_recovery(result), end="")
     elif args.task_cmd == "proxy":
         fields = {}
         if args.proxy_enabled is not None:

@@ -27,6 +27,9 @@
   }
 
   function createTaskConfirmRows(payload, context = {}) {
+    const supervision = payload.supervision || {};
+    const hostModel = context.hostModelLabel || supervision.host_model || "default";
+    const hostProxy = supervision.host_proxy_enabled ? "on" : "off";
     return [
       ["Run", context.runId || "-"],
       ["Title", payload.title],
@@ -38,6 +41,8 @@
       ["Execution", `${payload.collaboration_mode || "auto"} (${payload.max_sub_agents || 0})`],
       ["Workflow", payload.workflow_template || "auto"],
       ["Supervision", context.supervisionSummary || "manual"],
+      ["Host model", supervision.real_agent_enabled ? `${supervision.host_backend || "stub"} / ${hostModel}` : "-"],
+      ["Host proxy", supervision.real_agent_enabled ? hostProxy : "-"],
       ["Proxy", taskProxyConfirmLabel(payload)]
     ];
   }

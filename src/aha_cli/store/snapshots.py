@@ -74,6 +74,7 @@ def status_snapshot(
         "goal": plan["goal"],
         "mode": plan["mode"],
         "updated_at": plan["updated_at"],
+        "selected_task_id": str((plan.get("ui") or {}).get("selected_task_id") or ""),
         "aha_root": str(root),
         "main_agent": plan.get("main_agent"),
         "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),

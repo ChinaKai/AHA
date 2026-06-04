@@ -57,9 +57,17 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
     cfg = load_config(root)
     tasks = [task for task in plan.get("tasks", []) if not task.get("deleted_at")]
     lifecycle = run_lifecycle_projection(plan)
+    ui = plan.get("ui") if isinstance(plan.get("ui"), dict) else {}
     completed = sum(1 for task in tasks if task.get("status") == "completed")
     failed = any(task.get("status") == "failed" for task in tasks)
     blocked = any(task.get("status") == "blocked" for task in tasks)
+    running_task_count = sum(1 for task in tasks if task.get("status") == "running")
+    running_agent_count = sum(
+        1
+        for task in tasks
+        for agent in task.get("agents", [])
+        if agent.get("status") == "running"
+    )
     running = any(task.get("status") in {"running", "awaiting_user"} for task in tasks)
     if failed:
         status = "failed"
@@ -80,6 +88,9 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
         "updated_at": plan.get("updated_at"),
         "task_count": len(tasks),
         "completed_count": completed,
+        "running_task_count": running_task_count,
+        "running_agent_count": running_agent_count,
+        "has_running_work": bool(running_task_count or running_agent_count),
         "hidden_count": sum(1 for task in tasks if task.get("hidden")),
         "lifecycle": lifecycle,
         "lifecycle_status": lifecycle["status"],
@@ -87,6 +98,7 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
         "hidden_at": lifecycle["hidden_at"],
         "archived": lifecycle["archived"],
         "archived_at": lifecycle["archived_at"],
+        "selected_task_id": str(ui.get("selected_task_id") or ""),
         "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
         "path": str(plan_path(root, plan["id"])),
     }
@@ -113,6 +125,38 @@ def update_run_lifecycle(root: Path, run_id: str, status: object) -> dict:
                 "previous_status": previous,
                 "status": lifecycle["status"],
             },
+        )
+        return run_summary_from_plan(root, plan)
+
+
+def update_run_selected_task(root: Path, run_id: str, task_id: object) -> dict:
+    selected = str(task_id or "").strip()
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        if selected:
+            task = next(
+                (
+                    item
+                    for item in plan.get("tasks", [])
+                    if str(item.get("id") or "") == selected and not item.get("deleted_at")
+                ),
+                None,
+            )
+            if task is None:
+                raise ValueError(f"task not found: {selected}")
+        ui = plan.setdefault("ui", {})
+        if selected:
+            ui["selected_task_id"] = selected
+        else:
+            ui.pop("selected_task_id", None)
+        now = utc_now()
+        plan["updated_at"] = now
+        save_plan(root, plan)
+        append_event(
+            root,
+            run_id,
+            "run_selected_task_updated",
+            {"selected_task_id": selected},
         )
         return run_summary_from_plan(root, plan)
 

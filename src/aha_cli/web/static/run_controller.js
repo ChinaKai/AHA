@@ -9,6 +9,7 @@
   }
 
   function createRunController(elements = {}, deps = {}) {
+    const windowRef = deps.windowRef || window;
     let sessionMenuOpen = false;
     let runMaintenanceConsoleOpen = false;
     let runMaintenanceData = null;
@@ -22,6 +23,7 @@
     let runLifecycleMessage = "";
     let runLifecycleError = false;
     let runLifecycleFilter = "active";
+    let runSettingsOpenId = "";
 
     function currentRunId() {
       return String(deps.currentRunId?.() || "").trim();
@@ -62,27 +64,29 @@
     }
 
     function renderSessionSummary() {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
       renderAppVersion();
       const run = deps.currentRunSummary?.() || deps.fallbackCurrentRun?.();
       const statusData = deps.statusData?.();
       const bootstrapData = deps.bootstrapData?.();
       const runId = currentRunId() || deps.runIdOf?.(run) || "";
       if (!run && !statusData) {
-        if (elements.sessionTitleEl) elements.sessionTitleEl.textContent = currentRunId() || "未选择 Run";
+        if (elements.sessionTitleEl) elements.sessionTitleEl.textContent = currentRunId() || t("run.none", "No run selected");
         if (elements.runIdEl) elements.runIdEl.textContent = currentRunId() || "-";
         if (elements.runStateEl) elements.runStateEl.textContent = bootstrapData?.aha_home ? `AHA_HOME ${bootstrapData.aha_home}` : "";
-        if (elements.sessionDetailTextEl) elements.sessionDetailTextEl.textContent = "创建 Run 后开始";
+        if (elements.sessionDetailTextEl) elements.sessionDetailTextEl.textContent = t("run.create_first", "Create a run to start");
         renderRunLifecycleBadge(null);
-        if (elements.taskRunContextEl) elements.taskRunContextEl.textContent = "当前没有 Run";
+        if (elements.taskRunContextEl) elements.taskRunContextEl.textContent = t("run.no_current", "No current run");
         return;
       }
       const title = statusData?.goal || deps.runTitleOf?.(run) || "";
       if (elements.sessionTitleEl) {
-        elements.sessionTitleEl.textContent = title || "未选择 Run";
+        elements.sessionTitleEl.textContent = title || t("run.none", "No run selected");
         elements.sessionTitleEl.title = title || "";
       }
       if (elements.sessionToggleEl) {
-        const label = runId ? `Run 操作台: ${title || runId}` : "Run 操作台";
+        const consoleLabel = t("aha.console", "AHA console");
+        const label = runId ? `${consoleLabel}: ${title || runId}` : consoleLabel;
         elements.sessionToggleEl.title = label;
         elements.sessionToggleEl.setAttribute("aria-label", label);
       }
@@ -99,16 +103,16 @@
         const taskCount = Number.isFinite(run?.task_count) ? `${run.completed_count || 0}/${run.task_count} tasks` : "";
         elements.sessionDetailTextEl.textContent = [
           run?.mode ? `mode ${run.mode}` : statusData?.mode ? `mode ${statusData.mode}` : "",
-          run?.status ? `状态 ${run.status}` : "",
+          run?.status ? `${t("run.status", "status")} ${run.status}` : "",
           taskCount,
           deps.realtimeTransportText?.(),
-          deps.runsError?.() ? `提示 ${deps.runsError?.()}` : ""
-        ].filter(Boolean).join(" · ") || "Run 详情";
+          deps.runsError?.() ? `${t("run.notice", "notice")} ${deps.runsError?.()}` : ""
+        ].filter(Boolean).join(" · ") || t("run.details", "Run details");
       }
       if (elements.taskRunContextEl) {
         const mode = statusData?.mode || run?.mode || "-";
         const runLabel = title || runId || "-";
-        elements.taskRunContextEl.textContent = `当前 Run: ${runLabel} / ${mode}`;
+        elements.taskRunContextEl.textContent = `${t("run.current", "Current run")}: ${runLabel} / ${mode}`;
         elements.taskRunContextEl.title = runId || "";
       }
     }
@@ -148,11 +152,109 @@
       renderRunLifecycleFilters(runs);
       if (view.emptyMessage) {
         elements.runLifecycleActionsEl.innerHTML = `<div class="meta">${escapeHtml(view.emptyMessage)}</div>`;
+        renderRunSettingsPanel(null);
         renderRunLifecycleState();
         return;
       }
-      elements.runLifecycleActionsEl.innerHTML = deps.runLifecycleRowsHtml?.(view.rows || []) || "";
+      const rows = view.rows || [];
+      if (runSettingsOpenId && !rows.some(row => row.id === runSettingsOpenId)) runSettingsOpenId = "";
+      elements.runLifecycleActionsEl.innerHTML = deps.runLifecycleRowsHtml?.(rows.map(row => ({
+        ...row,
+        settingsOpen: row.id === runSettingsOpenId
+      }))) || "";
+      renderRunSettingsPanel(rows.find(row => row.id === runSettingsOpenId) || null);
       renderRunLifecycleState();
+    }
+
+    function runSettingsTriggerFor(runId) {
+      const buttons = elements.runLifecycleActionsEl?.querySelectorAll("[data-run-settings-toggle]") || [];
+      return Array.from(buttons).find(button => button.getAttribute("data-run-settings-toggle") === runId) || null;
+    }
+
+    function clearRunSettingsPosition() {
+      if (!elements.runSettingsPanelEl) return;
+      elements.runSettingsPanelEl.style.removeProperty("top");
+      elements.runSettingsPanelEl.style.removeProperty("left");
+      elements.runSettingsPanelEl.style.removeProperty("width");
+    }
+
+    function runSettingsUseSheet() {
+      return Boolean(windowRef.matchMedia?.("(max-width: 640px)")?.matches);
+    }
+
+    function positionRunSettingsPanel(row) {
+      const panel = elements.runSettingsPanelEl;
+      if (!panel || !row) return;
+      clearRunSettingsPosition();
+      const useSheet = runSettingsUseSheet();
+      panel.classList.toggle("run-settings-sheet", useSheet);
+      panel.classList.toggle("run-settings-popover", !useSheet);
+      if (useSheet) return;
+      const trigger = runSettingsTriggerFor(row.id);
+      const rect = trigger?.getBoundingClientRect?.();
+      if (!rect) return;
+      const margin = 12;
+      const gap = 8;
+      const width = Math.min(360, Math.max(280, windowRef.innerWidth - margin * 2));
+      panel.style.width = `${width}px`;
+      const height = Math.min(panel.offsetHeight || 420, windowRef.innerHeight - margin * 2);
+      let left = rect.right + gap;
+      if (left + width > windowRef.innerWidth - margin) left = rect.left - width - gap;
+      left = Math.max(margin, Math.min(left, windowRef.innerWidth - width - margin));
+      const maxTop = Math.max(margin, windowRef.innerHeight - height - margin);
+      const top = Math.max(margin, Math.min(rect.top, maxTop));
+      panel.style.left = `${Math.round(left)}px`;
+      panel.style.top = `${Math.round(top)}px`;
+    }
+
+    function runSettingsActionButtonHtml(action, runId) {
+      return `<button class="run-lifecycle-action" type="button" data-run-lifecycle-run="${escapeHtml(runId)}" data-run-lifecycle-status="${escapeHtml(action.status)}"${action.disabled ? " disabled" : ""} title="${escapeHtml(action.title)}">${escapeHtml(action.label)}</button>`;
+    }
+
+    function runSettingsDeleteButtonHtml(action, runId) {
+      if (!action) return "";
+      return `<button class="run-lifecycle-action danger" type="button" data-run-delete-run="${escapeHtml(runId)}"${action.disabled ? " disabled" : ""} title="${escapeHtml(action.title)}">${escapeHtml(action.label)}</button>`;
+    }
+
+    function renderRunSettingsPanel(row) {
+      if (!elements.runSettingsPanelEl) return;
+      const open = Boolean(runSettingsOpenId && row && row.id === runSettingsOpenId);
+      elements.runSettingsPanelEl.classList.toggle("hidden", !open);
+      elements.runSettingsPanelEl.hidden = !open;
+      if (!open) {
+        clearRunSettingsPosition();
+        if (runMaintenanceConsoleOpen) setRunMaintenanceConsoleOpen(false);
+        return;
+      }
+      if (elements.runSettingsSubtitleEl) {
+        elements.runSettingsSubtitleEl.textContent = `${row.title} | ${row.lifecycle}`;
+        elements.runSettingsSubtitleEl.title = row.id;
+      }
+      if (elements.runRenameFormEl) elements.runRenameFormEl.hidden = !row.current;
+      if (elements.renameRunNameEl && row.current && elements.documentRef?.activeElement !== elements.renameRunNameEl) {
+        elements.renameRunNameEl.value = row.title || "";
+        elements.renameRunNameEl.disabled = Boolean(row.actionInFlight);
+      }
+      const renameButton = elements.runRenameFormEl?.querySelector("button");
+      if (renameButton) renameButton.disabled = Boolean(row.actionInFlight || !row.current);
+      if (elements.runSettingsActionsEl) {
+        const actionButtons = (row.actions || []).map(action => runSettingsActionButtonHtml(action, row.id)).join("");
+        const deleteButton = runSettingsDeleteButtonHtml(row.deleteAction, row.id);
+        const maintenanceButton = row.maintenance
+          ? `<button class="run-lifecycle-action run-maintenance-trigger" type="button" data-run-maintenance-run="${escapeHtml(row.id)}" title="${escapeHtml(row.maintenance.title)}">${escapeHtml(row.maintenance.label)}</button>`
+          : "";
+        elements.runSettingsActionsEl.innerHTML = `${actionButtons}${deleteButton}${maintenanceButton}`;
+      }
+      if (elements.runSettingsProtectionEl) {
+        elements.runSettingsProtectionEl.textContent = row.reasonText || "";
+        elements.runSettingsProtectionEl.hidden = !row.reasonText;
+      }
+      positionRunSettingsPanel(row);
+    }
+
+    function closeRunSettings() {
+      runSettingsOpenId = "";
+      renderRunLifecycleActions();
     }
 
     function setRunArchiveState(message, isError = false) {
@@ -186,8 +288,7 @@
     }
 
     function runMaintenancePayload() {
-      const runId = currentRunId();
-      if (!runMaintenanceData || runMaintenanceRunId !== runId) return null;
+      if (!runMaintenanceData || !runMaintenanceRunId) return null;
       return runMaintenanceData;
     }
 
@@ -213,15 +314,16 @@
     }
 
     function renderRunMaintenance() {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
       if (!elements.runMaintenanceSummaryEl || !elements.runMaintenanceDetailEl) return;
-      if (!currentRunId()) {
-        elements.runMaintenanceSummaryEl.textContent = "未选择 Run";
+      if (!runMaintenanceRunId && !currentRunId()) {
+        elements.runMaintenanceSummaryEl.textContent = t("run.none", "No run selected");
         elements.runMaintenanceSummaryEl.classList.remove("error");
         elements.runMaintenanceDetailEl.innerHTML = "";
         return;
       }
       if (runMaintenanceLoading) {
-        elements.runMaintenanceSummaryEl.textContent = "诊断中...";
+        elements.runMaintenanceSummaryEl.textContent = t("run.maintenance_loading", "Diagnosing...");
         elements.runMaintenanceSummaryEl.classList.remove("error");
         elements.runMaintenanceDetailEl.innerHTML = "";
         return;
@@ -235,7 +337,7 @@
       }
       const payload = runMaintenancePayload();
       if (!payload) {
-        elements.runMaintenanceSummaryEl.textContent = "未诊断";
+        elements.runMaintenanceSummaryEl.textContent = t("run.maintenance_empty", "Not diagnosed");
         elements.runMaintenanceSummaryEl.classList.remove("error");
         elements.runMaintenanceDetailEl.innerHTML = "";
         return;
@@ -254,13 +356,13 @@
     }
 
     async function loadRunMaintenance(force = false) {
-      const runId = currentRunId();
+      const runId = runMaintenanceRunId || currentRunId();
       if (!runId) {
         resetRunMaintenanceState();
         renderRunMaintenance();
         return;
       }
-      if (!force && runMaintenancePayload()) {
+      if (!force && runMaintenancePayload() && runMaintenanceRunId === runId) {
         renderRunMaintenance();
         return;
       }
@@ -274,14 +376,17 @@
           {},
           "Failed to load run maintenance"
         );
-        if (runId !== currentRunId()) return;
+        const currentTargetId = runMaintenanceRunId || currentRunId();
+        if (currentTargetId !== runId) return;
         runMaintenanceData = payload;
       } catch (err) {
-        if (runId !== currentRunId()) return;
+        const currentTargetId = runMaintenanceRunId || currentRunId();
+        if (currentTargetId !== runId) return;
         runMaintenanceData = null;
-        runMaintenanceError = err?.message || String(err || "诊断不可用");
+        runMaintenanceError = err?.message || String(err || (window.AHAI18n?.t?.("run.maintenance_unavailable", "Diagnostics unavailable") || "Diagnostics unavailable"));
       } finally {
-        if (runId === currentRunId()) {
+        const currentTargetId = runMaintenanceRunId || currentRunId();
+        if (currentTargetId === runId) {
           runMaintenanceLoading = false;
           renderRunMaintenance();
         }
@@ -289,7 +394,6 @@
     }
 
     function renderSessionMenu() {
-      if (!elements.runSelectEl) return;
       const fallback = deps.fallbackCurrentRun?.();
       const rawRuns = deps.runsData?.();
       const loadedRuns = Array.isArray(rawRuns) ? rawRuns : [];
@@ -297,17 +401,19 @@
       const currentRun = deps.currentRunSummary?.() || fallback;
       const runId = currentRunId();
       const actionInFlight = runActionInFlight();
-      elements.runSelectEl.innerHTML = "";
-      for (const run of runs) {
-        const id = deps.runIdOf?.(run) || "";
-        if (!id) continue;
-        const opt = document.createElement("option");
-        opt.value = id;
-        opt.textContent = deps.sessionOptionLabel?.(run) || id;
-        opt.selected = id === runId;
-        elements.runSelectEl.appendChild(opt);
+      if (elements.runSelectEl) {
+        elements.runSelectEl.innerHTML = "";
+        for (const run of runs) {
+          const id = deps.runIdOf?.(run) || "";
+          if (!id) continue;
+          const opt = document.createElement("option");
+          opt.value = id;
+          opt.textContent = deps.sessionOptionLabel?.(run) || id;
+          opt.selected = id === runId;
+          elements.runSelectEl.appendChild(opt);
+        }
+        elements.runSelectEl.disabled = actionInFlight || elements.runSelectEl.options.length === 0;
       }
-      elements.runSelectEl.disabled = actionInFlight || elements.runSelectEl.options.length === 0;
       if (elements.sessionRefreshEl) elements.sessionRefreshEl.disabled = actionInFlight;
       if (elements.renameRunNameEl) {
         if (document.activeElement !== elements.renameRunNameEl) {
@@ -320,17 +426,21 @@
         if (button) button.disabled = actionInFlight || !runId;
       }
       if (elements.newRunGoalEl) elements.newRunGoalEl.disabled = actionInFlight;
+      if (elements.openRunCreateEl) elements.openRunCreateEl.disabled = actionInFlight;
       const hasRun = Boolean(runId);
       if (elements.runExportEl) elements.runExportEl.disabled = actionInFlight || !hasRun;
       if (elements.runImportEl) elements.runImportEl.disabled = actionInFlight;
       if (elements.runExportLogsEl) elements.runExportLogsEl.disabled = actionInFlight || !hasRun;
       if (elements.runImportFileEl) elements.runImportFileEl.disabled = actionInFlight;
       if (elements.webRestartEl) elements.webRestartEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
-      if (elements.runMaintenanceConsoleEl) elements.runMaintenanceConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.playConsoleEl) elements.playConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.runMaintenanceRefreshEl) {
         elements.runMaintenanceRefreshEl.disabled = runMaintenanceLoading || runMaintenanceActionInFlight || actionInFlight || !hasRun;
+      }
+      if (!hasRun && runSettingsOpenId) {
+        runSettingsOpenId = "";
+        renderRunSettingsPanel(null);
       }
       if (!hasRun || actionInFlight) {
         setRunMaintenanceConsoleOpen(false);
@@ -350,31 +460,55 @@
       renderSessionSummary();
     }
 
+    function closeRunCreateDialog() {
+      if (!elements.runCreateDialogEl) return;
+      if (typeof elements.runCreateDialogEl.close === "function" && elements.runCreateDialogEl.open) {
+        elements.runCreateDialogEl.close();
+      } else {
+        elements.runCreateDialogEl.removeAttribute("open");
+      }
+    }
+
+    function openRunCreateDialog() {
+      if (runActionInFlight() || !elements.runCreateDialogEl) return;
+      try {
+        if (typeof elements.runCreateDialogEl.showModal === "function") {
+          if (!elements.runCreateDialogEl.open) elements.runCreateDialogEl.showModal();
+        } else {
+          elements.runCreateDialogEl.setAttribute("open", "");
+        }
+      } catch (_err) {
+        elements.runCreateDialogEl.setAttribute("open", "");
+      }
+      windowRef.setTimeout(() => elements.newRunGoalEl?.focus(), 0);
+    }
+
     function setSessionMenu(open) {
       sessionMenuOpen = Boolean(open);
       elements.sessionMenuEl?.classList.toggle("hidden", !sessionMenuOpen);
       elements.sessionToggleEl?.setAttribute("aria-expanded", String(sessionMenuOpen));
       if (!sessionMenuOpen) {
-        setRunMaintenanceConsoleOpen(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
       }
     }
 
-    function setRunMaintenanceConsoleOpen(open) {
-      runMaintenanceConsoleOpen = Boolean(open && currentRunId() && elements.runMaintenancePopoverEl);
+    function setRunMaintenanceConsoleOpen(open, force = false) {
+      runMaintenanceConsoleOpen = Boolean(open && (runMaintenanceRunId || currentRunId()) && elements.runMaintenancePopoverEl);
       if (!elements.runMaintenancePopoverEl) return;
       if (runMaintenanceConsoleOpen) {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+      } else {
+        runMaintenanceRunId = "";
       }
-      elements.sessionMenuEl?.classList.toggle("maintenance-open", runMaintenanceConsoleOpen);
+      const maintenanceContainerEl = elements.runSettingsPanelEl || elements.runManagerEl || elements.sessionMenuEl;
+      maintenanceContainerEl?.classList.toggle("maintenance-open", runMaintenanceConsoleOpen);
       elements.runMaintenancePopoverEl.hidden = !runMaintenanceConsoleOpen;
       if (runMaintenanceConsoleOpen) {
         renderRunMaintenance();
-        void loadRunMaintenance(false);
+        void loadRunMaintenance(force);
       }
-      elements.runMaintenanceConsoleEl?.setAttribute("aria-expanded", String(runMaintenanceConsoleOpen));
     }
 
     function bind() {
@@ -392,26 +526,34 @@
         if (runMaintenanceConsoleOpen) await loadRunMaintenance(true);
         await deps.loadAccessControlStatus?.();
       });
-      elements.runMaintenanceConsoleEl?.addEventListener("click", event => {
-        event.stopPropagation();
-        if (runActionInFlight() || !currentRunId()) return;
-        setRunMaintenanceConsoleOpen(!runMaintenanceConsoleOpen);
-      });
       elements.runMaintenanceRefreshEl?.addEventListener("click", () => {
         void deps.dispatchAction?.("run-maintenance-refresh");
       });
       elements.runMaintenanceCloseEl?.addEventListener("click", () => setRunMaintenanceConsoleOpen(false));
       elements.runSelectEl?.addEventListener("change", async () => deps.switchRun?.(elements.runSelectEl.value));
-      elements.sessionMenuEl?.addEventListener("click", event => {
+      const handleRunManagerClick = event => {
         const target = event.target instanceof Element ? event.target : null;
         const filterEl = target?.closest("[data-run-lifecycle-filter]");
         if (filterEl) {
+          event.stopPropagation();
           runLifecycleFilter = filterEl.getAttribute("data-run-lifecycle-filter") || "active";
+          renderRunLifecycleActions();
+          return;
+        }
+        const settingsToggleEl = target?.closest("[data-run-settings-toggle]");
+        if (settingsToggleEl) {
+          event.preventDefault();
+          event.stopPropagation();
+          const runId = settingsToggleEl.getAttribute("data-run-settings-toggle") || "";
+          const previousRunId = runSettingsOpenId;
+          runSettingsOpenId = runSettingsOpenId === runId ? "" : runId;
+          if (!runSettingsOpenId || previousRunId !== runSettingsOpenId) setRunMaintenanceConsoleOpen(false);
           renderRunLifecycleActions();
           return;
         }
         const maintenanceEl = target?.closest("[data-run-maintenance-action]");
         if (maintenanceEl) {
+          event.stopPropagation();
           const action = maintenanceEl.getAttribute("data-run-maintenance-action") || "";
           void deps.dispatchAction?.("run-maintenance-action", {
             action,
@@ -423,11 +565,81 @@
           });
           return;
         }
+        const maintenanceTriggerEl = target?.closest("[data-run-maintenance-run]");
+        if (maintenanceTriggerEl) {
+          event.stopPropagation();
+          const runId = maintenanceTriggerEl.getAttribute("data-run-maintenance-run") || "";
+          if (runId && !runActionInFlight()) {
+            runMaintenanceRunId = runId;
+            setRunMaintenanceConsoleOpen(true, true);
+          }
+          return;
+        }
+        const selectRunEl = target?.closest("[data-run-select-run]");
+        if (selectRunEl) {
+          event.stopPropagation();
+          const runId = selectRunEl.getAttribute("data-run-select-run") || "";
+          if (runId && !runActionInFlight()) {
+            deps.switchRun?.(runId);
+          }
+          return;
+        }
+        const deleteEl = target?.closest("[data-run-delete-run]");
+        if (deleteEl) {
+          event.stopPropagation();
+          const runId = deleteEl.getAttribute("data-run-delete-run") || "";
+          if (runId && !runActionInFlight()) void deps.deleteRunFromMenu?.(runId);
+          return;
+        }
+        const actionEl = target?.closest("[data-run-lifecycle-status]");
+        if (!actionEl) return;
+        event.stopPropagation();
+        const runId = actionEl.getAttribute("data-run-lifecycle-run") || "";
+        const status = actionEl.getAttribute("data-run-lifecycle-status") || "";
+        void deps.updateRunLifecycleFromMenu?.(runId, status);
+      };
+      elements.runManagerEl?.addEventListener("click", handleRunManagerClick);
+      const handleRunSettingsClick = event => {
+        event.stopPropagation();
+        const target = event.target instanceof Element ? event.target : null;
+        const maintenanceTriggerEl = target?.closest("[data-run-maintenance-run]");
+        if (maintenanceTriggerEl) {
+          const runId = maintenanceTriggerEl.getAttribute("data-run-maintenance-run") || "";
+          if (runId && !runActionInFlight()) {
+            runMaintenanceRunId = runId;
+            setRunMaintenanceConsoleOpen(true, true);
+          }
+          return;
+        }
+        const deleteEl = target?.closest("[data-run-delete-run]");
+        if (deleteEl) {
+          const runId = deleteEl.getAttribute("data-run-delete-run") || "";
+          if (runId && !runActionInFlight()) void deps.deleteRunFromMenu?.(runId);
+          return;
+        }
         const actionEl = target?.closest("[data-run-lifecycle-status]");
         if (!actionEl) return;
         const runId = actionEl.getAttribute("data-run-lifecycle-run") || "";
         const status = actionEl.getAttribute("data-run-lifecycle-status") || "";
         void deps.updateRunLifecycleFromMenu?.(runId, status);
+      };
+      elements.runSettingsPanelEl?.addEventListener("click", handleRunSettingsClick);
+      elements.runSettingsCloseEl?.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeRunSettings();
+      });
+      elements.runManagerEl?.addEventListener("submit", async event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const form = target?.closest("#run-rename-form");
+        if (!form) return;
+        event.preventDefault();
+        const input = form.querySelector("#rename-run-name");
+        await deps.renameCurrentRun?.(input?.value || "");
+      });
+      elements.runRenameFormEl?.addEventListener("submit", async event => {
+        event.preventDefault();
+        await deps.renameCurrentRun?.(elements.renameRunNameEl?.value || "");
       });
       elements.runExportEl?.addEventListener("click", deps.exportCurrentRun);
       elements.webRestartEl?.addEventListener("click", () => {
@@ -444,7 +656,22 @@
         if (runActionInFlight() || !currentRunId()) return;
         deps.setPlayConsoleOpen?.(!deps.playConsoleOpen?.());
       });
-      elements.runMaintenancePopoverEl?.addEventListener("click", event => event.stopPropagation());
+      elements.runMaintenancePopoverEl?.addEventListener("click", event => {
+        event.stopPropagation();
+        const target = event.target instanceof Element ? event.target : null;
+        const maintenanceEl = target?.closest("[data-run-maintenance-action]");
+        if (maintenanceEl) {
+          const action = maintenanceEl.getAttribute("data-run-maintenance-action") || "";
+          void deps.dispatchAction?.("run-maintenance-action", {
+            action,
+            detail: {
+              taskId: maintenanceEl.getAttribute("data-run-maintenance-task") || "",
+              agentId: maintenanceEl.getAttribute("data-run-maintenance-agent") || "",
+              archive: maintenanceEl.getAttribute("data-run-maintenance-archive") || ""
+            }
+          });
+        }
+      });
       elements.weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.playConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.runImportEl?.addEventListener("click", () => {
@@ -455,6 +682,12 @@
         const file = elements.runImportFileEl.files?.[0] || null;
         elements.runImportFileEl.value = "";
         await deps.importRunArchive?.(file);
+      });
+      elements.openRunCreateEl?.addEventListener("click", openRunCreateDialog);
+      elements.closeRunCreateEl?.addEventListener("click", closeRunCreateDialog);
+      elements.cancelRunCreateEl?.addEventListener("click", closeRunCreateDialog);
+      elements.runCreateDialogEl?.addEventListener("click", event => {
+        if (event.target === elements.runCreateDialogEl) closeRunCreateDialog();
       });
       elements.runCreateFormEl?.addEventListener("submit", async event => {
         event.preventDefault();
@@ -467,7 +700,10 @@
       elements.documentRef?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
         if (sessionMenuOpen && !elements.sessionControlEl?.contains(target)) setSessionMenu(false);
-        if (runMaintenanceConsoleOpen && !elements.runMaintenanceConsoleEl?.contains(target) && !elements.runMaintenancePopoverEl?.contains(target)) {
+        if (runSettingsOpenId && !elements.runManagerEl?.contains(target) && !elements.runSettingsPanelEl?.contains(target)) {
+          closeRunSettings();
+        }
+        if (runMaintenanceConsoleOpen && !elements.runManagerEl?.contains(target) && !elements.runSettingsPanelEl?.contains(target) && !elements.runMaintenancePopoverEl?.contains(target)) {
           setRunMaintenanceConsoleOpen(false);
         }
         if (deps.weixinConsoleOpen?.() && !elements.weixinConsoleEl?.contains(target) && !elements.weixinConsolePopoverEl?.contains(target)) {
@@ -481,6 +717,7 @@
         if (event.key === "Escape") {
           setSessionMenu(false);
           setRunMaintenanceConsoleOpen(false);
+          closeRunCreateDialog();
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
         }
@@ -490,6 +727,7 @@
 
     return Object.freeze({
       bind,
+      closeRunCreateDialog,
       isRunMaintenanceConsoleOpen: () => runMaintenanceConsoleOpen,
       isSessionMenuOpen: () => sessionMenuOpen,
       loadRunMaintenance,
@@ -504,6 +742,7 @@
       runMaintenanceActionInFlight: () => runMaintenanceActionInFlight,
       runMaintenanceData: () => runMaintenanceData,
       runMaintenanceLoading: () => runMaintenanceLoading,
+      runMaintenanceRunId: () => runMaintenanceRunId,
       runMaintenancePayload,
       setRunArchiveState,
       setRunMaintenanceConsoleOpen,

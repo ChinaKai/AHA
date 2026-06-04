@@ -9,6 +9,14 @@
     const documentRef = elements.documentRef || document;
     const requestTimeoutMs = Number(deps.requestTimeoutMs || 12000);
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
+    function format(key, values = {}, fallback = "") {
+      return window.AHAI18n?.format?.(key, values, fallback) || fallback;
+    }
+
     function currentRunId() {
       return String(deps.currentRunId?.() || "").trim();
     }
@@ -55,6 +63,7 @@
         const nextRunId = deps.runIdOf?.(run);
         if (!nextRunId) throw new Error("New run did not include an id");
         if (elements.newRunGoalEl) elements.newRunGoalEl.value = "";
+        deps.closeRunCreateDialog?.();
         const previousRunId = currentRunId();
         deps.setRunsLoaded?.(false);
         await deps.loadRuns?.(true);
@@ -111,12 +120,62 @@
         const payload = await deps.fetchJson(deps.apiUrl(`/api/runs/${encodeURIComponent(targetRunId)}/lifecycle`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: nextStatus })
+          body: JSON.stringify({ status: nextStatus, current_run_id: currentRunId() })
         }, "Failed to update run lifecycle");
         deps.applyRunListData?.(payload);
         deps.setRunsLoaded?.(true);
         const updatedRun = payload.run || (deps.runsData?.() || []).find(item => deps.runIdOf?.(item) === targetRunId) || null;
-        deps.setRunLifecycleState?.(`${deps.runTitleOf?.(updatedRun || { id: targetRunId })} lifecycle=${deps.runLifecycleLabel?.(updatedRun)}`);
+        deps.setRunLifecycleState?.(format("run.lifecycle_result", {
+          title: deps.runTitleOf?.(updatedRun || { id: targetRunId }),
+          lifecycle: deps.runLifecycleLabel?.(updatedRun)
+        }, `${deps.runTitleOf?.(updatedRun || { id: targetRunId })} lifecycle=${deps.runLifecycleLabel?.(updatedRun)}`));
+      } catch (err) {
+        deps.setRunLifecycleState?.(err?.message || String(err), true);
+      } finally {
+        setRunActionInFlight(false);
+        deps.renderSessionMenu?.();
+      }
+    }
+
+    async function deleteRunFromMenu(runId) {
+      const targetRunId = String(runId || "").trim();
+      if (!targetRunId || deps.runActionInFlight?.()) return;
+      const run = (deps.runsData?.() || []).find(item => deps.runIdOf?.(item) === targetRunId) || null;
+      const protectedReason = deps.runDeleteProtectionReason?.(run, currentRunId());
+      if (protectedReason) {
+        deps.setRunLifecycleState?.(deps.runLifecycleReasonText?.(protectedReason), true);
+        return;
+      }
+      const title = deps.runTitleOf?.(run || { id: targetRunId }) || targetRunId;
+      const confirmed = await deps.confirmDialogAction?.({
+        title: format("run.delete_confirm_title", { run: title }, `Delete ${title}?`),
+        message: format(
+          "run.delete_confirm_message",
+          { run: title },
+          "Delete this run and its local AHA data. This cannot be undone."
+        ),
+        details: [
+          [t("run.current", "Run"), title],
+          ["ID", targetRunId]
+        ],
+        confirmLabel: t("run.delete", "Delete"),
+        danger: true
+      });
+      if (!confirmed) return;
+      setRunActionInFlight(true);
+      deps.renderSessionMenu?.();
+      try {
+        const payload = await deps.fetchJson(
+          deps.apiUrl(`/api/runs/${encodeURIComponent(targetRunId)}`, {
+            current_run_id: currentRunId(),
+            force: "1"
+          }, { runScoped: false }),
+          { method: "DELETE" },
+          t("run.delete_failed", "Failed to delete run")
+        );
+        deps.applyRunListData?.(payload);
+        deps.setRunsLoaded?.(true);
+        deps.setRunLifecycleState?.(format("run.delete_result", { run: title }, `Deleted ${title}`));
       } catch (err) {
         deps.setRunLifecycleState?.(err?.message || String(err), true);
       } finally {
@@ -128,7 +187,7 @@
     function exportCurrentRun() {
       const runId = currentRunId();
       if (!runId) {
-        alertUser("请先选择 Run");
+        alertUser(t("run.none", "No run selected"));
         return;
       }
       const includeLogs = Boolean(elements.runExportLogsEl?.checked);
@@ -139,7 +198,7 @@
       documentRef.body.appendChild(link);
       link.click();
       link.remove();
-      deps.setRunArchiveState?.(includeLogs ? "导出已开始，包含日志" : "导出已开始，未包含原始日志");
+      deps.setRunArchiveState?.(includeLogs ? t("run.archive_export_started_logs", "Export started with logs") : t("run.archive_export_started_no_logs", "Export started without raw logs"));
     }
 
     async function importRunArchive(file) {
@@ -147,7 +206,7 @@
       const form = new FormData();
       form.append("archive", file);
       setRunActionInFlight(true);
-      deps.setRunArchiveState?.("正在导入...");
+      deps.setRunArchiveState?.(t("run.importing", "Importing..."));
       deps.renderSessionMenu?.();
       try {
         const response = await deps.fetchWithTimeout(
@@ -155,7 +214,7 @@
           { method: "POST", body: form },
           Math.max(requestTimeoutMs, 60000)
         );
-        const payload = await deps.readJsonResponse(response, "导入失败");
+        const payload = await deps.readJsonResponse(response, t("run.import_failed", "Import failed"));
         const nextRunId = String(payload.imported_run_id || deps.runIdOf?.(payload.run) || "").trim();
         if (Array.isArray(payload.runs)) {
           deps.applyRunListData?.({ default_run_id: deps.defaultRunId?.(), runs: payload.runs });
@@ -166,9 +225,9 @@
           await deps.loadRuns?.(true);
         }
         if (nextRunId) await deps.switchRun?.(nextRunId);
-        deps.setRunArchiveState?.(nextRunId ? `已导入 ${nextRunId}` : "导入完成");
+        deps.setRunArchiveState?.(nextRunId ? format("run.imported", { runId: nextRunId }, `Imported ${nextRunId}`) : t("run.import_complete", "Import complete"));
       } catch (err) {
-        const message = err?.message || String(err || "导入失败");
+        const message = err?.message || String(err || t("run.import_failed", "Import failed"));
         deps.setRunArchiveState?.(message, true);
         alertUser(message);
       } finally {
@@ -177,24 +236,24 @@
       }
     }
 
-    async function postRunMaintenanceAction(path, body, fallbackMessage) {
+    async function postRunMaintenanceAction(path, body, fallbackMessage, targetRunId) {
       deps.setRunMaintenanceActionInFlight?.(true);
-      deps.setRunMaintenanceMessage?.("执行中...");
+      deps.setRunMaintenanceMessage?.(t("run.maintenance_action_running", "Running..."));
       deps.renderRunMaintenance?.();
       try {
         const payload = await deps.fetchJson(deps.apiUrl(path, {}, { runScoped: false }), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
+          body: JSON.stringify({ ...body, current_run_id: currentRunId() })
         }, fallbackMessage);
         if (payload.retention || payload.recovery || payload.retention_archives) {
           deps.setRunMaintenanceData?.({ ...(deps.runMaintenanceData?.() || {}), ...payload });
-          deps.setRunMaintenanceRunId?.(payload.run_id || currentRunId());
+          deps.setRunMaintenanceRunId?.(payload.run_id || targetRunId);
         }
-        deps.setRunMaintenanceMessage?.("完成");
+        deps.setRunMaintenanceMessage?.(t("run.maintenance_action_done", "Done"));
         await deps.loadRunMaintenance?.(true);
       } catch (err) {
-        deps.setRunMaintenanceMessage?.(err?.message || String(err || "执行失败"));
+        deps.setRunMaintenanceMessage?.(err?.message || String(err || fallbackMessage || t("run.maintenance_action_failed", "Action failed")));
       } finally {
         deps.setRunMaintenanceActionInFlight?.(false);
         deps.renderRunMaintenance?.();
@@ -202,7 +261,7 @@
     }
 
     async function runMaintenanceAction(action, detail = {}) {
-      const runId = currentRunId();
+      const runId = deps.runMaintenanceRunId?.() || currentRunId();
       if (!runId || deps.runMaintenanceActionInFlight?.()) return;
       const encodedRunId = encodeURIComponent(runId);
       const confirmPayload = deps.runMaintenanceActionConfirm?.(action, detail, deps.runMaintenancePayload?.() || {}, {
@@ -219,7 +278,8 @@
             force,
             confirm: force ? "delete archived originals" : "archive"
           },
-          "Retention action failed"
+          "Retention action failed",
+          runId
         );
       } else if (action === "recover") {
         const taskId = String(detail.taskId || "").trim();
@@ -232,7 +292,8 @@
             agent_id: agentId,
             confirm: "recover stale agent"
           },
-          "Stale recovery failed"
+          "Stale recovery failed",
+          runId
         );
       } else if (action === "restore-archive") {
         const archive = String(detail.archive || "").trim();
@@ -243,7 +304,8 @@
             archive,
             confirm: "restore archive"
           },
-          "Archive restore failed"
+          "Archive restore failed",
+          runId
         );
       }
     }
@@ -251,24 +313,24 @@
     async function restartWebService() {
       if (deps.webRestartInFlight?.()) return;
       if (!currentRunId()) {
-        alertUser("请先选择 Run");
+        alertUser(t("run.none", "No run selected"));
         return;
       }
       const restartVersion = deps.currentAppVersion?.();
       setWebRestartInFlight(true);
-      deps.setWebRestartState?.("正在安排重启...");
+      deps.setWebRestartState?.(t("run.restart_scheduling", "Scheduling restart..."));
       deps.renderSessionMenu?.();
       try {
         await deps.fetchJson(deps.apiUrl("/api/web/restart"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
-        }, "重启 Web 失败");
-        deps.setWebRestartState?.("已请求重启，等待恢复...");
+        }, t("run.restart_failed", "Failed to restart Web"));
+        deps.setWebRestartState?.(t("run.restart_waiting", "Restart requested. Waiting for recovery..."));
         waitForWebRestartAndReload(restartVersion);
       } catch (err) {
         setWebRestartInFlight(false);
-        deps.setWebRestartState?.(err?.message || String(err || "重启 Web 失败"), true);
+        deps.setWebRestartState?.(err?.message || String(err || t("run.restart_failed", "Failed to restart Web")), true);
         deps.renderSessionMenu?.();
       }
     }
@@ -296,7 +358,7 @@
             }
             void refreshAfterWebRestart();
             setWebRestartInFlight(false);
-            deps.setWebRestartState?.("重启完成。");
+            deps.setWebRestartState?.(t("run.restart_complete", "Restart complete."));
             deps.renderSessionMenu?.();
             deps.renderPanelForRealtime?.();
             return;
@@ -307,7 +369,7 @@
         await sleep(1000);
       }
       setWebRestartInFlight(false);
-      deps.setWebRestartState?.("已请求重启，若页面未恢复请手动启动。");
+      deps.setWebRestartState?.(t("run.restart_manual", "Restart requested. Start the service manually if the page does not recover."));
       deps.renderSessionMenu?.();
     }
 
@@ -331,6 +393,7 @@
       exportCurrentRun,
       importRunArchive,
       renameCurrentRun,
+      deleteRunFromMenu,
       restartWebService,
       runMaintenanceAction,
       updateRunLifecycleFromMenu,

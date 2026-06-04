@@ -5,12 +5,12 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest import mock
 
 from aha_cli.domain.run_lifecycle import run_lifecycle_projection
 from aha_cli.services.run_cleanup import cleanup_temp_runs
 from aha_cli.services.run_diagnostics import diagnose_runs
 from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_run_lifecycle_status
+from aha_cli.store.filesystem import create_plan, set_agent_status, set_task_status
 from aha_cli.store.io import write_json
 from aha_cli.store.runs import list_run_summaries, run_summary, update_run_lifecycle
 from tests.helpers import fetch_ui_response, json_response_body
@@ -124,29 +124,34 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertIsNone(restored["archived_at"])
         self.assertEqual(plan["lifecycle_status"], "active")
 
-    def test_lifecycle_service_rejects_current_and_active_heartbeat_runs(self) -> None:
+    def test_lifecycle_service_allows_idle_current_heartbeat_and_rejects_running_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_plan(root, "current-run")
             write_plan(root, "active-run")
+            running_plan = create_plan(root, "Running run", 1, "research", ["Running task"], [], backend="codex")
+            running_run_id = running_plan["id"]
+            set_task_status(root, running_run_id, "task-001", "running")
+            set_agent_status(root, running_run_id, "task-001", "main", "running")
             heartbeat = root / "runs" / "active-run" / "logs" / "realtime-debug.log"
             heartbeat.parent.mkdir(parents=True)
             heartbeat.write_text('{"type":"heartbeat_sent"}\n', encoding="utf-8")
             os.utime(heartbeat, (1995, 1995))
 
-            with self.assertRaises(RunLifecycleActionError) as current_error:
-                set_run_lifecycle_status(root, "current-run", "hidden", current_run_id="current-run")
-            with self.assertRaises(RunLifecycleActionError) as heartbeat_error:
-                set_run_lifecycle_status(
-                    root,
-                    "active-run",
-                    "archived",
-                    active_heartbeat_seconds=30,
-                    now=2000,
-                )
+            current = set_run_lifecycle_status(root, "current-run", "hidden", current_run_id="current-run")
+            heartbeat_run = set_run_lifecycle_status(
+                root,
+                "active-run",
+                "archived",
+                active_heartbeat_seconds=30,
+                now=2000,
+            )
+            with self.assertRaises(RunLifecycleActionError) as running_error:
+                set_run_lifecycle_status(root, running_run_id, "hidden")
 
-        self.assertEqual(current_error.exception.reason, "current_run")
-        self.assertEqual(heartbeat_error.exception.reason, "active_heartbeat")
+        self.assertEqual(current["lifecycle_status"], "hidden")
+        self.assertEqual(heartbeat_run["lifecycle_status"], "archived")
+        self.assertEqual(running_error.exception.reason, "running_work")
 
     def test_lifecycle_write_does_not_change_cleanup_or_diagnose_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,11 +214,19 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(restored_body["run"]["lifecycle_status"], "active")
         self.assertIn("old-run", {item["id"] for item in restored_body["runs"]})
 
-    def test_run_api_rejects_missing_current_and_active_heartbeat_runs(self) -> None:
+    def test_run_api_allows_idle_current_heartbeat_and_rejects_running_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
             write_plan(root, "current-run")
             write_plan(root, "old-run")
+            running_plan = create_plan(root, "Running run", 1, "research", ["Running task"], [], backend="codex")
+            running_run_id = running_plan["id"]
+            set_task_status(root, running_run_id, "task-001", "running")
+            set_agent_status(root, running_run_id, "task-001", "main", "running")
+            heartbeat = root / "runs" / "old-run" / "logs" / "realtime-debug.log"
+            heartbeat.parent.mkdir(parents=True)
+            heartbeat.write_text('{"type":"heartbeat_sent"}\n', encoding="utf-8")
+            os.utime(heartbeat, (1995, 1995))
 
             missing_response = asyncio.run(
                 fetch_ui_response(
@@ -233,24 +246,35 @@ class RunLifecycleTests(unittest.TestCase):
                     payload={"status": "hidden"},
                 )
             )
-            with mock.patch("aha_cli.services.run_lifecycle_actions.run_has_active_heartbeat", return_value=True):
-                heartbeat_response = asyncio.run(
-                    fetch_ui_response(
-                        root,
-                        "current-run",
-                        "/api/runs/old-run/lifecycle",
-                        method="PATCH",
-                        payload={"status": "hidden"},
-                    )
+            heartbeat_response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "current-run",
+                    "/api/runs/old-run/lifecycle",
+                    method="PATCH",
+                    payload={"status": "archived"},
                 )
+            )
+            running_response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "current-run",
+                    f"/api/runs/{running_run_id}/lifecycle",
+                    method="PATCH",
+                    payload={"status": "hidden"},
+                )
+            )
             current_body = json_response_body(current_response)
             heartbeat_body = json_response_body(heartbeat_response)
+            running_body = json_response_body(running_response)
 
         self.assertTrue(missing_response.startswith(b"HTTP/1.1 404 Not Found"))
-        self.assertTrue(current_response.startswith(b"HTTP/1.1 409 Conflict"))
-        self.assertEqual(current_body["reason"], "current_run")
-        self.assertTrue(heartbeat_response.startswith(b"HTTP/1.1 409 Conflict"))
-        self.assertEqual(heartbeat_body["reason"], "active_heartbeat")
+        self.assertTrue(current_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(current_body["run"]["lifecycle_status"], "hidden")
+        self.assertTrue(heartbeat_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(heartbeat_body["run"]["lifecycle_status"], "archived")
+        self.assertTrue(running_response.startswith(b"HTTP/1.1 409 Conflict"))
+        self.assertEqual(running_body["reason"], "running_work")
 
 
 if __name__ == "__main__":

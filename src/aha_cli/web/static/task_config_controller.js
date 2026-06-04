@@ -11,9 +11,40 @@
     const currentRunId = options.currentRunId || (() => "");
     const alertUser = options.alert || (message => window.alert(message));
     let createProxyOverride = false;
+    let createHostProxyOverride = false;
+    let selectedHostProxyOverride = false;
     let proxyEditingUntil = 0;
     let supervisionEditingUntil = 0;
     let contextEditingUntil = 0;
+    let taskSettingsEditorTaskId = "";
+
+    function taskById(taskId) {
+      const id = String(taskId || "");
+      if (!id) return null;
+      const tasks = getStatusData()?.tasks || [];
+      return Array.isArray(tasks) ? tasks.find(task => String(task?.id || "") === id) || null : null;
+    }
+
+    function getTaskSettingsTask() {
+      if (taskSettingsEditorTaskId) {
+        const task = taskById(taskSettingsEditorTaskId);
+        if (task) return task;
+        taskSettingsEditorTaskId = "";
+      }
+      return getSelectedTask();
+    }
+
+    function setTaskSettingsEditorTaskId(taskId) {
+      taskSettingsEditorTaskId = String(taskId || "");
+    }
+
+    function resolveTaskEditorTask(task, explicit) {
+      if (explicit) {
+        setTaskSettingsEditorTaskId(task?.id || "");
+        return task || null;
+      }
+      return getTaskSettingsTask();
+    }
 
     function renderAskUserGateControls(containerEl, gates) {
       if (!containerEl) return;
@@ -122,7 +153,8 @@
       if (els.runProxyStateEl) els.runProxyStateEl.textContent = disabled ? "Select a run to edit proxy." : runProxySummary();
     }
 
-    function renderTaskProxyEditor(task = getSelectedTask()) {
+    function renderTaskProxyEditor(taskArg) {
+      const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
       if (!els.taskProxyEditorEl || !els.taskProxyFormEl) return;
       const disabled = !task;
       els.taskProxyFormEl.querySelectorAll("input, button").forEach(item => {
@@ -137,42 +169,115 @@
       if (els.taskProxyStateEl) els.taskProxyStateEl.textContent = helpers.taskProxySummary(task, runProxyConfig());
     }
 
-    function syncSupervisionModeFields(modeEl, maxRoundsFieldEl, askUserFieldEl) {
+    function supervisionHostBackendForMode(mode) {
+      if (mode === "assisted_codex") return "codex";
+      if (mode === "assisted_claude") return "claude";
+      return "stub";
+    }
+
+    function syncSupervisionModeFields(
+      modeEl,
+      maxRoundsFieldEl,
+      askUserFieldEl,
+      hostModelFieldEl,
+      hostModelEl,
+      hostProxyFieldEl,
+      hostProxyEnabledEl,
+      syncOptions = {}
+    ) {
       const manual = modeEl?.value === "manual";
+      const hostBackend = supervisionHostBackendForMode(modeEl?.value || "manual");
+      const realHost = hostBackend !== "stub";
       maxRoundsFieldEl?.classList.toggle("hidden", manual);
       if (maxRoundsFieldEl) maxRoundsFieldEl.hidden = manual;
       askUserFieldEl?.classList.toggle("hidden", manual);
       if (askUserFieldEl) askUserFieldEl.hidden = manual;
+      hostModelFieldEl?.classList.toggle("hidden", !realHost);
+      if (hostModelFieldEl) hostModelFieldEl.hidden = !realHost;
+      hostProxyFieldEl?.classList.toggle("hidden", !realHost);
+      if (hostProxyFieldEl) hostProxyFieldEl.hidden = !realHost;
+      if (hostModelEl && realHost) {
+        const requested = syncOptions.selectedModel !== undefined ? syncOptions.selectedModel : hostModelEl.value;
+        helpers.fillModelSelect?.(hostModelEl, hostBackend, requested || helpers.defaultModelForBackend?.(hostBackend) || "");
+      }
+      if (hostProxyEnabledEl) {
+        if (!realHost) {
+          hostProxyEnabledEl.checked = false;
+        } else if (syncOptions.selectedProxyEnabled !== undefined) {
+          hostProxyEnabledEl.checked = Boolean(syncOptions.selectedProxyEnabled);
+        } else if (syncOptions.applySelectedProxyDefault && !selectedHostProxyOverride) {
+          hostProxyEnabledEl.checked = Boolean(backendProxyDefaultConfig(hostBackend).enabled);
+        } else if (syncOptions.applyCreateProxyDefault && !createHostProxyOverride) {
+          hostProxyEnabledEl.checked = Boolean(backendProxyDefaultConfig(hostBackend).enabled);
+        }
+      }
     }
 
-    function syncTaskSupervisionModeFields() {
-      syncSupervisionModeFields(els.selectedTaskSupervisionModeEl, els.selectedTaskSupervisionMaxRoundsFieldEl, els.selectedTaskSupervisionAskUserFieldEl);
+    function syncTaskSupervisionModeFields(options = {}) {
+      if (options.force) selectedHostProxyOverride = false;
+      syncSupervisionModeFields(
+        els.selectedTaskSupervisionModeEl,
+        els.selectedTaskSupervisionMaxRoundsFieldEl,
+        els.selectedTaskSupervisionAskUserFieldEl,
+        els.selectedTaskSupervisionHostModelFieldEl,
+        els.selectedTaskSupervisionHostModelEl,
+        els.selectedTaskSupervisionHostProxyFieldEl,
+        els.selectedTaskSupervisionHostProxyEnabledEl,
+        { applySelectedProxyDefault: Boolean(options.applyProxyDefault) }
+      );
     }
 
-    function syncCreateTaskSupervisionModeFields() {
-      syncSupervisionModeFields(els.taskSupervisionModeEl, els.taskSupervisionMaxRoundsFieldEl, els.taskSupervisionAskUserFieldEl);
+    function syncCreateTaskSupervisionModeFields(options = {}) {
+      if (options.force) createHostProxyOverride = false;
+      syncSupervisionModeFields(
+        els.taskSupervisionModeEl,
+        els.taskSupervisionMaxRoundsFieldEl,
+        els.taskSupervisionAskUserFieldEl,
+        els.taskSupervisionHostModelFieldEl,
+        els.taskSupervisionHostModelEl,
+        els.taskSupervisionHostProxyFieldEl,
+        els.taskSupervisionHostProxyEnabledEl,
+        { applyCreateProxyDefault: true }
+      );
     }
 
-    function renderTaskSupervisionEditor(task = getSelectedTask()) {
+    function renderTaskSupervisionEditor(taskArg) {
+      const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
       if (!els.taskSupervisionEditorEl || !els.taskSupervisionFormEl) return;
       const disabled = !task;
       const applyDisabledState = () => els.taskSupervisionFormEl.querySelectorAll("input, select, button").forEach(item => {
         item.disabled = disabled;
       });
       if (!task) {
+        selectedHostProxyOverride = false;
         if (els.selectedTaskSupervisionModeEl) els.selectedTaskSupervisionModeEl.value = "manual";
         if (els.selectedTaskSupervisionMaxRoundsEl) els.selectedTaskSupervisionMaxRoundsEl.value = String(defaults.defaultTaskSupervisionMaxRounds);
         renderAskUserGateControls(els.selectedTaskSupervisionAskUserGatesEl, helpers.defaultAskUserGates());
-        if (els.taskSupervisionStateEl) els.taskSupervisionStateEl.textContent = "Select a task to edit supervision.";
         syncTaskSupervisionModeFields();
+        if (els.selectedTaskSupervisionHostProxyEnabledEl) els.selectedTaskSupervisionHostProxyEnabledEl.checked = false;
+        if (els.taskSupervisionStateEl) els.taskSupervisionStateEl.textContent = "Select a task to edit supervision.";
         applyDisabledState();
         return;
       }
       const policy = helpers.taskSupervisionPolicy(task);
-      if (els.selectedTaskSupervisionModeEl) els.selectedTaskSupervisionModeEl.value = helpers.taskSupervisionModeValue(policy);
+      const selectedMode = helpers.taskSupervisionModeValue(policy);
+      selectedHostProxyOverride = false;
+      if (els.selectedTaskSupervisionModeEl) els.selectedTaskSupervisionModeEl.value = selectedMode;
       if (els.selectedTaskSupervisionMaxRoundsEl) els.selectedTaskSupervisionMaxRoundsEl.value = String(policy.max_rounds || defaults.defaultTaskSupervisionMaxRounds);
       renderAskUserGateControls(els.selectedTaskSupervisionAskUserGatesEl, policy.ask_user_gates);
-      syncTaskSupervisionModeFields();
+      syncSupervisionModeFields(
+        els.selectedTaskSupervisionModeEl,
+        els.selectedTaskSupervisionMaxRoundsFieldEl,
+        els.selectedTaskSupervisionAskUserFieldEl,
+        els.selectedTaskSupervisionHostModelFieldEl,
+        els.selectedTaskSupervisionHostModelEl,
+        els.selectedTaskSupervisionHostProxyFieldEl,
+        els.selectedTaskSupervisionHostProxyEnabledEl,
+        {
+          selectedModel: policy.host_model || helpers.defaultModelForBackend?.(supervisionHostBackendForMode(selectedMode)) || "",
+          selectedProxyEnabled: policy.host_proxy_enabled
+        }
+      );
       if (els.taskSupervisionStateEl) els.taskSupervisionStateEl.textContent = helpers.taskSupervisionSummary(task);
       applyDisabledState();
     }
@@ -183,7 +288,8 @@
       if (els.selectedTaskContextThresholdFieldEl) els.selectedTaskContextThresholdFieldEl.hidden = !enabled;
     }
 
-    function renderTaskContextEditor(task = getSelectedTask()) {
+    function renderTaskContextEditor(taskArg) {
+      const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
       if (!els.taskContextEditorEl || !els.taskContextFormEl) return;
       const disabled = !task;
       els.taskContextFormEl.querySelectorAll("input, button").forEach(item => {
@@ -237,7 +343,7 @@
     }
 
     async function saveTaskProxyConfig() {
-      const task = getSelectedTask();
+      const task = getTaskSettingsTask();
       if (!task) return;
       const proxyEnabled = Boolean(els.selectedTaskProxyEnabledEl?.checked);
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/proxy`), {
@@ -276,13 +382,17 @@
     }
 
     async function saveTaskSupervisionConfig() {
-      const task = getSelectedTask();
+      const task = getTaskSettingsTask();
       if (!task) return;
       const selectedMode = els.selectedTaskSupervisionModeEl?.value || "manual";
       const supervision = helpers.taskSupervisionPayloadFromMode(
         selectedMode,
         els.selectedTaskSupervisionMaxRoundsEl?.value || defaults.defaultTaskSupervisionMaxRounds,
-        readAskUserGateControls(els.selectedTaskSupervisionAskUserGatesEl)
+        readAskUserGateControls(els.selectedTaskSupervisionAskUserGatesEl),
+        {
+          hostModel: els.selectedTaskSupervisionHostModelEl?.value || null,
+          hostProxyEnabled: Boolean(els.selectedTaskSupervisionHostProxyEnabledEl?.checked)
+        }
       );
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/supervision`), {
         method: "POST",
@@ -294,7 +404,7 @@
     }
 
     async function saveTaskContextConfig() {
-      const task = getSelectedTask();
+      const task = getTaskSettingsTask();
       if (!task) return;
       const enabled = Boolean(els.selectedTaskContextAutoCompactEnabledEl?.checked);
       const threshold = helpers.normalizeTaskContextThreshold(els.selectedTaskContextThresholdEl?.value || defaults.defaultTaskContextThresholdPercent);
@@ -380,7 +490,20 @@
       els.taskProxyEnabledEl?.addEventListener("change", () => {
         createProxyOverride = true;
       });
-      els.taskSupervisionModeEl?.addEventListener("change", syncCreateTaskSupervisionModeFields);
+      els.taskSupervisionHostProxyEnabledEl?.addEventListener("change", () => {
+        createHostProxyOverride = true;
+      });
+      els.taskSupervisionModeEl?.addEventListener("change", () => {
+        createHostProxyOverride = false;
+        syncCreateTaskSupervisionModeFields();
+      });
+      els.selectedTaskSupervisionHostProxyEnabledEl?.addEventListener("change", () => {
+        selectedHostProxyOverride = true;
+      });
+      els.selectedTaskSupervisionModeEl?.addEventListener("change", () => {
+        selectedHostProxyOverride = false;
+        syncTaskSupervisionModeFields({ applyProxyDefault: true });
+      });
     }
 
     return Object.freeze({
@@ -406,6 +529,7 @@
       saveTaskProxyConfig,
       saveTaskSupervisionConfig,
       setCreateProxyDefaultsFromInputs,
+      setTaskSettingsEditorTaskId,
       syncCreateProxyDefaultForBackend,
       syncCreateTaskSupervisionModeFields,
       syncTaskContextFields,

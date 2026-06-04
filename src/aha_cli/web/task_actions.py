@@ -60,6 +60,10 @@ def parse_task_supervision_fields(payload: dict) -> dict[str, object]:
         update["mode"] = mode
     if "host_backend" in payload:
         update["host_backend"] = str(payload.get("host_backend") or "stub")
+    if "host_model" in payload:
+        update["host_model"] = str(payload.get("host_model") or "") or None
+    if "host_proxy_enabled" in payload:
+        update["host_proxy_enabled"] = parse_optional_bool(payload.get("host_proxy_enabled"), "host_proxy_enabled")
     if "host_agent_id" in payload:
         update["host_agent_id"] = str(payload.get("host_agent_id") or "host")
     if "real_agent_enabled" in payload:

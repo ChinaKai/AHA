@@ -22,6 +22,7 @@ from aha_cli.store.filesystem import (
 BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
 TASK_OUTCOME_SCAN_LIMIT = 10000
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+STALE_RECOVERABLE_TASK_STATUSES = {"running", "awaiting_user"}
 _BACKEND_STATUS_CACHE: dict[tuple[str, str, str, str], tuple[float, dict]] = {}
 
 
@@ -202,6 +203,27 @@ def merge_recovery_context_message(recovery_context: str, message: str) -> str:
     return "\n".join([context, "", "用户当前发送的新消息：", text]).strip()
 
 
+def _is_supervision_host_agent(task: dict, agent_id: str) -> bool:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    host_agent_id = str(supervision.get("host_agent_id") or "host")
+    agent = next((item for item in task.get("agents", []) if str(item.get("id") or "") == agent_id), None)
+    return agent_id == host_agent_id or str((agent or {}).get("role") or "") == "host"
+
+
+def _clear_main_host_wait_if_needed(root: Path, run_id: str, task_id: str, task: dict, recovered_agent_id: str) -> bool:
+    if not _is_supervision_host_agent(task, recovered_agent_id):
+        return False
+    main_agent = next((item for item in task.get("agents", []) if str(item.get("id") or "") == "main"), None)
+    if not (
+        main_agent
+        and str(main_agent.get("status") or "").lower() == "waiting"
+        and str(main_agent.get("waiting_reason") or "").lower() == "host"
+    ):
+        return False
+    set_agent_status(root, run_id, task_id, "main", "completed")
+    return True
+
+
 def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict, backend_state: dict) -> bool:
     task_id = str(task.get("id") or "")
     agent_id = str(agent.get("id") or "main")
@@ -225,7 +247,7 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     persisted_agent = next((item for item in persisted_task.get("agents", []) if str(item.get("id") or "") == agent_id), None)
     if (
         persisted_agent is None
-        or str(persisted_task.get("status") or "") != "running"
+        or str(persisted_task.get("status") or "") not in STALE_RECOVERABLE_TASK_STATUSES
         or str(persisted_agent.get("status") or "") != "running"
     ):
         return False
@@ -243,6 +265,7 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
         recovery_context_consumed_at="",
     )
     agent.update(updated_agent)
+    cleared_main_host_wait = _clear_main_host_wait_if_needed(root, run_id, task_id, persisted_task, agent_id)
     if agent_id != "main":
         fresh_task = task_snapshot(root, run_id, task_id)["task"]
         record_main_recovery_context(
@@ -283,10 +306,13 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
         for item in persisted_task.get("agents", [])
     )
     if not other_agent_running and not round_summary_requested:
-        updated_task = set_task_status(root, run_id, task_id, "awaiting_user")
-        for field in ("status", "exit_code", "started_at", "finished_at"):
-            task[field] = updated_task.get(field)
-        task_recovered = True
+        if str(persisted_task.get("status") or "") != "awaiting_user":
+            updated_task = set_task_status(root, run_id, task_id, "awaiting_user")
+            for field in ("status", "exit_code", "started_at", "finished_at"):
+                task[field] = updated_task.get(field)
+            task_recovered = True
+        else:
+            task["status"] = "awaiting_user"
 
     append_event(
         root,
@@ -300,6 +326,7 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
             "reason": recovery_reason,
             "backend": {"status": backend_process_status, "pid": backend_state.get("pid")},
             "task_recovered": task_recovered,
+            "cleared_main_host_wait": cleared_main_host_wait,
         },
     )
     return True
@@ -464,6 +491,7 @@ __all__ = [
     "task_activity_status",
     "cached_backend_status",
     "invalidate_backend_status_cache",
+    "STALE_RECOVERABLE_TASK_STATUSES",
     "agent_recovery_context",
     "sub_agent_recovery_notice",
     "append_recovery_context",

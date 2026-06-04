@@ -24,6 +24,7 @@
   }
 
   function accessControlView(payload = {}, options = {}) {
+    const t = window.AHAI18n?.t || ((_, fallback) => fallback);
     const locationObj = options.locationObj || window.location;
     const safePayload = payload || localAccessControlFallback(locationObj);
     const risk = String(safePayload.risk_level || "unknown");
@@ -32,8 +33,8 @@
     const accessAddress = browserAccessAddress(locationObj);
     const bindAddress = hostPortLabel(safePayload.bind_host, safePayload.bind_port);
     const riskText = risk === "low"
-      ? "本地访问"
-      : (safePayload.bind_network_visible ? "绑定风险" : (risk === "high" ? "访问风险" : "访问状态"));
+      ? t("access.local", "Local access")
+      : (safePayload.bind_network_visible ? t("access.bind_risk", "Bind risk") : (risk === "high" ? t("access.risk", "Access risk") : t("access.status", "Access status")));
     return {
       accessAddress,
       bindAddress,
@@ -42,11 +43,11 @@
       text: `${riskText} ${hostname} · auth=${authMode}`,
       title: options.error || String(safePayload.recommendation || ""),
       addressText: bindAddress
-        ? `访问 ${accessAddress || "-"} · 绑定 ${bindAddress}`
-        : `访问 ${accessAddress || "-"}`,
+        ? `${t("access.address", "Access")} ${accessAddress || "-"} · ${t("access.bind", "bind")} ${bindAddress}`
+        : `${t("access.address", "Access")} ${accessAddress || "-"}`,
       addressTitle: bindAddress
-        ? `当前浏览器访问地址: ${accessAddress || "-"}\n服务绑定地址: ${bindAddress}`
-        : `当前浏览器访问地址: ${accessAddress || "-"}`
+        ? `${t("access.browser_address", "Current browser address")}: ${accessAddress || "-"}\n${t("access.service_bind", "Service bind address")}: ${bindAddress}`
+        : `${t("access.browser_address", "Current browser address")}: ${accessAddress || "-"}`
     };
   }
 
@@ -82,7 +83,7 @@
         deps.setAccessControlError?.("");
       } catch (err) {
         if (deps.isAuthRequiredError?.(err)) {
-          deps.renderLoginState?.("登录已失效，请重新输入 token。", true);
+          deps.renderLoginState?.(window.AHAI18n?.t?.("auth.session_expired", "Login expired. Enter the token again."), true);
           return;
         }
         deps.setAccessControlData?.(null);

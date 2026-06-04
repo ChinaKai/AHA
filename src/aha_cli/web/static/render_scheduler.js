@@ -39,7 +39,7 @@
         options.renderPanelForRealtime?.();
       } catch (err) {
         if (options.isAuthRequiredError?.(err)) {
-          options.renderLoginState?.("登录已失效，请重新输入 token。", true);
+          options.renderLoginState?.(window.AHAI18n?.t?.("auth.session_expired", "Login expired. Enter the token again."), true);
           return;
         }
         recordFailure();

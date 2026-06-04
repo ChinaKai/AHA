@@ -10,6 +10,8 @@ from aha_cli.store.paths import run_dir
 from aha_cli.store.runs import locked_plan, require_plan, save_plan
 from aha_cli.store.sessions import ensure_session as default_ensure_session
 
+UNSET = object()
+
 
 def _find_task(plan: dict, task_id: str, *, allow_deleted: bool = False) -> dict:
     task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
@@ -27,6 +29,11 @@ def _find_agent(task: dict, agent_id: str) -> dict:
 
 def _write_task(root: Path, run_id: str, task: dict) -> None:
     write_json(run_dir(root, run_id) / "tasks" / task["id"] / "task.json", task)
+
+
+def _model_value(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def add_agent_to_task_dict(
@@ -59,6 +66,7 @@ def add_agent_to_task_dict(
         agent_role = "sub"
     default_sandbox = "read-only" if agent_role == "host" else task.get("preferred_sandbox")
     default_approval = "never" if agent_role == "host" else task.get("preferred_approval")
+    default_proxy_enabled = False if agent_role == "host" else bool(task.get("preferred_proxy_enabled"))
     agent = make_agent(
         agent_id,
         agent_role,
@@ -67,7 +75,7 @@ def add_agent_to_task_dict(
         workspace_path=workspace_path or task.get("workspace_path"),
         sandbox=sandbox if sandbox is not None else default_sandbox,
         approval=approval if approval is not None else default_approval,
-        proxy_enabled=bool(task.get("preferred_proxy_enabled")) if proxy_enabled is None else bool(proxy_enabled),
+        proxy_enabled=default_proxy_enabled if proxy_enabled is None else bool(proxy_enabled),
         created_by=created_by,
         created_reason=created_reason,
     )
@@ -81,6 +89,8 @@ def ensure_task_supervision_host_agent(
     task_id: str,
     *,
     backend: str | None = None,
+    model: object = UNSET,
+    proxy_enabled: object = UNSET,
     now_func: Callable[[], str] = utc_now,
     append_event_func: Callable[[Path, str, str, dict], dict] = default_append_event,
     ensure_session_func: Callable[..., dict] = default_ensure_session,
@@ -89,10 +99,17 @@ def ensure_task_supervision_host_agent(
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = _find_task(plan, task_id)
-        supervision = normalize_task_supervision(task.get("supervision"))
+        raw_supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+        supervision = normalize_task_supervision(raw_supervision)
         host_backend = str(backend or supervision.get("host_backend") or task.get("preferred_backend") or "codex")
         if host_backend == "stub":
             host_backend = str(task.get("preferred_backend") or "codex")
+        model_provided = model is not UNSET
+        model_configured = "host_model" in raw_supervision or "model" in raw_supervision
+        host_model = _model_value(model) if model_provided else _model_value(supervision.get("host_model"))
+        proxy_provided = proxy_enabled is not UNSET
+        proxy_configured = "host_proxy_enabled" in raw_supervision or "proxy_enabled" in raw_supervision
+        host_proxy_enabled = bool(proxy_enabled) if proxy_provided else bool(supervision.get("host_proxy_enabled"))
         host_agent_id = str(supervision.get("host_agent_id") or "host")
         agent = next(
             (
@@ -108,11 +125,11 @@ def ensure_task_supervision_host_agent(
                 "host",
                 host_backend,
                 status="stopped",
-                model=task.get("preferred_model"),
+                model=host_model,
                 workspace_path=task.get("workspace_path"),
                 sandbox="read-only",
                 approval="never",
-                proxy_enabled=bool(task.get("preferred_proxy_enabled")),
+                proxy_enabled=host_proxy_enabled,
                 created_by="supervision",
                 created_reason="task supervision host agent",
             )
@@ -121,6 +138,10 @@ def ensure_task_supervision_host_agent(
         else:
             agent["role"] = "host"
             agent["backend"] = host_backend
+            if model_provided or model_configured:
+                agent["model"] = host_model
+            if proxy_provided or proxy_configured:
+                agent["proxy_enabled"] = host_proxy_enabled
             agent["sandbox"] = agent.get("sandbox") or "read-only"
             agent["approval"] = agent.get("approval") or "never"
             agent.setdefault("created_by", "supervision")
@@ -129,6 +150,8 @@ def ensure_task_supervision_host_agent(
             {
                 "mode": "assisted",
                 "host_backend": agent.get("backend") or host_backend,
+                "host_model": agent.get("model"),
+                "host_proxy_enabled": bool(agent.get("proxy_enabled")),
                 "host_agent_id": agent.get("id") or "host",
                 "real_agent_enabled": True,
             }
@@ -172,6 +195,8 @@ def ensure_task_supervision_host_agent(
             "task_id": task_id,
             "host_agent_id": agent.get("id"),
             "host_backend": agent.get("backend"),
+            "host_model": agent.get("model"),
+            "host_proxy_enabled": agent.get("proxy_enabled"),
             "created": created,
         },
     )
@@ -259,6 +284,10 @@ def update_agent_config(
                 task["preferred_approval"] = approval
         if proxy_enabled is not None:
             agent["proxy_enabled"] = bool(proxy_enabled)
+            supervision = normalize_task_supervision(task.get("supervision"))
+            if agent.get("role") == "host" or supervision.get("host_agent_id") == agent_id:
+                supervision["host_proxy_enabled"] = bool(proxy_enabled)
+                task["supervision"] = normalize_task_supervision(supervision)
         agent["last_active_at"] = now_func()
         plan["updated_at"] = now_func()
         save_plan(root, plan)

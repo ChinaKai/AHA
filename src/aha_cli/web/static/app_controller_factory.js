@@ -21,17 +21,21 @@
       mobileActionsToggleEl, mobileSheetBackdropEl, mobileTaskStatusEl, mobileTaskSummaryEl,
       mobileTaskTitleEl, newTaskTitleEl, openAgentsSheetEl, openTaskCreateEl, openTasksSheetEl,
       overviewRailToggleEl, panelEl, pendingMessagesEl, selectedAgentInfoEl, selectedIdEl,
-      runHttpProxyEl, runHttpsProxyEl, runNoProxyEl, runProxyEditorEl, runProxyEnabledEl,
-      runProxyFormEl, runProxyStateEl,
+      runCreateDialogEl, runHttpProxyEl, runHttpsProxyEl, runNoProxyEl, runProxyEditorEl, runProxyEnabledEl,
+      runManagerEl, runManagerToggleEl, runProxyFormEl, runProxyStateEl,
       selectedStatusEl, selectedTaskContextAutoCompactEnabledEl, selectedTaskContextThresholdEl,
       selectedTaskContextThresholdFieldEl, selectedTaskMetaEl, selectedTaskProxyEnabledEl,
       selectedTaskSupervisionAskUserFieldEl, selectedTaskSupervisionAskUserGatesEl,
       selectedTaskSupervisionMaxRoundsEl, selectedTaskSupervisionMaxRoundsFieldEl,
+      selectedTaskSupervisionHostModelEl, selectedTaskSupervisionHostModelFieldEl,
+      selectedTaskSupervisionHostProxyEnabledEl, selectedTaskSupervisionHostProxyFieldEl,
       selectedTaskSupervisionModeEl, selectedTitleEl, sendFormEl, taskBackendEl,
       taskContextEditorEl, taskContextFormEl, taskContextStateEl, taskModelEl,
       taskProxyEditorEl, taskProxyEnabledEl,
       taskProxyFormEl, taskProxyStateEl, taskSupervisionAskUserFieldEl,
       taskSupervisionAskUserGatesEl, taskSupervisionEditorEl, taskSupervisionFormEl,
+      taskSupervisionHostModelEl, taskSupervisionHostModelFieldEl,
+      taskSupervisionHostProxyEnabledEl, taskSupervisionHostProxyFieldEl,
       taskSupervisionMaxRoundsFieldEl, taskSupervisionModeEl, taskSupervisionStateEl,
       workflowTemplateEl, workflowTemplateHelpEl, workspaceCustomEl, workspaceSelectEl,
       webServiceAddressEl, authLogoutEl
@@ -60,7 +64,6 @@
       collaborationModeOptions: deps.collaborationModeOptions,
       escapeHtml: deps.escapeHtml,
       workflowTemplateDescription: deps.staticWorkflowTemplateDescription,
-      workflowTemplateDescriptions: deps.taskMetadata?.workflowTemplateDescriptions || {},
       workflowTemplateOptions: deps.staticWorkflowTemplateOptions
     });
 
@@ -69,6 +72,25 @@
       sendFormEl
     }, {
       windowRef: deps.windowRef
+    });
+
+    const runtimeOptions = window.AHARuntimeConfig.createRuntimeOptionsController({
+      taskBackendEl,
+      taskModelEl,
+      workspaceCustomEl,
+      workspaceSelectEl
+    }, {
+      bootstrapCodexEnvGroups: deps.bootstrapCodexEnvGroups,
+      bootstrapConfigData: deps.bootstrapConfigData,
+      bootstrapData: deps.bootstrapData,
+      bootstrapEnvGroupName: deps.bootstrapEnvGroupName,
+      bootstrapEnvGroups: deps.bootstrapEnvGroups,
+      claudeEnvModelPrefix: deps.claudeEnvModelPrefix,
+      configString: deps.configString,
+      escapeHtml: deps.escapeHtml,
+      fetchJson: deps.fetchJson,
+      selectOptions: deps.selectOptions,
+      setDefaultWorkspacePath: deps.setDefaultWorkspacePath
     });
 
     const taskConfigController = window.AHATaskConfigController.createTaskConfigController({
@@ -91,6 +113,10 @@
         taskSupervisionEditorEl,
         taskSupervisionFormEl,
         selectedTaskSupervisionModeEl,
+        selectedTaskSupervisionHostModelFieldEl,
+        selectedTaskSupervisionHostModelEl,
+        selectedTaskSupervisionHostProxyFieldEl,
+        selectedTaskSupervisionHostProxyEnabledEl,
         selectedTaskSupervisionMaxRoundsFieldEl,
         selectedTaskSupervisionMaxRoundsEl,
         selectedTaskSupervisionAskUserFieldEl,
@@ -103,6 +129,10 @@
         selectedTaskContextThresholdEl,
         taskContextStateEl,
         taskSupervisionModeEl,
+        taskSupervisionHostModelFieldEl,
+        taskSupervisionHostModelEl,
+        taskSupervisionHostProxyFieldEl,
+        taskSupervisionHostProxyEnabledEl,
         taskSupervisionMaxRoundsFieldEl,
         taskSupervisionAskUserFieldEl
       },
@@ -124,6 +154,8 @@
         taskContextManagementPolicy: deps.taskContextManagementPolicy,
         taskContextSummary: deps.taskContextSummary,
         taskProxySummary: deps.taskProxySummary,
+        defaultModelForBackend: backend => runtimeOptions.defaultModelForBackend(backend),
+        fillModelSelect: (select, backend, selected = "") => runtimeOptions.fillModelSelect(select, backend, selected),
         taskSupervisionModeValue: deps.taskSupervisionModeValue,
         taskSupervisionPayloadFromMode: deps.taskSupervisionPayloadFromMode,
         taskSupervisionPolicy: deps.taskSupervisionPolicy,
@@ -151,11 +183,14 @@
       closeAgentsSheetEl,
       newTaskTitleEl,
       openTaskCreateEl,
+      runManagerEl,
+      runManagerToggleEl,
       overviewRailToggleEl,
       mobileTaskSummaryEl,
       mobileActionPanelEl,
       mobileActionsToggleEl,
       commandMenuEl,
+      runCreateDialogEl,
       taskCreateDialogEl: elements.taskCreateDialogEl
     }, {
       windowRef: deps.windowRef,
@@ -242,25 +277,6 @@
       terminalAgentStatuses: deps.terminalAgentStatuses
     });
 
-    const runtimeOptions = window.AHARuntimeConfig.createRuntimeOptionsController({
-      taskBackendEl,
-      taskModelEl,
-      workspaceCustomEl,
-      workspaceSelectEl
-    }, {
-      bootstrapCodexEnvGroups: deps.bootstrapCodexEnvGroups,
-      bootstrapConfigData: deps.bootstrapConfigData,
-      bootstrapData: deps.bootstrapData,
-      bootstrapEnvGroupName: deps.bootstrapEnvGroupName,
-      bootstrapEnvGroups: deps.bootstrapEnvGroups,
-      claudeEnvModelPrefix: deps.claudeEnvModelPrefix,
-      configString: deps.configString,
-      escapeHtml: deps.escapeHtml,
-      fetchJson: deps.fetchJson,
-      selectOptions: deps.selectOptions,
-      setDefaultWorkspacePath: deps.setDefaultWorkspacePath
-    });
-
     const eventBindings = window.AHAEventBindings;
     const panelController = window.AHAPanelController.createPanelController({
       panelEl,
@@ -341,7 +357,8 @@
       settingsDialogEl, taskApprovalEl, taskBackendEl, taskCreateConfirmDetailsEl,
       taskCreateConfirmDialogEl, taskCreateDialogEl, taskFormEl, taskModelEl,
       taskProxyEnabledEl, taskSandboxEl,
-      taskSupervisionAskUserGatesEl, taskSupervisionMaxRoundsEl, taskSupervisionModeEl,
+      taskSupervisionAskUserGatesEl, taskSupervisionHostModelEl, taskSupervisionHostProxyEnabledEl,
+      taskSupervisionMaxRoundsEl, taskSupervisionModeEl,
       weixinConsoleEl, weixinConsolePopoverEl, workflowTemplateEl, workspaceCustomEl,
       workspaceSelectEl
     } = elements;
@@ -441,6 +458,8 @@
       taskProxyEnabledEl,
       taskSandboxEl,
       taskSupervisionAskUserGatesEl,
+      taskSupervisionHostModelEl,
+      taskSupervisionHostProxyEnabledEl,
       taskSupervisionMaxRoundsEl,
       taskSupervisionModeEl,
       workflowTemplateEl,

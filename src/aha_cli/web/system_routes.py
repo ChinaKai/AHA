@@ -16,6 +16,8 @@ from aha_cli.services.weixin import (
 )
 from aha_cli.services.weixin_notifications import notification_status, set_notifications_enabled
 from aha_cli.store.filesystem import append_event
+from aha_cli.store.runs import run_exists
+from aha_cli.store.ui_state import read_global_ui_state, read_ui_state, update_global_ui_state, update_ui_state
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page, prompt_artifact_view
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 from aha_cli.web.run_api import default_api_run_id, require_api_run_id
@@ -317,6 +319,28 @@ def system_route_response(
         run_id = require_api_run_id(root, default_run_id, query)
         payload = web_tasks_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))
         return head_or_json(method, payload, request_headers=headers)
+    if method in {"GET", "HEAD"} and path == "/api/ui-state":
+        selected_run_id = str(query.get("run_id", [""])[0] or "").strip()
+        global_state = read_global_ui_state(root)
+        if not selected_run_id:
+            return head_or_json(method, {"run_id": "", **global_state}, request_headers=headers)
+        run_id = require_api_run_id(root, default_run_id, query)
+        return head_or_json(method, {"run_id": run_id, **global_state, **read_ui_state(root, run_id)}, request_headers=headers)
+    if method == "PATCH" and path == "/api/ui-state":
+        payload = parse_json_body(body) if body.strip() else {}
+        if "last_selected_run_id" not in payload and "last_selected_task_id" not in payload:
+            return json_response({"error": "last_selected_run_id or last_selected_task_id is required"}, "400 Bad Request")
+        response = {"ok": True}
+        if "last_selected_run_id" in payload:
+            selected_run_id = str(payload.get("last_selected_run_id") or "").strip()
+            if selected_run_id and not run_exists(root, selected_run_id):
+                return json_response({"error": f"run not found: {selected_run_id}"}, "404 Not Found")
+            response.update(update_global_ui_state(root, {"last_selected_run_id": selected_run_id}))
+        if "last_selected_task_id" in payload:
+            run_id = require_api_run_id(root, default_run_id, query, payload)
+            response["run_id"] = run_id
+            response.update(update_ui_state(root, run_id, {"last_selected_task_id": payload.get("last_selected_task_id")}))
+        return json_response(response)
     if method in {"GET", "HEAD"} and path == "/api/backends":
         return head_or_json(method, {"backends": agent_backends()})
     if method in {"GET", "HEAD"} and path == "/api/models":

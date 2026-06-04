@@ -38,10 +38,12 @@ from aha_cli.store.filesystem import (
     task_final_snapshot,
     update_agent_config,
     update_agent_runtime,
+    update_task_supervision_config,
     update_task_proxy_config,
     write_task_result,
 )
 from aha_cli.web.server import format_agent_command, format_aha_command, handle_slash_command, workspace_options
+from tests.helpers import isolated_cli_environment
 
 
 def write_cleanup_plan(run_path: Path, run_id: str, *, temporary: bool = False) -> None:
@@ -65,9 +67,9 @@ def touch_tree(path: Path, mtime: float) -> None:
 
 
 class CliCoreTests(unittest.TestCase):
-    def run_cli(self, *args: str) -> tuple[int, str]:
+    def run_cli(self, *args: str, allow_aha_keys: set[str] | None = None) -> tuple[int, str]:
         out = io.StringIO()
-        with mock.patch("sys.stdout", out):
+        with isolated_cli_environment(allow_aha_keys=allow_aha_keys or ()), mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
 
@@ -613,6 +615,50 @@ class CliCoreTests(unittest.TestCase):
 
         self.assertEqual(apply_code, 2)
 
+    def test_task_recover_dry_run_and_apply_stale_reopened_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover reopened host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+                set_agent_status(root, run_id, "task-001", "host", "running")
+
+                stopped = {"status": "stopped", "pid": None, "backend": "codex"}
+                with mock.patch("aha_cli.services.run_recovery.backend_status", return_value=stopped):
+                    dry_code, dry_output = self.run_cli("task", "recover", run_id, "task-001", "--json")
+                with (
+                    mock.patch("aha_cli.services.run_recovery.backend_status", return_value=stopped),
+                    mock.patch("aha_cli.web.status.backend_status", return_value=stopped),
+                ):
+                    apply_code, apply_output = self.run_cli("task", "recover", run_id, "task-001", "--apply", "--json")
+                task = task_snapshot(root, run_id, "task-001")["task"]
+                main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+                host_agent = next(agent for agent in task["agents"] if agent["id"] == "host")
+
+            dry_payload = json.loads(dry_output)
+            apply_payload = json.loads(apply_output)
+
+        self.assertEqual(dry_code, 0)
+        self.assertEqual(dry_payload["candidates"][0]["task_status"], "awaiting_user")
+        self.assertEqual(dry_payload["candidates"][0]["agent_id"], "host")
+        self.assertEqual(apply_code, 0)
+        self.assertEqual(apply_payload["recovered_count"], 1)
+        self.assertEqual(task["status"], "awaiting_user")
+        self.assertEqual(host_agent["status"], "interrupted")
+        self.assertEqual(main_agent["status"], "completed")
+
     def test_runs_lifecycle_hides_archives_and_restores_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "aha-home"
@@ -662,11 +708,23 @@ class CliCoreTests(unittest.TestCase):
             self.assertFalse(plan["hidden"])
             self.assertFalse(plan["archived"])
 
-    def test_runs_lifecycle_rejects_current_missing_and_active_heartbeat(self) -> None:
+    def test_runs_lifecycle_allows_idle_current_heartbeat_and_rejects_running_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "aha-home"
             write_cleanup_plan(home / "runs" / "current-run", "current-run")
             write_cleanup_plan(home / "runs" / "old-run", "old-run")
+            running_code, running_output = self.run_cli(
+                "--home",
+                str(home),
+                "plan",
+                "Running run",
+                "--agents",
+                "1",
+            )
+            self.assertEqual(running_code, 0)
+            running_run_id = next(line.split(": ", 1)[1] for line in running_output.splitlines() if line.startswith("Created run:"))
+            set_task_status(home, running_run_id, "task-001", "running")
+            set_agent_status(home, running_run_id, "task-001", "main", "running")
 
             current_code, _ = self.run_cli(
                 "--home",
@@ -679,12 +737,16 @@ class CliCoreTests(unittest.TestCase):
                 "current-run",
             )
             missing_code, _ = self.run_cli("--home", str(home), "runs", "lifecycle", "missing-run", "hidden")
-            with mock.patch("aha_cli.services.run_lifecycle_actions.run_has_active_heartbeat", return_value=True):
-                heartbeat_code, _ = self.run_cli("--home", str(home), "runs", "lifecycle", "old-run", "archived")
+            heartbeat_log = home / "runs" / "old-run" / "logs" / "backend.log"
+            heartbeat_log.parent.mkdir(parents=True, exist_ok=True)
+            heartbeat_log.write_text('{"phase":"heartbeat_sent"}\n', encoding="utf-8")
+            heartbeat_code, _ = self.run_cli("--home", str(home), "runs", "lifecycle", "old-run", "archived")
+            active_code, _ = self.run_cli("--home", str(home), "runs", "lifecycle", running_run_id, "hidden")
 
-            self.assertEqual(current_code, 2)
+            self.assertEqual(current_code, 0)
             self.assertEqual(missing_code, 2)
-            self.assertEqual(heartbeat_code, 2)
+            self.assertEqual(heartbeat_code, 0)
+            self.assertEqual(active_code, 2)
 
     def test_init_uses_aha_home_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1058,6 +1120,14 @@ class CliCoreTests(unittest.TestCase):
                 "AHA-Agent: main\n"
             ),
         )
+        self.assertIn(
+            "commit body should not include unsupported trailers: Co-Authored-By",
+            validate_commit_message(
+                "fix(web): stray coauthor\n\n"
+                "Generated-by: AHA Codex GPT-5.5\n"
+                "Co-Authored-By: Claude Opus <claude@example.com>\n"
+            ),
+        )
 
         code, output = self.run_cli(
             "commit",
@@ -1084,6 +1154,7 @@ class CliCoreTests(unittest.TestCase):
                 "--summary",
                 "use task generator",
                 "--dry-run",
+                allow_aha_keys={"AHA_BACKEND", "AHA_MODEL", "AHA_GENERATED_BY"},
         )
         self.assertEqual(code, 0)
         self.assertIn("Generated-by: AHA Codex GPT-5.4", dynamic_output)
@@ -1155,7 +1226,7 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("pending-messages", html)
                 self.assertIn("command-menu", html)
                 self.assertIn("conversation-filters", html)
-                self.assertIn('data-tab="final"', html)
+                self.assertIn('data-mobile-action="final"', html)
 
     def test_package_onebin_builds_executable_with_ui_static(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,7 +8,7 @@
   function formatLocalTimestamp(value, fallback = "-") {
     const millis = parseTimestamp(value);
     if (millis === null) return fallback;
-    return new Date(millis).toLocaleString("zh-CN", { hour12: false });
+    return new Date(millis).toLocaleString(window.AHAI18n?.language?.() || "en-US", { hour12: false });
   }
 
   function localizeTimestampFields(value, key = "") {
@@ -39,7 +39,7 @@
 
   function formatClock(millis) {
     if (!millis) return "-";
-    return new Date(millis).toLocaleTimeString("zh-CN", { hour12: false });
+    return new Date(millis).toLocaleTimeString(window.AHAI18n?.language?.() || "en-US", { hour12: false });
   }
 
   window.AHATimeFormat = Object.freeze({

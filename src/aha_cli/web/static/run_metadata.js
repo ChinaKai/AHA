@@ -1,13 +1,21 @@
 (() => {
   const lifecycleFilterOptions = ["active", "hidden", "archived", "all"];
 
+  function t(key, fallback = "") {
+    return window.AHAI18n?.t?.(key, fallback) || fallback;
+  }
+
+  function formatText(key, values = {}, fallback = "") {
+    return window.AHAI18n?.format?.(key, values, fallback) || fallback;
+  }
+
   function runIdOf(run) {
     return String(run?.id || run?.run_id || "").trim();
   }
 
   function runTitleOf(run) {
     const goal = String(run?.goal || "").trim();
-    return goal || runIdOf(run) || "未命名 Run";
+    return goal || runIdOf(run) || t("run.unnamed", "Untitled run");
   }
 
   function runUpdatedAtOf(run) {
@@ -24,7 +32,7 @@
   }
 
   function runLifecycleLabel(run) {
-    return runLifecycleStatus(run);
+    return runLifecycleStatusLabel(runLifecycleStatus(run));
   }
 
   function runLifecycleClass(run) {
@@ -39,28 +47,45 @@
       : status === "hidden"
         ? (run?.hidden_at || lifecycle.hidden_at || "")
         : "";
-    return timestamp ? `${status} since ${timestamp}` : status;
+    const label = runLifecycleStatusLabel(status);
+    return timestamp
+      ? formatText("run.lifecycle_since", { status: label, timestamp }, `${label} since ${timestamp}`)
+      : label;
   }
 
   function sessionOptionLabel(run) {
-    const title = runTitleOf(run);
-    const lifecycle = ` · ${runLifecycleLabel(run)}`;
-    const status = run?.status ? ` · ${run.status}` : "";
-    const taskCount = Number.isFinite(run?.task_count) ? ` · ${run.task_count} 个任务` : "";
-    return `${title}${lifecycle}${status}${taskCount}`;
+    return runTitleOf(run);
+  }
+
+  function runListMeta(run) {
+    const status = run?.status ? String(run.status) : "";
+    const taskCount = Number.isFinite(run?.task_count)
+      ? formatText("run.task_count", { count: run.task_count }, `${run.task_count} tasks`)
+      : "";
+    return [status, taskCount].filter(Boolean).join(" | ");
+  }
+
+  function runHasRunningWork(run) {
+    return Boolean(run?.has_running_work || Number(run?.running_task_count || 0) > 0 || Number(run?.running_agent_count || 0) > 0);
   }
 
   function runLifecycleProtectionReason(run, currentRunId = "") {
+    if (runHasRunningWork(run)) return "running_work";
+    return "";
+  }
+
+  function runDeleteProtectionReason(run, currentRunId = "") {
     const id = runIdOf(run);
     if (id && id === String(currentRunId || "").trim()) return "current_run";
-    if (run?.active_heartbeat) return "active_heartbeat";
+    if (runHasRunningWork(run)) return "running_work";
     return "";
   }
 
   function runLifecycleReasonText(reason) {
-    if (reason === "current_run") return "Current run is protected";
-    if (reason === "active_heartbeat") return "Active heartbeat is protected";
-    if (reason === "run_not_found") return "Run not found";
+    if (reason === "running_work") return t("run.lifecycle_protected_running", "Run has running tasks");
+    if (reason === "current_run") return t("run.lifecycle_protected_current", "Current run is protected");
+    if (reason === "active_heartbeat") return t("run.lifecycle_protected_heartbeat", "Active heartbeat is protected");
+    if (reason === "run_not_found") return t("run.lifecycle_run_not_found", "Run not found");
     return reason || "";
   }
 
@@ -69,19 +94,33 @@
     const reason = runLifecycleProtectionReason(run, currentRunId);
     const disabled = Boolean(reason);
     const actions = status === "archived"
-      ? [{ status: "active", label: "Restore" }]
+      ? [{ status: "active", label: t("run.lifecycle_restore", "Restore") }]
       : status === "hidden"
-        ? [{ status: "active", label: "Restore" }, { status: "archived", label: "Archive" }]
-        : [{ status: "hidden", label: "Hide" }, { status: "archived", label: "Archive" }];
+        ? [{ status: "active", label: t("run.lifecycle_restore", "Restore") }, { status: "archived", label: t("run.lifecycle_archive", "Archive") }]
+        : [{ status: "hidden", label: t("run.lifecycle_hide", "Hide") }, { status: "archived", label: t("run.lifecycle_archive", "Archive") }];
     return actions.map(action => ({ ...action, disabled, reason }));
   }
 
+  function runDeleteActionItem(run, currentRunId = "") {
+    const reason = runDeleteProtectionReason(run, currentRunId);
+    return {
+      label: t("run.delete", "Delete"),
+      disabled: Boolean(reason),
+      reason,
+      title: reason ? runLifecycleReasonText(reason) : `${t("run.delete", "Delete")} ${runIdOf(run)}`
+    };
+  }
+
+  function runLifecycleStatusLabel(status) {
+    const value = String(status || "").trim().toLowerCase();
+    if (value === "hidden") return t("run.lifecycle_hidden", "Hidden");
+    if (value === "archived") return t("run.lifecycle_archived", "Archived");
+    if (value === "all") return t("run.lifecycle_all", "All");
+    return t("run.lifecycle_active", "Active");
+  }
+
   function runLifecycleFilterLabel(filter) {
-    const value = String(filter || "").trim().toLowerCase();
-    if (value === "hidden") return "Hidden";
-    if (value === "archived") return "Archived";
-    if (value === "all") return "All";
-    return "Active";
+    return runLifecycleStatusLabel(filter);
   }
 
   function runMatchesLifecycleFilter(run, filter = "active") {
@@ -115,9 +154,9 @@
     const filteredRuns = safeRuns.filter(run => runMatchesLifecycleFilter(run, selectedFilter));
     const selectedLabel = runLifecycleFilterLabel(selectedFilter).toLowerCase();
     const emptyMessage = !safeRuns.length
-      ? "No runs available"
+      ? t("run.lifecycle_no_runs", "No runs available")
       : !filteredRuns.length
-        ? `No ${selectedLabel} runs in this filter`
+        ? formatText("run.lifecycle_no_runs_filter", { filter: selectedLabel }, `No ${selectedLabel} runs in this filter`)
         : "";
     const rows = filteredRuns.map(run => {
       const id = runIdOf(run);
@@ -131,14 +170,21 @@
         reason: action.reason || "",
         title: action.disabled ? reasonText : `${action.label} ${id}`
       }));
+      const deleteAction = runDeleteActionItem(run, currentRunId);
       return {
         id,
         title: runTitleOf(run),
+        meta: runListMeta(run),
+        current: id === String(currentRunId || "").trim(),
         lifecycle: runLifecycleLabel(run),
         lifecycleClass: runLifecycleClass(run),
         reason,
         reasonText,
-        actions
+        actionInFlight,
+        settingsTitle: formatText("run.settings_for", { run: id }, `Run settings for ${id}`),
+        actions,
+        deleteAction: { ...deleteAction, disabled: Boolean(deleteAction.disabled || actionInFlight) },
+        maintenance: { label: t("run.maintenance", "Diagnostics"), title: `${t("run.maintenance", "Diagnostics")} ${id}` }
       };
     }).filter(Boolean);
     return {
@@ -155,12 +201,16 @@
     runUpdatedAtOf,
     runLifecycleStatus,
     runLifecycleLabel,
+    runLifecycleStatusLabel,
     runLifecycleClass,
     runLifecycleTitle,
     sessionOptionLabel,
+    runHasRunningWork,
     runLifecycleProtectionReason,
+    runDeleteProtectionReason,
     runLifecycleReasonText,
     runLifecycleActionItems,
+    runDeleteActionItem,
     runLifecycleFilterLabel,
     runMatchesLifecycleFilter,
     runLifecycleFilterCounts,

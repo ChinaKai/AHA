@@ -91,6 +91,10 @@
     const realtimeDebug = deps.realtimeDebug || (() => {});
     let createInFlight = false;
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
     function currentRunId() {
       return String(deps.currentRunId?.() || "").trim();
     }
@@ -118,10 +122,14 @@
     }
 
     function createTaskConfirmContext(payload) {
+      const supervision = payload.supervision || {};
       return {
         runId: currentRunId() || "-",
         workspaceLabel: selectedWorkspaceLabel() || payload.workspace_path || payload.workspace_id || "-",
         backendLabel: taskBackendConfirmLabel(payload),
+        hostModelLabel: supervision.host_backend
+          ? deps.modelLabelForBackend?.(supervision.host_backend, supervision.host_model)
+          : "",
         supervisionSummary: deps.taskSupervisionSummary?.({ supervision: payload.supervision || {} })
       };
     }
@@ -162,7 +170,7 @@
       }
       if (!currentRunId()) {
         realtimeDebug("task_create.skip", { reason: "missing_run" });
-        alertUser("请先创建 Run，再添加任务。");
+        alertUser(t("task.create_run_first", "Create a run before adding a task."));
         return;
       }
       const title = elements.newTaskTitleEl?.value.trim() || "";
@@ -178,7 +186,11 @@
       const supervision = deps.taskSupervisionPayloadFromMode?.(
         elements.taskSupervisionModeEl?.value || "manual",
         elements.taskSupervisionMaxRoundsEl?.value || deps.defaultTaskSupervisionMaxRounds,
-        deps.readAskUserGateControls?.(elements.taskSupervisionAskUserGatesEl)
+        deps.readAskUserGateControls?.(elements.taskSupervisionAskUserGatesEl),
+        {
+          hostModel: elements.taskSupervisionHostModelEl?.value || null,
+          hostProxyEnabled: Boolean(elements.taskSupervisionHostProxyEnabledEl?.checked)
+        }
       );
       deps.setCreateProxyDefaultsFromInputs?.();
       const createProxyEnabled = Boolean(elements.taskProxyEnabledEl?.checked);

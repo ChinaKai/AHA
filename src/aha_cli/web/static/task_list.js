@@ -61,6 +61,14 @@
       .replaceAll("'", "&#039;");
   }
 
+  function t(key, fallback = "") {
+    return window.AHAI18n?.t?.(key, fallback) || fallback;
+  }
+
+  function formatText(key, values = {}, fallback = "") {
+    return window.AHAI18n?.format?.(key, values, fallback) || fallback;
+  }
+
   function normalizeTaskVisibilityFilter(filter = "active") {
     if (filter === true) return "all";
     if (filter === false || filter === null || filter === undefined) return "active";
@@ -75,10 +83,10 @@
 
   function taskVisibilityFilterLabel(filter) {
     const value = normalizeTaskVisibilityFilter(filter);
-    if (value === "closed") return "Closed";
-    if (value === "hidden") return "Hidden";
-    if (value === "all") return "All";
-    return "Active";
+    if (value === "closed") return t("task.filter_closed", "Closed");
+    if (value === "hidden") return t("task.filter_hidden", "Hidden");
+    if (value === "all") return t("task.filter_all", "All");
+    return t("task.filter_active", "Active");
   }
 
   function taskMatchesVisibilityFilter(task, filter = "active") {
@@ -160,7 +168,7 @@
 
   function taskListMetaParts(task, summaries = {}) {
     return [
-      `${taskAgentCount(task)} agent(s)`,
+      formatText("task.agent_count", { count: taskAgentCount(task) }, `${taskAgentCount(task)} agents`),
       summaries.workflow ? `workflow ${summaries.workflow}` : "",
       summaries.execution ? `execution ${summaries.execution}` : "",
       `default ${summaries.defaultBackend || task?.preferred_backend || "-"}`,
@@ -169,6 +177,14 @@
       summaries.context ? `context ${summaries.context}` : "",
       pathName(task?.workspace_path),
       summaries.timing || ""
+    ].filter(Boolean);
+  }
+
+  function taskCardMetaParts(task, summaries = {}) {
+    return [
+      formatText("task.agent_count", { count: taskAgentCount(task) }, `${taskAgentCount(task)} agents`),
+      summaries.timing || "",
+      pathName(task?.workspace_path)
     ].filter(Boolean);
   }
 
@@ -189,30 +205,49 @@
     return `task ${task?.id === selectedTaskId ? "active" : ""} ${task?.hidden ? "hidden-task" : ""}`;
   }
 
+  function taskViewSwitcherHtml(activeTab = "conversation") {
+    const items = [
+      ["conversation", t("conversation.chat", "Chat"), t("conversation.chat", "Chat")],
+      ["final", t("conversation.final", "Final"), t("conversation.final", "Final")],
+      ["logs", t("conversation.logs", "Logs"), t("conversation.logs", "Logs")],
+      ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")]
+    ];
+    return `
+      <div class="task-view-switcher tabs" role="group" aria-label="${escapeHtml(t("task.view_switcher", "Task view"))}">
+        ${items.map(([key, label, title]) => `
+          <button class="tab task-view-tab ${activeTab === key ? "active" : ""}" type="button" data-tab="${escapeHtml(key)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${escapeHtml(label)}</button>
+        `).join("")}
+      </div>
+    `;
+  }
+
   function taskListItemHtml(task, options = {}) {
     const summaries = options.summaries || {};
-    const locked = terminalTaskStatuses.has(taskCurrentStatus(task));
-    const completionAction = locked ? "reopen" : "final";
-    const completionLabel = locked ? "Reopen" : "Final";
-    const metaText = taskListMetaParts(task, summaries).join(" | ");
+    const metaText = taskCardMetaParts(task, summaries).join(" | ");
     const statusHtml = [
-      options.statusBadgesHtml,
-      options.proxyBadgeHtml,
-      options.supervisionBadgeHtml,
-      options.contextBadgeHtml
+      options.statusBadgesHtml
     ].filter(Boolean).join("");
+    const taskId = task?.id || "";
+    const settingsLabel = formatText("task.settings_for", { task: taskId }, `Task settings for ${taskId}`);
+    const settingsOpen = Boolean(options.settingsOpen);
+    const activeTab = options.activeTab || "conversation";
     return `
       <div class="task-row">
-        <strong>${escapeHtml(task?.id || "")}</strong>
-        <span class="task-statuses">${statusHtml}</span>
+        <div class="task-identity">
+          <strong class="task-id">${escapeHtml(taskId)}</strong>
+          <div class="task-title">${escapeHtml(task?.title || "")}</div>
+        </div>
+        <div class="task-row-actions">
+          <span class="task-statuses">${statusHtml}</span>
+          <div class="task-icon-rail">
+            <button class="task-settings-trigger" type="button" data-task-settings-trigger="${escapeHtml(taskId)}" aria-controls="task-settings-panel" aria-expanded="${settingsOpen ? "true" : "false"}" aria-label="${escapeHtml(settingsLabel)}" title="${escapeHtml(settingsLabel)}">
+              <span aria-hidden="true">⚙</span>
+            </button>
+          </div>
+        </div>
       </div>
-      <div class="task-title">${escapeHtml(task?.title || "")}</div>
       <div class="meta truncate">${escapeHtml(metaText)}</div>
-      <div class="task-actions">
-        <button class="task-action" type="button" data-action="${completionAction}">${completionLabel}</button>
-        <button class="task-action" type="button" data-action="${task?.hidden ? "restore" : "hide"}">${task?.hidden ? "Restore" : "Hide"}</button>
-        <button class="task-action danger" type="button" data-action="delete">Delete</button>
-      </div>
+      ${options.selected ? taskViewSwitcherHtml(activeTab) : ""}
     `;
   }
 
@@ -244,6 +279,7 @@
     pathName,
     taskStatusOrder,
     taskListMetaParts,
+    taskCardMetaParts,
     taskListTitle,
     taskListItemClass,
     taskListItemHtml

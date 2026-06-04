@@ -183,6 +183,8 @@ def default_task_supervision() -> dict:
         "mode": "manual",
         "scope": "task",
         "host_backend": "stub",
+        "host_model": None,
+        "host_proxy_enabled": False,
         "host_agent_id": None,
         "real_agent_enabled": False,
         "channel": "main_only",
@@ -198,6 +200,9 @@ def normalize_task_supervision(value: object | None = None) -> dict:
     supervision["mode"] = mode if mode in TASK_SUPERVISION_MODES else "manual"
     host_backend = str(raw.get("host_backend") or supervision["host_backend"]).strip().lower()
     supervision["host_backend"] = host_backend if host_backend in TASK_SUPERVISION_HOST_BACKENDS else "stub"
+    host_model = raw.get("host_model", raw.get("model"))
+    supervision["host_model"] = str(host_model).strip() if host_model not in (None, "") else None
+    supervision["host_proxy_enabled"] = normalize_bool(raw.get("host_proxy_enabled", raw.get("proxy_enabled")), default=False)
     host_agent_id = raw.get("host_agent_id")
     supervision["host_agent_id"] = str(host_agent_id).strip() if host_agent_id else None
     if "real_agent_enabled" in raw:

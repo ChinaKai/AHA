@@ -24,6 +24,7 @@ BackendStatusProvider = Callable[[Path, str, str, str | None], dict]
 _COMMON_AHA_PORTS = {"8766", "8788"}
 _LISTENER_PORT_RE = re.compile(r":(?P<port>\d+)(?:\s|$)")
 _LISTENER_PROCESS_RE = re.compile(r'"(?P<name>[^"]+)",pid=(?P<pid>\d+)')
+_STALE_AGENT_TASK_STATUSES = {"running", "awaiting_user"}
 
 
 def _default_command_runner(argv: list[str]) -> str:
@@ -70,7 +71,7 @@ def _iter_running_agent_candidates(plan: dict) -> list[dict]:
     for task in plan.get("tasks") or []:
         task_id = str(task.get("id") or "")
         task_status = str(task.get("status") or "")
-        if not task_id or task_status != "running":
+        if not task_id or task_status not in _STALE_AGENT_TASK_STATUSES:
             continue
         for agent in task.get("agents") or []:
             agent_id = str(agent.get("id") or "")

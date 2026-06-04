@@ -15,6 +15,12 @@ BACKEND_LABELS = {
     "stub": "Stub",
 }
 DEFAULT_GENERATED_BY = "AHA Codex GPT-5.5"
+FORBIDDEN_TRAILER_KEYS = {
+    "aha-agent",
+    "aha-scope",
+    "aha-task",
+    "co-authored-by",
+}
 
 
 def _model_label(model: str | None) -> str:
@@ -67,22 +73,29 @@ def validate_commit_message(message: str, expected_generated_by: str | None = No
         errors.append("first line must be a Conventional Commit subject, e.g. feat(web): add lazy loading")
     generated_by_values: list[str] = []
     legacy_aha_trailers: list[str] = []
+    forbidden_trailers: list[str] = []
     for line in lines[1:]:
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
         normalized_key = key.strip()
+        normalized_key_lower = normalized_key.lower()
         normalized_value = value.strip()
         if normalized_key == "Generated-by":
             generated_by_values.append(normalized_value)
         if normalized_key in {"AHA-Task", "AHA-Agent", "AHA-Scope"}:
             legacy_aha_trailers.append(normalized_key)
+        if normalized_key_lower in FORBIDDEN_TRAILER_KEYS:
+            forbidden_trailers.append(normalized_key)
     if len(generated_by_values) != 1:
         errors.append("commit body must include exactly one Generated-by trailer")
     elif expected_generated_by and generated_by_values[0] != expected_generated_by:
         errors.append(f"commit body Generated-by value must be exactly: {expected_generated_by}")
     if legacy_aha_trailers:
         errors.append("commit body should not include AHA task/agent/scope trailers; keep that tracking in the AHA journal")
+    extra_forbidden_trailers = sorted({key for key in forbidden_trailers if key not in {"AHA-Task", "AHA-Agent", "AHA-Scope"}})
+    if extra_forbidden_trailers:
+        errors.append(f"commit body should not include unsupported trailers: {', '.join(extra_forbidden_trailers)}")
     return errors
 
 

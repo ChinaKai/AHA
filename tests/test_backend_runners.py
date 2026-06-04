@@ -396,7 +396,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 target="main",
                 session=session,
             )
-            handle_claude_event(
+            text_result = handle_claude_event(
                 json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}}),
                 events_file=events,
                 run_id="run",
@@ -405,7 +405,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 target="main",
                 session=session,
             )
-            handle_claude_event(
+            started_result = handle_claude_event(
                 json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "pwd"}}]}}),
                 events_file=events,
                 run_id="run",
@@ -414,7 +414,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 target="main",
                 session=session,
             )
-            handle_claude_event(
+            finished_result = handle_claude_event(
                 json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}]}}),
                 events_file=events,
                 run_id="run",
@@ -444,6 +444,11 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(rows[2]["data"]["command"], "pwd")
         self.assertEqual(rows[3]["data"]["output_tail"], "ok")
         self.assertEqual(rows[4]["data"]["usage"]["input_tokens"], 1)
+        self.assertEqual(text_result["events"][0][0], "agent_message")
+        self.assertEqual(started_result["events"][0][0], "agent_command_started")
+        self.assertEqual(started_result["events"][0][1]["command"], "pwd")
+        self.assertEqual(finished_result["events"][0][0], "agent_command_finished")
+        self.assertEqual(finished_result["events"][0][1]["output_tail"], "ok")
 
     def test_claude_native_subagent_claims_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

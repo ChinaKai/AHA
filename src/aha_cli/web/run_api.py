@@ -13,6 +13,7 @@ from aha_cli.store.filesystem import (
     run_exists,
     run_summary,
 )
+from aha_cli.store.ui_state import read_global_ui_state
 
 
 class ApiRunNotFound(Exception):
@@ -114,7 +115,11 @@ def workspace_options(roots: list[Path] | None = None, aha_home: Path | None = N
 
 
 def runs_payload(root: Path, default_run_id: str) -> dict:
-    return {"default_run_id": default_api_run_id(root, default_run_id), "runs": list_run_summaries(root)}
+    return {
+        "default_run_id": default_api_run_id(root, default_run_id),
+        "ui_state": read_global_ui_state(root),
+        "runs": list_run_summaries(root),
+    }
 
 
 def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
@@ -127,6 +132,7 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "config_backend_options": ["codex", "claude"],
         "default_workspace_path": str(cwd or Path.cwd()),
         "default_run_id": default_api_run_id(root, default_run_id),
+        "ui_state": read_global_ui_state(root),
         "runs": list_run_summaries(root),
         "workspaces": workspace_options(aha_home=root),
         "backends": agent_backends(),

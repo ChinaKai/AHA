@@ -28,7 +28,11 @@
         deps.syncRunUrl?.();
       }
       const statusData = getStatusData();
-      const preferred = nextCurrentRunId || nextDefaultRunId || runIdOf(nextRunsData[0]) || String(statusData?.run_id || "").trim();
+      const lastSelectedRunId = String(payload.ui_state?.last_selected_run_id || "").trim();
+      const preferredLastRunId = !deps.initialRunId && lastSelectedRunId && knownRunIds.has(lastSelectedRunId)
+        ? lastSelectedRunId
+        : "";
+      const preferred = nextCurrentRunId || preferredLastRunId || nextDefaultRunId || runIdOf(nextRunsData[0]) || String(statusData?.run_id || "").trim();
       if (preferred && preferred !== nextCurrentRunId) {
         nextCurrentRunId = preferred;
         setCurrentRunId(nextCurrentRunId);
@@ -40,6 +44,7 @@
         deps.syncRunUrl?.();
       }
       if (nextCurrentRunId) {
+        deps.writeSelectedRunId?.(nextCurrentRunId);
         if (!deps.initialSelectedTaskId) {
           setSelectedTaskId(deps.readStoredSelectedTaskId?.() || getSelectedTaskId());
         }

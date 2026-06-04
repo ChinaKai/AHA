@@ -53,6 +53,64 @@ PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT = 240
 PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
 
 
+def model_family_for_guidance(backend: str | None, *model_values: object) -> str | None:
+    if str(backend or "").strip().lower() != "claude":
+        return None
+    model_text = " ".join(str(value or "").strip().lower() for value in model_values if value is not None)
+    if "minimax" in model_text or "mini-max" in model_text:
+        return "minimax"
+    if "kimi" in model_text:
+        return "kimi"
+    return None
+
+
+def _model_guidance_for_prompt(
+    backend: str | None,
+    requested_model: object = None,
+    resolved_model: object = None,
+) -> str:
+    family = model_family_for_guidance(backend, requested_model, resolved_model)
+    if not family:
+        return ""
+    return render_prompt_template("backend_model_guidance_kimi_minimax.md", model_family=family).rstrip()
+
+
+def _root_cause_reaudit_gate_for_prompt(
+    backend: str | None,
+    requested_model: object,
+    resolved_model: object,
+    events: list[dict],
+    item: dict,
+    target: str,
+) -> str:
+    family = model_family_for_guidance(backend, requested_model, resolved_model)
+    if not family or str(item.get("sender") or "") != "browser":
+        return ""
+    saw_prior_browser_request = False
+    saw_prior_agent_reply = False
+    for event in events:
+        if event.get("type") != "message":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        sender, recipient = _conversation_message_endpoints(event)
+        if sender == "browser" and recipient == target:
+            saw_prior_browser_request = True
+        if sender == target and recipient == "browser":
+            saw_prior_agent_reply = True
+        if str(data.get("sender") or "") == target and str(data.get("target") or "") == "browser":
+            saw_prior_agent_reply = True
+    if not (saw_prior_browser_request and saw_prior_agent_reply):
+        return ""
+    return "\n".join(
+        [
+            f"AHA runtime root-cause re-audit gate for `{family}`:",
+            "- The user is following up after prior agent work in this task. Treat this as repeated feedback unless evidence proves otherwise.",
+            "- Before another patch or answer, re-read the relevant code/logs/tests and state the missed root cause.",
+            "- Do not stack another small fix until you have checked the full behavior path and verification target.",
+        ]
+    )
+
+
 def recent_run_events(root: Path, run_id: str, limit: int) -> list[dict]:
     events: list[dict] = []
     for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
@@ -512,9 +570,29 @@ def _fill_prompt_metrics(
         metrics["event_limit"] = event_limit
 
 
-def chat_prompt_with_metrics(root: Path, run_id: str, target: str, item: dict, prefix: str) -> tuple[str, dict]:
+def chat_prompt_with_metrics(
+    root: Path,
+    run_id: str,
+    target: str,
+    item: dict,
+    prefix: str,
+    *,
+    backend: str | None = None,
+    requested_model: str | None = None,
+    resolved_model: str | None = None,
+) -> tuple[str, dict]:
     metrics: dict = {}
-    prompt = chat_prompt(root, run_id, target, item, prefix, metrics=metrics)
+    prompt = chat_prompt(
+        root,
+        run_id,
+        target,
+        item,
+        prefix,
+        metrics=metrics,
+        backend=backend,
+        requested_model=requested_model,
+        resolved_model=resolved_model,
+    )
     return prompt, metrics
 
 
@@ -534,13 +612,25 @@ def compact_summary_context(root: Path, run_id: str, session: dict | None) -> st
     return f"Backend compact summary from previous session:\n{text}\n"
 
 
-def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *, metrics: dict | None = None) -> str:
+def chat_prompt(
+    root: Path,
+    run_id: str,
+    target: str,
+    item: dict,
+    prefix: str,
+    *,
+    metrics: dict | None = None,
+    backend: str | None = None,
+    requested_model: str | None = None,
+    resolved_model: str | None = None,
+) -> str:
     plan = require_plan(root, run_id)
     task_id = item.get("task_id")
     is_finalization = item.get("result_policy") == "finalize"
     is_agent_command = item.get("command_namespace") == "agent"
     task = None
     agent = None
+    session = None
     sticky_delta = False
     components: dict = {
         "prefix": prefix,
@@ -685,6 +775,28 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
         except KeyError:
             task_context = f"Current task context: task_id={task_id} was referenced but not found.\n"
             components["task_context"] = task_context
+    prompt_backend = (
+        backend
+        or (session or {}).get("backend")
+        or (agent or {}).get("backend")
+        or (task or {}).get("preferred_backend")
+    )
+    prompt_requested_model = (
+        requested_model
+        or (session or {}).get("requested_model")
+        or (agent or {}).get("model")
+        or (task or {}).get("preferred_model")
+    )
+    prompt_resolved_model = (
+        resolved_model
+        or (session or {}).get("resolved_model")
+        or (session or {}).get("model")
+        or (agent or {}).get("model")
+        or (task or {}).get("preferred_model")
+    )
+    model_guidance = _model_guidance_for_prompt(prompt_backend, prompt_requested_model, prompt_resolved_model)
+    if model_guidance:
+        components["model_guidance"] = model_guidance
     mode_instruction = render_prompt_template(
         "mode_instruction_final.md" if is_finalization else "mode_instruction_default.md"
     ).strip()
@@ -701,6 +813,14 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             item,
         )
         recent_conversation = format_recent_conversation(conversation_events, conversation_chain_limit)
+        root_cause_reaudit_gate = _root_cause_reaudit_gate_for_prompt(
+            prompt_backend,
+            prompt_requested_model,
+            prompt_resolved_model,
+            conversation_events,
+            item,
+            target,
+        )
         sticky_context = render_prompt_template(
             "backend_sticky_context.md",
             task_id=task_id,
@@ -728,6 +848,11 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             )
             sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_context}\n"
             components["supervision_host_delta_context"] = supervision_context
+        if model_guidance:
+            sticky_context = f"{sticky_context.rstrip()}\n\n{model_guidance}\n"
+        if root_cause_reaudit_gate:
+            sticky_context = f"{sticky_context.rstrip()}\n\n{root_cause_reaudit_gate}\n"
+            components["root_cause_reaudit_gate"] = root_cause_reaudit_gate
         for stale_component in ("task_context", "task_agents", "task_journal", "commit_policy", "supervision_host_context"):
             components.pop(stale_component, None)
         components.update(
@@ -774,6 +899,19 @@ def chat_prompt(root: Path, run_id: str, target: str, item: dict, prefix: str, *
             item,
         )
         recent_conversation = format_recent_conversation(conversation_events, conversation_chain_limit)
+    root_cause_reaudit_gate = _root_cause_reaudit_gate_for_prompt(
+        prompt_backend,
+        prompt_requested_model,
+        prompt_resolved_model,
+        conversation_events if not is_finalization else [],
+        item,
+        target,
+    )
+    if model_guidance:
+        task_context = f"{(task_context or 'Current task context: none').rstrip()}\n\n{model_guidance}\n"
+    if root_cause_reaudit_gate:
+        task_context = f"{(task_context or 'Current task context: none').rstrip()}\n\n{root_cause_reaudit_gate}\n"
+        components["root_cause_reaudit_gate"] = root_cause_reaudit_gate
     components.update(
         {
             "mode_instruction": mode_instruction,

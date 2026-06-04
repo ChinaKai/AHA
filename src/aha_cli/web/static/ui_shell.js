@@ -9,6 +9,43 @@
       return `aha.${side}.sidebarCollapsed`;
     }
 
+    function runManagerStorageKey() {
+      return "aha.runManagerCollapsed";
+    }
+
+    function readRunManagerCollapsed() {
+      try {
+        const stored = windowRef.localStorage?.getItem(runManagerStorageKey());
+        if (stored === "false") return false;
+        if (stored === "true") return true;
+      } catch {
+        // localStorage can be unavailable in restricted browser modes.
+      }
+      return true;
+    }
+
+    function writeRunManagerCollapsed(collapsed) {
+      try {
+        windowRef.localStorage?.setItem(runManagerStorageKey(), collapsed ? "true" : "false");
+      } catch {
+        // localStorage can be unavailable in restricted browser modes.
+      }
+    }
+
+    function setRunManagerCollapsed(collapsed) {
+      elements.runManagerEl?.classList.toggle("run-manager-collapsed", collapsed);
+      if (elements.runManagerToggleEl) {
+        const labelKey = collapsed ? "run.manager_expand" : "run.manager_collapse";
+        const fallback = collapsed ? "Expand run management" : "Collapse run management";
+        const label = windowRef.AHAI18n?.t?.(labelKey, fallback) || fallback;
+        elements.runManagerToggleEl.setAttribute("aria-expanded", String(!collapsed));
+        elements.runManagerToggleEl.setAttribute("aria-label", label);
+        elements.runManagerToggleEl.setAttribute("title", label);
+        elements.runManagerToggleEl.textContent = collapsed ? "▸" : "▾";
+      }
+      writeRunManagerCollapsed(collapsed);
+    }
+
     function readSidebarCollapsed(side) {
       try {
         return windowRef.localStorage?.getItem(sidebarStorageKey(side)) === "true";
@@ -41,10 +78,14 @@
     function initDesktopSidebars() {
       setSidebarCollapsed("overview", readSidebarCollapsed("overview"));
       setSidebarCollapsed("agents", readSidebarCollapsed("agents"));
+      setRunManagerCollapsed(readRunManagerCollapsed());
       elements.collapseOverviewEl?.addEventListener("click", () => setSidebarCollapsed("overview", true));
       elements.overviewRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("overview", false));
       elements.collapseAgentsEl?.addEventListener("click", () => setSidebarCollapsed("agents", true));
       elements.agentsRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("agents", false));
+      elements.runManagerToggleEl?.addEventListener("click", () => {
+        setRunManagerCollapsed(!elements.runManagerEl?.classList.contains("run-manager-collapsed"));
+      });
     }
 
     function closeTaskCreateDialog() {
@@ -58,13 +99,14 @@
 
     function openTaskCreateDialog() {
       if (!deps.currentRunId?.()) {
-        deps.alertError?.("请先创建 Run，再添加任务。");
+        deps.alertError?.(window.AHAI18n?.t?.("task.create_run_first", "Create a run before adding a task.") || "Create a run before adding a task.");
         return;
       }
       if (!elements.taskCreateDialogEl) return;
       closeMobileSheets();
       closeMobileActionPanel();
       deps.syncCreateProxyDefaultForBackend?.({ force: true });
+      deps.syncCreateTaskSupervisionModeFields?.({ force: true });
       try {
         if (typeof elements.taskCreateDialogEl.showModal === "function") {
           if (!elements.taskCreateDialogEl.open) elements.taskCreateDialogEl.showModal();
@@ -159,9 +201,11 @@
     function syncMobileComposerToggle(hasMessage) {
       if (!elements.mobileActionsToggleEl) return;
       elements.mobileActionsToggleEl.classList.toggle("sending", Boolean(hasMessage));
-      elements.mobileActionsToggleEl.textContent = hasMessage ? "发送" : "+";
-      elements.mobileActionsToggleEl.setAttribute("aria-label", hasMessage ? "发送消息" : "打开工具面板");
-      elements.mobileActionsToggleEl.title = hasMessage ? "发送消息" : "打开工具面板";
+      const sendLabel = window.AHAI18n?.t?.("conversation.send", "Send") || "Send";
+      const toolsLabel = window.AHAI18n?.t?.("aha.console", "AHA console") || "AHA console";
+      elements.mobileActionsToggleEl.textContent = hasMessage ? sendLabel : "+";
+      elements.mobileActionsToggleEl.setAttribute("aria-label", hasMessage ? sendLabel : toolsLabel);
+      elements.mobileActionsToggleEl.title = hasMessage ? sendLabel : toolsLabel;
     }
 
     function mobileViewportMatches() {
@@ -201,8 +245,14 @@
     }
 
     function mobileDialogScrollerFor(element) {
-      if (!elements.taskCreateDialogEl?.open || !element || !elements.taskCreateDialogEl.contains(element)) return null;
-      return elements.taskCreateDialogEl.querySelector(".task-dialog-panel");
+      if (!element) return null;
+      if (elements.taskCreateDialogEl?.open && elements.taskCreateDialogEl.contains(element)) {
+        return elements.taskCreateDialogEl.querySelector(".task-dialog-panel");
+      }
+      if (elements.runCreateDialogEl?.open && elements.runCreateDialogEl.contains(element)) {
+        return elements.runCreateDialogEl.querySelector(".task-dialog-panel");
+      }
+      return null;
     }
 
     function keepMobileControlVisible(control, keyboardInset) {

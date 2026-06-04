@@ -486,10 +486,176 @@ class ChatPromptTests(unittest.TestCase):
         self.assertGreater(metrics["components"]["task_context"]["chars"], 0)
         self.assertIn("prompt_ref", metrics)
         self.assertTrue(metrics["prompt_ref"]["path"].startswith("tasks/task-001/prompts/main-"))
+        self.assertNotIn("model_guidance", metrics["components"])
         self.assertIn("User message from browser", artifact_text)
         self.assertIn("measure prompt", artifact_text)
         self.assertNotIn("User message from browser", metrics_json)
         self.assertNotIn("measure prompt", metrics_json)
+
+    def test_kimi_prompt_gets_model_specific_guidance_without_affecting_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Kimi prompt guidance", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                item = {
+                    "sender": "browser",
+                    "message": "continue",
+                    "task_id": "task-001",
+                    "role": "main",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+
+                kimi_prompt, kimi_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    item,
+                    "",
+                    backend="claude",
+                    requested_model="env:kimi",
+                    resolved_model="kimi-k2.6",
+                )
+                codex_prompt, codex_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    item,
+                    "",
+                    backend="codex",
+                    requested_model="gpt5.5",
+                    resolved_model="gpt-5.5",
+                )
+
+        self.assertIn("AHA model-specific operating guidance for `kimi`:", kimi_prompt)
+        self.assertIn("Do not claim sub-agents exist until AHA creates or reuses them", kimi_prompt)
+        self.assertIn("start with an audit and write a keep/drop/redo list before editing", kimi_prompt)
+        self.assertIn("Re-audit the root cause", kimi_prompt)
+        self.assertIn("Before the first file edit/write, long-running test, or commit", kimi_prompt)
+        self.assertIn("reconcile the task journal, final summary, commits, changed_files, verification, and risks", kimi_prompt)
+        self.assertIn("model_guidance", kimi_metrics["components"])
+        self.assertNotIn("AHA model-specific operating guidance", codex_prompt)
+        self.assertNotIn("keep/drop/redo", codex_prompt)
+        self.assertNotIn("long-running test, or commit", codex_prompt)
+        self.assertNotIn("Re-audit the root cause", codex_prompt)
+        self.assertNotIn("model_guidance", codex_metrics["components"])
+
+    def test_minimax_sticky_delta_keeps_model_specific_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "MiniMax sticky prompt guidance", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "next request",
+                        "task_id": "task-001",
+                        "role": "main",
+                        "ts": "2026-01-01T00:00:00+00:00",
+                    },
+                    "",
+                    backend="claude",
+                    requested_model="env:MiniMax-M2.7-highspeed",
+                    resolved_model="MiniMax-M2.7-highspeed",
+                )
+
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("AHA model-specific operating guidance for `minimax`:", prompt)
+        self.assertIn("On sticky-session resumes, do not replay completed old requirements", prompt)
+        self.assertIn("start with an audit and write a keep/drop/redo list before editing", prompt)
+        self.assertIn("Before the first file edit/write, long-running test, or commit", prompt)
+        self.assertIn("Do not say there are no risks if any unresolved product, test, or behavior issue remains", prompt)
+        self.assertIn("model_guidance", metrics["components"])
+        self.assertIn("sticky_context", metrics["components"])
+        self.assertNotIn("task_context", metrics["components"])
+
+    def test_kimi_followup_prompt_adds_root_cause_reaudit_gate_without_affecting_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Kimi follow-up gate", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "browser", "target": "main", "message": "first bug report"})
+                append_event(root, run_id, "message", {"task_id": "task-001", "sender": "main", "target": "browser", "message": "first fix"})
+                item = {
+                    "sender": "browser",
+                    "message": "same issue still fails",
+                    "task_id": "task-001",
+                    "role": "main",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+
+                kimi_prompt, kimi_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    item,
+                    "",
+                    backend="claude",
+                    requested_model="env:kimi",
+                    resolved_model="kimi-k2.6",
+                )
+                codex_prompt, codex_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    item,
+                    "",
+                    backend="codex",
+                    requested_model="gpt5.5",
+                    resolved_model="gpt-5.5",
+                )
+
+        self.assertIn("AHA runtime root-cause re-audit gate for `kimi`:", kimi_prompt)
+        self.assertIn("re-read the relevant code/logs/tests", kimi_prompt)
+        self.assertIn("root_cause_reaudit_gate", kimi_metrics["components"])
+        self.assertNotIn("AHA runtime root-cause re-audit gate", codex_prompt)
+        self.assertNotIn("root_cause_reaudit_gate", codex_metrics["components"])
+
+    def test_claude_chat_passes_kimi_model_context_to_prompt_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("plan", "Kimi chat prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "check prompt", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, "reply", None)) as run_agent:
+                    code, _ = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                        "--model",
+                        "env:kimi",
+                    )
+                rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                metrics_events = [row for row in rows if row["type"] == "agent_prompt_metrics"]
+
+        self.assertEqual(code, 0)
+        prompt = run_agent.call_args.args[0]
+        self.assertIn("AHA model-specific operating guidance for `kimi`:", prompt)
+        self.assertIn("model_guidance", metrics_events[-1]["data"]["components"])
 
     def test_chat_prompt_uses_recent_conversation_chains_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

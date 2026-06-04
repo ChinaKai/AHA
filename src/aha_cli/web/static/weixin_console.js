@@ -12,10 +12,12 @@
     const escapeHtml = context.escapeHtml || escapeFallback;
     const formatDuration = context.formatDuration || (value => String(value || ""));
     const formatLocalTimestamp = context.formatLocalTimestamp || (value => String(value || ""));
+    const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+    const formatText = window.AHAI18n?.format || ((_, __, fallback) => fallback);
     const payload = context.status || {};
     const pairing = payload.pairing || {};
     const account = payload.account || {};
-    const accountId = String(account.user_id || pairing.user_id || "未配对");
+    const accountId = String(account.user_id || pairing.user_id || t("weixin.unpaired", "not paired"));
     const paired = Boolean(payload.paired);
     const status = String(context.pairingStatus || "");
     const notifications = payload.notifications || {};
@@ -25,40 +27,40 @@
     const contextAgeSeconds = Number(sendContext.age_seconds);
     const contextAgeText = Number.isFinite(contextAgeSeconds) ? formatDuration(contextAgeSeconds * 1000) : "";
     const contextUpdatedAt = String(sendContext.updated_at || "").trim();
-    const contextStatusText = !paired ? "等待配对" : ({
-      fresh: "会话可回复",
-      stale: "需微信发消息",
-      missing: "需微信发消息",
-      unknown: "会话状态未知",
-      not_paired: "等待配对"
-    }[contextState] || "已配对");
+    const contextStatusText = !paired ? t("weixin.context_status_not_paired", "waiting for pairing") : ({
+      fresh: t("weixin.context_status_fresh", "session can reply"),
+      stale: t("weixin.context_status_stale", "needs a Weixin message"),
+      missing: t("weixin.context_status_missing", "needs a Weixin message"),
+      unknown: t("weixin.context_status_unknown", "session state unknown"),
+      not_paired: t("weixin.context_status_not_paired", "waiting for pairing")
+    }[contextState] || t("weixin.context_status_paired", "paired"));
     const contextDetail = (() => {
-      if (!paired) return "配对后检测会话状态";
+      if (!paired) return t("weixin.context_detail_check_after_pair", "Check session state after pairing");
       if (contextState === "fresh") {
         return contextUpdatedAt
-          ? `最近刷新 ${formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt)} · ${contextAgeText}`
-          : "最近会话可用";
+          ? formatText("weixin.context_recent", { time: formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt), age: contextAgeText }, `recent refresh ${formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt)} · ${contextAgeText}`)
+          : t("weixin.context_detail_available", "Recent session available");
       }
       if (contextState === "stale") {
         return contextUpdatedAt
-          ? `上次刷新 ${formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt)} · ${contextAgeText}`
-          : "会话已过期";
+          ? formatText("weixin.context_previous", { time: formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt), age: contextAgeText }, `previous refresh ${formatLocalTimestamp(contextUpdatedAt, contextUpdatedAt)} · ${contextAgeText}`)
+          : t("weixin.context_detail_expired", "Session expired");
       }
-      if (contextState === "missing") return "从微信发任意消息后刷新";
-      return "刷新状态后重试";
+      if (contextState === "missing") return t("weixin.context_detail_send_message", "Send any message from Weixin, then refresh");
+      return t("weixin.context_detail_refresh", "Refresh status and retry");
     })();
     const statusText = {
-      idle: "未配对",
-      waiting: "等待扫码",
-      scanned: "已扫码，等待确认",
-      paired: "已配对",
-      expired: "二维码已过期"
+      idle: t("weixin.status_idle", "not paired"),
+      waiting: t("weixin.status_waiting", "waiting for scan"),
+      scanned: t("weixin.status_scanned", "scanned, waiting for confirmation"),
+      paired: t("weixin.status_paired", "paired"),
+      expired: t("weixin.status_expired", "QR code expired")
     }[status] || status;
     const qrSvg = pairing.qrcode_svg || "";
     const qrSrc = qrSvg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg)}` : "";
     const pairingActive = ["waiting", "scanned"].includes(status);
     const displayPaired = paired && !pairingActive;
-    const pairButtonLabel = pairingActive ? "重新生成二维码" : displayPaired ? "已配对" : "配对";
+    const pairButtonLabel = pairingActive ? t("weixin.regenerate", "Regenerate QR code") : displayPaired ? t("weixin.status_paired", "paired") : t("weixin.pair", "Pair");
     const pairButtonDisabled = context.loading || displayPaired;
     const canSendTest = paired && !context.sending && !context.loading;
     const notificationToggleDisabled = !paired || context.loading || context.togglingNotifications;
@@ -66,7 +68,7 @@
     const receivedList = receivedMessages.length ? `
     <ol class="weixin-received-list">
       ${receivedMessages.map(message => {
-        const text = String(message?.text || "").trim() || "(非文本消息)";
+        const text = String(message?.text || "").trim() || t("weixin.non_text", "(non-text message)");
         const receivedAt = String(message?.received_at || "").trim();
         const time = receivedAt ? formatLocalTimestamp(receivedAt, receivedAt) : "";
         return `
@@ -77,62 +79,62 @@
         `;
       }).join("")}
     </ol>
-  ` : `<div class="weixin-received-empty">${paired ? "暂无接收消息" : "配对后显示最近接收消息"}</div>`;
+  ` : `<div class="weixin-received-empty">${paired ? escapeHtml(t("weixin.empty_received_paired", "No received messages yet")) : escapeHtml(t("weixin.empty_received_unpaired", "Recent received messages appear after pairing"))}</div>`;
     return `
     <div class="weixin-console">
       <div class="weixin-console-head">
         <div>
-          <h3>微信操作台</h3>
-          <p>当前 Run: ${escapeHtml(context.currentRunId || "-")}</p>
+          <h3>${escapeHtml(t("weixin.title", "Weixin console"))}</h3>
+          <p>${escapeHtml(t("weixin.current_run", "Current run"))}: ${escapeHtml(context.currentRunId || "-")}</p>
         </div>
         <span class="status ${displayPaired ? "completed" : "session"}">${escapeHtml(statusText)}</span>
       </div>
       <div class="weixin-console-actions">
         <button type="button" data-weixin-action="pair" ${pairButtonDisabled ? "disabled" : ""}>${pairButtonLabel}</button>
-        <button type="button" data-weixin-action="refresh" ${context.loading ? "disabled" : ""}>刷新状态</button>
-        <button class="danger" type="button" data-weixin-action="reset" ${context.loading ? "disabled" : ""}>重置</button>
+        <button type="button" data-weixin-action="refresh" ${context.loading ? "disabled" : ""}>${escapeHtml(t("weixin.refresh", "Refresh status"))}</button>
+        <button class="danger" type="button" data-weixin-action="reset" ${context.loading ? "disabled" : ""}>${escapeHtml(t("weixin.reset", "Reset"))}</button>
       </div>
-      ${context.loading ? '<div class="weixin-console-note">正在连接微信服务...</div>' : ""}
+      ${context.loading ? `<div class="weixin-console-note">${escapeHtml(t("weixin.console_loading", "Connecting to Weixin service..."))}</div>` : ""}
       ${context.error ? `<div class="weixin-console-note error">${escapeHtml(context.error)}</div>` : ""}
-      ${payload.receive_error ? `<div class="weixin-console-note error">接收消息失败：${escapeHtml(payload.receive_error)}</div>` : ""}
+      ${payload.receive_error ? `<div class="weixin-console-note error">${escapeHtml(formatText("weixin.receive_error", { message: payload.receive_error }, `Failed to receive messages: ${payload.receive_error}`))}</div>` : ""}
       ${context.notice ? `<div class="weixin-console-note success">${escapeHtml(context.notice)}</div>` : ""}
       ${qrSrc && status !== "paired" ? `
         <div class="weixin-qr">
-          <img src="${escapeHtml(qrSrc)}" alt="微信配对二维码">
-          <p>${status === "scanned" ? "已扫码，请在微信里确认授权。" : "用微信扫码并确认授权，页面会自动刷新配对状态。"}</p>
-          ${pairing.qrcode_payload ? `<a href="${escapeHtml(pairing.qrcode_payload)}" target="_blank" rel="noreferrer">二维码无法识别时打开链接</a>` : ""}
+          <img src="${escapeHtml(qrSrc)}" alt="${escapeHtml(t("weixin.qr_alt", "Weixin pairing QR code"))}">
+          <p>${status === "scanned" ? escapeHtml(t("weixin.authorize_scanned", "Scanned. Confirm authorization in Weixin.")) : escapeHtml(t("weixin.pairing_default", "Scan with Weixin and confirm authorization. Pairing status refreshes automatically."))}</p>
+          ${pairing.qrcode_payload ? `<a href="${escapeHtml(pairing.qrcode_payload)}" target="_blank" rel="noreferrer">${escapeHtml(t("weixin.link_qr", "Open link if the QR code cannot be recognized"))}</a>` : ""}
         </div>
       ` : ""}
       <div class="weixin-console-grid">
         <section>
-          <strong>账号</strong>
+          <strong>${escapeHtml(t("weixin.account", "Account"))}</strong>
           <code class="weixin-account-id" title="${escapeHtml(accountId)}">${escapeHtml(accountId)}</code>
         </section>
         <section>
-          <strong>通道</strong>
+          <strong>${escapeHtml(t("weixin.channel", "Channel"))}</strong>
           <code class="weixin-session-state ${sendContext.requires_user_message ? "warning" : ""}">${escapeHtml(contextStatusText)}</code>
           <small>${escapeHtml(contextDetail)}</small>
         </section>
       </div>
       <div class="weixin-received">
         <div class="weixin-received-head">
-          <strong>最近接收消息</strong>
-          <span>最多 3 条</span>
+          <strong>${escapeHtml(t("weixin.received_messages", "Recent received messages"))}</strong>
+          <span>${escapeHtml(t("weixin.max_received", "up to 3"))}</span>
         </div>
         ${receivedList}
       </div>
       <div class="weixin-notifications">
         <label class="checkbox-line">
           <input type="checkbox" data-weixin-notifications-toggle ${notificationsEnabled ? "checked" : ""} ${notificationToggleDisabled ? "disabled" : ""}>
-          <span>微信通知</span>
+          <span>${escapeHtml(t("weixin.notifications", "Weixin notifications"))}</span>
         </label>
-        <small>${paired ? "状态变更、等待用户、完成摘要会推送到当前微信。" : "配对成功后可开启任务通知。"}</small>
+        <small>${paired ? escapeHtml(t("weixin.notifications_hint_paired", "Status changes, waiting-for-user states, and final summaries are pushed to the current Weixin.")) : escapeHtml(t("weixin.notifications_hint_unpaired", "Enable task notifications after pairing."))}</small>
       </div>
       <label class="weixin-test">
-        <span>测试通知</span>
+        <span>${escapeHtml(t("weixin.test_label", "Test notification"))}</span>
         <textarea data-weixin-test-message rows="3">${escapeHtml(context.testMessage)}</textarea>
       </label>
-      <button type="button" data-weixin-action="test" ${canSendTest ? "" : "disabled"}>${context.sending ? "发送中..." : "发送测试通知"}</button>
+      <button type="button" data-weixin-action="test" ${canSendTest ? "" : "disabled"}>${context.sending ? escapeHtml(t("weixin.sending", "Sending...")) : escapeHtml(t("weixin.send_test", "Send test notification"))}</button>
     </div>
   `;
   }
@@ -148,7 +150,7 @@
       error: "",
       notice: "",
       status: null,
-      testMessage: "AHA 微信通知测试"
+      testMessage: window.AHAI18n?.t?.("weixin.test_message", "AHA Weixin notification test") || "AHA Weixin notification test"
     };
 
     function currentRunId() {
@@ -235,12 +237,12 @@
         renderPopover();
       }
       try {
-        const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/weixin"), {}, "加载微信状态失败");
+        const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/weixin"), {}, window.AHAI18n?.t?.("weixin.load_failed", "Failed to load Weixin status") || "Failed to load Weixin status");
         state.status = payload;
         state.loaded = true;
         state.error = payload?.error || "";
       } catch (err) {
-        state.error = err?.message || String(err || "加载微信状态失败");
+        state.error = err?.message || String(err || (window.AHAI18n?.t?.("weixin.load_failed", "Failed to load Weixin status") || "Failed to load Weixin status"));
       } finally {
         state.loading = false;
         renderPopover();
@@ -258,11 +260,11 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
-        }, "生成微信配对二维码失败");
+        }, window.AHAI18n?.t?.("weixin.pair_failed", "Failed to generate Weixin pairing QR code") || "Failed to generate Weixin pairing QR code");
         state.status = payload;
         state.loaded = true;
       } catch (err) {
-        state.error = err?.message || String(err || "生成微信配对二维码失败");
+        state.error = err?.message || String(err || (window.AHAI18n?.t?.("weixin.pair_failed", "Failed to generate Weixin pairing QR code") || "Failed to generate Weixin pairing QR code"));
       } finally {
         state.loading = false;
         renderPopover();
@@ -272,9 +274,9 @@
     async function resetPairing() {
       if (!currentRunId() || state.loading) return;
       const confirmed = await deps.confirmDialogAction?.({
-        title: "重置微信配对？",
-        message: "当前账号、二维码、入站同步状态和微信通知开关都会清除。",
-        confirmLabel: "重置配对",
+        title: window.AHAI18n?.t?.("weixin.reset_title", "Reset Weixin pairing?") || "Reset Weixin pairing?",
+        message: window.AHAI18n?.t?.("weixin.reset_confirm_message", "The current account, QR code, inbound sync state, and Weixin notification switch will be cleared.") || "The current account, QR code, inbound sync state, and Weixin notification switch will be cleared.",
+        confirmLabel: window.AHAI18n?.t?.("weixin.confirm_reset", "Reset pairing") || "Reset pairing",
         danger: true,
         details: [["Run", currentRunId()]]
       });
@@ -288,12 +290,12 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
-        }, "重置微信配对失败");
+        }, window.AHAI18n?.t?.("weixin.reset_failed", "Failed to reset Weixin pairing") || "Failed to reset Weixin pairing");
         state.status = payload;
         state.loaded = true;
-        state.notice = "微信配对已重置";
+        state.notice = window.AHAI18n?.t?.("weixin.notice_pair_reset", "Weixin pairing reset") || "Weixin pairing reset";
       } catch (err) {
-        state.error = err?.message || String(err || "重置微信配对失败");
+        state.error = err?.message || String(err || (window.AHAI18n?.t?.("weixin.reset_failed", "Failed to reset Weixin pairing") || "Failed to reset Weixin pairing"));
       } finally {
         state.loading = false;
         renderPopover();
@@ -311,11 +313,11 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: state.testMessage })
-        }, "发送微信测试通知失败");
-        state.notice = "测试通知已发送";
+        }, window.AHAI18n?.t?.("weixin.test_failed", "Failed to send Weixin test notification") || "Failed to send Weixin test notification");
+        state.notice = window.AHAI18n?.t?.("weixin.notice_test_sent", "Test notification sent") || "Test notification sent";
         await loadStatus({ silent: true });
       } catch (err) {
-        state.error = err?.message || String(err || "发送微信测试通知失败");
+        state.error = err?.message || String(err || (window.AHAI18n?.t?.("weixin.test_failed", "Failed to send Weixin test notification") || "Failed to send Weixin test notification"));
       } finally {
         state.sending = false;
         renderPopover();
@@ -333,11 +335,13 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled: Boolean(enabled) })
-        }, "更新微信通知开关失败");
+        }, window.AHAI18n?.t?.("weixin.notifications_failed", "Failed to update Weixin notifications") || "Failed to update Weixin notifications");
         state.status = { ...(state.status || {}), notifications: payload?.notifications || {} };
-        state.notice = payload?.notifications?.enabled ? "微信通知已开启" : "微信通知已关闭";
+        state.notice = payload?.notifications?.enabled
+          ? (window.AHAI18n?.t?.("weixin.notice_enabled", "Weixin notifications enabled") || "Weixin notifications enabled")
+          : (window.AHAI18n?.t?.("weixin.notice_disabled", "Weixin notifications disabled") || "Weixin notifications disabled");
       } catch (err) {
-        state.error = err?.message || String(err || "更新微信通知开关失败");
+        state.error = err?.message || String(err || (window.AHAI18n?.t?.("weixin.notifications_failed", "Failed to update Weixin notifications") || "Failed to update Weixin notifications"));
         await loadStatus({ silent: true });
       } finally {
         state.togglingNotifications = false;

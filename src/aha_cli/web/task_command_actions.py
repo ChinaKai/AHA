@@ -15,7 +15,7 @@ from aha_cli.store.filesystem import (
     set_task_status,
     task_snapshot,
 )
-from aha_cli.web.status import recover_stale_running_agent
+from aha_cli.web.status import recover_stale_running_agent, recover_stale_running_agents
 from aha_cli.web.task_runtime import (
     finalization_prompt,
     format_task_journal_for_prompt,
@@ -61,9 +61,13 @@ def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:
         return "No task is selected."
     try:
         reopen_task(root, run_id, task_id)
+        recovered = recover_stale_running_agents(root, run_id, task_id=task_id)
     except SystemExit:
         return f"Task not found: {task_id}"
-    return f"{task_id} reopened. Follow-up messages are allowed again."
+    suffix = ""
+    if int(recovered.get("recovered_count") or 0):
+        suffix = f" Recovered {recovered['recovered_count']} stale agent(s)."
+    return f"{task_id} reopened. Follow-up messages are allowed again.{suffix}"
 
 
 def _agent_by_id(task: dict, agent_id: str) -> dict:

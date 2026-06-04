@@ -19,11 +19,10 @@
 
     function rowsHtml(rows = []) {
       return rows.map(row => {
-        const buttons = row.actions.map(action => (
-          `<button class="run-lifecycle-action" type="button" data-run-lifecycle-run="${escapeHtml(row.id)}" data-run-lifecycle-status="${escapeHtml(action.status)}"${action.disabled ? " disabled" : ""} title="${escapeHtml(action.title)}">${escapeHtml(action.label)}</button>`
-        )).join("");
-        const protectedText = row.reasonText ? `<span class="run-lifecycle-protection">${escapeHtml(row.reasonText)}</span>` : "";
-        return `<div class="run-lifecycle-row" data-run-lifecycle-row="${escapeHtml(row.id)}"><span class="run-lifecycle-name" title="${escapeHtml(row.id)}">${escapeHtml(row.title)}</span><span class="run-lifecycle status ${escapeHtml(row.lifecycleClass)}">${escapeHtml(row.lifecycle)}</span><div class="run-lifecycle-buttons">${buttons}</div>${protectedText}</div>`;
+        const currentAttr = row.current ? ` aria-current="true"` : "";
+        const settingsOpen = Boolean(row.settingsOpen);
+        const metaHtml = row.meta ? `<div class="run-lifecycle-meta meta truncate">${escapeHtml(row.meta)}</div>` : "";
+        return `<div class="run-lifecycle-row${row.current ? " active" : ""}${settingsOpen ? " settings-open" : ""}" data-run-lifecycle-row="${escapeHtml(row.id)}"><div class="run-lifecycle-identity"><button class="run-lifecycle-select" type="button" data-run-select-run="${escapeHtml(row.id)}" title="${escapeHtml(row.id)}"${currentAttr}>${escapeHtml(row.title)}</button>${metaHtml}</div><span class="run-lifecycle status ${escapeHtml(row.lifecycleClass)}">${escapeHtml(row.lifecycle)}</span><button class="run-settings-trigger" type="button" data-run-settings-toggle="${escapeHtml(row.id)}" aria-controls="run-settings-panel" aria-expanded="${settingsOpen ? "true" : "false"}" aria-label="${escapeHtml(row.settingsTitle)}" title="${escapeHtml(row.settingsTitle)}"><span aria-hidden="true">⚙</span></button></div>`;
       }).join("");
     }
 

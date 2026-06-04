@@ -115,6 +115,12 @@ Every task has a logical `main` agent. A task may have zero or more sub-agents:
 
 The backend is stored per agent. Valid chat backends include `codex` and `claude`, so one task may contain agents backed by different providers.
 
+Assisted supervision can create a task-scoped `host` agent. Task creation and
+`POST /api/task/<task-id>/supervision` accept `host_backend`, `host_model`, and
+`host_proxy_enabled` in the `supervision` object so the host can use the model
+and proxy switch for its own backend instead of inheriting the task-main
+defaults.
+
 ## Agent Backend And Runtime Config
 
 `POST /api/agent-config` updates task agent configuration. It accepts the task
@@ -298,6 +304,10 @@ Agents store only:
 ```json
 {"proxy_enabled": true}
 ```
+
+Assisted supervision hosts also mirror their agent proxy switch in
+`supervision.host_proxy_enabled`, keeping the host proxy setting independent
+from `preferred_proxy_enabled` for task-main and future sub-agents.
 
 When the selected backend has Core Settings proxy values and the agent switch is enabled, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and lowercase variants into the child backend environment. Old global/run/task-level proxy value fields are still read as a config/archive/runtime compatibility fallback.
 

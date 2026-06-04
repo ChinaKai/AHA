@@ -1,21 +1,37 @@
 (function () {
   const collaborationModeOptions = Object.freeze(["auto", "solo", "pair", "team"]);
+  const collaborationModeDescriptionKeys = Object.freeze({
+    auto: "task.collaboration_auto_desc",
+    solo: "task.collaboration_solo_desc",
+    pair: "task.collaboration_pair_desc",
+    team: "task.collaboration_team_desc"
+  });
   const collaborationModeDescriptions = Object.freeze({
-    auto: "AHA 自动选择最快执行方式；只有能节省时间时才启用 sub-agent。",
-    solo: "单人模式：main 自己完成全部工作，适合小任务和快速修改。",
-    pair: "双人模式：最多 1 个 sub-agent 并行处理实现、调研或 review。",
-    team: "团队模式：最多 2 个 sub-agent 处理可拆分责任区，main 负责协调和合并。"
+    auto: "AHA automatically chooses the fastest execution path and uses sub-agents only when it saves time.",
+    solo: "Solo mode: main completes all work, best for small tasks and quick edits.",
+    pair: "Pair mode: up to 1 sub-agent handles implementation, research, or review in parallel.",
+    team: "Team mode: up to 2 sub-agents handle separable scopes while main coordinates and integrates."
   });
   const workflowTemplateOptions = Object.freeze(["auto", "bugfix", "feature", "review", "embedded-driver", "fault-debug", "hil-regression", "release"]);
+  const workflowTemplateDescriptionKeys = Object.freeze({
+    auto: "task.workflow_auto_desc",
+    bugfix: "task.workflow_bugfix_desc",
+    feature: "task.workflow_feature_desc",
+    review: "task.workflow_review_desc",
+    "embedded-driver": "task.workflow_embedded_driver_desc",
+    "fault-debug": "task.workflow_fault_debug_desc",
+    "hil-regression": "task.workflow_hil_regression_desc",
+    release: "task.workflow_release_desc"
+  });
   const workflowTemplateDescriptions = Object.freeze({
-    auto: "自动识别任务类型和最高效执行策略。",
-    bugfix: "面向定位、修复、回归验证的效率策略。",
-    feature: "面向设计、实现、测试/文档的效率策略。",
-    review: "面向独立风险审查、测试审查和代码审查。",
-    "embedded-driver": "面向 datasheet/register 分析、驱动实现和边界测试。",
-    "fault-debug": "面向 crash/log 分析、最近改动审查和复现验证。",
-    "hil-regression": "面向 HIL 测试矩阵、自动化日志和回归风险。",
-    release: "面向 changelog/docs、build/package 和最终风险审查。"
+    auto: "Automatically detect task type and the most efficient execution strategy.",
+    bugfix: "Efficiency strategy for investigation, fixes, and regression checks.",
+    feature: "Efficiency strategy for design, implementation, tests, and documentation.",
+    review: "For independent risk review, test review, and code review.",
+    "embedded-driver": "For datasheet/register analysis, driver implementation, and boundary testing.",
+    "fault-debug": "For crash/log analysis, recent-change review, and reproduction validation.",
+    "hil-regression": "For HIL test matrices, automated logs, and regression risk.",
+    release: "For changelogs/docs, build/package work, and final risk review."
   });
   const defaultTaskSupervisionMaxRounds = 99;
   const defaultTaskContextThresholdPercent = 75;
@@ -28,12 +44,18 @@
     Object.freeze(["product_preference", "Product preference"])
   ]);
 
+  function t(key, fallback = "") {
+    return window.AHAI18n?.t?.(key, fallback) || fallback;
+  }
+
   function collaborationModeDescription(mode) {
-    return collaborationModeDescriptions[mode] || collaborationModeDescriptions.auto;
+    const value = collaborationModeOptions.includes(mode) ? mode : "auto";
+    return t(collaborationModeDescriptionKeys[value], collaborationModeDescriptions[value]);
   }
 
   function workflowTemplateDescription(template) {
-    return workflowTemplateDescriptions[template] || workflowTemplateDescriptions.auto;
+    const value = workflowTemplateOptions.includes(template) ? template : "auto";
+    return t(workflowTemplateDescriptionKeys[value], workflowTemplateDescriptions[value]);
   }
 
   function collaborationModeMaxSubAgents(mode, fallback = 3) {
@@ -94,6 +116,8 @@
     return {
       mode: policy.mode === "assisted" ? "assisted" : "manual",
       host_backend: policy.host_backend || "stub",
+      host_model: policy.host_model || "",
+      host_proxy_enabled: Boolean(policy.host_proxy_enabled),
       real_agent_enabled: Boolean(policy.real_agent_enabled),
       max_rounds: Number(policy.max_rounds || defaultTaskSupervisionMaxRounds),
       ask_user_gates: normalizeAskUserGates(policy.ask_user_gates)
@@ -111,7 +135,10 @@
     const policy = taskSupervisionPolicy(task);
     if (policy.mode === "manual") return "manual";
     const askCount = Object.values(policy.ask_user_gates).filter(Boolean).length;
-    return `${policy.mode}${policy.mode === "assisted" ? ` via ${policy.host_backend}` : ""} | max rounds ${policy.max_rounds} | ask user ${askCount}/${supervisionAskUserGateDefs.length}`;
+    const hostParts = policy.host_backend === "stub"
+      ? ["stub"]
+      : [policy.host_backend, policy.host_model || "default", `proxy ${policy.host_proxy_enabled ? "on" : "off"}`];
+    return `${policy.mode} via ${hostParts.join(" / ")} | max rounds ${policy.max_rounds} | ask user ${askCount}/${supervisionAskUserGateDefs.length}`;
   }
 
   function normalizeTaskContextThreshold(value) {
@@ -134,14 +161,17 @@
     return policy.auto_compact_enabled ? `auto at ${policy.auto_compact_threshold_percent}%` : "auto off";
   }
 
-  function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates) {
+  function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates, hostOptions = {}) {
     const assisted = selectedMode !== "manual";
     const codexHost = selectedMode === "assisted_codex";
     const claudeHost = selectedMode === "assisted_claude";
+    const realHost = codexHost || claudeHost;
     return {
       mode: assisted ? "assisted" : "manual",
       host_backend: codexHost ? "codex" : (claudeHost ? "claude" : "stub"),
-      real_agent_enabled: codexHost || claudeHost,
+      host_model: realHost ? (hostOptions.hostModel || null) : null,
+      host_proxy_enabled: realHost ? Boolean(hostOptions.hostProxyEnabled) : false,
+      real_agent_enabled: realHost,
       max_rounds: Number(maxRoundsValue || defaultTaskSupervisionMaxRounds),
       ask_user_gates: normalizeAskUserGates(askUserGates)
     };
@@ -149,8 +179,10 @@
 
   window.AHATaskMetadata = Object.freeze({
     collaborationModeOptions,
+    collaborationModeDescriptionKeys,
     collaborationModeDescriptions,
     workflowTemplateOptions,
+    workflowTemplateDescriptionKeys,
     workflowTemplateDescriptions,
     defaultTaskSupervisionMaxRounds,
     defaultTaskContextThresholdPercent,

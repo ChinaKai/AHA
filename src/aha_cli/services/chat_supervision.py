@@ -126,6 +126,17 @@ def task_supervision_host_id(task: dict) -> str | None:
     return str(supervision.get("host_agent_id") or "host")
 
 
+def _real_host_supervision_enabled(task: dict) -> bool:
+    supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
+    host_backend = str(supervision.get("host_backend") or "stub")
+    return bool(
+        supervision.get("mode") == "assisted"
+        and host_backend != "stub"
+        and host_backend in PROCESS_AGENT_BACKENDS
+        and supervision.get("real_agent_enabled")
+    )
+
+
 def is_task_supervision_host_agent(task: dict, agent_id: str | None) -> bool:
     host_agent_id = task_supervision_host_id(task)
     return bool(host_agent_id and agent_id == host_agent_id)
@@ -605,12 +616,7 @@ def apply_supervision_real_host(
         return None
     supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     host_backend = str(supervision.get("host_backend") or "stub")
-    if (
-        supervision.get("mode") != "assisted"
-        or host_backend == "stub"
-        or host_backend not in PROCESS_AGENT_BACKENDS
-        or not supervision.get("real_agent_enabled")
-    ):
+    if not _real_host_supervision_enabled(task):
         return None
     host_agent_id = str(supervision.get("host_agent_id") or "host")
     host_agent = next((agent for agent in task.get("agents", []) if agent.get("id") == host_agent_id), None)
@@ -662,6 +668,22 @@ def apply_supervision_real_host(
         display_sender="main",
         display_target=host_agent_id,
     )
+    try:
+        fresh_task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return None
+    if not _real_host_supervision_enabled(fresh_task):
+        append_event(
+            root,
+            run_id,
+            "supervision_route_cancelled",
+            {
+                "task_id": task_id,
+                "host_agent_id": host_agent_id,
+                "reason": "supervision_disabled_before_host_start",
+            },
+        )
+        return {"routed_to_host": False, "executed": [], "cancelled": True}
     set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="host")
     set_task_status(root, run_id, task_id, "running")
     set_agent_status(root, run_id, task_id, host_agent_id, "pending")

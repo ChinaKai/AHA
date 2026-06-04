@@ -23,15 +23,39 @@ from aha_cli.store.filesystem import (
     status_snapshot,
 )
 from aha_cli.web.run_routes import handle_run_workspace_route
-from tests.helpers import fetch_ui_response, json_response_body
+from tests.helpers import (
+    AHA_RUNTIME_ENV_KEYS,
+    fetch_ui_response,
+    isolated_cli_environment,
+    json_response_body,
+)
 
 
 class WebRunApiTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
-        with mock.patch("sys.stdout", out):
+        with isolated_cli_environment(allow_temp_aha_home=False), mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_run_cli_ignores_runtime_aha_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            leaked_home = Path(tmp) / "leaked-home"
+            root.mkdir()
+            leaked_home.mkdir()
+            env = {key: "leaked-value" for key in AHA_RUNTIME_ENV_KEYS}
+            env["AHA_HOME"] = str(leaked_home)
+            env["AHA_ROOT"] = str(leaked_home)
+            with mock.patch.dict("os.environ", env, clear=False), mock.patch("pathlib.Path.cwd", return_value=root):
+                code, _ = self.run_cli("init", "--portable", "--backend", "codex")
+                self.assertEqual(code, 0)
+                code, plan_output = self.run_cli("plan", "Isolated run", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            self.assertTrue((root / ".aha" / "runs" / run_id / "plan.json").exists())
+            self.assertFalse((leaked_home / "runs").exists())
 
     def test_api_bootstrap_works_without_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -640,6 +664,79 @@ class WebRunApiTests(unittest.TestCase):
         self.assertFalse((root / ".aha" / "runs" / old_run_id).exists())
         self.assertTrue(current_response.startswith(b"HTTP/1.1 409 Conflict"))
         self.assertEqual(current_body["reason"], "current_run")
+
+    def test_api_run_delete_force_removes_heartbeat_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, current_output = self.run_cli("plan", "Current run", "--agents", "1")
+                self.assertEqual(code, 0)
+                current_run_id = current_output.splitlines()[0].split(": ", 1)[1]
+                code, heartbeat_output = self.run_cli("plan", "Heartbeat run", "--agents", "1")
+                self.assertEqual(code, 0)
+                heartbeat_run_id = heartbeat_output.splitlines()[0].split(": ", 1)[1]
+                heartbeat_log = root / ".aha" / "runs" / heartbeat_run_id / "logs" / "realtime-debug.log"
+                heartbeat_log.parent.mkdir(parents=True, exist_ok=True)
+                heartbeat_log.write_text('{"phase":"heartbeat_sent"}\n', encoding="utf-8")
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        current_run_id,
+                        f"/api/runs/{heartbeat_run_id}?current_run_id={current_run_id}&force=1",
+                        method="DELETE",
+                    )
+                )
+                body = json_response_body(response)
+                deleted_path_exists = (root / ".aha" / "runs" / heartbeat_run_id).exists()
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["deleted"]["run_id"], heartbeat_run_id)
+        self.assertEqual(body["deleted"]["reason"], "forced")
+        self.assertFalse(deleted_path_exists)
+
+    def test_api_run_lifecycle_allows_idle_current_and_blocks_running_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, current_output = self.run_cli("plan", "Current idle run", "--agents", "1")
+                self.assertEqual(code, 0)
+                current_run_id = current_output.splitlines()[0].split(": ", 1)[1]
+                code, running_output = self.run_cli("plan", "Running run", "--agents", "1")
+                self.assertEqual(code, 0)
+                running_run_id = running_output.splitlines()[0].split(": ", 1)[1]
+                aha_home = root / ".aha"
+                set_task_status(aha_home, running_run_id, "task-001", "running")
+                set_agent_status(aha_home, running_run_id, "task-001", "main", "running")
+
+                idle_current_response = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{current_run_id}/lifecycle",
+                        method="PATCH",
+                        payload={"status": "hidden", "current_run_id": current_run_id},
+                    )
+                )
+                idle_current_body = json_response_body(idle_current_response)
+                running_response = asyncio.run(
+                    fetch_ui_response(
+                        aha_home,
+                        current_run_id,
+                        f"/api/runs/{running_run_id}/lifecycle",
+                        method="PATCH",
+                        payload={"status": "hidden", "current_run_id": current_run_id},
+                    )
+                )
+                running_body = json_response_body(running_response)
+
+        self.assertTrue(idle_current_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(idle_current_body["run"]["lifecycle_status"], "hidden")
+        self.assertTrue(running_response.startswith(b"HTTP/1.1 409 Conflict"))
+        self.assertEqual(running_body["reason"], "running_work")
 
     def test_api_run_archive_exports_and_imports_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

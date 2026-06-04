@@ -209,12 +209,18 @@ class RunRetentionTests(unittest.TestCase):
             write_file(heartbeat, '{"phase":"heartbeat_sent"}\n', mtime=99999)
 
             with self.assertRaises(RunRetentionError) as current_error:
+                apply_run_retention(root, "current-run", current_run_id="current-run", now=100000)
+            with self.assertRaises(RunRetentionError) as forced_current_error:
                 apply_run_retention(root, "current-run", current_run_id="current-run", force=True, now=100000)
             with self.assertRaises(RunRetentionError) as heartbeat_error:
+                apply_run_retention(root, "active-run", now=100000)
+            with self.assertRaises(RunRetentionError) as forced_heartbeat_error:
                 apply_run_retention(root, "active-run", force=True, now=100000)
 
             self.assertEqual(current_error.exception.reason, "current_run")
+            self.assertEqual(forced_current_error.exception.reason, "current_run")
             self.assertEqual(heartbeat_error.exception.reason, "active_heartbeat")
+            self.assertEqual(forced_heartbeat_error.exception.reason, "active_heartbeat")
             self.assertTrue(current_path.exists())
             self.assertTrue(active_path.exists())
 

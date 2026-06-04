@@ -67,9 +67,8 @@
       const status = state.status || "stopped";
       const formatLocalTimestamp = deps.formatLocalTimestamp || ((value, fallback) => fallback || value || "");
       const detail = [
-        state.target || "main",
         state.backend || "backend",
-        state.pid ? `pid=${state.pid}` : "pid=-",
+        state.pid ? `pid=${state.pid}` : "",
         state.last_reply_at ? `last reply ${formatLocalTimestamp(state.last_reply_at, state.last_reply_at)}` : ""
       ].filter(Boolean).join(" | ");
       elements.backendStatusEl.className = `backend-status ${escapeHtml(status)}`;

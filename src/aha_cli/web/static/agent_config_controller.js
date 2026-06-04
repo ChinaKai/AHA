@@ -30,15 +30,29 @@
     const runScopedPayload = options.runScopedPayload || (payload => payload);
     const alertUser = options.alert || (message => window.alert(message));
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
+    function formatText(key, values = {}, fallback = "") {
+      return window.AHAI18n?.format?.(key, values, fallback) || fallback;
+    }
+
     function agentConfigEditorHtml(agentId, currentConfig) {
       return `
         <div class="agent-config-editor" data-agent-config-editor data-agent-id="${escapeHtml(agentId)}">
-          <select data-agent-config-part="backend" title="Backend">${selectOptions(agentBackendOptions(), currentConfig.backend)}</select>
-          <select data-agent-config-part="model" title="Model">${backendModelSelectOptions(currentConfig.backend, currentConfig.model)}</select>
-          <select data-agent-config-part="sandbox" title="Sandbox">${selectOptions(sandboxOptions, currentConfig.sandbox)}</select>
-          <select data-agent-config-part="approval" title="Approval">${selectOptions(approvalOptions, currentConfig.approval)}</select>
-          <select data-agent-config-part="proxy_enabled" title="Proxy">${proxySelectOptions(currentConfig.proxyEnabled)}</select>
-          <button type="button" data-agent-config-apply>Confirm</button>
+          <div class="agent-config-summary">
+            <span>${escapeHtml(t("agent.runtime_settings", "Runtime settings"))}</span>
+            <code>${escapeHtml(agentConfigLabel(currentConfig))}</code>
+          </div>
+          <div class="agent-config-fields">
+            <select data-agent-config-part="backend" title="Backend">${selectOptions(agentBackendOptions(), currentConfig.backend)}</select>
+            <select data-agent-config-part="model" title="Model">${backendModelSelectOptions(currentConfig.backend, currentConfig.model)}</select>
+            <select data-agent-config-part="sandbox" title="Sandbox">${selectOptions(sandboxOptions, currentConfig.sandbox)}</select>
+            <select data-agent-config-part="approval" title="Approval">${selectOptions(approvalOptions, currentConfig.approval)}</select>
+            <select data-agent-config-part="proxy_enabled" title="Proxy">${proxySelectOptions(currentConfig.proxyEnabled)}</select>
+            <button type="button" data-agent-config-apply>${escapeHtml(t("agent.config_confirm", "Confirm"))}</button>
+          </div>
         </div>
       `;
     }
@@ -48,13 +62,13 @@
       const previousLabel = agentConfigLabel(previousConfig);
       const nextLabel = agentConfigLabel(nextConfig);
       return await confirmDialogAction({
-        title: "切换 agent backend config？",
-        message: "AHA 会停止当前 backend、重置 backend_session_id，并给新 backend 写入交接信息。",
-        confirmLabel: "切换 config",
+        title: t("agent.confirm_backend_config_title", "Switch agent backend config?"),
+        message: t("agent.confirm_backend_config_message", "AHA will stop the current backend, reset backend_session_id, and write handoff information for the new backend."),
+        confirmLabel: t("agent.confirm_backend_config_confirm", "Switch config"),
         details: [
           ["Agent", agent.id],
-          ["当前", previousLabel],
-          ["目标", nextLabel]
+          [t("agent.current", "Current"), previousLabel],
+          [t("agent.target", "Target"), nextLabel]
         ]
       });
     }
@@ -66,11 +80,11 @@
     }
 
     function agentRuntimeFieldLabel(field) {
-      if (field === "agent_config") return "runtime settings";
-      if (field === "sandbox") return "sandbox";
-      if (field === "approval") return "approval";
-      if (field === "proxy_enabled") return "proxy";
-      return field || "runtime setting";
+      if (field === "agent_config") return t("agent.field_runtime_settings", "runtime settings");
+      if (field === "sandbox") return t("agent.field_sandbox", "sandbox");
+      if (field === "approval") return t("agent.field_approval", "approval");
+      if (field === "proxy_enabled") return t("agent.field_proxy", "proxy");
+      return field || t("agent.field_runtime_setting", "runtime setting");
     }
 
     function agentRuntimeChangeNeedsRestartChoice(agent, field) {
@@ -80,16 +94,21 @@
 
     function requestAgentRuntimeConfigAction(agent, field, value) {
       const label = agentRuntimeFieldLabel(field);
+      const valueLabel = value === true
+        ? t("agent.value_on", "on")
+        : value === false
+          ? t("agent.value_off", "off")
+          : value;
       const message = [
-        `Change ${agent.id} ${label} to ${value === true ? "on" : value === false ? "off" : value}?`,
+        formatText("agent.runtime_change_question", { agent: agent.id, field: label, value: valueLabel }, `Change ${agent.id} ${label} to ${valueLabel}?`),
         "",
-        "The current backend process is already running.",
-        "Save for next start keeps the process running.",
-        "Save & restart backend applies the change immediately."
+        t("agent.runtime_change_process_running", "The current backend process is already running."),
+        t("agent.runtime_save_next_hint", "Save for next start keeps the process running."),
+        t("agent.runtime_save_restart_hint", "Save & restart backend applies the change immediately.")
       ].join("\n");
       if (!agentRuntimeConfirmDialogEl || typeof agentRuntimeConfirmDialogEl.showModal !== "function") {
-        if (windowRef.confirm(`${message}\n\nOK = Save & restart backend`)) return Promise.resolve("restart");
-        return Promise.resolve(windowRef.confirm("Save for next backend start instead?") ? "next" : "cancel");
+        if (windowRef.confirm(`${message}\n\n${t("agent.runtime_save_restart_ok", "OK = Save & restart backend")}`)) return Promise.resolve("restart");
+        return Promise.resolve(windowRef.confirm(t("agent.runtime_save_next_question", "Save for next backend start instead?")) ? "next" : "cancel");
       }
       if (agentRuntimeConfirmMessageEl) {
         agentRuntimeConfirmMessageEl.textContent = message;
@@ -103,7 +122,7 @@
           agentRuntimeConfirmDialogEl.showModal();
         } catch (_err) {
           agentRuntimeConfirmDialogEl.removeEventListener("close", onClose);
-          resolve(windowRef.confirm(`${message}\n\nOK = Save & restart backend`) ? "restart" : "cancel");
+          resolve(windowRef.confirm(`${message}\n\n${t("agent.runtime_save_restart_ok", "OK = Save & restart backend")}`) ? "restart" : "cancel");
         }
       });
     }
@@ -132,6 +151,7 @@
         return;
       }
       await loadStatus({ forceAgents: true });
+      renderAgents();
       contextDetails.delete(task.id);
       await ensureActiveTabData();
       renderPanel();

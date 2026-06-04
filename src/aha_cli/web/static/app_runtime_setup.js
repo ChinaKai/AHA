@@ -31,6 +31,7 @@ let accessControlError = "";
 let offset = -1;
 let lastEventId = "";
 let statusData = null;
+const initialRunId = currentRunId;
 const initialSelectedTaskId = String(queryParams.get("selected_task_id") || queryParams.get("task_id") || "").trim();
 let selectedTaskId = initialSelectedTaskId || null;
 let activeTab = "conversation";
@@ -137,6 +138,7 @@ const {
   runLifecycleTitle,
   sessionOptionLabel,
   runLifecycleProtectionReason,
+  runDeleteProtectionReason,
   runLifecycleReasonText,
   runLifecycleActionsView
 } = runMetadata;
@@ -291,12 +293,41 @@ const {
 } = taskTimingHelpers;
 const selectionState = window.AHASelectionState;
 const {
+  createRemoteSelectedTaskState,
   readStoredSelectedTaskId: readStoredSelectedTaskIdForRun,
   selectedAgent: selectedAgentFromTask,
   selectedTask: selectedTaskFromStatus,
   selectedTaskRealtimeActive: selectedTaskRealtimeActiveFromState,
   writeStoredSelectedTaskId: writeStoredSelectedTaskIdForRun
 } = selectionState;
+const remoteSelectedTaskState = createRemoteSelectedTaskState({
+  apiUrl,
+  currentRunId: () => currentRunId,
+  fetchJson,
+  fetchWithTimeout
+});
+function readPersistedSelectedTaskIdForRun(runId, storage = window.localStorage) {
+  const remoteValue = String(currentRunId === runId ? remoteSelectedTaskState.cachedValue() || "" : "").trim();
+  return remoteValue || readStoredSelectedTaskIdForRun(runId, storage);
+}
+function writePersistedSelectedTaskIdForRun(runId, taskId, storage = window.localStorage) {
+  writeStoredSelectedTaskIdForRun(runId, taskId, storage);
+  if (currentRunId === runId) remoteSelectedTaskState.writeSelectedTaskId(taskId);
+}
+async function ensureRemoteSelectedTaskId() {
+  return await remoteSelectedTaskState.readSelectedTaskId();
+}
+let persistedSelectedRunId = "";
+function writePersistedSelectedRunId(runId) {
+  const value = String(runId || "").trim();
+  if (!value || persistedSelectedRunId === value) return;
+  persistedSelectedRunId = value;
+  fetchWithTimeout(apiUrl("/api/ui-state", {}, { runScoped: false }), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ last_selected_run_id: value })
+  }).catch(err => console.warn("Failed to save selected run", err));
+}
 const realtimeState = window.AHARealtimeState;
 const {
   realtimeReadyStateName,
@@ -343,9 +374,10 @@ appBridge = window.AHAAppBridge.createAppBridge({
   escapeHtml,
   localStorage: window.localStorage,
   panelEl: () => panelEl,
-  readStoredSelectedTaskIdForRun,
+  readStoredSelectedTaskIdForRun: readPersistedSelectedTaskIdForRun,
   runStateEl: () => runStateEl,
-  writeStoredSelectedTaskIdForRun
+  writeSelectedRunId: writePersistedSelectedRunId,
+  writeStoredSelectedTaskIdForRun: writePersistedSelectedTaskIdForRun
 });
 const {
   addBootstrapConfigRow,

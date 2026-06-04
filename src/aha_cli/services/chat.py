@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import subprocess
 import time
 import traceback
 import uuid
@@ -12,14 +13,15 @@ from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
-from aha_cli.services.chat_prompt_context import chat_prompt, chat_prompt_with_metrics
+from aha_cli.services.chat_prompt_context import chat_prompt, chat_prompt_with_metrics, model_family_for_guidance
 from aha_cli.services.chat_supervision import (
     SUPERVISION_FAILURE_FALLBACK_STATUS,
     apply_supervision_host_decision,
     apply_supervision_real_host,
     is_task_supervision_host_agent,
 )
-from aha_cli.services.action_payloads import action_response_text, extract_action_payload
+from aha_cli.services.action_payloads import action_response_text, extract_action_payload, invalid_action_schema_reason
+from aha_cli.services.commit_policy import generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.orchestrator import (
     append_visible_sub_agent_result,
     apply_supervision_stub,
@@ -29,6 +31,7 @@ from aha_cli.services.orchestrator import (
     request_round_summary_if_ready,
     sub_agent_failure_message,
 )
+from aha_cli.services.progress_heartbeat import AgentProgressHeartbeat
 from aha_cli.services.prompt_artifacts import save_prompt_artifact
 from aha_cli.services.proxy import proxy_env_for_agent
 from aha_cli.services.subagent_state import task_has_incomplete_sub_agents, waiting_for_subagents_message
@@ -75,6 +78,224 @@ SUPERVISION_SKIP_COORDINATIONS = {
     "system_status",
     "verification_status",
 }
+
+AHA_ACTION_RETRY_SCHEMA = (
+    '{"actions":[{"type":"record_task_update","summary":"...","changed_files":[],"verification":[],"risks":[]}],'
+    '"response":"..."}'
+)
+
+
+def action_schema_retry_message(reason: str) -> str:
+    return "\n".join(
+        [
+            AHA_ACTION_RETRY_SCHEMA,
+            "",
+            "AHA runtime rejected your previous reply before executing actions.",
+            f"Reason: {reason}.",
+            "Return exactly one JSON object with an `actions` array and `response` string.",
+            "Allowed action types are `route_to_agent`, `spawn_sub`, and `record_task_update`.",
+            "Do not use top-level `type` or `action`; do not wrap the JSON in Markdown.",
+            "Continue from the latest active user request.",
+        ]
+    )
+
+
+def task_update_required_retry_message() -> str:
+    return "\n".join(
+        [
+            AHA_ACTION_RETRY_SCHEMA,
+            "",
+            "AHA runtime detected repository changes from your previous turn, but your reply did not include `record_task_update`.",
+            "Before normal completion, return exactly one AHA JSON object with a `record_task_update` action.",
+            "Fill `changed_files`, `verification`, and `risks` from the actual work you performed.",
+            "Do not mix Markdown prose outside the JSON envelope.",
+        ]
+    )
+
+
+def commit_policy_retry_message(errors: list[str], expected_generated_by: str) -> str:
+    error_text = "; ".join(errors)
+    return "\n".join(
+        [
+            AHA_ACTION_RETRY_SCHEMA,
+            "",
+            "AHA runtime detected a commit message policy violation from your previous turn.",
+            f"Expected Generated-by trailer: {expected_generated_by}",
+            f"Errors: {error_text}",
+            "Amend or repair the commit before normal completion, then return an AHA JSON object with `record_task_update`.",
+            "Do not add Co-Authored-By, AHA-Task, AHA-Agent, or AHA-Scope trailers.",
+        ]
+    )
+
+
+def _reply_action_schema_error(reply: str) -> str | None:
+    payload = extract_action_payload(reply)
+    if not payload:
+        return None
+    return invalid_action_schema_reason(payload)
+
+
+def _reply_has_action_type(reply: str, action_type: str) -> bool:
+    payload = extract_action_payload(reply)
+    if not payload or invalid_action_schema_reason(payload):
+        return False
+    actions = payload.get("actions")
+    if not isinstance(actions, list):
+        return False
+    return any(isinstance(action, dict) and action.get("type") == action_type for action in actions)
+
+
+def _git_workspace_snapshot(workspace: Path) -> dict | None:
+    try:
+        root_result = subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if root_result.returncode != 0:
+        return None
+    try:
+        head_result = subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        status_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                ".",
+                ":(exclude).aha",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if status_result.returncode != 0:
+        return None
+    head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+    return {"root": root_result.stdout.strip(), "head": head, "status": status_result.stdout}
+
+
+def _git_workspace_changed(before: dict | None, after: dict | None) -> bool:
+    return bool(before is not None and after is not None and before != after)
+
+
+def _git_commit_messages(workspace: Path, before: dict | None, after: dict | None, *, force_head: bool = False) -> list[str]:
+    if not after or not after.get("head"):
+        return []
+    before_head = str((before or {}).get("head") or "")
+    after_head = str(after.get("head") or "")
+    if before_head and before_head != after_head:
+        revision = f"{before_head}..{after_head}"
+    elif not before_head and after_head:
+        revision = after_head
+    elif force_head:
+        revision = "-1"
+    else:
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace), "log", "--format=%B%x1e", revision],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return [message.strip() + "\n" for message in result.stdout.split("\x1e") if message.strip()]
+
+
+def _git_commit_policy_errors(
+    workspace: Path,
+    before: dict | None,
+    after: dict | None,
+    *,
+    expected_generated_by: str,
+    force_head: bool = False,
+) -> list[str]:
+    errors: list[str] = []
+    for message in _git_commit_messages(workspace, before, after, force_head=force_head):
+        errors.extend(validate_commit_message(message, expected_generated_by=expected_generated_by))
+    return errors
+
+
+def append_agent_retry_request(
+    root: Path,
+    run_id: str,
+    *,
+    target: str,
+    task_id: str | None,
+    agent_id: str,
+    item: dict,
+    message: str,
+    gate: str,
+    reason: str,
+    manages_task_status: bool,
+) -> None:
+    append_message(
+        root,
+        run_id,
+        target,
+        message,
+        sender="aha",
+        task_id=task_id,
+        role=item.get("role") or "main",
+        from_agent="aha",
+        to_agent=agent_id,
+        coordination=gate,
+    )
+    append_event(root, run_id, "agent_retry_requested", {"task_id": task_id, "target": agent_id, "gate": gate, "reason": reason})
+    if manages_task_status and task_id:
+        set_agent_status(root, run_id, task_id, agent_id, "pending")
+        set_task_status(root, run_id, task_id, "running")
+
+
+def append_agent_completion_blocked(
+    root: Path,
+    run_id: str,
+    *,
+    task_id: str | None,
+    agent_id: str,
+    item: dict,
+    reason: str,
+    manages_task_status: bool,
+) -> None:
+    notice = f"AHA runtime blocked normal completion for `{agent_id}`: {reason}"
+    append_event(root, run_id, "agent_completion_blocked", {"task_id": task_id, "target": agent_id, "reason": reason})
+    append_message(
+        root,
+        run_id,
+        "browser",
+        notice,
+        sender="aha",
+        task_id=task_id,
+        role=item.get("role") or "main",
+        from_agent="aha",
+        to_agent="browser",
+        coordination="completion_blocked",
+        agent_id=agent_id,
+    )
+    if manages_task_status and task_id:
+        set_agent_status(root, run_id, task_id, agent_id, "failed", 1)
+        set_task_status(root, run_id, task_id, "running", 1)
 
 
 def message_triggers_supervision(item: dict) -> bool:
@@ -349,12 +570,35 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     },
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task, plan, cfg)
-                prompt, prompt_metrics = chat_prompt_with_metrics(root, run_id, args.target, item, args.prompt_prefix)
+                prompt, prompt_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    args.target,
+                    item,
+                    args.prompt_prefix,
+                    backend=backend_name,
+                    requested_model=requested_model,
+                    resolved_model=resolved_model,
+                )
                 try:
                     prompt_metrics["prompt_ref"] = save_prompt_artifact(root, run_id, item_task_id, args.target, prompt)
                 except OSError as exc:
                     prompt_metrics["prompt_ref_error"] = str(exc)
                 append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
+                gate_model_family = model_family_for_guidance(backend_name, requested_model, resolved_model)
+                git_before = _git_workspace_snapshot(workspace) if gate_model_family else None
+                progress_heartbeat = (
+                    AgentProgressHeartbeat(
+                        root,
+                        run_id,
+                        task_id=item_task_id,
+                        agent_id=agent_id,
+                        role=item.get("role") or "main",
+                        model_family=gate_model_family,
+                    )
+                    if gate_model_family and manages_task_status and item_task_id
+                    else None
+                )
                 try:
                     if backend_name == "claude":
                         exit_code, reply, session = run_claude_exec(
@@ -373,6 +617,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             session=session,
                             proxy_env=proxy_env,
                             claude_config=claude_config,
+                            event_callback=progress_heartbeat.handle_event if progress_heartbeat else None,
                         )
                     else:
                         exit_code, reply, session = run_codex_exec(
@@ -400,6 +645,122 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     reply = f"{backend_name.title()} backend crashed while handling agent turn: {type(exc).__name__}: {exc}"
                 if session:
                     save_session(root, session)
+                if exit_code == 0 and reply.strip():
+                    schema_error = _reply_action_schema_error(reply)
+                    if schema_error and item.get("coordination") != "action_schema_retry":
+                        append_agent_retry_request(
+                            root,
+                            run_id,
+                            target=args.target,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            item=item,
+                            message=action_schema_retry_message(schema_error),
+                            gate="action_schema_retry",
+                            reason=schema_error,
+                            manages_task_status=manages_task_status,
+                        )
+                        append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                        print(f"AHA requested {args.target} retry: invalid action schema ({schema_error})", flush=True)
+                        if worker_task_id:
+                            save_chat_offset(offset_file, item_offset)
+                            mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            return exit_code
+                        if args.once:
+                            save_chat_offset(offset_file, item_offset)
+                            return exit_code
+                        continue
+                    git_after = _git_workspace_snapshot(workspace) if gate_model_family else None
+                    commit_policy_retry_active = item.get("coordination") == "commit_policy_retry"
+                    expected_generated_by = generated_by_for_backend_model(backend_name, resolved_model or requested_model)
+                    commit_errors = (
+                        _git_commit_policy_errors(
+                            workspace,
+                            git_before,
+                            git_after,
+                            expected_generated_by=expected_generated_by,
+                            force_head=commit_policy_retry_active,
+                        )
+                        if gate_model_family
+                        else []
+                    )
+                    if commit_errors:
+                        reason = "; ".join(commit_errors)
+                        if commit_policy_retry_active:
+                            append_agent_completion_blocked(
+                                root,
+                                run_id,
+                                task_id=item_task_id,
+                                agent_id=agent_id,
+                                item=item,
+                                reason=f"commit message policy violation: {reason}",
+                                manages_task_status=manages_task_status,
+                            )
+                        else:
+                            append_agent_retry_request(
+                                root,
+                                run_id,
+                                target=args.target,
+                                task_id=item_task_id,
+                                agent_id=agent_id,
+                                item=item,
+                                message=commit_policy_retry_message(commit_errors, expected_generated_by),
+                                gate="commit_policy_retry",
+                                reason=reason,
+                                manages_task_status=manages_task_status,
+                            )
+                        append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                        print(f"AHA blocked {args.target} normal completion: commit message policy violation", flush=True)
+                        if worker_task_id:
+                            save_chat_offset(offset_file, item_offset)
+                            mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            return exit_code
+                        if args.once:
+                            save_chat_offset(offset_file, item_offset)
+                            return exit_code
+                        continue
+                    task_update_retry_active = item.get("coordination") == "task_update_required_retry"
+                    task_update_required = bool(
+                        gate_model_family
+                        and manages_task_status
+                        and not _reply_has_action_type(reply, "record_task_update")
+                        and (_git_workspace_changed(git_before, git_after) or task_update_retry_active)
+                    )
+                    if task_update_required:
+                        reason = "repository changes require a record_task_update action before normal completion"
+                        if task_update_retry_active:
+                            append_agent_completion_blocked(
+                                root,
+                                run_id,
+                                task_id=item_task_id,
+                                agent_id=agent_id,
+                                item=item,
+                                reason=reason,
+                                manages_task_status=manages_task_status,
+                            )
+                        else:
+                            append_agent_retry_request(
+                                root,
+                                run_id,
+                                target=args.target,
+                                task_id=item_task_id,
+                                agent_id=agent_id,
+                                item=item,
+                                message=task_update_required_retry_message(),
+                                gate="task_update_required_retry",
+                                reason=reason,
+                                manages_task_status=manages_task_status,
+                            )
+                        append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                        print(f"AHA blocked {args.target} normal completion: {reason}", flush=True)
+                        if worker_task_id:
+                            save_chat_offset(offset_file, item_offset)
+                            mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            return exit_code
+                        if args.once:
+                            save_chat_offset(offset_file, item_offset)
+                            return exit_code
+                        continue
                 if item_task_id and is_task_supervision_host_agent(task, agent_id):
                     host_result = apply_supervision_host_decision(
                         root,

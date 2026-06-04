@@ -17,6 +17,8 @@ from aha_cli.store.filesystem import (
     iter_jsonl_from,
     read_json,
     run_dir,
+    set_agent_status,
+    set_task_status,
     status_snapshot,
     task_context_snapshot,
     task_final_snapshot,
@@ -215,6 +217,42 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertFalse(body["task"]["supervision"]["ask_user_gates"]["commit_merge_delete"])
         self.assertNotIn("allowed_actions", body["task"]["supervision"])
         self.assertEqual(updated["supervision"], body["task"]["supervision"])
+
+    def test_disabling_supervision_clears_main_host_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Disable supervision wait", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+                set_agent_status(root, run_id, "task-001", "host", "completed", 0)
+
+                task = update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="manual",
+                    host_backend="stub",
+                    real_agent_enabled=False,
+                )
+                rows, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+
+        main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+        self.assertEqual(task["status"], "awaiting_user")
+        self.assertEqual(main_agent["status"], "completed")
+        self.assertNotIn("waiting_reason", main_agent)
+        self.assertTrue(any(row["type"] == "task_supervision_host_wait_cleared" for row in rows))
 
     def test_task_supervision_host_agent_is_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

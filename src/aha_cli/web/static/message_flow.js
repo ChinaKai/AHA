@@ -5,6 +5,7 @@
     const terminalTaskStatuses = state.terminalTaskStatuses || new Set();
     let pendingMessageId = 0;
     let pendingSendInFlight = false;
+    let sendNotice = null;
 
     const currentRunId = deps.currentRunId || (() => "");
     const selectedTaskId = deps.selectedTaskId || (() => "");
@@ -33,6 +34,29 @@
     const setConversationAutoFollow = deps.setConversationAutoFollow || (() => {});
     const agentTarget = deps.agentTarget || (() => "main");
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
+    function formatTemplate(template, values = {}) {
+      return String(template || "").replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => (
+        values[key] === undefined ? `{${key}}` : String(values[key])
+      ));
+    }
+
+    function terminalTaskSendError(task) {
+      const status = taskCurrentStatus(task);
+      if (!terminalTaskStatuses.has(status)) return "";
+      return formatTemplate(
+        t("send.terminal_task", "Task {task} is {status}; use /aha reopen before sending follow-up messages."),
+        { task: task?.id || "-", status }
+      );
+    }
+
+    function sendInFlightError() {
+      return t("send.in_flight", "A message is already being sent. Wait for it to finish before sending another one.");
+    }
+
     function messageContextKey(taskId = selectedTaskId(), target = backendTarget()) {
       return `${currentRunId() || ""}::${taskId || ""}::${target || "main"}`;
     }
@@ -40,6 +64,25 @@
     function pendingForContext(taskId = selectedTaskId(), target = backendTarget()) {
       const key = messageContextKey(taskId, target);
       return pendingMessages.filter(item => item.contextKey === key);
+    }
+
+    function sendNoticeForContext(taskId = selectedTaskId(), target = backendTarget()) {
+      const key = messageContextKey(taskId, target);
+      return sendNotice?.contextKey === key ? sendNotice : null;
+    }
+
+    function clearSendNotice(taskId = selectedTaskId(), target = backendTarget()) {
+      const key = messageContextKey(taskId, target);
+      if (sendNotice?.contextKey === key) sendNotice = null;
+    }
+
+    function showSendNotice(message, task, target = backendTarget(), kind = "error") {
+      sendNotice = {
+        contextKey: messageContextKey(task?.id, target),
+        message: String(message || ""),
+        kind
+      };
+      renderPendingMessages();
     }
 
     function renderPendingMessages() {
@@ -50,24 +93,28 @@
       const key = messageContextKey(task?.id, target);
       const items = task ? pendingForContext(task.id, target) : [];
       const interrupted = interruptedContexts.has(key);
-      container.classList.toggle("hidden", !items.length && !interrupted);
-      if (!items.length && !interrupted) {
+      const notice = task ? sendNoticeForContext(task.id, target) : null;
+      container.classList.toggle("hidden", !items.length && !interrupted && !notice);
+      if (!items.length && !interrupted && !notice) {
         container.innerHTML = "";
         return;
       }
+      const noticeHtml = notice
+        ? `<div class="pending-note ${escapeHtml(notice.kind || "info")}">${escapeHtml(notice.message)}</div>`
+        : "";
       const note = interrupted
-        ? '<div class="pending-note">上一轮已中断。确认 pending 后点 Send，会合并发送下一轮。</div>'
-        : '<div class="pending-note">Agent 忙碌或等待中收到的消息会先暂存，当前轮可继续后自动合并发送。</div>';
+        ? `<div class="pending-note">${escapeHtml(t("pending.interrupted_note", "The previous turn was interrupted. Confirm pending and press Send to merge it into the next turn."))}</div>`
+        : (items.length ? `<div class="pending-note">${escapeHtml(t("pending.queued_note", "Messages received while the agent is busy or waiting are queued and will be merged into the next turn."))}</div>` : "");
       const list = items.map((item, index) => `
         <div class="pending-message" data-pending-id="${escapeHtml(item.id)}">
           <div>
             <strong>#${index + 1}</strong>
             <span>${escapeHtml(item.message)}</span>
           </div>
-          <button type="button" class="pending-remove" data-remove-pending="${escapeHtml(item.id)}" title="删除 pending 消息">Delete</button>
+          <button type="button" class="pending-remove" data-remove-pending="${escapeHtml(item.id)}" title="${escapeHtml(t("pending.delete_title", "Delete pending message"))}">Delete</button>
         </div>
       `).join("");
-      container.innerHTML = `${note}${list}`;
+      container.innerHTML = `${noticeHtml}${note}${list}`;
     }
 
     function addPendingMessage(message, task, agentId) {
@@ -114,23 +161,23 @@
       const lines = [];
       if (interrupted) {
         lines.push(
-          "上一轮 agent 工作被用户中断。",
-          "继续前请注意：当前工作区或命令可能已有部分副作用，请基于当前实际状态判断后继续。",
+          t("pending.prompt_interrupted", "The previous agent turn was interrupted by the user."),
+          t("pending.prompt_interrupted_caution", "Before continuing, account for possible partial side effects in the workspace or command state."),
           ""
         );
       }
       if (items.length) {
-        lines.push("用户在你工作期间补充了以下消息，请按时间顺序合并理解并继续处理：");
+        lines.push(t("pending.prompt_queued_messages", "The user added these messages while you were working. Merge them in chronological order and continue:"));
         items.forEach((item, index) => {
           lines.push(`${index + 1}. [${formatLocalTimestamp(item.createdAt, item.createdAt)}] ${item.message}`);
         });
       }
       if (currentMessage) {
-        if (items.length) lines.push("", "用户当前发送的新消息：");
+        if (items.length) lines.push("", t("pending.prompt_new_message", "New message from the user:"));
         lines.push(currentMessage);
       }
       if (!items.length && !currentMessage && interrupted) {
-        lines.push("用户中断了上一轮，但没有补充新消息。");
+        lines.push(t("pending.prompt_no_new_message", "The user interrupted the previous turn without adding a new message."));
       }
       return lines.join("\n").trim();
     }
@@ -193,8 +240,11 @@
           pending_count: items.length,
           interrupted
         });
-        if (currentMessage) addPendingMessage(currentMessage, task, target);
-        renderPendingMessages();
+        if (!options.auto) {
+          const message = sendInFlightError();
+          showSendNotice(message, task, target, "error");
+          throw new Error(message);
+        }
         return { ok: true, deferred: true, reason: "send_in_flight" };
       }
       if (!items.length && !currentMessage && !interrupted) return null;
@@ -248,6 +298,13 @@
         message_len: message.length
       });
       let response = null;
+      const terminalMessage = isAha ? "" : terminalTaskSendError(task);
+      if (terminalMessage) {
+        realtimeDebug("composer.blocked", { task_id: task.id, target: agentId, reason: "terminal_task", status: taskCurrentStatus(task) });
+        showSendNotice(terminalMessage, task, agentId, "error");
+        throw new Error(terminalMessage);
+      }
+      clearSendNotice(task.id, agentId);
       if (selectedAgentInputBlocked() && !isAha) {
         realtimeDebug("composer.pending", { task_id: task.id, target: agentId, reason: "input_blocked", message_len: message.length });
         addPendingMessage(message, task, agentId);

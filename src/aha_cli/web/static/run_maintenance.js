@@ -21,7 +21,15 @@
     return typeof options.formatBytes === "function" ? options.formatBytes : defaultFormatBytes;
   }
 
-  function runMaintenanceTextList(items, formatter, emptyText = "无") {
+  function t(key, fallback = "") {
+    return window.AHAI18n?.t?.(key, fallback) || fallback;
+  }
+
+  function formatText(key, values = {}, fallback = "") {
+    return window.AHAI18n?.format?.(key, values, fallback) || fallback;
+  }
+
+  function runMaintenanceTextList(items, formatter, emptyText = "none") {
     if (!Array.isArray(items) || !items.length) return emptyText;
     return items.slice(0, 3).map(formatter).filter(Boolean).join(" · ") || emptyText;
   }
@@ -49,8 +57,8 @@
   function runMaintenanceButtons(parts, actionInFlight = false) {
     const actionDisabled = Boolean(actionInFlight || !parts.candidates.length);
     const buttons = [
-      { action: "archive", label: "归档", disabled: actionDisabled },
-      { action: "compact", label: "归档并删除", disabled: actionDisabled, danger: true }
+      { action: "archive", label: t("maintenance.archive", "Archive"), disabled: actionDisabled },
+      { action: "compact", label: t("maintenance.compact", "Archive & delete"), disabled: actionDisabled, danger: true }
     ];
     for (const item of parts.staleAgents.slice(0, 3)) {
       const taskId = String(item.task_id || "");
@@ -83,15 +91,21 @@
     const totalBytes = Number(parts.total.bytes || 0);
     const message = options.message ? ` · ${options.message}` : "";
     return {
-      summary: `容量 ${totalFiles} 文件 / ${formatBytes(totalBytes)} · 候选 ${parts.candidates.length} · stale ${parts.staleAgents.length}${message}`,
+      summary: formatText("maintenance.capacity_summary", {
+        files: totalFiles,
+        bytes: formatBytes(totalBytes),
+        candidates: parts.candidates.length,
+        stale: parts.staleAgents.length,
+        message
+      }, `Size ${totalFiles} files / ${formatBytes(totalBytes)} · candidates ${parts.candidates.length} · stale ${parts.staleAgents.length}${message}`),
       rows: [
-        ["分组", runMaintenanceTextList(parts.groups, group => `${group.name}: ${group.files || 0} / ${formatBytes(Number(group.bytes || 0))}`)],
-        ["候选", runMaintenanceTextList(parts.candidates, item => `${item.path}: ${formatBytes(Number(item.bytes || 0))}`)],
-        ["Stale", runMaintenanceTextList(parts.staleAgents, item => {
+        [t("maintenance.groups", "Groups"), runMaintenanceTextList(parts.groups, group => `${group.name}: ${group.files || 0} / ${formatBytes(Number(group.bytes || 0))}`, t("maintenance.none", "none"))],
+        [t("maintenance.candidates", "Candidates"), runMaintenanceTextList(parts.candidates, item => `${item.path}: ${formatBytes(Number(item.bytes || 0))}`, t("maintenance.none", "none"))],
+        [t("maintenance.stale", "Stale"), runMaintenanceTextList(parts.staleAgents, item => {
           const backend = item.backend ? ` ${item.backend}` : "";
           return `${item.task_id || "-"}/${item.agent_id || "-"}${backend}`;
-        })],
-        ["归档", runMaintenanceTextList(parts.archives, item => `${item.created_at || "-"}: ${item.files || 0} / ${formatBytes(Number(item.bytes || 0))}`)]
+        }, t("maintenance.none", "none"))],
+        [t("maintenance.archives", "Archives"), runMaintenanceTextList(parts.archives, item => `${item.created_at || "-"}: ${item.files || 0} / ${formatBytes(Number(item.bytes || 0))}`, t("maintenance.none", "none"))]
       ].map(([label, value]) => ({ label, value })),
       buttons: runMaintenanceButtons(parts, options.actionInFlight)
     };
@@ -105,34 +119,34 @@
     const candidateSize = formatBytes(candidateBytes(parts.candidates));
     if (action === "archive") {
       return {
-        title: "创建 retention 归档？",
-        message: "将候选日志和提示文件打包为可恢复归档，不删除原文件。",
-        confirmLabel: "创建归档",
+        title: t("maintenance.archive_title", "Create retention archive?"),
+        message: t("maintenance.archive_message", "Package candidate logs and prompt files into a recoverable archive without deleting originals."),
+        confirmLabel: t("maintenance.archive_confirm", "Create archive"),
         details: [
           ["Run", runId],
-          ["候选", `${candidateCount} 文件 / ${candidateSize}`],
-          ["影响", "只写入归档文件"]
+          [t("maintenance.candidates", "Candidates"), formatText("maintenance.files_size", { count: candidateCount, size: candidateSize }, `${candidateCount} files / ${candidateSize}`)],
+          [t("maintenance.impact", "Impact"), t("maintenance.archive_impact", "Only writes the archive file")]
         ]
       };
     }
     if (action === "compact") {
       return {
-        title: "归档并删除候选原文件？",
-        message: "会先创建可恢复归档，然后删除已经归档的候选原文件。",
-        confirmLabel: "归档并删除",
+        title: t("maintenance.compact_title", "Archive and delete candidate originals?"),
+        message: t("maintenance.compact_message", "Creates a recoverable archive first, then deletes archived candidate originals."),
+        confirmLabel: t("maintenance.compact_confirm", "Archive & delete"),
         danger: true,
         details: [
           ["Run", runId],
-          ["候选", `${candidateCount} 文件 / ${candidateSize}`],
-          ["影响", "删除归档覆盖的原文件"]
+          [t("maintenance.candidates", "Candidates"), formatText("maintenance.files_size", { count: candidateCount, size: candidateSize }, `${candidateCount} files / ${candidateSize}`)],
+          [t("maintenance.impact", "Impact"), t("maintenance.compact_impact", "Deletes originals covered by the archive")]
         ]
       };
     }
     if (action === "recover") {
       return {
-        title: "恢复 stale agent？",
-        message: "会把该 agent 标记为 interrupted，让任务状态脱离 stale running。",
-        confirmLabel: "标记 interrupted",
+        title: t("maintenance.recover_title", "Recover stale agent?"),
+        message: t("maintenance.recover_message", "Marks this agent as interrupted so the task leaves stale running state."),
+        confirmLabel: t("maintenance.recover_confirm", "Mark interrupted"),
         details: [
           ["Run", runId],
           ["Task", String(detail.taskId || "-")],
@@ -142,9 +156,9 @@
     }
     if (action === "restore-archive") {
       return {
-        title: "恢复 retention archive？",
-        message: "会从所选归档恢复文件；已有文件由后端安全检查处理。",
-        confirmLabel: "恢复归档",
+        title: t("maintenance.restore_archive_title", "Restore retention archive?"),
+        message: t("maintenance.restore_archive_message", "Restores files from the selected archive. Existing files are handled by backend safety checks."),
+        confirmLabel: t("maintenance.restore_archive_confirm", "Restore archive"),
         details: [
           ["Run", runId],
           ["Archive", String(detail.archive || "-")]

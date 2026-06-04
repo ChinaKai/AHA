@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -701,6 +702,288 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(sub_messages, [])
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 self.assertTrue(any(event["type"] == "invalid_action_schema" for event in events))
+
+    def test_chat_invalid_action_schema_queues_retry_before_user_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Bad chat schema", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "route this", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps({"type": "route_to_agent", "response": "sent"})
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertEqual(code, 0)
+        self.assertIn("invalid action schema", output)
+        self.assertEqual(main_messages[-1]["sender"], "aha")
+        self.assertEqual(main_messages[-1]["coordination"], "action_schema_retry")
+        self.assertTrue(main_messages[-1]["message"].startswith('{"actions":[{"type":"record_task_update"'))
+        self.assertIn("top-level type is not supported", main_messages[-1]["message"])
+        self.assertEqual(browser_messages, [])
+        self.assertTrue(any(event["type"] == "agent_retry_requested" and event["data"]["gate"] == "action_schema_retry" for event in events))
+        self.assertEqual(detail["status"], "running")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == "main")["status"], "pending")
+
+    def test_kimi_chat_requires_record_task_update_after_repo_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("plan", "Kimi journal gate", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "change code", sender="browser", task_id="task-001", role="main")
+
+                def run_agent(*args, **kwargs):
+                    (root / "changed.py").write_text("x = 1\n", encoding="utf-8")
+                    return 0, "done without journal", None
+
+                with mock.patch("aha_cli.services.chat.run_claude_exec", side_effect=run_agent):
+                    code, _output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                        "--model",
+                        "env:kimi",
+                    )
+
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(main_messages[-1]["sender"], "aha")
+        self.assertEqual(main_messages[-1]["coordination"], "task_update_required_retry")
+        self.assertIn("record_task_update", main_messages[-1]["message"])
+        self.assertEqual(browser_messages, [])
+        self.assertTrue(any(event["type"] == "agent_retry_requested" and event["data"]["gate"] == "task_update_required_retry" for event in events))
+        self.assertEqual(detail["status"], "running")
+        self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == "main")["status"], "pending")
+
+    def test_kimi_chat_blocks_bad_commit_message_even_with_record_task_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "config", "user.email", "aha@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "AHA Test"], cwd=root, check=True)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("plan", "Kimi commit gate", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "change and commit", sender="browser", task_id="task-001", role="main")
+
+                def run_agent(*args, **kwargs):
+                    (root / "changed.py").write_text("x = 1\n", encoding="utf-8")
+                    subprocess.run(["git", "add", "changed.py"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+                    subprocess.run(["git", "commit", "-m", "minimax"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+                    return (
+                        0,
+                        json.dumps(
+                            {
+                                "actions": [
+                                    {
+                                        "type": "record_task_update",
+                                        "summary": "committed bad message",
+                                        "changed_files": ["changed.py"],
+                                    }
+                                ],
+                                "response": "done",
+                            }
+                        ),
+                        None,
+                    )
+
+                with mock.patch("aha_cli.services.chat.run_claude_exec", side_effect=run_agent):
+                    code, _output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                        "--model",
+                        "env:kimi",
+                    )
+
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(main_messages[-1]["sender"], "aha")
+        self.assertEqual(main_messages[-1]["coordination"], "commit_policy_retry")
+        self.assertIn("commit message policy violation", main_messages[-1]["message"])
+        self.assertIn("Conventional Commit subject", main_messages[-1]["message"])
+        self.assertIn("Generated-by", main_messages[-1]["message"])
+        self.assertEqual(browser_messages, [])
+        self.assertTrue(any(event["type"] == "agent_retry_requested" and event["data"]["gate"] == "commit_policy_retry" for event in events))
+
+    def test_codex_chat_repo_change_without_record_task_update_still_uses_normal_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Codex normal path", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "change code", sender="browser", task_id="task-001", role="main")
+
+                def run_agent(*args, **kwargs):
+                    (root / "changed.py").write_text("x = 1\n", encoding="utf-8")
+                    return 0, "codex done", None
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=run_agent):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(browser_messages[-1]["message"], "codex done")
+        self.assertFalse(any(event["type"] == "agent_retry_requested" for event in events))
+        self.assertEqual(detail["status"], "awaiting_user")
+
+    def test_kimi_chat_emits_progress_heartbeat_for_task19_style_tool_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("plan", "Kimi long tool loop", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "move the UI control", sender="browser", task_id="task-001", role="main")
+
+                def run_agent(*args, **kwargs):
+                    callback = kwargs.get("event_callback")
+                    self.assertIsNotNone(callback)
+                    for index in range(8):
+                        callback(
+                            "agent_command_started",
+                            {
+                                "tool_name": "Read",
+                                "command": f"Read src/aha_cli/web/static/file_{index}.js",
+                            },
+                        )
+                        callback("agent_command_finished", {"tool_name": "Read", "output_tail": "ok"})
+                    return 0, "done", None
+
+                with mock.patch("aha_cli.services.chat.run_claude_exec", side_effect=run_agent):
+                    code, _output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                        "--model",
+                        "env:kimi",
+                    )
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        heartbeat_messages = [item for item in browser_messages if item.get("coordination") == "agent_progress_heartbeat"]
+        self.assertEqual(len(heartbeat_messages), 1)
+        self.assertIn("AHA 进度", heartbeat_messages[0]["message"])
+        self.assertIn("已连续执行 8 次工具调用", heartbeat_messages[0]["message"])
+        self.assertIn("file_7.js", heartbeat_messages[0]["message"])
+        heartbeat_events = [event for event in events if event["type"] == "agent_progress_heartbeat"]
+        self.assertEqual(len(heartbeat_events), 1)
+        self.assertEqual(heartbeat_events[0]["data"]["reason"], "tool_loop")
+        self.assertEqual(heartbeat_events[0]["data"]["model_family"], "kimi")
+        self.assertEqual(browser_messages[-1]["message"], "done")
+
+    def test_minimax_chat_emits_progress_heartbeat_before_edit_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("plan", "MiniMax edit heartbeat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "edit one file", sender="browser", task_id="task-001", role="main")
+
+                def run_agent(*args, **kwargs):
+                    callback = kwargs.get("event_callback")
+                    self.assertIsNotNone(callback)
+                    callback(
+                        "agent_command_started",
+                        {
+                            "tool_name": "Edit",
+                            "command": 'Edit {"file_path": "src/aha_cli/web/static/app.js"}',
+                        },
+                    )
+                    return 0, "done", None
+
+                with mock.patch("aha_cli.services.chat.run_claude_exec", side_effect=run_agent):
+                    code, _output = self.run_cli(
+                        "claude-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                        "--model",
+                        "env:MiniMax-M2.7-highspeed",
+                    )
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        heartbeat_messages = [item for item in browser_messages if item.get("coordination") == "agent_progress_heartbeat"]
+        self.assertEqual(len(heartbeat_messages), 1)
+        self.assertIn("即将进入编辑/写入阶段", heartbeat_messages[0]["message"])
+        heartbeat_events = [event for event in events if event["type"] == "agent_progress_heartbeat"]
+        self.assertEqual(heartbeat_events[0]["data"]["reason"], "edit")
+        self.assertEqual(heartbeat_events[0]["data"]["model_family"], "minimax")
+
+    def test_codex_chat_does_not_install_progress_heartbeat_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Codex no heartbeat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "normal codex work", sender="browser", task_id="task-001", role="main")
+
+                def run_agent(*args, **kwargs):
+                    self.assertNotIn("event_callback", kwargs)
+                    return 0, "codex done", None
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=run_agent):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(browser_messages[-1]["message"], "codex done")
+        self.assertFalse(any(item.get("coordination") == "agent_progress_heartbeat" for item in browser_messages))
+        self.assertFalse(any(event["type"] == "agent_progress_heartbeat" for event in events))
 
     def test_execute_actions_records_task_update_round(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -33,6 +33,7 @@ from aha_cli.store.filesystem import (
 from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import parse_json_body, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
+from aha_cli.web.status import recover_stale_running_agents
 from aha_cli.web.task_actions import (
     handle_send_payload,
     parse_task_context_management_fields,
@@ -123,6 +124,9 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             from aha_cli.store.filesystem import reopen_task
 
             task = reopen_task(root, run_id, task_id)
+            recovery = recover_stale_running_agents(root, run_id, task_id=task_id)
+            task = task_snapshot(root, run_id, task_id)["task"]
+            return route_result({"ok": True, "task": task, "recovery": recovery})
         elif action == "delete":
             task = delete_task(root, run_id, task_id)
         elif action == "proxy":

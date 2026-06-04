@@ -29,12 +29,13 @@ from aha_cli.web.task_command_actions import (
     reopen_selected_task,
     request_task_finalization,
 )
+from tests.helpers import isolated_cli_environment
 
 
 class TaskCommandActionTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
-        with mock.patch("sys.stdout", out):
+        with isolated_cli_environment(), mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
 
@@ -95,6 +96,33 @@ class TaskCommandActionTests(unittest.TestCase):
 
         self.assertIn("reopened", message)
         self.assertEqual(detail["status"], "awaiting_user")
+
+    def test_reopen_selected_task_recovers_stale_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            update_task_supervision_config(
+                root,
+                run_id,
+                "task-001",
+                mode="assisted",
+                host_backend="codex",
+                real_agent_enabled=True,
+            )
+            complete_task(root, run_id, "task-001", 0)
+            set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+            set_agent_status(root, run_id, "task-001", "host", "running")
+
+            with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                message = reopen_selected_task(root, run_id, "task-001")
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+            main_agent = next(agent for agent in detail["agents"] if agent["id"] == "main")
+            host_agent = next(agent for agent in detail["agents"] if agent["id"] == "host")
+
+        self.assertIn("Recovered 1 stale agent", message)
+        self.assertEqual(detail["status"], "awaiting_user")
+        self.assertEqual(host_agent["status"], "interrupted")
+        self.assertEqual(main_agent["status"], "completed")
 
     def test_interrupt_selected_agent_stops_busy_backend_and_records_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -138,6 +138,8 @@ def switch_agent_backend(
         supervision = normalize_task_supervision(task.get("supervision"))
         if agent.get("role") == "host" or supervision.get("host_agent_id") == agent_id:
             supervision["host_backend"] = new_backend
+            supervision["host_model"] = new_model
+            supervision["host_proxy_enabled"] = bool(agent.get("proxy_enabled"))
             supervision["real_agent_enabled"] = new_backend != "stub"
             task["supervision"] = normalize_task_supervision(supervision)
         plan["updated_at"] = switched_at

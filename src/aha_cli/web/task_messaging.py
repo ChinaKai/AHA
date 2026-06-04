@@ -115,13 +115,30 @@ def task_locked_for_messages(root: Path, run_id: str, task_id: str | None) -> st
 def _active_supervision_host_review(root: Path, run_id: str, task_id: str, host_agent_id: str, host: dict | None) -> bool:
     host_status = str((host or {}).get("status") or "").lower()
     if host_status in {"running", "waiting"}:
-        return True
+        state = backend_status(root, run_id, host_agent_id, task_id=task_id)
+        return str(state.get("status") or "").lower() in {"running", "busy"}
     if host_status != "pending":
         return False
     if (host or {}).get("backend_session_id"):
         return True
     state = backend_status(root, run_id, host_agent_id, task_id=task_id)
     return str(state.get("status") or "").lower() in {"running", "busy"}
+
+
+def _terminal_supervision_host(root: Path, run_id: str, task_id: str, host_agent_id: str, host: dict | None) -> bool:
+    host_status = str((host or {}).get("status") or "").lower()
+    if host_status not in {"interrupted", "stopped", "failed", "blocked"}:
+        return False
+    state = backend_status(root, run_id, host_agent_id, task_id=task_id)
+    return str(state.get("status") or "").lower() == "stopped"
+
+
+def _stopped_supervision_host_backend(root: Path, run_id: str, task_id: str, host_agent_id: str, host: dict | None) -> bool:
+    host_status = str((host or {}).get("status") or "").lower()
+    if host_status not in {"pending", "running", "waiting"}:
+        return False
+    state = backend_status(root, run_id, host_agent_id, task_id=task_id)
+    return str(state.get("status") or "").lower() == "stopped"
 
 
 def task_host_review_message_blocker(root: Path, run_id: str, task_id: str | None, target_id: str) -> str | None:
@@ -145,10 +162,14 @@ def task_host_review_message_blocker(root: Path, run_id: str, task_id: str | Non
     host = next((agent for agent in agents if agent.get("id") == host_agent_id or agent.get("role") == "host"), None)
     if _active_supervision_host_review(root, run_id, task_id, host_agent_id, host):
         return "host_review"
+    terminal_host = _terminal_supervision_host(root, run_id, task_id, host_agent_id, host)
+    host_backend_stopped = _stopped_supervision_host_backend(root, run_id, task_id, host_agent_id, host)
     main = next((agent for agent in agents if agent.get("id") == "main"), None)
     if (
         str((main or {}).get("status") or "").lower() == "waiting"
         and str((main or {}).get("waiting_reason") or "").lower() == "host"
+        and not terminal_host
+        and not host_backend_stopped
     ):
         return "host_review"
     return None

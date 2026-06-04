@@ -6,7 +6,16 @@ import unittest
 from unittest import mock
 
 from aha_cli.services.run_recovery import RunRecoveryError, format_stale_runtime_recovery, run_stale_runtime_recovery
-from aha_cli.store.filesystem import create_plan, event_path, inbox_path, set_agent_status, set_task_status, task_snapshot
+from aha_cli.store.filesystem import (
+    create_plan,
+    event_path,
+    inbox_path,
+    set_agent_status,
+    set_task_status,
+    task_snapshot,
+    update_task_supervision_config,
+)
+from aha_cli.web.task_messaging import task_host_review_message_blocker
 
 
 def make_running_plan(root: Path) -> tuple[str, str, str]:
@@ -81,6 +90,83 @@ class RunRecoveryTests(unittest.TestCase):
             self.assertEqual(task["agents"][0]["status"], "interrupted")
             self.assertIn("recovery_context", task["agents"][0])
             self.assertIn("agent_status_recovered", event_log)
+
+    def test_recovery_apply_clears_main_host_wait_when_host_backend_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id, task_id, _agent_id = make_running_plan(root)
+            update_task_supervision_config(
+                root,
+                run_id,
+                task_id,
+                mode="assisted",
+                host_backend="codex",
+                real_agent_enabled=True,
+            )
+            set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="host")
+            set_agent_status(root, run_id, task_id, "host", "running")
+
+            with mock.patch("aha_cli.web.status.backend_status", side_effect=stopped_backend):
+                result = run_stale_runtime_recovery(
+                    root,
+                    run_id,
+                    task_id=task_id,
+                    agent_id="host",
+                    apply=True,
+                    backend_status_provider=stopped_backend,
+                )
+            task = task_snapshot(root, run_id, task_id)["task"]
+            main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+            host_agent = next(agent for agent in task["agents"] if agent["id"] == "host")
+            blocker = task_host_review_message_blocker(root, run_id, task_id, "main")
+            event_log = event_path(root, run_id).read_text(encoding="utf-8")
+
+            self.assertEqual(result["recovered_count"], 1)
+            self.assertEqual(task["status"], "awaiting_user")
+            self.assertEqual(host_agent["status"], "interrupted")
+            self.assertEqual(main_agent["status"], "completed")
+            self.assertNotIn("waiting_reason", main_agent)
+            self.assertIsNone(blocker)
+            self.assertIn('"cleared_main_host_wait": true', event_log)
+
+    def test_recovery_apply_handles_stale_host_after_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id, task_id, _agent_id = make_running_plan(root)
+            update_task_supervision_config(
+                root,
+                run_id,
+                task_id,
+                mode="assisted",
+                host_backend="codex",
+                real_agent_enabled=True,
+            )
+            set_task_status(root, run_id, task_id, "awaiting_user")
+            set_agent_status(root, run_id, task_id, "main", "waiting", waiting_reason="host")
+            set_agent_status(root, run_id, task_id, "host", "running")
+
+            dry = run_stale_runtime_recovery(root, run_id, backend_status_provider=stopped_backend)
+            with mock.patch("aha_cli.web.status.backend_status", side_effect=stopped_backend):
+                result = run_stale_runtime_recovery(
+                    root,
+                    run_id,
+                    task_id=task_id,
+                    agent_id="host",
+                    apply=True,
+                    backend_status_provider=stopped_backend,
+                )
+            task = task_snapshot(root, run_id, task_id)["task"]
+            main_agent = next(agent for agent in task["agents"] if agent["id"] == "main")
+            host_agent = next(agent for agent in task["agents"] if agent["id"] == "host")
+            blocker = task_host_review_message_blocker(root, run_id, task_id, "main")
+
+            self.assertEqual(dry["candidates"][0]["task_status"], "awaiting_user")
+            self.assertEqual(dry["candidates"][0]["agent_id"], "host")
+            self.assertEqual(result["recovered_count"], 1)
+            self.assertEqual(task["status"], "awaiting_user")
+            self.assertEqual(host_agent["status"], "interrupted")
+            self.assertEqual(main_agent["status"], "completed")
+            self.assertIsNone(blocker)
 
     def test_recovery_apply_rechecks_candidate_before_mutating(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

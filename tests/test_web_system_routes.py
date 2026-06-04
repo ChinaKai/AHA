@@ -146,6 +146,55 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(recovery and recovery.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(json_response_body(recovery)["ok"])
 
+    def test_ui_state_route_persists_selected_task_for_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "UI state", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                global_initial = system_route_response(root, "", "GET", "/api/ui-state", {})
+                global_saved = system_route_response(
+                    root,
+                    "",
+                    "PATCH",
+                    "/api/ui-state",
+                    {},
+                    json.dumps({"last_selected_run_id": run_id}).encode("utf-8"),
+                )
+                initial = system_route_response(root, "", "GET", "/api/ui-state", parse_qs(f"run_id={run_id}"))
+                saved = system_route_response(
+                    root,
+                    "",
+                    "PATCH",
+                    "/api/ui-state",
+                    {},
+                    json.dumps({"run_id": run_id, "last_selected_task_id": "task-001"}).encode("utf-8"),
+                )
+                loaded = system_route_response(root, "", "GET", "/api/ui-state", parse_qs(f"run_id={run_id}"))
+                missing_field = system_route_response(root, run_id, "PATCH", "/api/ui-state", {}, b"{}")
+                global_state_file = root / ".aha" / "ui_state.json"
+                global_state_file_payload = json.loads(global_state_file.read_text(encoding="utf-8"))
+                state_file = root / ".aha" / "runs" / run_id / "ui_state.json"
+                state_file_payload = json.loads(state_file.read_text(encoding="utf-8"))
+
+        self.assertTrue(global_initial and global_initial.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(global_initial)["last_selected_run_id"], "")
+        self.assertTrue(global_saved and global_saved.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(global_saved)["last_selected_run_id"], run_id)
+        self.assertTrue(initial and initial.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(initial)["last_selected_run_id"], run_id)
+        self.assertEqual(json_response_body(initial)["last_selected_task_id"], "")
+        self.assertTrue(saved and saved.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(saved)["last_selected_task_id"], "task-001")
+        self.assertTrue(loaded and loaded.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(json_response_body(loaded)["last_selected_task_id"], "task-001")
+        self.assertEqual(global_state_file_payload, {"last_selected_run_id": run_id})
+        self.assertEqual(state_file_payload, {"last_selected_task_id": "task-001"})
+        self.assertTrue(missing_field and missing_field.startswith(b"HTTP/1.1 400 Bad Request"))
+
     def test_system_routes_return_events_and_conversation_views(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

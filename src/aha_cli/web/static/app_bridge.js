@@ -187,6 +187,7 @@
       state.setRunActionInFlight?.(true);
       try {
         setCurrentRunId(nextRunId);
+        deps.writeSelectedRunId?.(nextRunId);
         syncRunUrl();
         resetRunScopedState();
         renderSessionMenu();

@@ -282,9 +282,10 @@ def handle_run_retention_action(root: Path, default_run_id: str, run_id: str, bo
     expected_confirm = "delete archived originals" if force else "apply retention policy" if apply_if_over_limit else "archive"
     if _payload_text(payload, "confirm") != expected_confirm:
         return _confirmation_error(expected_confirm)
+    current_run_id = str(payload.get("current_run_id", "") or "").strip() or default_run_id
     try:
         options = {
-            "current_run_id": default_run_id,
+            "current_run_id": current_run_id,
             "active_heartbeat_seconds": _payload_int(payload, "active_heartbeat_seconds", 120),
             "force": force,
             "top": _payload_int(payload, "top", 10),
@@ -381,12 +382,13 @@ def handle_run_retention_archive_restore(
     expected_confirm = "overwrite restored files" if force else "restore archive"
     if _payload_text(payload, "confirm") != expected_confirm:
         return _confirmation_error(expected_confirm)
+    current_run_id = str(payload.get("current_run_id", "") or "").strip() or default_run_id
     try:
         restore = restore_run_retention_archive(
             root,
             run_id,
             selected_archive_name,
-            current_run_id=default_run_id,
+            current_run_id=current_run_id,
             force=force,
             active_heartbeat_seconds=_payload_int(payload, "active_heartbeat_seconds", 120),
         )
@@ -715,8 +717,9 @@ def handle_update_run_lifecycle(root: Path, default_run_id: str, run_id: str, bo
     status = str(payload.get("status", payload.get("lifecycle_status", "")) or "").strip()
     if not status:
         return json_response({"error": "lifecycle status is required"}, "400 Bad Request")
+    current_run_id = str(payload.get("current_run_id", "") or "").strip() or default_run_id
     try:
-        run = set_run_lifecycle_status(root, run_id, status, current_run_id=default_run_id)
+        run = set_run_lifecycle_status(root, run_id, status, current_run_id=current_run_id)
     except RunLifecycleActionError as exc:
         return json_response({"error": str(exc), "reason": exc.reason}, exc.status_code)
     except ValueError as exc:
@@ -741,8 +744,9 @@ def handle_update_run_proxy(root: Path, default_run_id: str, run_id: str, body: 
 
 def handle_delete_run(root: Path, default_run_id: str, run_id: str, query: dict[str, list[str]]) -> bytes:
     force = parse_query_bool(query, "force", False)
+    current_run_id = str(query.get("current_run_id", [""])[0] or "").strip() or default_run_id
     try:
-        deleted = delete_run(root, run_id, current_run_id=default_run_id, force=force)
+        deleted = delete_run(root, run_id, current_run_id=current_run_id, force=force)
     except RunDeleteError as exc:
         return json_response({"error": str(exc), "reason": exc.reason}, exc.status_code)
     except ValueError as exc:

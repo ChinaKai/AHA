@@ -20,12 +20,13 @@ from aha_cli.store.filesystem import (
     update_task_supervision_config,
 )
 from aha_cli.web.task_messaging import handle_send_payload
+from tests.helpers import isolated_cli_environment
 
 
 class WebTaskMessagingTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
-        with mock.patch("sys.stdout", out):
+        with isolated_cli_environment(), mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
 
@@ -245,6 +246,98 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertFalse(result.get("deferred", False))
         self.assertEqual(result["backend"]["status"], "running")
         self.assertEqual([item["message"] for item in messages], ["continue after stale host"])
+        start_backend.assert_called_once()
+
+    def test_send_to_main_allows_stale_running_supervision_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Stale host running", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+                set_agent_status(root, run_id, "task-001", "host", "running")
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "message": "continue after stopped host",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result.get("deferred", False))
+        self.assertEqual([item["message"] for item in messages], ["continue after stopped host"])
+        start_backend.assert_called_once()
+
+    def test_send_to_main_allows_terminal_stopped_host_with_stale_main_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Terminal host stale wait", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_supervision_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="assisted",
+                    host_backend="codex",
+                    real_agent_enabled=True,
+                )
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="host")
+                set_agent_status(root, run_id, "task-001", "host", "interrupted")
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "from_agent": "browser",
+                            "to_agent": "main",
+                            "message": "continue after interrupted host",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result.get("deferred", False))
+        self.assertEqual([item["message"] for item in messages], ["continue after interrupted host"])
         start_backend.assert_called_once()
 
     def test_send_to_main_defers_while_main_waits_for_host(self) -> None:

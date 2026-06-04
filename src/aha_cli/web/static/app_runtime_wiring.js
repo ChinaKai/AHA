@@ -1,14 +1,16 @@
 const domRefs = window.AHAControllerRegistry.collectDomRefs(document);
 const {
   agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerWorkspaceDirEl,
-  mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, panelEl, pendingMessagesEl,
+  mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, openRunCreateEl, panelEl, pendingMessagesEl,
   playConsoleEl, playConsolePopoverEl, renameRunNameEl, runArchiveStateEl, runCreateFormEl, runExportEl,
-  runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
-  runLifecycleFilterEl, runLifecycleStateEl, runMaintenanceCloseEl, runMaintenanceConsoleEl,
+  runCreateDialogEl, closeRunCreateEl, cancelRunCreateEl, runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
+  runLifecycleFilterEl, runLifecycleStateEl, runMaintenanceCloseEl, runManagerEl,
   runMaintenanceDetailEl, runMaintenancePopoverEl, runMaintenanceRefreshEl, runMaintenanceSummaryEl,
+  runSettingsActionsEl, runSettingsCloseEl, runSettingsPanelEl, runSettingsProtectionEl, runSettingsSubtitleEl,
   runRenameFormEl, runSelectEl, runStateEl, selectedAgentInfoEl, selectedIdEl, selectedStatusEl,
   selectedTaskMetaEl, selectedTitleEl, sessionControlEl, sessionDetailTextEl, sessionMenuEl, sessionRefreshEl,
-  sessionTitleEl, sessionToggleEl, summaryEl, taskRunContextEl, tasksEl, taskVisibilityFilterEl,
+  sessionTitleEl, sessionToggleEl, summaryEl, taskRunContextEl, taskSettingsActionsEl, taskSettingsCloseEl,
+  taskSettingsPanelEl, taskSettingsSubtitleEl, tasksEl, taskVisibilityFilterEl,
   webRestartEl, webRestartStateEl, weixinConsoleEl, weixinConsolePopoverEl
 } = domRefs;
 const initialControllers = window.AHAAppControllerFactory.createInitialControllers(domRefs, {
@@ -180,6 +182,7 @@ conversationController = window.AHAConversationController.createConversationCont
   conversationStates,
   copyTextByKey,
   currentRunId: () => currentRunId,
+  documentRef: document,
   finalDetails,
   activeTab: () => activeTab,
   backendTarget,
@@ -380,6 +383,18 @@ const renderOrchestrator = window.AHARenderOrchestrator.createRenderOrchestrator
   setSelectedTitle: value => { if (selectedTitleEl) selectedTitleEl.textContent = value || ""; },
   hideConversationFilters: () => conversationFiltersEl?.classList.add("hidden")
 });
+window.addEventListener("aha:languagechange", () => {
+  taskOptionsController.syncCollaborationFields();
+  renderSessionMenu();
+  renderOrchestrator.renderAll({
+    forceTaskProxy: true,
+    forceTaskSupervision: true,
+    forceTaskContext: true,
+    forceAgents: true
+  });
+  renderPanel();
+  renderBackendStatus();
+});
 const statusStore = window.AHAStatusStore.createStatusStore({
   allEvents,
   agentsRuntimeCache,
@@ -407,6 +422,7 @@ const statusStore = window.AHAStatusStore.createStatusStore({
   clearPendingState,
   closeEventWebSocket,
   documentBody: document.body,
+  initialRunId,
   initialSelectedTaskId,
   readStoredSelectedTaskId,
   renderAll: renderOrchestrator.renderAll,
@@ -415,7 +431,8 @@ const statusStore = window.AHAStatusStore.createStatusStore({
   restoreEventCursorFromStorage: eventCursorStore.restoreFromStorage,
   runIdOf,
   syncRunUrl,
-  taskCurrentStatus
+  taskCurrentStatus,
+  writeSelectedRunId: writePersistedSelectedRunId
 });
 const statusController = window.AHAStatusController.createStatusController({
   bootstrapData: () => bootstrapData,
@@ -429,14 +446,22 @@ const statusController = window.AHAStatusController.createStatusController({
   setRunsData: value => { runsData = Array.isArray(value) ? value : []; },
   setRunsError: value => { runsError = String(value || ""); },
   setRunsLoaded: value => { runsLoaded = Boolean(value); },
+  setSelectedTaskId: value => { selectedTaskId = value || null; },
   setStatusData: value => { statusData = value; },
   statusData: () => statusData
 }, {
   apiUrl,
-  applyBackendData: backends => runtimeOptions.applyBackendData(backends),
+  applyBackendData: backends => {
+    runtimeOptions.applyBackendData(backends);
+    syncCreateTaskSupervisionModeFields();
+    if (!isTaskSupervisionEditing()) renderTaskSupervisionEditor();
+  },
   applyWorkflowTemplateData: taskOptionsController.applyWorkflowTemplateData,
   clearLoginState,
+  ensureRemoteSelectedTaskId,
+  escapeHtml,
   fetchJson,
+  initialSelectedTaskId,
   isAgentsPanelEditing,
   panelEl,
   renderAgents,
@@ -461,6 +486,7 @@ const runActions = window.AHARunActions.createRunActions({
   applyBootstrapPayload,
   applyRunListData,
   catchUpRealtimeEvents,
+  closeRunCreateDialog: () => runController.closeRunCreateDialog(),
   confirmDialogAction,
   currentAppVersion,
   currentRunId: () => currentRunId,
@@ -485,10 +511,12 @@ const runActions = window.AHARunActions.createRunActions({
   runIdOf,
   runLifecycleLabel,
   runLifecycleProtectionReason,
+  runDeleteProtectionReason,
   runLifecycleReasonText,
   runMaintenanceActionConfirm,
   runMaintenanceActionInFlight: () => runController.runMaintenanceActionInFlight(),
   runMaintenanceData: () => runController.runMaintenanceData(),
+  runMaintenanceRunId: () => runController.runMaintenanceRunId(),
   runMaintenancePayload,
   runTitleOf,
   runsData: () => runsData,
@@ -645,11 +673,17 @@ const taskController = window.AHATaskController.createTaskController({
   selectedStatusEl,
   selectedTaskMetaEl,
   selectedTitleEl,
+  taskSettingsActionsEl,
+  taskSettingsCloseEl,
+  taskSettingsPanelEl,
+  taskSettingsSubtitleEl,
   tasksEl,
   taskVisibilityFilterEl
 }, {
+  activeTab: () => activeTab,
   allTasks: () => statusData?.tasks || [],
   defaultTaskId,
+  documentRef: document,
   dispatchAction: appActions.dispatch,
   normalizeTaskVisibilityFilter,
   renderAgents,
@@ -658,8 +692,12 @@ const taskController = window.AHATaskController.createTaskController({
   renderTaskContextEditor,
   renderTaskProxyEditor,
   renderTaskSupervisionEditor,
+  isTaskContextEditing,
+  isTaskProxyEditing,
+  isTaskSupervisionEditing,
   selectedTaskId: () => selectedTaskId,
   selectedTask,
+  setTaskSettingsEditorTaskId: taskConfigController.setTaskSettingsEditorTaskId,
   setSelectedTaskId: value => { selectedTaskId = value || null; },
   setTaskVisibilityFilter: value => { taskVisibilityFilter = value; },
   escapeHtml,
@@ -681,6 +719,7 @@ const taskController = window.AHATaskController.createTaskController({
   taskWorkflowSummary,
   pathName,
   visibleTasksForFilter: taskListVisibleTasks,
+  windowRef: window,
   writeStoredSelectedTaskId
 });
 const agentController = window.AHAAgentController.createAgentController({
@@ -694,6 +733,7 @@ const agentController = window.AHAAgentController.createAgentController({
   agentContextPressureSummary,
   agentDisplayModel,
   agentLifecycleDisplay,
+  agentLifecycleStatus,
   agentModelValue,
   agentOptionGroups,
   agentOptionLabel,
@@ -701,6 +741,7 @@ const agentController = window.AHAAgentController.createAgentController({
   agentStatusTiming,
   agentStatusTimingText,
   closeMobileSheets: () => uiShell.closeMobileSheets(),
+  documentRef: document,
   ensureConversationLoaded,
   escapeHtml,
   formatClock,
@@ -713,12 +754,17 @@ const agentController = window.AHAAgentController.createAgentController({
   renderPendingMessages,
   selectedTask,
   setConversationAutoFollow: value => { conversationAutoFollow = Boolean(value); },
-  taskProxySummary
+  taskProxySummary,
+  windowRef: window
 });
 const runController = window.AHARunController.createRunController({
   appVersionEl,
   authLogoutEl,
   documentRef: document,
+  openRunCreateEl,
+  runCreateDialogEl,
+  closeRunCreateEl,
+  cancelRunCreateEl,
   newRunGoalEl,
   playConsoleEl,
   playConsolePopoverEl,
@@ -731,7 +777,6 @@ const runController = window.AHARunController.createRunController({
   runArchiveStateEl,
   runIdEl,
   runMaintenanceCloseEl,
-  runMaintenanceConsoleEl,
   runMaintenanceDetailEl,
   runMaintenancePopoverEl,
   runMaintenanceRefreshEl,
@@ -740,6 +785,12 @@ const runController = window.AHARunController.createRunController({
   runLifecycleEl,
   runLifecycleFilterEl,
   runLifecycleStateEl,
+  runManagerEl,
+  runSettingsActionsEl,
+  runSettingsCloseEl,
+  runSettingsPanelEl,
+  runSettingsProtectionEl,
+  runSettingsSubtitleEl,
   runRenameFormEl,
   runSelectEl,
   runStateEl,
@@ -761,6 +812,7 @@ const runController = window.AHARunController.createRunController({
   currentRunSummary,
   currentAppVersion,
   dispatchAction: appActions.dispatch,
+  deleteRunFromMenu: runActions.deleteRunFromMenu,
   exportCurrentRun: runActions.exportCurrentRun,
   fallbackCurrentRun,
   importRunArchive: runActions.importRunArchive,

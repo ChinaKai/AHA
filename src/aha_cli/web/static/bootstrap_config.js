@@ -318,6 +318,7 @@
     const claudeProxy = claude.proxy || proxy;
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
+    const codexDetailsOpen = mode === "settings" ? "" : " open";
     return `
       <form class="bootstrap-form" data-bootstrap-config-form data-bootstrap-config-mode="${escapeHtml(mode)}">
         <details class="bootstrap-config-section" open>
@@ -351,7 +352,7 @@
             <div class="field-help">Optional workspace for web game static assets.</div>
           </label>
         </details>
-        <details class="bootstrap-config-section" open>
+        <details class="bootstrap-config-section"${codexDetailsOpen}>
           <summary>Codex defaults</summary>
           <div class="bootstrap-config-grid">
             <label class="field-label">

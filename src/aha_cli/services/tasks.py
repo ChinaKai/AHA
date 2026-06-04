@@ -60,6 +60,8 @@ def create_task_and_dispatch(
             run_id,
             task["id"],
             backend=str(policy.get("host_backend") or "codex"),
+            model=policy.get("host_model"),
+            proxy_enabled=bool(policy.get("host_proxy_enabled")),
         )["task"]
     if dispatch:
         dispatch_task_to_main(root, run_id, task)

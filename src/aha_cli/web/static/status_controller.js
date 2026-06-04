@@ -1,5 +1,11 @@
 (() => {
   function createStatusController(state = {}, deps = {}) {
+    const escapeHtml = deps.escapeHtml || (value => String(value ?? ""));
+
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
     function currentRunId() {
       return String(state.currentRunId?.() || "").trim();
     }
@@ -63,7 +69,7 @@
       if (!id) return null;
       return {
         id,
-        goal: data?.goal || "当前 Run",
+        goal: data?.goal || t("run.current_fallback", "Current run"),
         mode: data?.mode || "",
         status: data?.status || "",
         updated_at: data?.updated_at || ""
@@ -86,7 +92,7 @@
 
     function resetRunScopedState() {
       deps.statusStore?.resetRunScopedState();
-      if (deps.panelEl) deps.panelEl.innerHTML = '<div class="empty">正在切换 Run...</div>';
+      if (deps.panelEl) deps.panelEl.innerHTML = `<div class="empty">${escapeHtml(t("run.switching", "Switching run..."))}</div>`;
     }
 
     function currentAppVersion() {
@@ -103,7 +109,7 @@
         applyRunListData(payload);
         state.setRunsError?.("");
       } catch (err) {
-        state.setRunsError?.(err?.message || String(err || "Run 列表不可用"));
+        state.setRunsError?.(err?.message || String(err || t("run.list_unavailable", "Run list unavailable")));
         const fallback = fallbackCurrentRun();
         state.setRunsData?.(fallback ? [fallback] : []);
       } finally {
@@ -122,6 +128,10 @@
         state.setStatusData?.(null);
         deps.renderFirstRunState?.();
         return null;
+      }
+      if (!deps.initialSelectedTaskId) {
+        const remoteSelectedTaskId = await deps.ensureRemoteSelectedTaskId?.();
+        if (remoteSelectedTaskId) state.setSelectedTaskId?.(remoteSelectedTaskId);
       }
       const params = { lite: "1" };
       const requestedSelectedTaskId = selectedTaskId();
