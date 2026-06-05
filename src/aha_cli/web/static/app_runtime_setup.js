@@ -33,7 +33,30 @@ let lastEventId = "";
 let statusData = null;
 const initialRunId = currentRunId;
 const initialSelectedTaskId = String(queryParams.get("selected_task_id") || queryParams.get("task_id") || "").trim();
-let selectedTaskId = initialSelectedTaskId || null;
+const initialTaskMemoQueryView = String(queryParams.get("view") || "").trim().toLowerCase();
+function readStoredTaskMemoView() {
+  try {
+    return String(window.localStorage?.getItem("aha.taskMemoView") || "").trim().toLowerCase();
+  } catch (_err) {
+    return "";
+  }
+}
+const initialTaskMemoStoredView = readStoredTaskMemoView();
+const initialTaskMemoView = initialTaskMemoQueryView || initialTaskMemoStoredView;
+const initialTaskMemoHomeActive = initialTaskMemoQueryView === "memo" || (!initialSelectedTaskId && initialTaskMemoView !== "task");
+let selectedTaskId = initialTaskMemoHomeActive ? null : (initialSelectedTaskId || null);
+
+function applyInitialTaskMemoHomeState() {
+  if (!initialTaskMemoHomeActive) return;
+  const memoPage = document.getElementById("task-memo-dialog");
+  if (!memoPage?.classList?.contains("task-memo-page")) return;
+  document.body?.classList?.add("task-memo-home");
+  memoPage.setAttribute("open", "");
+  document.getElementById("open-task-memos")?.setAttribute("aria-pressed", "true");
+}
+
+applyInitialTaskMemoHomeState();
+
 let activeTab = "conversation";
 let taskActionInFlight = false;
 let backendStatusData = null;
@@ -361,6 +384,7 @@ appBridge = window.AHAAppBridge.createAppBridge({
   runtimeOptions: () => runtimeOptions,
   settingsController: () => settingsController,
   statusController: () => statusController,
+  taskMemoController: () => taskMemoController,
   taskController: () => taskController,
   timelineView: () => timelineView,
   weixinConsoleController: () => weixinConsoleController

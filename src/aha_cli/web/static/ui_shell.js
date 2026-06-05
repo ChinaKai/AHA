@@ -9,29 +9,6 @@
       return `aha.${side}.sidebarCollapsed`;
     }
 
-    function runManagerStorageKey() {
-      return "aha.runManagerCollapsed";
-    }
-
-    function readRunManagerCollapsed() {
-      try {
-        const stored = windowRef.localStorage?.getItem(runManagerStorageKey());
-        if (stored === "false") return false;
-        if (stored === "true") return true;
-      } catch {
-        // localStorage can be unavailable in restricted browser modes.
-      }
-      return true;
-    }
-
-    function writeRunManagerCollapsed(collapsed) {
-      try {
-        windowRef.localStorage?.setItem(runManagerStorageKey(), collapsed ? "true" : "false");
-      } catch {
-        // localStorage can be unavailable in restricted browser modes.
-      }
-    }
-
     function setRunManagerCollapsed(collapsed) {
       elements.runManagerEl?.classList.toggle("run-manager-collapsed", collapsed);
       if (elements.runManagerToggleEl) {
@@ -43,7 +20,6 @@
         elements.runManagerToggleEl.setAttribute("title", label);
         elements.runManagerToggleEl.textContent = collapsed ? "▸" : "▾";
       }
-      writeRunManagerCollapsed(collapsed);
     }
 
     function readSidebarCollapsed(side) {
@@ -78,7 +54,7 @@
     function initDesktopSidebars() {
       setSidebarCollapsed("overview", readSidebarCollapsed("overview"));
       setSidebarCollapsed("agents", readSidebarCollapsed("agents"));
-      setRunManagerCollapsed(readRunManagerCollapsed());
+      setRunManagerCollapsed(false);
       elements.collapseOverviewEl?.addEventListener("click", () => setSidebarCollapsed("overview", true));
       elements.overviewRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("overview", false));
       elements.collapseAgentsEl?.addEventListener("click", () => setSidebarCollapsed("agents", true));

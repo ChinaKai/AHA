@@ -97,6 +97,141 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertIsNone(task_created["data"]["preferred_sub_model"])
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
+    def test_task_memo_api_crud_and_task_conversion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task memo run", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                create_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memos",
+                        method="POST",
+                        payload={
+                            "title": "Memo title",
+                            "description": "Memo detail",
+                            "scheduled_date": "2026-06-05",
+                            "status": "todo",
+                            "backend": "codex",
+                            "workflow_template": "feature",
+                        },
+                    )
+                )
+                created = json_response_body(create_response)["memo"]
+                memo_id = created["id"]
+                update_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{memo_id}",
+                        method="PATCH",
+                        payload={"status": "doing", "description": "Updated detail"},
+                    )
+                )
+                updated = json_response_body(update_response)["memo"]
+                task_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": updated["title"],
+                            "description": updated["description"],
+                            "backend": updated["backend"],
+                            "workflow_template": updated["workflow_template"],
+                            "source_memo_id": memo_id,
+                            "dispatch": False,
+                        },
+                    )
+                )
+                task_body = json_response_body(task_response)
+                clear_link_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{memo_id}",
+                        method="PATCH",
+                        payload={"created_task_id": ""},
+                    )
+                )
+                clear_link_body = json_response_body(clear_link_response)["memo"]
+                relink_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{memo_id}",
+                        method="PATCH",
+                        payload={"created_task_id": task_body["task"]["id"]},
+                    )
+                )
+                relinked = json_response_body(relink_response)["memo"]
+                unlinked_query_response = asyncio.run(
+                    fetch_ui_response(root, run_id, "/api/task-memos?status=active&linked=unlinked&limit=50")
+                )
+                unlinked_query = json_response_body(unlinked_query_response)
+                include_query_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/task-memos?status=active&linked=unlinked&include_id={memo_id}&limit=50")
+                )
+                include_query = json_response_body(include_query_response)
+                search_query_response = asyncio.run(
+                    fetch_ui_response(root, run_id, "/api/task-memos?q=updated&linked=linked&limit=1")
+                )
+                search_query = json_response_body(search_query_response)
+                list_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task-memos"))
+                memos = json_response_body(list_response)["memos"]
+                delete_response = asyncio.run(fetch_ui_response(root, run_id, f"/api/task-memos/{memo_id}", method="DELETE"))
+
+        self.assertEqual(created["title"], "Memo title")
+        self.assertEqual(created["scheduled_date"], "2026-06-05")
+        self.assertEqual(updated["status"], "doing")
+        self.assertEqual(updated["description"], "Updated detail")
+        self.assertEqual(task_body["memo"]["status"], "doing")
+        self.assertEqual(task_body["memo"]["created_task_id"], task_body["task"]["id"])
+        self.assertEqual(task_body["memo"]["created_task_status"], task_body["task"]["status"])
+        self.assertEqual(clear_link_body["created_task_id"], "")
+        self.assertEqual(clear_link_body["created_task_status"], "")
+        self.assertEqual(clear_link_body["converted_at"], "")
+        self.assertEqual(relinked["created_task_id"], task_body["task"]["id"])
+        self.assertEqual(relinked["created_task_status"], task_body["task"]["status"])
+        self.assertEqual(unlinked_query["memos"], [])
+        self.assertEqual(include_query["memos"][0]["id"], memo_id)
+        self.assertEqual(search_query["total"], 1)
+        self.assertEqual(search_query["memos"][0]["id"], memo_id)
+        self.assertEqual(memos[0]["status"], "doing")
+        self.assertEqual(memos[0]["created_task_status"], task_body["task"]["status"])
+        self.assertTrue(json_response_body(delete_response)["memo"]["deleted"])
+
+    def test_ui_state_persists_selected_memo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Memo UI state", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/ui-state",
+                        method="PATCH",
+                        payload={"last_selected_memo_id": "memo-123"},
+                    )
+                )
+                read_response = asyncio.run(fetch_ui_response(root, run_id, f"/api/ui-state?run_id={run_id}"))
+
+        update_body = json_response_body(update_response)
+        read_body = json_response_body(read_response)
+        self.assertTrue(update_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(update_body["run_id"], run_id)
+        self.assertEqual(update_body["last_selected_memo_id"], "memo-123")
+        self.assertEqual(read_body["last_selected_memo_id"], "memo-123")
+
     def test_api_task_create_rejects_unknown_execution_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

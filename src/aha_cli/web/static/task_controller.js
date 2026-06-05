@@ -283,6 +283,7 @@
     }
 
     async function selectTask(taskId) {
+      deps.closeTaskMemoPage?.();
       return await dispatchAction("select-task", { taskId });
     }
 

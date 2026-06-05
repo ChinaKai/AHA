@@ -58,8 +58,41 @@
     mobileTaskStatusEl: "mobile-task-status",
     summaryEl: "summary",
     openTaskCreateEl: "open-task-create",
+    openTaskMemosEl: "open-task-memos",
     taskCreateDialogEl: "task-create-dialog",
     closeTaskCreateEl: "close-task-create",
+    closeTaskMemosEl: "close-task-memos",
+    taskMemoDialogEl: "task-memo-dialog",
+    taskMemoPrevYearEl: "task-memo-prev-year",
+    taskMemoPrevMonthEl: "task-memo-prev-month",
+    taskMemoNextMonthEl: "task-memo-next-month",
+    taskMemoNextYearEl: "task-memo-next-year",
+    taskMemoCurrentMonthEl: "task-memo-current-month",
+    taskMemoCalendarEl: "task-memo-calendar",
+    taskMemoFilterEl: "task-memo-filter",
+    taskMemoListEl: "task-memo-list",
+    taskMemoFormEl: "task-memo-form",
+    taskMemoEditorTitleEl: "task-memo-editor-title",
+    taskMemoEditorHintEl: "task-memo-editor-hint",
+    taskMemoEditDateEl: "task-memo-edit-date",
+    taskMemoEditTitleEl: "task-memo-edit-title",
+    taskMemoEditDescriptionEl: "task-memo-edit-description",
+    taskMemoEditStatusEl: "task-memo-edit-status",
+    taskMemoStatusOptionsEl: "task-memo-status-options",
+    taskMemoTaskLinkClearEl: "task-memo-task-link-clear",
+    taskMemoTaskLinkFieldEl: "task-memo-task-link-field",
+    taskMemoTaskLinkSummaryEl: "task-memo-task-link-summary",
+    taskMemoTaskPickerEl: "task-memo-task-picker",
+    taskMemoTaskPickerFilterEl: "task-memo-task-picker-filter",
+    taskMemoTaskPickerListEl: "task-memo-task-picker-list",
+    taskMemoTaskPickerSearchEl: "task-memo-task-picker-search",
+    taskMemoTaskPickerToggleEl: "task-memo-task-picker-toggle",
+    taskMemoNewEl: "task-memo-new",
+    taskMemoCancelEl: "task-memo-cancel",
+    taskMemoDeleteEl: "task-memo-delete",
+    taskMemoConvertEl: "task-memo-convert",
+    taskMemoSaveEl: "task-memo-save",
+    taskMemoStateEl: "task-memo-state",
     cancelTaskCreateEl: "cancel-task-create",
     collapseOverviewEl: "collapse-overview",
     collapseAgentsEl: "collapse-agents",
@@ -144,11 +177,14 @@
     taskContextStateEl: "task-context-state",
     taskCreateConfirmDialogEl: "task-create-confirm",
     taskCreateConfirmDetailsEl: "task-create-confirm-details",
-    deleteTaskDraftEl: "delete-task-draft",
-    restoreTaskDraftEl: "restore-task-draft",
-    saveTaskDraftEl: "save-task-draft",
-    taskDraftSelectEl: "task-draft-select",
     taskDraftStateEl: "task-draft-state",
+    taskMemoLinkClearEl: "task-memo-link-clear",
+    taskMemoLinkSummaryEl: "task-memo-link-summary",
+    taskMemoPickerEl: "task-memo-picker",
+    taskMemoPickerFilterEl: "task-memo-picker-filter",
+    taskMemoPickerListEl: "task-memo-picker-list",
+    taskMemoPickerSearchEl: "task-memo-picker-search",
+    taskMemoPickerToggleEl: "task-memo-picker-toggle",
     agentRuntimeConfirmDialogEl: "agent-runtime-confirm",
     agentRuntimeConfirmMessageEl: "agent-runtime-confirm-message",
     selectedAgentInfoEl: "selected-agent-info",
@@ -177,6 +213,7 @@
     });
 
     deps.taskCreateController?.bind?.();
+    deps.taskMemoController?.bind?.();
     deps.messageComposer?.bind?.();
 
     elements.pendingMessagesEl?.addEventListener("click", event => {
@@ -310,6 +347,7 @@
       void deps.loadAccessControlStatus?.();
       if (deps.currentRunId?.()) {
         await renderScheduler.tick();
+        deps.openInitialTaskMemoHome?.();
       } else {
         deps.renderFirstRunState?.(true);
       }

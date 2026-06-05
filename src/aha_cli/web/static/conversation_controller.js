@@ -790,6 +790,9 @@
       appendRealtimeConversationEvents(accepted);
       deps.removeOptimisticEventsMatchedBy(accepted);
       invalidateRealtimeTaskDetails(accepted);
+      if (accepted.some(event => event.type === "task_status_changed")) {
+        void deps.refreshTaskMemosIfOpen?.().catch(err => console.warn("Failed to refresh task memos", err));
+      }
       deps.realtimeDebug("events.accepted", {
         count: accepted.length,
         start_offset: startOffset,

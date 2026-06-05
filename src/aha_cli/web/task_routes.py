@@ -30,6 +30,12 @@ from aha_cli.store.filesystem import (
     update_task_proxy_config,
     update_task_supervision_config,
 )
+from aha_cli.store.task_memos import (
+    create_task_memo,
+    delete_task_memo,
+    read_task_memos,
+    update_task_memo,
+)
 from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import parse_json_body, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
@@ -270,10 +276,111 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
     except ValueError as exc:
         return route_result({"error": str(exc)}, "400 Bad Request")
     backend_state = start_dispatched_task_backend(root, run_id, task, dispatch)
+    source_memo_id = str(payload.get("source_memo_id") or "").strip()
+    memo = None
+    if source_memo_id:
+        try:
+            memo = enrich_task_memo(root, run_id, update_task_memo(root, run_id, source_memo_id, {"created_task_id": task.get("id")}))
+        except (KeyError, SystemExit, ValueError):
+            memo = None
     response = {"ok": True, "task": task}
+    if memo:
+        response["memo"] = memo
     if backend_state:
         response["backend"] = backend_state
     return route_result(response)
+
+
+def enrich_task_memo(root: Path, run_id: str, memo: dict) -> dict:
+    enriched = dict(memo)
+    task_id = str(enriched.get("created_task_id") or "").strip()
+    if not task_id:
+        enriched["created_task_status"] = ""
+        enriched["created_task_title"] = ""
+        return enriched
+    plan = require_plan(root, run_id)
+    task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
+    enriched["created_task_status"] = str((task or {}).get("status") or "missing")
+    enriched["created_task_title"] = str((task or {}).get("title") or "")
+    return enriched
+
+
+def enrich_task_memos(root: Path, run_id: str, memos: list[dict]) -> list[dict]:
+    return [enrich_task_memo(root, run_id, memo) for memo in memos]
+
+
+def task_memo_query_value(query: dict[str, list[str]], key: str) -> str:
+    return str(query.get(key, [""])[0] or "").strip()
+
+
+def task_memo_query_limit(query: dict[str, list[str]]) -> int:
+    raw = task_memo_query_value(query, "limit")
+    try:
+        return max(1, min(int(raw or "50"), 200))
+    except ValueError:
+        return 50
+
+
+def task_memo_matches_query(memo: dict, query_text: str) -> bool:
+    if not query_text:
+        return True
+    haystack = " ".join(
+        str(memo.get(key) or "")
+        for key in ("id", "title", "description", "scheduled_date", "created_task_id", "created_task_title")
+    ).lower()
+    return query_text.lower() in haystack
+
+
+def filter_task_memos_for_query(root: Path, run_id: str, query: dict[str, list[str]]) -> tuple[list[dict], int]:
+    memos = enrich_task_memos(root, run_id, read_task_memos(root, run_id))
+    query_text = task_memo_query_value(query, "q")
+    status = task_memo_query_value(query, "status").lower()
+    linked = task_memo_query_value(query, "linked").lower()
+    include_id = task_memo_query_value(query, "include_id")
+    limit = task_memo_query_limit(query)
+
+    def matches(memo: dict) -> bool:
+        if include_id and memo.get("id") == include_id:
+            return True
+        memo_status = str(memo.get("status") or "")
+        if status and status != "all":
+            if status in {"active", "open"}:
+                if memo_status in {"done", "closed"}:
+                    return False
+            elif memo_status != status:
+                return False
+        has_task = bool(str(memo.get("created_task_id") or "").strip())
+        if linked in {"linked", "true", "1"} and not has_task:
+            return False
+        if linked in {"unlinked", "false", "0"} and has_task:
+            return False
+        return task_memo_matches_query(memo, query_text)
+
+    filtered = [memo for memo in memos if matches(memo)]
+    return filtered[:limit], len(filtered)
+
+
+def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, query: dict[str, list[str]], body: bytes) -> dict:
+    try:
+        if path == "/api/task-memos":
+            if method in {"GET", "HEAD"}:
+                memos, total = filter_task_memos_for_query(root, run_id, query)
+                return route_result({"ok": True, "memos": memos, "total": total})
+            if method == "POST":
+                return route_result({"ok": True, "memo": enrich_task_memo(root, run_id, create_task_memo(root, run_id, parse_json_body(body)))})
+        if path.startswith("/api/task-memos/"):
+            memo_id = unquote(path.removeprefix("/api/task-memos/")).split("/", 1)[0]
+            if not memo_id:
+                return route_result({"error": "memo id is required"}, "400 Bad Request")
+            if method in {"PATCH", "POST"}:
+                return route_result({"ok": True, "memo": enrich_task_memo(root, run_id, update_task_memo(root, run_id, memo_id, parse_json_body(body)))})
+            if method == "DELETE":
+                return route_result({"ok": True, "memo": delete_task_memo(root, run_id, memo_id)})
+        return route_not_handled()
+    except ValueError as exc:
+        return route_result({"error": str(exc)}, "400 Bad Request")
+    except (KeyError, SystemExit) as exc:
+        return route_result({"error": str(exc)}, "404 Not Found")
 
 
 def handle_create_agent_route(root: Path, run_id: str, payload: dict) -> dict:
@@ -372,6 +479,8 @@ def route_task_agent_request(
     query: dict[str, list[str]],
     body: bytes,
 ) -> dict:
+    if path == "/api/task-memos" or path.startswith("/api/task-memos/"):
+        return handle_task_memos_route(root, require_api_run_id(root, default_run_id, query), method, path, query, body)
     if method in {"GET", "HEAD"} and path.startswith("/api/task/"):
         return handle_task_detail_route(root, require_api_run_id(root, default_run_id, query), path, query)
     if method == "POST" and path.startswith("/api/task/"):
@@ -399,6 +508,7 @@ __all__ = [
     "handle_create_agent_route",
     "handle_create_task_route",
     "handle_send_route",
+    "handle_task_memos_route",
     "handle_task_action_route",
     "handle_task_config_route",
     "handle_task_detail_route",

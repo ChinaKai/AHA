@@ -26,14 +26,17 @@
       tickInFlight = true;
       try {
         await options.loadStatus?.();
+        await options.refreshTaskMemosIfOpen?.();
         options.renderPanelForRealtime?.();
         await options.ensureConversationLoaded?.();
         await options.maybeRefreshConversationBackendSessionFallback?.();
         const autoFlushResponse = await options.maybeAutoFlushPending?.();
         if (autoFlushResponse) {
           await options.loadStatus?.({ forceAgents: true });
+          await options.refreshTaskMemosIfOpen?.();
         }
         await options.syncRealtimeEvents?.({ allowStalePoll: Boolean(options.selectedTaskRealtimeActive?.()) });
+        await options.refreshTaskMemosIfOpen?.();
         resetFailures();
         options.renderPendingMessages?.();
         options.renderPanelForRealtime?.();

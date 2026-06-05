@@ -328,8 +328,8 @@ def system_route_response(
         return head_or_json(method, {"run_id": run_id, **global_state, **read_ui_state(root, run_id)}, request_headers=headers)
     if method == "PATCH" and path == "/api/ui-state":
         payload = parse_json_body(body) if body.strip() else {}
-        if "last_selected_run_id" not in payload and "last_selected_task_id" not in payload:
-            return json_response({"error": "last_selected_run_id or last_selected_task_id is required"}, "400 Bad Request")
+        if "last_selected_run_id" not in payload and "last_selected_task_id" not in payload and "last_selected_memo_id" not in payload:
+            return json_response({"error": "last_selected_run_id, last_selected_task_id, or last_selected_memo_id is required"}, "400 Bad Request")
         response = {"ok": True}
         if "last_selected_run_id" in payload:
             selected_run_id = str(payload.get("last_selected_run_id") or "").strip()
@@ -340,6 +340,10 @@ def system_route_response(
             run_id = require_api_run_id(root, default_run_id, query, payload)
             response["run_id"] = run_id
             response.update(update_ui_state(root, run_id, {"last_selected_task_id": payload.get("last_selected_task_id")}))
+        if "last_selected_memo_id" in payload:
+            run_id = require_api_run_id(root, default_run_id, query, payload)
+            response["run_id"] = run_id
+            response.update(update_ui_state(root, run_id, {"last_selected_memo_id": payload.get("last_selected_memo_id")}))
         return json_response(response)
     if method in {"GET", "HEAD"} and path == "/api/backends":
         return head_or_json(method, {"backends": agent_backends()})

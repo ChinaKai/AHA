@@ -23,6 +23,11 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
     void loadAccessControlStatus();
     if (currentRunId) {
       await renderScheduler.tick();
+      if (initialTaskMemoHomeActive) {
+        taskMemoController.openDialog?.();
+      } else {
+        taskMemoController.closeDialog?.();
+      }
     } else {
       renderFirstRunState(true);
     }
@@ -228,6 +233,7 @@ conversationController = window.AHAConversationController.createConversationCont
   escapeHtml,
   fetchJson,
   fetchWithTimeout,
+  initialTaskMemoHomeActive,
   finalDetailInvalidatingEvents,
   formatMetricBytes,
   formatMetricCompact,
@@ -241,6 +247,7 @@ conversationController = window.AHAConversationController.createConversationCont
   promptArtifactMeta,
   promptRefPath,
   readJsonResponse,
+  refreshTaskMemosIfOpen: () => taskMemoController.refreshIfOpen?.(),
   realtimeDebug,
   rememberEventCursor: eventCursorStore.remember,
   rememberEventCursorFromEvent: eventCursorStore.rememberFromEvent,
@@ -596,6 +603,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   agentConfigLabel,
   agentConfigValue,
   agentRuntimeConfigChanged,
+  allTasks: () => statusData?.tasks || [],
   alert,
   apiUrl,
   approvalOptions,
@@ -605,6 +613,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   closeMobileSheets: () => uiShell.closeMobileSheets(),
   closeTaskCreateDialog: () => uiShell.closeTaskCreateDialog(),
   collaborationModeDelegationPolicy,
+  consoleRef: console,
   confirmDialogAction,
   contextDetails,
   createTaskConfirmRows,
@@ -653,6 +662,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   syncBootstrapProxyDefaultsForInput: bootstrapConfigHelpers.syncBootstrapProxyDefaultsForInput,
   syncMobileComposerToggle: hasMessage => uiShell.syncMobileComposerToggle(hasMessage),
   taskOptionsController,
+  taskDisplayStatus,
   taskSupervisionPayloadFromMode,
   taskSupervisionSummary,
   windowRef: window,
@@ -662,7 +672,8 @@ const {
   agentConfigController,
   messageComposer,
   settingsController,
-  taskCreateController
+  taskCreateController,
+  taskMemoController
 } = featureControllers;
 playConsoleController = featureControllers.playConsoleController;
 weixinConsoleController = featureControllers.weixinConsoleController;
@@ -687,6 +698,7 @@ const taskController = window.AHATaskController.createTaskController({
   defaultTaskId,
   documentRef: document,
   dispatchAction: appActions.dispatch,
+  closeTaskMemoPage: () => taskMemoController.closeDialog?.(),
   normalizeTaskVisibilityFilter,
   renderAgents,
   renderConversationFilters,
@@ -921,6 +933,7 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   syncWorkflowTemplateHelp: taskOptionsController.syncWorkflowTemplateHelp,
   taskConfigController,
   taskCreateController,
+  taskMemoController,
   taskController,
   windowRef: window
 });
@@ -940,7 +953,15 @@ window.AHAAppRuntime = Object.freeze({
       loadStatus,
       maybeAutoFlushPending,
       maybeRefreshConversationBackendSessionFallback,
+      openInitialTaskMemoHome: () => {
+        if (initialTaskMemoHomeActive) {
+          taskMemoController.openDialog?.();
+        } else {
+          taskMemoController.closeDialog?.();
+        }
+      },
       pollInterval,
+      refreshTaskMemosIfOpen: () => taskMemoController.refreshIfOpen?.(),
       renderActiveTurn: () => renderOrchestrator.renderActiveTurn(),
       renderBootstrapError,
       renderError: err => { panelEl.innerHTML = `<pre>${escapeHtml(String(err))}</pre>`; },

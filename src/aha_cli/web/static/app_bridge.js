@@ -174,6 +174,7 @@
       await loadStatus({ forceAgents: true });
       await ensureConversationLoaded();
       await syncRealtimeEvents();
+      await controllers.taskMemoController?.()?.refreshIfOpen?.();
       controllers.panelController?.()?.renderPanel({ preserveContextScroll: true });
     }
 

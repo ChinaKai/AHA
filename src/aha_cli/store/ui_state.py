@@ -40,6 +40,7 @@ def normalize_ui_state(data: dict | None = None) -> dict:
     source = data or {}
     return {
         "last_selected_task_id": str(source.get("last_selected_task_id") or "").strip(),
+        "last_selected_memo_id": str(source.get("last_selected_memo_id") or "").strip(),
     }
 
 
@@ -54,5 +55,7 @@ def update_ui_state(root: Path, run_id: str, fields: dict) -> dict:
     state = read_ui_state(root, run_id)
     if "last_selected_task_id" in fields:
         state["last_selected_task_id"] = str(fields.get("last_selected_task_id") or "").strip()
+    if "last_selected_memo_id" in fields:
+        state["last_selected_memo_id"] = str(fields.get("last_selected_memo_id") or "").strip()
     write_json(ui_state_path(root, run_id), state)
     return state
