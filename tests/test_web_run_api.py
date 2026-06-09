@@ -761,6 +761,9 @@ class WebRunApiTests(unittest.TestCase):
                 log_file = run_dir(root, run_id) / "logs" / "backend.log"
                 log_file.parent.mkdir(parents=True, exist_ok=True)
                 log_file.write_text("backend log", encoding="utf-8")
+                memo_asset = run_dir(root, run_id) / "task_memo_assets" / "memo-test.png"
+                memo_asset.parent.mkdir(parents=True, exist_ok=True)
+                memo_asset.write_bytes(b"memo image")
 
                 export_response = asyncio.run(
                     fetch_ui_response(root, run_id, f"/api/run/export?run_id={run_id}&no_logs=1", timeout=2.0)
@@ -795,11 +798,13 @@ class WebRunApiTests(unittest.TestCase):
                 import_body = json_response_body(import_response)
                 imported_run_id = import_body["imported_run_id"]
                 imported_status = status_snapshot(root, imported_run_id)
+                imported_memo_asset = (run_dir(root, imported_run_id) / "task_memo_assets" / "memo-test.png").read_bytes()
 
         self.assertTrue(export_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertIn(b'Content-Disposition: attachment; filename="aha-run-', export_headers)
         self.assertIn("aha-run-manifest.json", names)
         self.assertIn("run/plan.json", names)
+        self.assertIn("run/task_memo_assets/memo-test.png", names)
         self.assertNotIn("run/logs/backend.log", names)
         self.assertEqual(plan["proxy"]["http_proxy"], "<redacted>")
         self.assertNotIn("secret", json.dumps(plan))
@@ -808,6 +813,7 @@ class WebRunApiTests(unittest.TestCase):
         self.assertNotEqual(imported_run_id, run_id)
         self.assertEqual(import_body["run"]["lifecycle_status"], "active")
         self.assertIn(imported_run_id, {item["id"] for item in import_body["runs"]})
+        self.assertEqual(imported_memo_asset, b"memo image")
         self.assertEqual(imported_status["tasks"][0]["agents"][0]["session_status"], "imported")
         self.assertIsNone(imported_status["tasks"][0]["agents"][0]["backend_session_id"])
 

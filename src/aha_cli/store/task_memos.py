@@ -8,14 +8,15 @@ from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import run_dir
 from aha_cli.store.runs import require_plan
 
-MEMO_STATUSES = {"todo", "doing", "paused", "done", "closed"}
+MEMO_STATUSES = {"todo", "doing", "done", "closed"}
 MEMO_STATUS_ALIASES = {
     "open": "todo",
     "incomplete": "todo",
     "pending": "todo",
+    "paused": "todo",
     "running": "doing",
-    "blocked": "paused",
-    "suspended": "paused",
+    "blocked": "todo",
+    "suspended": "todo",
     "complete": "done",
     "completed": "done",
     "archived": "closed",
@@ -42,6 +43,13 @@ def normalize_memo_date(value: object) -> str:
         return ""
 
 
+def normalize_memo_end_date(value: object, scheduled_date: str) -> str:
+    end_date = normalize_memo_date(value)
+    if not end_date or not scheduled_date or end_date <= scheduled_date:
+        return ""
+    return end_date
+
+
 def normalize_memo_max_sub_agents(value: object) -> int | None:
     if value in (None, ""):
         return None
@@ -54,12 +62,14 @@ def normalize_memo_max_sub_agents(value: object) -> int | None:
 def normalize_memo(raw: dict | None = None) -> dict:
     source = raw or {}
     now = utc_now()
+    scheduled_date = normalize_memo_date(source.get("scheduled_date") or source.get("date"))
     return {
         "id": str(source.get("id") or "").strip(),
         "title": str(source.get("title") or "").strip(),
         "description": str(source.get("description") or "").strip(),
         "status": normalize_memo_status(source.get("status")),
-        "scheduled_date": normalize_memo_date(source.get("scheduled_date") or source.get("date")),
+        "scheduled_date": scheduled_date,
+        "end_date": normalize_memo_end_date(source.get("end_date"), scheduled_date),
         "workspace_id": str(source.get("workspace_id") or "").strip(),
         "workspace_path": str(source.get("workspace_path") or "").strip(),
         "backend": str(source.get("backend") or "").strip(),

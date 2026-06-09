@@ -1,6 +1,6 @@
 const domRefs = window.AHAControllerRegistry.collectDomRefs(document);
 const {
-  agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerWorkspaceDirEl,
+  agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerRunConsoleEl, headerRunTitleEl, headerWorkspaceDirEl,
   mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, openRunCreateEl, panelEl, pendingMessagesEl,
   playConsoleEl, playConsolePopoverEl, renameRunNameEl, runArchiveStateEl, runCreateFormEl, runExportEl,
   runCreateDialogEl, closeRunCreateEl, cancelRunCreateEl, runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
@@ -777,6 +777,8 @@ const runController = window.AHARunController.createRunController({
   documentRef: document,
   openRunCreateEl,
   runCreateDialogEl,
+  headerRunConsoleEl,
+  headerRunTitleEl,
   closeRunCreateEl,
   cancelRunCreateEl,
   newRunGoalEl,
@@ -808,6 +810,7 @@ const runController = window.AHARunController.createRunController({
   runRenameFormEl,
   runSelectEl,
   runStateEl,
+  headerWorkspaceDirEl,
   sessionDetailTextEl,
   sessionControlEl,
   sessionMenuEl,

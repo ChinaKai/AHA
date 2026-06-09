@@ -28,6 +28,7 @@ from aha_cli.web.status import (
     recover_stale_running_agents,
     web_agents_runtime_snapshot,
     web_status_snapshot,
+    web_task_options_snapshot,
     web_tasks_snapshot,
 )
 
@@ -314,6 +315,21 @@ def system_route_response(
     if method in {"GET", "HEAD"} and path == "/api/status":
         run_id = require_api_run_id(root, default_run_id, query)
         payload = web_status_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))
+        return head_or_json(method, payload, request_headers=headers)
+    if method in {"GET", "HEAD"} and path == "/api/task-options":
+        run_id = require_api_run_id(root, default_run_id, query)
+        try:
+            limit = max(1, min(query_int(query, "limit", 100), 500))
+        except ValueError:
+            return json_response({"error": "limit must be a valid integer"}, "400 Bad Request")
+        payload = web_task_options_snapshot(
+            root,
+            run_id,
+            q=str(query.get("q", [""])[0] or "").strip(),
+            status_filter=str(query.get("filter", ["active"])[0] or "active").strip(),
+            include_id=str(query.get("include_id", [""])[0] or "").strip(),
+            limit=limit,
+        )
         return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/tasks":
         run_id = require_api_run_id(root, default_run_id, query)

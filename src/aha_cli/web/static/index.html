@@ -10,7 +10,79 @@
 <body>
   <header>
     <div>
-      <h1 class="brand-title"><button id="open-task-memos" class="brand-logo-toggle" type="button" aria-label="Task Memo" title="Task Memo" aria-pressed="false" data-i18n-aria-label="memo.open" data-i18n-title="memo.open"><img class="brand-logo" src="/static/aha-logo.svg" alt="" aria-hidden="true"><span class="sr-only" data-i18n="memo.open">Task Memo</span></button><span class="brand-short">AHA</span><span id="app-version" class="app-version"></span><span id="header-workspace-dir" class="header-workspace-dir"></span></h1>
+      <div class="brand-main-row">
+        <h1 class="brand-title"><button id="open-task-memos" class="brand-logo-toggle" type="button" aria-label="Task Memo" title="Task Memo" aria-pressed="false" data-i18n-aria-label="memo.open" data-i18n-title="memo.open"><img class="brand-logo" src="/static/aha-logo.svg" alt="" aria-hidden="true"><span class="sr-only" data-i18n="memo.open">Task Memo</span></button><span class="brand-short">AHA</span></h1>
+        <details id="header-run-console" class="header-run-console">
+          <summary class="header-run-toggle">
+            <span id="header-run-title" class="header-run-title">Run</span>
+            <span id="header-workspace-dir" class="header-workspace-dir"></span>
+          </summary>
+          <div class="header-run-menu">
+            <section id="run-manager" class="run-manager run-manager-collapsed" aria-labelledby="run-manager-title">
+              <div class="run-manager-head panel-title-row">
+                <h2 id="run-manager-title" class="sr-only" data-i18n="run.manager">Run manager</h2>
+                <select id="run-select" class="run-manager-select" aria-label="Run list" data-i18n-aria-label="run.section_runs"></select>
+                <div class="run-manager-title-actions">
+                  <button id="open-run-create" class="task-create-trigger run-quick-create" type="button" data-i18n="run.new">New Run</button>
+                  <button id="run-manager-toggle" class="run-manager-toggle" type="button" aria-controls="run-manager-body" aria-expanded="false" aria-label="Expand run management" title="Expand run management" data-i18n-aria-label="run.manager_expand" data-i18n-title="run.manager_expand">▸</button>
+                </div>
+              </div>
+              <div id="summary" class="run-manager-summary sr-only" data-i18n="run.summary_loading">Loading...</div>
+              <div id="run-manager-body" class="run-manager-body">
+                <section class="run-menu-section run-switcher-section">
+                  <div class="run-lifecycle-panel">
+                    <div id="run-lifecycle-filter" class="run-lifecycle-filters"></div>
+                    <div id="run-lifecycle-actions" class="run-lifecycle-actions"></div>
+                    <div id="run-lifecycle-state" class="meta"></div>
+                  </div>
+                </section>
+              </div>
+            </section>
+            <section id="run-settings-panel" class="run-settings-panel hidden" aria-labelledby="run-settings-title" hidden>
+              <div class="run-settings-header">
+                <div>
+                  <h3 id="run-settings-title" data-i18n="run.settings">Run settings</h3>
+                  <div id="run-settings-subtitle" class="meta"></div>
+                </div>
+                <button id="run-settings-close" class="run-settings-close" type="button" data-i18n="common.close">Close</button>
+              </div>
+              <div class="run-settings-body">
+                <form id="run-rename-form" class="session-rename run-rename-inline">
+                  <input id="rename-run-name" placeholder="Current run name" data-i18n-placeholder="run.rename_placeholder">
+                  <button type="submit" data-i18n="run.rename">Rename</button>
+                </form>
+                <div id="run-settings-actions" class="run-lifecycle-buttons"></div>
+                <div id="run-settings-protection" class="run-lifecycle-protection"></div>
+                <div id="run-maintenance-popover" class="run-maintenance-popover" hidden>
+                  <div class="run-maintenance">
+                    <div class="run-maintenance-actions">
+                      <button id="run-maintenance-refresh" type="button" data-i18n="run.maintenance_refresh">Refresh diagnostics</button>
+                      <button id="run-maintenance-close" type="button" data-i18n="run.maintenance_close">Close</button>
+                      <div id="run-maintenance-summary" class="meta"></div>
+                    </div>
+                    <div id="run-maintenance-detail" class="run-maintenance-detail"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <div class="run-actions-section run-data-section">
+              <span class="run-actions-label" data-i18n="run.section_data">Data</span>
+              <div class="run-archive">
+                <div class="run-archive-actions">
+                  <button id="run-export" type="button" data-i18n="run.archive_export">Export</button>
+                  <button id="run-import" type="button" data-i18n="run.archive_import">Import</button>
+                  <label class="run-archive-logs">
+                    <input id="run-export-logs" type="checkbox">
+                    <span data-i18n="run.archive_include_logs">Include logs</span>
+                  </label>
+                </div>
+                <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
+                <div id="run-archive-state" class="meta"></div>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
       <div id="run-state" class="meta"></div>
     </div>
     <div id="session-control" class="session-control">
@@ -21,6 +93,7 @@
       <div id="session-menu" class="session-menu hidden">
         <div class="session-menu-head">
           <span data-i18n="aha.console">AHA console</span>
+          <span id="app-version" class="app-version"></span>
           <button id="session-refresh" type="button" data-i18n="common.refresh">Refresh</button>
         </div>
         <label class="language-switch">
@@ -35,21 +108,6 @@
           <div id="session-detail" class="meta"><span id="session-detail-text" data-i18n="run.details">Run details</span><span id="run-lifecycle" class="run-lifecycle status run-lifecycle-active">active</span><code id="web-service-address" data-i18n="run.current_address">Current address</code><code id="run-id"></code></div>
         </section>
         <div id="run-more-tools" class="run-more-tools-body">
-          <div class="run-actions-section run-data-section">
-            <span class="run-actions-label" data-i18n="run.section_data">Data</span>
-            <div class="run-archive">
-              <div class="run-archive-actions">
-                <button id="run-export" type="button" data-i18n="run.archive_export">Export</button>
-                <button id="run-import" type="button" data-i18n="run.archive_import">Import</button>
-                <label class="run-archive-logs">
-                  <input id="run-export-logs" type="checkbox">
-                  <span data-i18n="run.archive_include_logs">Include logs</span>
-                </label>
-              </div>
-              <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
-              <div id="run-archive-state" class="meta"></div>
-            </div>
-          </div>
           <div class="run-actions-section run-system-section">
             <span class="run-actions-label" data-i18n="run.section_system">System</span>
             <div class="run-admin-actions">
@@ -205,85 +263,32 @@
       <section id="task-memo-dialog" class="task-memo-page" aria-labelledby="task-memo-title">
         <div class="task-memo-panel">
           <div class="task-memo-layout">
-            <section class="task-memo-column task-memo-calendar-column" aria-labelledby="task-memo-current-month">
-              <div class="task-memo-calendar-head">
-                <button id="task-memo-prev-year" type="button" aria-label="Previous year" data-i18n-aria-label="memo.prev_year">«</button>
-                <button id="task-memo-prev-month" type="button" aria-label="Previous month" data-i18n-aria-label="memo.prev_month">‹</button>
-                <button id="task-memo-current-month" class="task-memo-current-month" type="button" data-i18n-aria-label="memo.current_month" aria-label="Back to today">2026-06</button>
-                <button id="task-memo-next-month" type="button" aria-label="Next month" data-i18n-aria-label="memo.next_month">›</button>
-                <button id="task-memo-next-year" type="button" aria-label="Next year" data-i18n-aria-label="memo.next_year">»</button>
-              </div>
-              <div id="task-memo-calendar" class="task-memo-calendar"></div>
-              <div class="task-memo-runbar">
-                <div class="task-memo-column-head">
-                  <h3 id="task-memo-console-title" data-i18n="run.manager">Run manager</h3>
+            <section class="task-memo-column task-memo-left-column" aria-labelledby="task-memo-title">
+              <section class="task-memo-calendar-panel" aria-labelledby="task-memo-current-month">
+                <div class="task-memo-calendar-head">
+                  <button id="task-memo-prev-year" type="button" aria-label="Previous year" data-i18n-aria-label="memo.prev_year">«</button>
+                  <button id="task-memo-prev-month" type="button" aria-label="Previous month" data-i18n-aria-label="memo.prev_month">‹</button>
+                  <button id="task-memo-current-month" class="task-memo-current-month" type="button" data-i18n-aria-label="memo.current_month" aria-label="Back to today">2026-06</button>
+                  <button id="task-memo-next-month" type="button" aria-label="Next month" data-i18n-aria-label="memo.next_month">›</button>
+                  <button id="task-memo-next-year" type="button" aria-label="Next year" data-i18n-aria-label="memo.next_year">»</button>
+                  <button id="task-memo-calendar-collapse" class="task-memo-calendar-collapse" type="button" aria-label="Expand calendar" title="Expand calendar" aria-expanded="false" data-i18n-aria-label="memo.calendar_expand" data-i18n-title="memo.calendar_expand">▾</button>
                 </div>
-                <section id="run-manager" class="run-manager task-memo-run-manager" aria-labelledby="run-manager-title">
-                  <div class="run-manager-head panel-title-row">
-                    <h2 id="run-manager-title" class="sr-only" data-i18n="run.manager">Run manager</h2>
-                    <select id="run-select" class="run-manager-select" aria-label="Run list" data-i18n-aria-label="run.section_runs"></select>
-                    <div class="run-manager-title-actions">
-                      <button id="open-run-create" class="task-create-trigger run-quick-create" type="button" data-i18n="run.new">New Run</button>
-                      <button id="run-manager-toggle" class="run-manager-toggle" type="button" aria-controls="run-manager-body" aria-expanded="true" aria-label="Collapse run management" title="Collapse run management" data-i18n-aria-label="run.manager_collapse" data-i18n-title="run.manager_collapse">▾</button>
-                    </div>
-                  </div>
-                  <div id="summary" class="run-manager-summary sr-only" data-i18n="run.summary_loading">Loading...</div>
-                  <div id="run-manager-body" class="run-manager-body">
-                    <section class="run-menu-section run-switcher-section">
-                      <div class="run-lifecycle-panel">
-                        <div id="run-lifecycle-filter" class="run-lifecycle-filters"></div>
-                        <div id="run-lifecycle-actions" class="run-lifecycle-actions"></div>
-                        <div id="run-lifecycle-state" class="meta"></div>
-                      </div>
-                    </section>
-                  </div>
-                </section>
-                <section id="run-settings-panel" class="run-settings-panel hidden" aria-labelledby="run-settings-title" hidden>
-                  <div class="run-settings-header">
-                    <div>
-                      <h3 id="run-settings-title" data-i18n="run.settings">Run settings</h3>
-                      <div id="run-settings-subtitle" class="meta"></div>
-                    </div>
-                    <button id="run-settings-close" class="run-settings-close" type="button" data-i18n="common.close">Close</button>
-                  </div>
-                  <div class="run-settings-body">
-                    <form id="run-rename-form" class="session-rename run-rename-inline">
-                      <input id="rename-run-name" placeholder="Current run name" data-i18n-placeholder="run.rename_placeholder">
-                      <button type="submit" data-i18n="run.rename">Rename</button>
-                    </form>
-                    <div id="run-settings-actions" class="run-lifecycle-buttons"></div>
-                    <div id="run-settings-protection" class="run-lifecycle-protection"></div>
-                    <div id="run-maintenance-popover" class="run-maintenance-popover" hidden>
-                      <div class="run-maintenance">
-                        <div class="run-maintenance-actions">
-                          <button id="run-maintenance-refresh" type="button" data-i18n="run.maintenance_refresh">Refresh diagnostics</button>
-                          <button id="run-maintenance-close" type="button" data-i18n="run.maintenance_close">Close</button>
-                          <div id="run-maintenance-summary" class="meta"></div>
-                        </div>
-                        <div id="run-maintenance-detail" class="run-maintenance-detail"></div>
-                      </div>
-                    </div>
-                  </div>
-                </section>
-              </div>
+                <div id="task-memo-calendar" class="task-memo-calendar"></div>
+              </section>
+              <section class="task-memo-list-panel" aria-labelledby="task-memo-title">
+                <h2 id="task-memo-title" class="sr-only" data-i18n="memo.title">Task Memo</h2>
+                <div id="task-memo-filter" class="task-list-filters task-memo-filters" role="group" aria-label="Memo filter" data-i18n-aria-label="memo.filter"></div>
+                <button id="task-memo-editor-jump" class="task-memo-editor-jump" type="button" data-i18n="memo.editor_jump">Editor</button>
+                <div id="task-memo-list" class="task-memo-list"></div>
+              </section>
             </section>
-            <section class="task-memo-column task-memo-list-column" aria-labelledby="task-memo-title">
-              <div class="task-dialog-head task-memo-list-head">
-                <div>
-                  <h2 id="task-memo-title" data-i18n="memo.title">Task Memo</h2>
-                  <p data-i18n="memo.hint">Keep future task ideas before dispatching agents.</p>
-                </div>
-              </div>
-              <div class="task-memo-left-actions">
-                <button id="task-memo-new" class="primary" type="button" data-i18n="memo.new">New Memo</button>
-              </div>
-              <div id="task-memo-filter" class="task-list-filters task-memo-filters" role="group" aria-label="Memo filter" data-i18n-aria-label="memo.filter"></div>
-              <div id="task-memo-list" class="task-memo-list"></div>
-            </section>
-            <section class="task-memo-column task-memo-editor-column">
+            <section id="task-memo-editor-column" class="task-memo-column task-memo-editor-column">
               <div class="task-memo-editor-head">
-                <h3 id="task-memo-editor-title" data-i18n="memo.editor_empty">Select or create a memo</h3>
-                <p id="task-memo-editor-hint" data-i18n="memo.editor_empty_hint">Choose a memo from the list, or create a new one from the left column.</p>
+                <div class="task-memo-editor-title-row">
+                  <h3 id="task-memo-editor-title" data-i18n="memo.editor_empty">Select or create a memo</h3>
+                  <button id="task-memo-new" class="primary" type="button" data-i18n="memo.new">New Memo</button>
+                </div>
+                <p id="task-memo-editor-hint" data-i18n="memo.editor_empty_hint">Choose a memo from the list, or click New Memo to create one.</p>
               </div>
               <form id="task-memo-form" class="task-memo-form">
                 <label class="field-label">
@@ -295,26 +300,46 @@
                   <div id="task-memo-status-options" class="task-memo-status-options" role="group" aria-label="Memo status" data-i18n-aria-label="memo.status"></div>
                   <input id="task-memo-edit-status" type="hidden" value="todo">
                 </div>
-                <label class="field-label">
-                  <span data-i18n="memo.date">Date</span>
-                  <input id="task-memo-edit-date" type="date">
-                </label>
-                <label class="field-label">
-                  <span data-i18n="task.description">Description</span>
-                  <textarea id="task-memo-edit-description" rows="8"></textarea>
-                </label>
-                <div id="task-memo-task-link-field" class="task-memo-link-box entity-link-box task-memo-task-link-field">
-                  <div class="entity-link-summary-row">
-                    <div>
-                      <div class="field-label-text" data-i18n="memo.link_task">Link Task</div>
-                      <div id="task-memo-task-link-summary" class="entity-link-summary" data-i18n="memo.unlinked_task">No task</div>
-                    </div>
+                <div class="task-memo-date-mode-row">
+                  <div class="task-memo-date-fields">
+                    <label class="field-label">
+                      <span data-i18n="memo.start_date">Start date</span>
+                      <input id="task-memo-edit-date" type="date">
+                    </label>
+                    <span class="task-memo-date-separator" aria-hidden="true">-</span>
+                    <label class="field-label">
+                      <span data-i18n="memo.end_date">End date</span>
+                      <input id="task-memo-edit-end-date" type="date">
+                    </label>
+                  </div>
+                  <div class="task-memo-description-mode" role="group" aria-label="Markdown mode" data-i18n-aria-label="memo.markdown_mode">
+                    <button id="task-memo-preview-mode" type="button" data-i18n="memo.preview_mode">Preview</button>
+                    <button id="task-memo-edit-mode" type="button" data-i18n="memo.edit_mode">Edit</button>
+                  </div>
+                </div>
+                <div class="field-label task-memo-description-field">
+                  <label class="sr-only" for="task-memo-edit-description" data-i18n="task.description">Description</label>
+                  <div id="task-memo-markdown-editor" class="task-memo-markdown-editor" data-mode="preview">
+                    <textarea id="task-memo-edit-description" class="task-memo-description-source" rows="8" spellcheck="false" hidden></textarea>
+                    <div id="task-memo-description-editor" class="task-memo-description-editor" aria-live="polite" tabindex="0"></div>
+                  </div>
+                </div>
+                <div class="task-memo-editor-actions">
+                  <button id="task-memo-cancel" class="task-memo-action-ghost" type="button" data-i18n="common.cancel">Cancel</button>
+                  <div class="task-memo-description-tools">
+                    <button id="task-memo-image-upload" type="button" data-i18n="memo.image_add">Add image</button>
+                    <input id="task-memo-image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+                  </div>
+                  <div id="task-memo-task-link-field" class="task-memo-link-box entity-link-box task-memo-task-link-field">
                     <div class="entity-link-actions">
                       <button id="task-memo-task-picker-toggle" type="button" data-i18n="memo.task_choose">Choose task</button>
                       <button id="task-memo-task-link-clear" type="button" data-i18n="memo.task_clear">Clear</button>
                     </div>
                   </div>
-                  <div id="task-memo-task-picker" class="entity-picker" hidden>
+                  <button id="task-memo-convert" class="task-memo-action-secondary" type="button" data-i18n="memo.convert">Create Task</button>
+                  <button id="task-memo-delete" class="task-memo-action-danger" type="button" data-i18n="memo.delete">Delete</button>
+                  <button id="task-memo-save" class="primary" type="submit" data-i18n="memo.save">Save</button>
+                  <div id="task-memo-task-picker" class="entity-picker task-memo-task-picker" hidden>
                     <div class="entity-picker-controls">
                       <input id="task-memo-task-picker-search" type="search" placeholder="Search tasks" data-i18n-placeholder="memo.task_search">
                       <select id="task-memo-task-picker-filter" aria-label="Task filter">
@@ -326,12 +351,6 @@
                     </div>
                     <div id="task-memo-task-picker-list" class="entity-picker-list"></div>
                   </div>
-                </div>
-                <div class="task-memo-editor-actions">
-                  <button id="task-memo-cancel" type="button" data-i18n="common.cancel">Cancel</button>
-                  <button id="task-memo-delete" type="button" data-i18n="memo.delete">Delete</button>
-                  <button id="task-memo-convert" type="button" data-i18n="memo.convert">Create Task</button>
-                  <button id="task-memo-save" class="primary" type="submit" data-i18n="memo.save_new">Save New Memo</button>
                 </div>
                 <div id="task-memo-state" class="meta" aria-live="polite"></div>
               </form>
@@ -664,6 +683,8 @@
   <script src="/static/run_actions.js"></script>
   <script src="/static/app_actions.js"></script>
   <script src="/static/task_create_controller.js"></script>
+  <script src="/static/textarea_image_paste.js"></script>
+  <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/task_memo_controller.js"></script>
   <script src="/static/settings_controller.js"></script>
   <script src="/static/run_controller.js"></script>

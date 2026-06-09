@@ -18,6 +18,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_runtime,
 )
+from aha_cli.store.runs import require_plan
 
 BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
 TASK_OUTCOME_SCAN_LIMIT = 10000
@@ -367,6 +368,89 @@ def web_tasks_snapshot(
         if lite and (not selected_task_id or raw_task_id != selected_task_id):
             task["agents"] = []
     return snapshot
+
+
+def _task_option_title(task: dict) -> str:
+    for key in ("title", "summary", "objective"):
+        value = str(task.get(key) or "").strip()
+        if value:
+            return value
+    return str(task.get("id") or "").strip()
+
+
+def _task_option_payload(task: dict) -> dict:
+    raw_task_id = str(task.get("id") or "").strip()
+    return {
+        "id": raw_task_id,
+        "title": _task_option_title(task),
+        "status": str(task.get("status") or "pending"),
+        "current_status": str(task.get("current_status") or task.get("status") or "pending"),
+        "outcome_status": task.get("outcome_status"),
+        "display_status": str(task.get("display_status") or task.get("status") or "pending"),
+        "hidden": bool(task.get("hidden")),
+    }
+
+
+def _task_option_matches_filter(option: dict, status_filter: str) -> bool:
+    status = str(option.get("display_status") or option.get("status") or "pending").lower()
+    if status_filter == "all":
+        return True
+    if status_filter == "running":
+        return status == "running"
+    if status_filter == "completed":
+        return status == "completed"
+    return not option.get("hidden") and status not in TERMINAL_TASK_STATUSES
+
+
+def _task_option_matches_query(option: dict, query_text: str) -> bool:
+    if not query_text:
+        return True
+    query = query_text.lower()
+    values = [
+        option.get("id"),
+        option.get("title"),
+        option.get("display_status"),
+        option.get("current_status"),
+    ]
+    return any(query in str(value or "").lower() for value in values)
+
+
+def web_task_options_snapshot(
+    root: Path,
+    run_id: str,
+    *,
+    q: str = "",
+    status_filter: str = "active",
+    include_id: str = "",
+    limit: int = 100,
+) -> dict:
+    plan = require_plan(root, run_id)
+    options: list[dict] = []
+    included: dict | None = None
+    normalized_filter = status_filter if status_filter in {"active", "running", "completed", "all"} else "active"
+    query_text = str(q or "").strip()
+    requested_id = str(include_id or "").strip()
+    for task in plan.get("tasks", []):
+        if task.get("deleted_at"):
+            continue
+        raw_task_id = str(task.get("id") or "").strip()
+        if not raw_task_id:
+            continue
+        decorate_task_status(task)
+        option = _task_option_payload(task)
+        if requested_id and raw_task_id == requested_id:
+            included = option
+        if not _task_option_matches_filter(option, normalized_filter):
+            continue
+        if not _task_option_matches_query(option, query_text):
+            continue
+        options.append(option)
+        if len(options) >= limit:
+            break
+    if included:
+        options = [option for option in options if option.get("id") != included.get("id")]
+        options.insert(0, included)
+    return {"tasks": options[: max(1, limit)]}
 
 
 def backend_runtime_payload(state: dict, *, task_id: str | None, agent_id: str) -> dict:

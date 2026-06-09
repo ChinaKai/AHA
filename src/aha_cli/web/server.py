@@ -66,6 +66,11 @@ def task_agent_response(route_result: dict, method: str) -> bytes | None:
     if not route_result.get("handled"):
         return None
     status = str(route_result.get("status") or "200 OK")
+    if "body" in route_result:
+        body = bytes(route_result.get("body") or b"")
+        content_type = str(route_result.get("content_type") or "application/octet-stream")
+        headers = route_result.get("headers") if isinstance(route_result.get("headers"), dict) else None
+        return http_response(status, b"" if method == "HEAD" else body, content_type, headers=headers)
     if method == "HEAD":
         return http_response(status, b"", "application/json; charset=utf-8")
     return json_response(route_result.get("payload") or {}, status)

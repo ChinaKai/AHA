@@ -36,6 +36,7 @@ from aha_cli.store.task_memos import (
     read_task_memos,
     update_task_memo,
 )
+from aha_cli.store.task_memo_assets import create_task_memo_asset, read_task_memo_asset
 from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import parse_json_body, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
@@ -57,6 +58,10 @@ APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 
 def route_result(payload: dict, status: str = "200 OK") -> dict:
     return {"handled": True, "status": status, "payload": payload}
+
+
+def binary_route_result(body: bytes, content_type: str, status: str = "200 OK", headers: dict[str, str] | None = None) -> dict:
+    return {"handled": True, "status": status, "body": body, "content_type": content_type, "headers": headers or {}}
 
 
 def route_not_handled() -> dict:
@@ -326,7 +331,7 @@ def task_memo_matches_query(memo: dict, query_text: str) -> bool:
         return True
     haystack = " ".join(
         str(memo.get(key) or "")
-        for key in ("id", "title", "description", "scheduled_date", "created_task_id", "created_task_title")
+        for key in ("id", "title", "description", "scheduled_date", "end_date", "created_task_id", "created_task_title")
     ).lower()
     return query_text.lower() in haystack
 
@@ -381,6 +386,29 @@ def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, que
         return route_result({"error": str(exc)}, "400 Bad Request")
     except (KeyError, SystemExit) as exc:
         return route_result({"error": str(exc)}, "404 Not Found")
+
+
+def handle_task_memo_assets_route(root: Path, run_id: str, method: str, path: str, body: bytes) -> dict:
+    try:
+        if path == "/api/task-memo-assets" and method == "POST":
+            asset = create_task_memo_asset(root, run_id, parse_json_body(body))
+            return route_result({"ok": True, "asset": asset}, "201 Created")
+        if path.startswith("/api/task-memo-assets/") and method in {"GET", "HEAD"}:
+            filename = unquote(path.removeprefix("/api/task-memo-assets/")).split("/", 1)[0]
+            data, content_type, safe_name = read_task_memo_asset(root, run_id, filename)
+            return binary_route_result(
+                data,
+                content_type,
+                headers={
+                    "Content-Disposition": f'inline; filename="{safe_name}"',
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        return route_not_handled()
+    except FileNotFoundError as exc:
+        return route_result({"error": f"memo image asset not found: {exc}"}, "404 Not Found")
+    except (SystemExit, ValueError) as exc:
+        return route_result({"error": str(exc)}, "400 Bad Request")
 
 
 def handle_create_agent_route(root: Path, run_id: str, payload: dict) -> dict:
@@ -479,6 +507,8 @@ def route_task_agent_request(
     query: dict[str, list[str]],
     body: bytes,
 ) -> dict:
+    if path == "/api/task-memo-assets" or path.startswith("/api/task-memo-assets/"):
+        return handle_task_memo_assets_route(root, require_api_run_id(root, default_run_id, query), method, path, body)
     if path == "/api/task-memos" or path.startswith("/api/task-memos/"):
         return handle_task_memos_route(root, require_api_run_id(root, default_run_id, query), method, path, query, body)
     if method in {"GET", "HEAD"} and path.startswith("/api/task/"):
@@ -508,6 +538,7 @@ __all__ = [
     "handle_create_agent_route",
     "handle_create_task_route",
     "handle_send_route",
+    "handle_task_memo_assets_route",
     "handle_task_memos_route",
     "handle_task_action_route",
     "handle_task_config_route",

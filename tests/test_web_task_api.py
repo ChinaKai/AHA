@@ -105,6 +105,24 @@ class WebTaskApiTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Task memo run", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                asset_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memo-assets",
+                        method="POST",
+                        payload={
+                            "filename": "clip.png",
+                            "content_type": "image/png",
+                            "data_url": "data:image/png;base64,iVBORw0KGgo=",
+                        },
+                    )
+                )
+                asset = json_response_body(asset_response)["asset"]
+                asset_fetch_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/task-memo-assets/{asset['filename']}?run_id={run_id}")
+                )
+                asset_fetch_headers, asset_fetch_body = asset_fetch_response.split(b"\r\n\r\n", 1)
                 create_response = asyncio.run(
                     fetch_ui_response(
                         root,
@@ -113,8 +131,9 @@ class WebTaskApiTests(unittest.TestCase):
                         method="POST",
                         payload={
                             "title": "Memo title",
-                            "description": "Memo detail",
+                            "description": f"Memo detail\n\n{asset['markdown']}",
                             "scheduled_date": "2026-06-05",
+                            "end_date": "2026-06-08",
                             "status": "todo",
                             "backend": "codex",
                             "workflow_template": "feature",
@@ -129,7 +148,7 @@ class WebTaskApiTests(unittest.TestCase):
                         run_id,
                         f"/api/task-memos/{memo_id}",
                         method="PATCH",
-                        payload={"status": "doing", "description": "Updated detail"},
+                        payload={"status": "doing", "description": "Updated detail", "end_date": "2026-06-09"},
                     )
                 )
                 updated = json_response_body(update_response)["memo"]
@@ -179,17 +198,34 @@ class WebTaskApiTests(unittest.TestCase):
                 )
                 include_query = json_response_body(include_query_response)
                 search_query_response = asyncio.run(
-                    fetch_ui_response(root, run_id, "/api/task-memos?q=updated&linked=linked&limit=1")
+                    fetch_ui_response(root, run_id, "/api/task-memos?q=2026-06-09&linked=linked&limit=1")
                 )
                 search_query = json_response_body(search_query_response)
+                task_options_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-options?filter=all&include_id={task_body['task']['id']}&limit=5",
+                    )
+                )
+                task_options = json_response_body(task_options_response)
                 list_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task-memos"))
                 memos = json_response_body(list_response)["memos"]
                 delete_response = asyncio.run(fetch_ui_response(root, run_id, f"/api/task-memos/{memo_id}", method="DELETE"))
 
         self.assertEqual(created["title"], "Memo title")
+        self.assertTrue(asset_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(asset["path"], f"task_memo_assets/{asset['filename']}")
+        self.assertIn(asset["path"], asset["markdown"])
+        self.assertIn(asset["markdown"], created["description"])
+        self.assertTrue(asset_fetch_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b"Content-Type: image/png", asset_fetch_headers)
+        self.assertEqual(asset_fetch_body, b"\x89PNG\r\n\x1a\n")
         self.assertEqual(created["scheduled_date"], "2026-06-05")
+        self.assertEqual(created["end_date"], "2026-06-08")
         self.assertEqual(updated["status"], "doing")
         self.assertEqual(updated["description"], "Updated detail")
+        self.assertEqual(updated["end_date"], "2026-06-09")
         self.assertEqual(task_body["memo"]["status"], "doing")
         self.assertEqual(task_body["memo"]["created_task_id"], task_body["task"]["id"])
         self.assertEqual(task_body["memo"]["created_task_status"], task_body["task"]["status"])
@@ -202,6 +238,11 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(include_query["memos"][0]["id"], memo_id)
         self.assertEqual(search_query["total"], 1)
         self.assertEqual(search_query["memos"][0]["id"], memo_id)
+        self.assertTrue(task_options_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(task_options["tasks"][0]["id"], task_body["task"]["id"])
+        self.assertEqual(task_options["tasks"][0]["title"], task_body["task"]["title"])
+        self.assertEqual(task_options["tasks"][0]["display_status"], task_body["task"]["status"])
+        self.assertNotIn("agents", task_options["tasks"][0])
         self.assertEqual(memos[0]["status"], "doing")
         self.assertEqual(memos[0]["created_task_status"], task_body["task"]["status"])
         self.assertTrue(json_response_body(delete_response)["memo"]["deleted"])

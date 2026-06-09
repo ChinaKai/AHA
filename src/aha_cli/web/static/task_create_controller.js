@@ -97,14 +97,15 @@
     let taskMemoPickerOpen = false;
     let taskMemoPickerSearch = "";
     let taskMemoPickerFilter = "active_unlinked";
-    const memoStatuses = ["todo", "doing", "paused", "done", "closed"];
+    const memoStatuses = ["todo", "doing", "done", "closed"];
     const memoStatusAliases = Object.freeze({
       open: "todo",
       incomplete: "todo",
       pending: "todo",
+      paused: "todo",
       running: "doing",
-      blocked: "paused",
-      suspended: "paused",
+      blocked: "todo",
+      suspended: "todo",
       complete: "done",
       completed: "done",
       archived: "closed"
@@ -170,13 +171,19 @@
       const title = String(memo.title || "").trim();
       const description = String(memo.description || "").trim().replace(/\s+/g, " ");
       const base = title || (description ? description.slice(0, 48) : t("task.untitled_draft", "Untitled draft"));
-      const date = String(memo.scheduled_date || "").trim();
+      const date = taskMemoDateRangeLabel(memo);
       return date ? `${base} · ${date}` : base;
+    }
+
+    function taskMemoDateRangeLabel(memo = {}) {
+      const start = String(memo.scheduled_date || "").trim();
+      const end = String(memo.end_date || "").trim();
+      return start && end && end > start ? `${start} ~ ${end}` : start;
     }
 
     function memoLinkMeta(memo = {}) {
       const parts = [];
-      const date = String(memo.scheduled_date || "").trim();
+      const date = taskMemoDateRangeLabel(memo);
       if (date) parts.push(date);
       parts.push(memo.created_task_id ? t("memo.linked_task", "Linked") : t("memo.unlinked_task", "No task"));
       parts.push(memoStatusLabel(memo.status));

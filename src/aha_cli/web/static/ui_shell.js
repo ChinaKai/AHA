@@ -54,7 +54,7 @@
     function initDesktopSidebars() {
       setSidebarCollapsed("overview", readSidebarCollapsed("overview"));
       setSidebarCollapsed("agents", readSidebarCollapsed("agents"));
-      setRunManagerCollapsed(false);
+      setRunManagerCollapsed(true);
       elements.collapseOverviewEl?.addEventListener("click", () => setSidebarCollapsed("overview", true));
       elements.overviewRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("overview", false));
       elements.collapseAgentsEl?.addEventListener("click", () => setSidebarCollapsed("agents", true));
@@ -227,6 +227,12 @@
       }
       if (elements.runCreateDialogEl?.open && elements.runCreateDialogEl.contains(element)) {
         return elements.runCreateDialogEl.querySelector(".task-dialog-panel");
+      }
+      if (
+        (elements.taskMemoDialogEl?.open || elements.taskMemoDialogEl?.hasAttribute?.("open")) &&
+        elements.taskMemoDialogEl.contains(element)
+      ) {
+        return elements.taskMemoDialogEl;
       }
       return null;
     }

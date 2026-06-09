@@ -49,6 +49,21 @@
       if (elements.documentRef) elements.documentRef.title = version ? `AHA v${version}` : "AHA Dashboard";
     }
 
+    function closeHeaderRunConsole() {
+      if (elements.headerRunConsoleEl) elements.headerRunConsoleEl.open = false;
+    }
+
+    function renderHeaderRunTitle(run, title, runId) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      if (!elements.headerRunTitleEl) return;
+      const label = title || deps.runTitleOf?.(run) || runId || t("run.short_label", "Run");
+      elements.headerRunTitleEl.textContent = label;
+      if (elements.headerRunConsoleEl) {
+        const project = String(elements.headerWorkspaceDirEl?.textContent || "").trim();
+        elements.headerRunConsoleEl.title = [label, project].filter(Boolean).join(" · ");
+      }
+    }
+
     function renderRunLifecycleBadge(run) {
       if (!elements.runLifecycleEl) return;
       elements.runLifecycleEl.hidden = !run;
@@ -71,6 +86,7 @@
       const bootstrapData = deps.bootstrapData?.();
       const runId = currentRunId() || deps.runIdOf?.(run) || "";
       if (!run && !statusData) {
+        renderHeaderRunTitle(null, "", "");
         if (elements.sessionTitleEl) elements.sessionTitleEl.textContent = currentRunId() || t("run.none", "No run selected");
         if (elements.runIdEl) elements.runIdEl.textContent = currentRunId() || "-";
         if (elements.runStateEl) elements.runStateEl.textContent = bootstrapData?.aha_home ? `AHA_HOME ${bootstrapData.aha_home}` : "";
@@ -80,6 +96,7 @@
         return;
       }
       const title = statusData?.goal || deps.runTitleOf?.(run) || "";
+      renderHeaderRunTitle(run, title, runId);
       if (elements.sessionTitleEl) {
         elements.sessionTitleEl.textContent = title || t("run.none", "No run selected");
         elements.sessionTitleEl.title = title || "";
@@ -700,6 +717,7 @@
       elements.documentRef?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
         if (sessionMenuOpen && !elements.sessionControlEl?.contains(target)) setSessionMenu(false);
+        if (elements.headerRunConsoleEl?.open && !elements.headerRunConsoleEl.contains(target)) closeHeaderRunConsole();
         if (runSettingsOpenId && !elements.runManagerEl?.contains(target) && !elements.runSettingsPanelEl?.contains(target)) {
           closeRunSettings();
         }
@@ -716,6 +734,7 @@
       elements.documentRef?.addEventListener("keydown", event => {
         if (event.key === "Escape") {
           setSessionMenu(false);
+          closeHeaderRunConsole();
           setRunMaintenanceConsoleOpen(false);
           closeRunCreateDialog();
           deps.setWeixinConsoleOpen?.(false);
