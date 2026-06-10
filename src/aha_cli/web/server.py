@@ -154,7 +154,7 @@ async def handle_ui_client(
                     bind_port=bind_port,
                 )
             if response is None:
-                route_result = await asyncio.to_thread(route_task_agent_request, root, run_id, method, path, query, body)
+                route_result = await asyncio.to_thread(route_task_agent_request, root, run_id, method, path, query, body, headers)
                 response = task_agent_response(route_result, method)
             if response is None:
                 response = http_response("404 Not Found", b"not found\n")

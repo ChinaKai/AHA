@@ -3448,25 +3448,25 @@ body.task-memo-home .task-memo-page .task-memo-panel {
 .task-memo-day.active .task-memo-day-number {
   font-weight: 700;
 }
-.task-memo-day.progress-none {
+.task-memo-day.progress-overdue {
   border-color: #f04438;
   background: #fff1f0;
 }
-.task-memo-day.progress-none.active {
+.task-memo-day.progress-overdue.active {
   box-shadow: inset 0 0 0 2px #1f6feb, 0 0 0 2px rgba(240, 68, 56, 0.2);
 }
-.task-memo-day.progress-partial {
+.task-memo-day.progress-late {
   border-color: #f79009;
   background: #fffaeb;
 }
-.task-memo-day.progress-partial.active {
-  box-shadow: inset 0 0 0 2px #1f6feb, 0 0 0 2px rgba(247, 144, 9, 0.22);
+.task-memo-day.progress-late.active {
+  box-shadow: inset 0 0 0 2px #1f6feb, 0 0 0 2px rgba(247, 144, 9, 0.2);
 }
-.task-memo-day.progress-complete {
+.task-memo-day.progress-on-track {
   border-color: #12b76a;
   background: #ecfdf3;
 }
-.task-memo-day.progress-complete.active {
+.task-memo-day.progress-on-track.active {
   box-shadow: inset 0 0 0 2px #1f6feb, 0 0 0 2px rgba(18, 183, 106, 0.18);
 }
 .task-memo-day.outside {
@@ -3503,15 +3503,15 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   line-height: 14px;
   text-align: center;
 }
-.task-memo-day-count.none {
+.task-memo-day-count.overdue {
   color: #b42318;
   background: #fee4e2;
 }
-.task-memo-day-count.partial {
+.task-memo-day-count.late {
   color: #b54708;
   background: #fef0c7;
 }
-.task-memo-day-count.complete {
+.task-memo-day-count.on-track {
   color: #027a48;
   background: #d1fadf;
 }
@@ -3712,15 +3712,24 @@ body.task-memo-home .task-memo-page .task-memo-panel {
 }
 .task-memo-date-fields {
   display: grid;
-  grid-template-columns: minmax(9.5rem, 10rem) auto minmax(9.5rem, 10rem);
+  grid-template-columns: minmax(7.5rem, 8.5rem) auto minmax(7.5rem, 8.5rem) minmax(7.5rem, 8.5rem) minmax(7.5rem, 8.5rem);
   justify-content: start;
   gap: 8px;
   align-items: end;
+}
+.task-memo-date-fields .field-label[hidden] {
+  display: none;
 }
 .task-memo-date-fields .field-label,
 .task-memo-date-fields input {
   min-width: 0;
   width: 100%;
+}
+.task-memo-date-fields input[type="date"].task-memo-date-empty {
+  color: transparent;
+}
+.task-memo-date-fields input[type="date"].task-memo-date-empty::-webkit-datetime-edit {
+  color: transparent;
 }
 .task-memo-date-separator {
   display: inline-flex;
@@ -3856,13 +3865,86 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   background: transparent;
   color: inherit;
 }
+.task-memo-attachments {
+  border-top: 1px solid #eaecf0;
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.task-memo-attachments[hidden] {
+  display: none;
+}
+.task-memo-attachments-title {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.task-memo-attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.task-memo-attachment-link {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  color: #344054;
+  display: inline-flex;
+  font-size: 12px;
+  line-height: 1.2;
+  max-width: 100%;
+  min-height: 28px;
+  overflow-wrap: anywhere;
+  padding: 0 8px;
+  text-decoration: none;
+}
+.task-memo-attachment-link:hover {
+  background: #eef2f6;
+  color: #182230;
+}
 .task-memo-description-tools {
   display: flex;
+  position: relative;
   justify-content: flex-start;
   gap: 6px;
 }
-.task-memo-description-tools button {
+.task-memo-description-tools button,
+.task-memo-image-upload {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  color: #344054;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  justify-content: center;
+  line-height: 1.2;
   min-height: 32px;
+  padding: 0 10px;
+  user-select: none;
+  white-space: nowrap;
+}
+.task-memo-image-upload:hover {
+  background: #f9fafb;
+}
+.task-memo-image-upload.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.task-memo-image-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  pointer-events: none;
 }
 @media (max-width: 640px) {
   .task-memo-editor-title-row {
@@ -3873,15 +3955,20 @@ body.task-memo-home .task-memo-page .task-memo-panel {
     align-self: flex-start;
   }
   .task-memo-date-mode-row {
+    align-items: stretch;
+    flex-direction: column;
     gap: 8px;
   }
   .task-memo-date-fields {
-    grid-template-columns: minmax(6.5rem, 6.75rem) auto minmax(6.5rem, 6.75rem);
+    grid-template-columns: minmax(6.25rem, 6.5rem) auto minmax(6.25rem, 6.5rem) minmax(6.25rem, 6.5rem) minmax(6.25rem, 6.5rem);
     gap: 6px;
   }
   .task-memo-description-mode button {
     padding: 4px 6px;
     font-size: 12px;
+  }
+  .task-memo-description-mode {
+    align-self: flex-start;
   }
   .task-memo-editor-jump {
     display: inline-flex;
@@ -4080,6 +4167,19 @@ body.task-memo-home .task-memo-page .task-memo-panel {
 .task-memo-action-ghost:focus-visible:not(:disabled) {
   border-color: #d0d5dd;
   background: #f8fafc;
+}
+.task-memo-editor-actions button.task-memo-action-blocked {
+  border-color: #d0d5dd;
+  background: #f2f4f7;
+  color: #667085;
+  cursor: not-allowed;
+  box-shadow: inset 0 0 0 1px #e4e7ec;
+}
+.task-memo-editor-actions button.task-memo-action-blocked:hover,
+.task-memo-editor-actions button.task-memo-action-blocked:focus-visible {
+  border-color: #98a2b3;
+  background: #eaecf0;
+  color: #475467;
 }
 .task-memo-action-danger {
   border-color: #fecaca;

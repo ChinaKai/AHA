@@ -119,6 +119,78 @@ class WebTaskApiTests(unittest.TestCase):
                     )
                 )
                 asset = json_response_body(asset_response)["asset"]
+                heic_asset_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memo-assets",
+                        method="POST",
+                        payload={
+                            "filename": "camera.HEIC",
+                            "content_type": "",
+                            "data_url": "data:application/octet-stream;base64,aGVpYw==",
+                        },
+                    )
+                )
+                heic_asset = json_response_body(heic_asset_response)["asset"]
+                boundary = "----aha-memo-boundary"
+                multipart_body = (
+                    f"--{boundary}\r\n"
+                    'Content-Disposition: form-data; name="filename"\r\n\r\n'
+                    "camera.avif\r\n"
+                    f"--{boundary}\r\n"
+                    'Content-Disposition: form-data; name="content_type"\r\n\r\n'
+                    "image/avif\r\n"
+                    f"--{boundary}\r\n"
+                    'Content-Disposition: form-data; name="image"; filename="camera.avif"\r\n'
+                    "Content-Type: application/octet-stream\r\n\r\n"
+                ).encode("utf-8") + b"avif-bytes" + f"\r\n--{boundary}--\r\n".encode("utf-8")
+                multipart_asset_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memo-assets",
+                        method="POST",
+                        body=multipart_body,
+                        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                    )
+                )
+                multipart_asset = json_response_body(multipart_asset_response)["asset"]
+                heic_asset_fetch_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/task-memo-assets/{heic_asset['filename']}?run_id={run_id}")
+                )
+                heic_asset_fetch_headers, heic_asset_fetch_body = heic_asset_fetch_response.split(b"\r\n\r\n", 1)
+                multipart_asset_fetch_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/task-memo-assets/{multipart_asset['filename']}?run_id={run_id}")
+                )
+                multipart_asset_fetch_headers, multipart_asset_fetch_body = multipart_asset_fetch_response.split(b"\r\n\r\n", 1)
+                attachment_boundary = "----aha-memo-attachment-boundary"
+                attachment_body = (
+                    f"--{attachment_boundary}\r\n"
+                    'Content-Disposition: form-data; name="filename"\r\n\r\n'
+                    "notes.pdf\r\n"
+                    f"--{attachment_boundary}\r\n"
+                    'Content-Disposition: form-data; name="content_type"\r\n\r\n'
+                    "application/pdf\r\n"
+                    f"--{attachment_boundary}\r\n"
+                    'Content-Disposition: form-data; name="image"; filename="notes.pdf"\r\n'
+                    "Content-Type: application/pdf\r\n\r\n"
+                ).encode("utf-8") + b"%PDF-1.4\nmemo" + f"\r\n--{attachment_boundary}--\r\n".encode("utf-8")
+                attachment_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memo-assets",
+                        method="POST",
+                        body=attachment_body,
+                        headers={"Content-Type": f"multipart/form-data; boundary={attachment_boundary}"},
+                    )
+                )
+                attachment = json_response_body(attachment_response)["asset"]
+                attachment_fetch_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/task-memo-assets/{attachment['filename']}?run_id={run_id}")
+                )
+                attachment_fetch_headers, attachment_fetch_body = attachment_fetch_response.split(b"\r\n\r\n", 1)
                 asset_fetch_response = asyncio.run(
                     fetch_ui_response(root, run_id, f"/api/task-memo-assets/{asset['filename']}?run_id={run_id}")
                 )
@@ -211,16 +283,83 @@ class WebTaskApiTests(unittest.TestCase):
                 task_options = json_response_body(task_options_response)
                 list_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task-memos"))
                 memos = json_response_body(list_response)["memos"]
+                done_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{memo_id}",
+                        method="PATCH",
+                        payload={"status": "done", "completed_at": "2026-06-07"},
+                    )
+                )
+                done_body = json_response_body(done_response)["memo"]
+                closed_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{memo_id}",
+                        method="PATCH",
+                        payload={"status": "closed", "closed_at": "2026-06-10"},
+                    )
+                )
+                closed_body = json_response_body(closed_response)["memo"]
+                invalid_date_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memos",
+                        method="POST",
+                        payload={
+                            "title": "Future memo",
+                            "scheduled_date": "2099-02-10",
+                            "end_date": "2099-02-09",
+                            "status": "done",
+                            "completed_at": "2099-02-01",
+                        },
+                    )
+                )
+                invalid_date_body = json_response_body(invalid_date_response)["memo"]
+                invalid_closed_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{invalid_date_body['id']}",
+                        method="PATCH",
+                        payload={"status": "closed", "closed_at": "2099-02-01"},
+                    )
+                )
+                invalid_closed_body = json_response_body(invalid_closed_response)["memo"]
                 delete_response = asyncio.run(fetch_ui_response(root, run_id, f"/api/task-memos/{memo_id}", method="DELETE"))
 
         self.assertEqual(created["title"], "Memo title")
         self.assertTrue(asset_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertIn("/", asset["filename"])
         self.assertEqual(asset["path"], f"task_memo_assets/{asset['filename']}")
         self.assertIn(asset["path"], asset["markdown"])
         self.assertIn(asset["markdown"], created["description"])
         self.assertTrue(asset_fetch_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertIn(b"Content-Type: image/png", asset_fetch_headers)
         self.assertEqual(asset_fetch_body, b"\x89PNG\r\n\x1a\n")
+        self.assertTrue(heic_asset_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(heic_asset["content_type"], "image/heic")
+        self.assertTrue(heic_asset["filename"].endswith(".heic"))
+        self.assertIn(b"Content-Type: image/heic", heic_asset_fetch_headers)
+        self.assertEqual(heic_asset_fetch_body, b"heic")
+        self.assertTrue(multipart_asset_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(multipart_asset["content_type"], "image/avif")
+        self.assertTrue(multipart_asset["filename"].endswith(".avif"))
+        self.assertEqual(multipart_asset["bytes"], len(b"avif-bytes"))
+        self.assertIn(b"Content-Type: image/avif", multipart_asset_fetch_headers)
+        self.assertEqual(multipart_asset_fetch_body, b"avif-bytes")
+        self.assertTrue(attachment_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(attachment["content_type"], "application/pdf")
+        self.assertEqual(attachment["kind"], "attachment")
+        self.assertIn("/", attachment["filename"])
+        self.assertTrue(attachment["filename"].endswith(".pdf"))
+        self.assertIn("[Attachment: notes.pdf]", attachment["markdown"])
+        self.assertIn(b"Content-Type: application/pdf", attachment_fetch_headers)
+        self.assertIn(b'Content-Disposition: attachment; filename="', attachment_fetch_headers)
+        self.assertEqual(attachment_fetch_body, b"%PDF-1.4\nmemo")
         self.assertEqual(created["scheduled_date"], "2026-06-05")
         self.assertEqual(created["end_date"], "2026-06-08")
         self.assertEqual(updated["status"], "doing")
@@ -245,6 +384,18 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertNotIn("agents", task_options["tasks"][0])
         self.assertEqual(memos[0]["status"], "doing")
         self.assertEqual(memos[0]["created_task_status"], task_body["task"]["status"])
+        self.assertEqual(done_body["status"], "done")
+        self.assertEqual(done_body["completed_at"], "2026-06-07")
+        self.assertEqual(done_body["closed_at"], "")
+        self.assertEqual(closed_body["status"], "closed")
+        self.assertEqual(closed_body["completed_at"], "")
+        self.assertEqual(closed_body["closed_at"], "2026-06-10")
+        self.assertEqual(invalid_date_body["scheduled_date"], "2099-02-10")
+        self.assertEqual(invalid_date_body["end_date"], "")
+        self.assertEqual(invalid_date_body["completed_at"], "2099-02-10")
+        self.assertEqual(invalid_closed_body["status"], "closed")
+        self.assertEqual(invalid_closed_body["completed_at"], "")
+        self.assertEqual(invalid_closed_body["closed_at"], "2099-02-10")
         self.assertTrue(json_response_body(delete_response)["memo"]["deleted"])
 
     def test_ui_state_persists_selected_memo(self) -> None:

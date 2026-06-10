@@ -1,5 +1,6 @@
 (() => {
   const memoImageMarkdownPattern = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)/g;
+  const memoAttachmentMarkdownPattern = /\[([^\]]+)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)/g;
 
   function memoImageFilenameFromPath(path) {
     const text = String(path || "").trim();
@@ -23,6 +24,40 @@
     if (text.toLowerCase().startsWith("data:image/")) return text;
     const filename = memoImageFilenameFromPath(text);
     return filename ? apiUrl(`/api/task-memo-assets/${encodeURIComponent(filename)}`) : "";
+  }
+
+  function memoAssetHref(path, apiUrl = value => value) {
+    const text = String(path || "").trim();
+    if (!text) return "";
+    const filename = memoImageFilenameFromPath(text);
+    return filename ? apiUrl(`/api/task-memo-assets/${encodeURIComponent(filename)}`) : "";
+  }
+
+  function memoAttachmentLabel(value) {
+    return String(value || "")
+      .replace(/^Attachment:\s*/i, "")
+      .trim() || "attachment";
+  }
+
+  function collectMemoAttachments(markdown, options = {}) {
+    const source = String(markdown || "");
+    const attachments = [];
+    const seen = new Set();
+    memoAttachmentMarkdownPattern.lastIndex = 0;
+    let match = memoAttachmentMarkdownPattern.exec(source);
+    while (match) {
+      const label = String(match[1] || "").trim();
+      const path = String(match[2] || "").trim();
+      if (source[match.index - 1] !== "!" && /^Attachment:\s*/i.test(label)) {
+        const href = memoAssetHref(path, options.apiUrl);
+        if (href && !seen.has(href)) {
+          seen.add(href);
+          attachments.push({ href, label: memoAttachmentLabel(label) });
+        }
+      }
+      match = memoAttachmentMarkdownPattern.exec(source);
+    }
+    return attachments;
   }
 
   function safeMarkdownLinkHref(value) {
@@ -102,6 +137,31 @@
     code.textContent = lines.join("\n");
     pre.appendChild(code);
     parent.appendChild(pre);
+  }
+
+  function renderMemoAttachmentList(parent, markdown, options = {}) {
+    const documentRef = options.documentRef || parent?.ownerDocument;
+    if (!parent || !documentRef) return;
+    parent.innerHTML = "";
+    const attachments = collectMemoAttachments(markdown, options);
+    parent.hidden = !attachments.length;
+    parent.setAttribute("aria-hidden", String(!attachments.length));
+    if (!attachments.length) return;
+    const title = documentRef.createElement("div");
+    title.className = "task-memo-attachments-title";
+    title.textContent = options.t?.("memo.attachments", "Attachments") || "Attachments";
+    const list = documentRef.createElement("div");
+    list.className = "task-memo-attachments-list";
+    for (const attachment of attachments) {
+      const link = documentRef.createElement("a");
+      link.className = "task-memo-attachment-link";
+      link.href = attachment.href;
+      link.download = attachment.label;
+      link.textContent = attachment.label;
+      list.appendChild(link);
+    }
+    parent.appendChild(title);
+    parent.appendChild(list);
   }
 
   function renderMarkdownPreview(parent, markdown, options = {}) {
@@ -247,10 +307,13 @@
 
     function renderDescriptionEditor() {
       const editorEl = elements.taskMemoDescriptionEditorEl;
-      if (!editorEl || !documentRef) return;
-      editorEl.innerHTML = "";
-      renderMarkdownPreview(editorEl, elements.taskMemoEditDescriptionEl?.value || "", { documentRef, apiUrl, t });
-      if (!editorEl.childNodes.length) editorEl.appendChild(documentRef.createElement("br"));
+      const markdown = elements.taskMemoEditDescriptionEl?.value || "";
+      if (editorEl && documentRef) {
+        editorEl.innerHTML = "";
+        renderMarkdownPreview(editorEl, markdown, { documentRef, apiUrl, t });
+        if (!editorEl.childNodes.length) editorEl.appendChild(documentRef.createElement("br"));
+      }
+      renderMemoAttachmentList(elements.taskMemoAttachmentListEl, markdown, { documentRef, apiUrl, t });
       syncMarkdownMode();
     }
 
@@ -338,11 +401,58 @@
       options.updateSaveState?.();
     }
 
-    async function uploadMemoImageMarkdown({ dataUrl, file }) {
+    function memoAssetContentType(file = {}) {
+      const type = String(file?.type || "").trim().toLowerCase();
+      if (type === "image/jpg") return "image/jpeg";
+      if (type) return type;
+      const name = String(file?.name || "").trim().toLowerCase();
+      if (/\.(jpe?g)$/.test(name)) return "image/jpeg";
+      if (/\.png$/.test(name)) return "image/png";
+      if (/\.gif$/.test(name)) return "image/gif";
+      if (/\.webp$/.test(name)) return "image/webp";
+      if (/\.avif$/.test(name)) return "image/avif";
+      if (/\.bmp$/.test(name)) return "image/bmp";
+      if (/\.heic$/.test(name)) return "image/heic";
+      if (/\.heif$/.test(name)) return "image/heif";
+      if (/\.pdf$/.test(name)) return "application/pdf";
+      if (/\.txt$/.test(name)) return "text/plain";
+      if (/\.md$/.test(name)) return "text/markdown";
+      if (/\.csv$/.test(name)) return "text/csv";
+      if (/\.json$/.test(name)) return "application/json";
+      if (/\.zip$/.test(name)) return "application/zip";
+      if (/\.docx$/.test(name)) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      if (/\.xlsx$/.test(name)) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      if (/\.pptx$/.test(name)) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+      if (/\.doc$/.test(name)) return "application/msword";
+      if (/\.xls$/.test(name)) return "application/vnd.ms-excel";
+      if (/\.ppt$/.test(name)) return "application/vnd.ms-powerpoint";
+      return "application/octet-stream";
+    }
+
+    function memoImageFileType(file = {}) {
+      const type = memoAssetContentType(file);
+      return type.startsWith("image/") ? type : "";
+    }
+
+    function normalizeMemoImageDataUrl(dataUrl, file) {
+      const text = String(dataUrl || "");
+      const type = memoAssetContentType(file);
+      if (!type || !text.startsWith("data:")) return text;
+      return text.replace(/^data:[^;,]*;base64,/i, `data:${type};base64,`);
+    }
+
+    function memoImageFailureMessage(prefix, err) {
+      const detail = String(err?.payload?.error || err?.message || "").trim()
+        .replace(/^Failed to upload memo image:\s*/i, "");
+      return detail ? `${prefix}: ${detail}` : prefix;
+    }
+
+    async function uploadMemoImageJsonMarkdown({ dataUrl, file }) {
+      const contentType = memoAssetContentType(file);
       const payload = {
         filename: file?.name || "",
-        content_type: file?.type || "",
-        data_url: dataUrl
+        content_type: contentType,
+        data_url: normalizeMemoImageDataUrl(dataUrl, file)
       };
       const response = await options.fetchJson(apiUrl("/api/task-memo-assets"), {
         method: "POST",
@@ -352,32 +462,57 @@
       return response?.asset?.markdown || "";
     }
 
-    async function insertMemoImageFile(file, index = 0) {
-      if (!imagePaste?.readAsDataUrl || !elements.taskMemoEditDescriptionEl || !elements.taskMemoDescriptionEditorEl) {
+    async function uploadMemoImageFormDataMarkdown({ file }) {
+      const contentType = memoAssetContentType(file);
+      const form = new windowRef.FormData();
+      form.append("image", file, file?.name || "memo-image");
+      form.append("filename", file?.name || "");
+      form.append("content_type", contentType);
+      const response = await options.fetchJson(apiUrl("/api/task-memo-assets"), {
+        method: "POST",
+        body: form
+      }, "Failed to upload memo image");
+      return response?.asset?.markdown || "";
+    }
+
+    async function uploadMemoImageMarkdown({ file }) {
+      if (windowRef.FormData && file) {
+        return uploadMemoImageFormDataMarkdown({ file });
+      }
+      if (!imagePaste?.readAsDataUrl) {
         throw new Error("Memo image upload is unavailable.");
       }
       const dataUrl = await imagePaste.readAsDataUrl(file, { windowRef });
-      const markdown = await uploadMemoImageMarkdown({ dataUrl, file, index });
+      return uploadMemoImageJsonMarkdown({ dataUrl, file });
+    }
+
+    async function insertMemoImageFile(file, index = 0) {
+      if (!elements.taskMemoEditDescriptionEl || !elements.taskMemoDescriptionEditorEl) {
+        throw new Error("Memo image upload is unavailable.");
+      }
+      const markdown = await uploadMemoImageMarkdown({ file, index });
       insertDescriptionImageMarkdown(markdown);
       return Boolean(markdown);
     }
 
-    async function insertMemoImageFiles(files) {
-      const selectedFiles = Array.from(files || []).filter(file => String(file?.type || "").toLowerCase().startsWith("image/"));
+    async function insertMemoImageFiles(files, insertOptions = {}) {
+      const selectedFiles = Array.from(files || []).filter(Boolean);
       if (!selectedFiles.length) return;
-      options.setState?.(t("memo.image_uploading", "Saving image..."));
+      options.setState?.(t("memo.image_uploading", "Saving attachment..."));
+      const failureMessage = insertOptions.failureMessage || t("memo.image_upload_failed", "Failed to upload attachment.");
+      const successMessage = insertOptions.successMessage || t("memo.image_added", "Attachment added.");
       let inserted = 0;
       for (const [index, file] of selectedFiles.entries()) {
         try {
           if (await insertMemoImageFile(file, index)) inserted += 1;
         } catch (err) {
           options.consoleRef?.warn?.("Failed to add memo image", err);
-          options.setState?.(t("memo.image_paste_failed", "Failed to paste image."));
+          options.setState?.(memoImageFailureMessage(failureMessage, err));
         }
       }
       if (inserted) {
         options.updateSaveState?.();
-        options.setState?.(t("memo.image_pasted", "Image pasted."));
+        options.setState?.(successMessage);
       }
     }
 
@@ -387,7 +522,10 @@
         const files = imagePaste.clipboardImageFiles(event);
         if (!files.length) return;
         event.preventDefault();
-        void insertMemoImageFiles(files).catch(options.reportError);
+        void insertMemoImageFiles(files, {
+          failureMessage: t("memo.image_paste_failed", "Failed to paste image."),
+          successMessage: t("memo.image_pasted", "Image pasted.")
+        }).catch(options.reportError);
       };
       elements.taskMemoEditDescriptionEl.addEventListener("paste", listener);
       elements.taskMemoDescriptionEditorEl?.addEventListener("paste", listener);
@@ -420,6 +558,7 @@
       insertMemoImageFiles,
       openClickedImage,
       renderDescriptionEditor,
+      renderMemoAttachmentList,
       setDisabled,
       setMode
     });
@@ -427,10 +566,12 @@
 
   window.AHATaskMemoMarkdown = Object.freeze({
     appendInlineMarkdown,
+    collectMemoAttachments,
     createTaskMemoMarkdownTools,
     memoImageFilenameFromPath,
     memoImageSrc,
     renderMarkdownPreview,
+    renderMemoAttachmentList,
     safeMarkdownLinkHref
   });
 })();

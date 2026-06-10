@@ -515,6 +515,7 @@
         dispatch: true
       });
       if (payload && activeTaskMemoId) payload.source_memo_id = activeTaskMemoId;
+      const createdFromMemo = Boolean(activeTaskMemoId);
       const reopenCreateDialog = Boolean(elements.taskCreateDialogEl?.open);
       if (reopenCreateDialog) deps.closeTaskCreateDialog?.();
       try {
@@ -553,7 +554,11 @@
         clearDraft();
         if (elements.newTaskTitleEl) elements.newTaskTitleEl.value = "";
         if (elements.newTaskDescriptionEl) elements.newTaskDescriptionEl.value = "";
-        await deps.loadStatus?.({ forceAgents: Boolean(createdTaskId) });
+        if (createdTaskId && createdFromMemo && deps.refreshRunScopedView) {
+          await deps.refreshRunScopedView();
+        } else {
+          await deps.loadStatus?.({ forceAgents: Boolean(createdTaskId) });
+        }
         if (createdTaskId) await deps.selectTask?.(createdTaskId);
         deps.closeMobileSheets?.();
         deps.closeTaskCreateDialog?.();

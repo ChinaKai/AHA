@@ -11,6 +11,7 @@
     let editorMode = "empty";
     let draftTaskLinkMemoId = "";
     let draftTaskLinkId = "";
+    let draftTaskLinkDirty = false;
     let memoFilter = "day";
     let memoCalendarCollapsed = true;
     let remoteSelectedMemoRunId = "";
@@ -108,7 +109,25 @@
     function memoEndDateValue(value = "", scheduledDate = selectedDate) {
       const start = memoOptionalDateValue(scheduledDate);
       const end = memoOptionalDateValue(value);
-      return start && end && end > start ? end : "";
+      return start && end && end >= start ? end : "";
+    }
+
+    function memoTerminalDateValue(value = "", scheduledDate = selectedDate) {
+      const start = memoOptionalDateValue(scheduledDate);
+      const terminalDate = memoOptionalDateValue(value);
+      if (!terminalDate) return "";
+      return start && terminalDate < start ? "" : terminalDate;
+    }
+
+    function memoDefaultTerminalDate(scheduledDate = selectedDate) {
+      const start = memoOptionalDateValue(scheduledDate);
+      const today = isoDate(new Date());
+      return start && today < start ? start : today;
+    }
+
+    function memoTimestampDate(value = "") {
+      const match = String(value || "").trim().match(/^(\d{4}-\d{2}-\d{2})/);
+      return match ? memoOptionalDateValue(match[1]) : "";
     }
 
     function memoRangeEndDate(memo = {}) {
@@ -124,18 +143,87 @@
     }
 
     function memoDisplaysOnDate(memo = {}, dateText = selectedDate) {
+      return Boolean(memoCalendarEntryForDate(memo, dateText));
+    }
+
+    function memoCalendarEntryForDate(memo = {}, dateText = selectedDate) {
       const target = memoOptionalDateValue(dateText);
-      if (!target) return false;
-      return memoCalendarDate(memo) === target;
+      if (!target) return null;
+      return memoCalendarEntries(memo).find(info => info.date === target) || null;
+    }
+
+    function memoTerminalInfo(memo = {}) {
+      const status = normalizeMemoStatus(memo.status);
+      const end = memoRangeEndDate(memo);
+      if (status === "done") {
+        const completedDate = memoTimestampDate(memo.completed_at) || memoTimestampDate(memo.updated_at) || end;
+        if (completedDate && end && completedDate > end) return { date: end, overdue: true };
+        return { date: completedDate, overdue: false };
+      }
+      if (status === "closed") {
+        const closedDate = memoTimestampDate(memo.closed_at) || memoTimestampDate(memo.updated_at) || end;
+        return {
+          date: closedDate && end && closedDate > end ? end : closedDate,
+          overdue: false,
+        };
+      }
+      return { date: "", overdue: false };
+    }
+
+    function memoTerminalDate(memo = {}) {
+      return memoTerminalInfo(memo).date;
+    }
+
+    function memoTerminalInputDate(memo = {}, status = normalizeMemoStatus(memo.status)) {
+      const start = memoOptionalDateValue(memo.scheduled_date);
+      if (status === "done") {
+        const completedDate = memoTimestampDate(memo.completed_at) || (memo.id ? memoTimestampDate(memo.updated_at) || memoRangeEndDate(memo) : "");
+        return memoTerminalDateValue(completedDate, start);
+      }
+      if (status === "closed") {
+        const closedDate = memoTimestampDate(memo.closed_at) || (memo.id ? memoTimestampDate(memo.updated_at) || memoRangeEndDate(memo) : "");
+        return memoTerminalDateValue(closedDate, start);
+      }
+      return "";
+    }
+
+    function memoCalendarInfo(memo = {}, today = isoDate(new Date())) {
+      const start = memoOptionalDateValue(memo.scheduled_date);
+      if (!start) return { date: "", overdue: false };
+      if (isTerminalMemoStatus(normalizeMemoStatus(memo.status))) {
+        return memoTerminalInfo(memo);
+      }
+      const end = memoRangeEndDate(memo);
+      if (today < start) return { date: start, overdue: false };
+      if (today <= end) return { date: today, overdue: false };
+      return { date: end, overdue: true };
+    }
+
+    function memoCalendarEntries(memo = {}, today = isoDate(new Date())) {
+      const start = memoOptionalDateValue(memo.scheduled_date);
+      if (!start) return [];
+      const end = memoRangeEndDate(memo);
+      const status = normalizeMemoStatus(memo.status);
+      const terminal = isTerminalMemoStatus(status) ? memoTerminalInfo(memo) : null;
+      const lastDate = terminal ? terminal.date : (today < start ? start : (today <= end ? today : end));
+      const entries = [];
+      for (let date = start; date && date <= lastDate && date <= end; date = nextIsoDate(date)) {
+        const completed = Boolean(terminal && date === terminal.date);
+        entries.push({
+          date,
+          completed,
+          pending: Boolean(!terminal && date === lastDate),
+          overdue: Boolean(terminal?.overdue && date === end) || (!terminal && today > end && date === end),
+        });
+      }
+      if (!entries.length && terminal?.date) {
+        entries.push({ date: terminal.date, completed: true, overdue: terminal.overdue });
+      }
+      return entries;
     }
 
     function memoCalendarDate(memo = {}, today = isoDate(new Date())) {
-      const start = memoOptionalDateValue(memo.scheduled_date);
-      if (!start) return "";
-      const end = memoRangeEndDate(memo);
-      if (today < start) return start;
-      if (today <= end) return today;
-      return end;
+      return memoCalendarInfo(memo, today).date;
     }
 
     function selectedMemoStorageKey() {
@@ -297,11 +385,18 @@
       if (!memoId) {
         draftTaskLinkMemoId = "";
         draftTaskLinkId = "";
+        draftTaskLinkDirty = false;
         return;
       }
+      const memoTaskId = String(memo?.created_task_id || "").trim();
       if (draftTaskLinkMemoId !== memoId) {
         draftTaskLinkMemoId = memoId;
-        draftTaskLinkId = String(memo?.created_task_id || "").trim();
+        draftTaskLinkId = memoTaskId;
+        draftTaskLinkDirty = false;
+        return;
+      }
+      if (!draftTaskLinkDirty && draftTaskLinkId !== memoTaskId) {
+        draftTaskLinkId = memoTaskId;
       }
     }
 
@@ -437,7 +532,11 @@
     }
 
     function setDisabled(element, disabled) {
-      if (element) element.disabled = Boolean(disabled);
+      if (!element) return;
+      const isDisabled = Boolean(disabled);
+      if ("disabled" in element) element.disabled = isDisabled;
+      element.classList?.toggle("is-disabled", isDisabled);
+      element.setAttribute?.("aria-disabled", String(isDisabled));
     }
 
     function setState(message = "") {
@@ -548,6 +647,7 @@
         editorMode = "empty";
         draftTaskLinkMemoId = "";
         draftTaskLinkId = "";
+        draftTaskLinkDirty = false;
         taskPickerRunId = "";
         taskPickerLoaded = false;
         taskPickerTasks = [];
@@ -583,12 +683,18 @@
       start.setDate(start.getDate() - start.getDay());
       const counts = new Map();
       for (const memo of memos) {
-        const date = memoCalendarDate(memo);
-        if (!date) continue;
-        const count = counts.get(date) || { total: 0, completed: 0 };
-        count.total += 1;
-        if (isTerminalMemoStatus(memo.status)) count.completed += 1;
-        counts.set(date, count);
+        for (const info of memoCalendarEntries(memo)) {
+          const date = info.date;
+          if (!date) continue;
+          const count = counts.get(date) || { total: 0, completed: 0, overdue: 0, openOverdue: 0 };
+          count.total += 1;
+          if (info.completed) count.completed += 1;
+          if (info.overdue) {
+            count.overdue += 1;
+            if (!info.completed) count.openOverdue += 1;
+          }
+          counts.set(date, count);
+        }
       }
       elements.taskMemoCalendarEl.innerHTML = "";
       elements.taskMemoCalendarEl.classList.toggle("collapsed", memoCalendarCollapsed);
@@ -609,16 +715,20 @@
         const value = isoDate(date);
         const button = documentRef.createElement("button");
         button.type = "button";
-        const count = counts.get(value) || { total: 0, completed: 0 };
+        const count = counts.get(value) || { total: 0, completed: 0, overdue: 0, openOverdue: 0 };
+        const progressState = count.openOverdue ? "overdue" : (count.overdue ? "late" : "on-track");
+        const riskLabel = count.openOverdue
+          ? t("memo.calendar_overdue_open", "overdue pending")
+          : count.overdue
+            ? t("memo.calendar_late_done", "late done")
+            : "";
         const dayLabel = count.total
-          ? `${value} ${t("memo.calendar_progress", "memo progress")} ${count.completed}/${count.total}`
+          ? `${value} ${t("memo.calendar_progress", "memo progress")} ${count.completed}/${count.total}${riskLabel ? ` · ${riskLabel}` : ""}`
           : value;
         button.className = [
           "task-memo-day",
           value === selectedDate ? "active" : "",
-          count.total && count.completed === 0 ? "progress-none" : "",
-          count.total && count.completed > 0 && count.completed < count.total ? "progress-partial" : "",
-          count.total && count.completed === count.total ? "progress-complete" : "",
+          count.total ? `progress-${progressState}` : "",
           date.getMonth() === month - 1 ? "" : "outside"
         ].filter(Boolean).join(" ");
         button.dataset.memoDate = value;
@@ -636,9 +746,7 @@
           const badge = documentRef.createElement("span");
           badge.className = [
             "task-memo-day-count",
-            count.completed === 0 ? "none" : "",
-            count.completed > 0 && count.completed < count.total ? "partial" : "",
-            count.completed === count.total ? "complete" : ""
+            progressState
           ].filter(Boolean).join(" ");
           badge.textContent = `${count.completed}/${count.total}`;
           badge.title = dayLabel;
@@ -702,18 +810,36 @@
       return memos.filter(memo => memoDisplaysOnDate(memo, selectedDate));
     }
 
-    function historicalOpenMemos() {
-      return sortMemoList(
-        memos.filter(memo => {
-          const endDate = memoRangeEndDate(memo);
-          return endDate && endDate < selectedDate && !isTerminalMemoStatus(normalizeMemoStatus(memo.status));
-        }),
-        true
-      );
+    function selectedDayMemoSections() {
+      const onTimeDone = [];
+      const lateDone = [];
+      const pending = [];
+      const unfinishedRecord = [];
+      for (const memo of memos) {
+        const info = memoCalendarEntryForDate(memo, selectedDate);
+        if (!info) continue;
+        if (!info.completed) {
+          if (info.pending) {
+            pending.push(memo);
+          } else {
+            unfinishedRecord.push(memo);
+          }
+        } else if (info.overdue) {
+          lateDone.push(memo);
+        } else {
+          onTimeDone.push(memo);
+        }
+      }
+      return [
+        { title: t("memo.section_done_on_time", "Done on time"), items: sortMemoList(onTimeDone, true), showDate: true },
+        { title: t("memo.section_done_late", "Done late"), items: sortMemoList(lateDone, true), showDate: true },
+        { title: t("memo.section_pending", "Pending"), items: sortMemoList(pending, true), showDate: true },
+        { title: t("memo.section_unfinished_record", "Unfinished record"), items: sortMemoList(unfinishedRecord, true), showDate: true }
+      ];
     }
 
     function memoFilterCount(filter) {
-      if (filter === "day") return selectedDayMemos().length + historicalOpenMemos().length;
+      if (filter === "day") return selectedDayMemos().length;
       if (filter === "all") return memos.length;
       return memos.filter(memo => normalizeMemoStatus(memo.status) === filter).length;
     }
@@ -744,10 +870,7 @@
     function filteredMemos() {
       if (memoFilter === "day") {
         return {
-          sections: [
-            { title: t("memo.section_selected_day", "Selected day"), items: selectedDayMemos(), showDate: true },
-            { title: t("memo.section_history_open", "History open"), items: historicalOpenMemos(), showDate: true }
-          ]
+          sections: selectedDayMemoSections()
         };
       }
       if (memoFilter === "all") {
@@ -799,22 +922,69 @@
     function fillEditor(values = {}) {
       if (elements.taskMemoEditTitleEl) elements.taskMemoEditTitleEl.value = values.title || "";
       if (elements.taskMemoEditDescriptionEl) elements.taskMemoEditDescriptionEl.value = values.description || "";
-      if (elements.taskMemoEditStatusEl) elements.taskMemoEditStatusEl.value = normalizeMemoStatus(values.status);
+      const status = normalizeMemoStatus(values.status);
+      if (elements.taskMemoEditStatusEl) elements.taskMemoEditStatusEl.value = status;
       const scheduledDate = memoDateValue(values.scheduled_date || selectedDate);
       if (elements.taskMemoEditDateEl) elements.taskMemoEditDateEl.value = scheduledDate;
       if (elements.taskMemoEditEndDateEl) elements.taskMemoEditEndDateEl.value = memoEndDateValue(values.end_date, scheduledDate);
+      if (elements.taskMemoEditCompletedDateEl) elements.taskMemoEditCompletedDateEl.value = memoTerminalInputDate(values, "done");
+      if (elements.taskMemoEditClosedDateEl) elements.taskMemoEditClosedDateEl.value = memoTerminalInputDate(values, "closed");
       syncEndDateInputBounds();
+      syncTerminalDateFields();
+    }
+
+    function syncDateInputEmptyState(input) {
+      input?.classList?.toggle("task-memo-date-empty", !input.value);
+    }
+
+    function syncDateInputEmptyStates() {
+      [
+        elements.taskMemoEditDateEl,
+        elements.taskMemoEditEndDateEl,
+        elements.taskMemoEditCompletedDateEl,
+        elements.taskMemoEditClosedDateEl
+      ].forEach(syncDateInputEmptyState);
     }
 
     function syncEndDateInputBounds() {
       const start = memoDateValue(elements.taskMemoEditDateEl?.value || selectedDate);
-      const minimumEnd = nextIsoDate(start);
-      if (elements.taskMemoEditEndDateEl) {
-        elements.taskMemoEditEndDateEl.min = minimumEnd;
-        if (elements.taskMemoEditEndDateEl.value && elements.taskMemoEditEndDateEl.value <= start) {
-          elements.taskMemoEditEndDateEl.value = "";
+      [
+        elements.taskMemoEditEndDateEl,
+        elements.taskMemoEditCompletedDateEl,
+        elements.taskMemoEditClosedDateEl
+      ].forEach(input => {
+        if (!input) return;
+        if (start) {
+          input.min = start;
+        } else {
+          input.removeAttribute?.("min");
         }
+        if (input.value && start && input.value < start) {
+          input.value = "";
+        }
+      });
+    }
+
+    function syncTerminalDateFields(options = {}) {
+      const status = normalizeMemoStatus(elements.taskMemoEditStatusEl?.value || "todo");
+      const disabled = Boolean(options.disabled);
+      const defaultDate = Boolean(options.defaultDate);
+      const defaultTerminalDate = memoDefaultTerminalDate(elements.taskMemoEditDateEl?.value || selectedDate);
+      const showCompleted = status === "done";
+      const showClosed = status === "closed";
+      setHidden(elements.taskMemoCompletedDateFieldEl, !showCompleted);
+      setHidden(elements.taskMemoClosedDateFieldEl, !showClosed);
+      setDisabled(elements.taskMemoEditCompletedDateEl, disabled || !showCompleted);
+      setDisabled(elements.taskMemoEditClosedDateEl, disabled || !showClosed);
+      if (showCompleted && defaultDate && elements.taskMemoEditCompletedDateEl && !elements.taskMemoEditCompletedDateEl.value) {
+        elements.taskMemoEditCompletedDateEl.value = defaultTerminalDate;
       }
+      if (showClosed && defaultDate && elements.taskMemoEditClosedDateEl && !elements.taskMemoEditClosedDateEl.value) {
+        elements.taskMemoEditClosedDateEl.value = defaultTerminalDate;
+      }
+      if (!showCompleted && elements.taskMemoEditCompletedDateEl) elements.taskMemoEditCompletedDateEl.value = "";
+      if (!showClosed && elements.taskMemoEditClosedDateEl) elements.taskMemoEditClosedDateEl.value = "";
+      syncDateInputEmptyStates();
     }
 
     function renderStatusOptions(status, disabled) {
@@ -839,24 +1009,30 @@
     }
 
     function editorFieldsFromMemo(memo = {}) {
+      const status = normalizeMemoStatus(memo.status);
       return {
         title: String(memo.title || ""),
         description: String(memo.description || ""),
-        status: normalizeMemoStatus(memo.status),
+        status,
         scheduled_date: memoDateValue(memo.scheduled_date || selectedDate),
         end_date: memoEndDateValue(memo.end_date, memo.scheduled_date || selectedDate),
+        completed_at: status === "done" ? memoTerminalInputDate(memo, "done") : "",
+        closed_at: status === "closed" ? memoTerminalInputDate(memo, "closed") : "",
         created_task_id: String(memo.created_task_id || "").trim()
       };
     }
 
     function readCurrentEditorFields() {
       const memo = editorMode === "edit" ? selectedMemo() : null;
+      const status = normalizeMemoStatus(elements.taskMemoEditStatusEl?.value || "todo");
       return {
         title: String(elements.taskMemoEditTitleEl?.value || ""),
         description: String(elements.taskMemoEditDescriptionEl?.value || ""),
-        status: normalizeMemoStatus(elements.taskMemoEditStatusEl?.value || "todo"),
+        status,
         scheduled_date: memoDateValue(elements.taskMemoEditDateEl?.value || selectedDate),
         end_date: memoEndDateValue(elements.taskMemoEditEndDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate),
+        completed_at: status === "done" ? memoTerminalDateValue(elements.taskMemoEditCompletedDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate) : "",
+        closed_at: status === "closed" ? memoTerminalDateValue(elements.taskMemoEditClosedDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate) : "",
         created_task_id: editorMode === "edit" ? currentDraftTaskLinkId(memo) : ""
       };
     }
@@ -877,6 +1053,8 @@
         || current.status !== baseline.status
         || current.scheduled_date !== baseline.scheduled_date
         || current.end_date !== baseline.end_date
+        || current.completed_at !== baseline.completed_at
+        || current.closed_at !== baseline.closed_at
         || current.created_task_id !== baseline.created_task_id;
     }
 
@@ -884,10 +1062,39 @@
       const isEmpty = editorMode === "empty";
       const canSave = editorCanSave();
       const showCancel = editorMode === "create" || (editorMode === "edit" && canSave);
+      const blockTaskAction = editorMode === "edit" && canSave;
       setHidden(elements.taskMemoCancelEl, !showCancel);
       setHidden(elements.taskMemoSaveEl, isEmpty);
       setDisabled(elements.taskMemoSaveEl, !canSave);
+      setDisabled(elements.taskMemoConvertEl, editorMode !== "edit");
+      if (elements.taskMemoConvertEl) {
+        elements.taskMemoConvertEl.classList.toggle("task-memo-action-blocked", blockTaskAction);
+        elements.taskMemoConvertEl.setAttribute("aria-disabled", String(editorMode !== "edit" || blockTaskAction));
+        if (blockTaskAction) {
+          elements.taskMemoConvertEl.title = t("memo.task_action_save_first", "Save memo changes before using task actions.");
+        } else {
+          elements.taskMemoConvertEl.removeAttribute?.("title");
+        }
+      }
       elements.taskMemoSaveEl?.classList?.toggle("task-memo-save-dirty", canSave);
+    }
+
+    async function showTaskActionSaveFirstDialog() {
+      const message = t("memo.task_action_save_first", "Save memo changes before using task actions.");
+      setState(message);
+      if (deps.confirmDialogAction) {
+        await deps.confirmDialogAction({
+          title: t("memo.task_action_save_first_title", "Unsaved memo changes"),
+          message,
+          actions: [{
+            value: "confirm",
+            label: t("common.confirm", "Confirm"),
+            primary: true
+          }]
+        });
+      } else {
+        deps.alert?.(message);
+      }
     }
 
     function isCompactMemoViewport() {
@@ -989,6 +1196,7 @@
       if (isEmpty) {
         draftTaskLinkMemoId = "";
         draftTaskLinkId = "";
+        draftTaskLinkDirty = false;
         fillEditor({});
       }
       if (isCreate) fillEditor({
@@ -1000,6 +1208,7 @@
       });
       const editorStatus = isEdit ? memo?.status : (isCreate ? elements.taskMemoEditStatusEl?.value : "todo");
       renderStatusOptions(editorStatus, isEmpty);
+      syncTerminalDateFields({ disabled: isEmpty, defaultDate: isCreate });
       renderTaskLinkPicker(memo, isEdit);
       setText(elements.taskMemoEditorTitleEl, isEdit
         ? t("memo.editor_edit", "Edit memo")
@@ -1011,14 +1220,24 @@
         : isCreate
           ? t("memo.editor_create_hint", "Fill in a future task idea, then save it as a memo.")
           : t("memo.editor_empty_hint", "Choose a memo from the list, or click New Memo to create one."));
-      [elements.taskMemoEditTitleEl, elements.taskMemoEditDateEl, elements.taskMemoEditEndDateEl, elements.taskMemoEditDescriptionEl]
+      [
+        elements.taskMemoEditTitleEl,
+        elements.taskMemoEditDateEl,
+        elements.taskMemoEditEndDateEl,
+        elements.taskMemoEditCompletedDateEl,
+        elements.taskMemoEditClosedDateEl,
+        elements.taskMemoEditDescriptionEl
+      ]
         .forEach(element => setDisabled(element, isEmpty));
+      syncTerminalDateFields({ disabled: isEmpty, defaultDate: isCreate });
       if (elements.taskMemoDescriptionEditorEl) {
         elements.taskMemoDescriptionEditorEl.setAttribute("aria-disabled", String(isEmpty));
       }
       memoMarkdownTools?.setDisabled?.(isEmpty);
       setHidden(elements.taskMemoImageUploadEl, isEmpty);
       setDisabled(elements.taskMemoImageUploadEl, isEmpty);
+      setHidden(elements.taskMemoImageFileEl, isEmpty);
+      setDisabled(elements.taskMemoImageFileEl, isEmpty);
       setHidden(elements.taskMemoCancelEl, !isCreate);
       setHidden(elements.taskMemoConvertEl, !isEdit);
       setHidden(elements.taskMemoDeleteEl, !isEdit);
@@ -1040,12 +1259,15 @@
     }
 
     function readEditorPayload() {
+      const status = normalizeMemoStatus(elements.taskMemoEditStatusEl?.value || "todo");
       const payload = {
         title: elements.taskMemoEditTitleEl?.value || "",
         description: elements.taskMemoEditDescriptionEl?.value || "",
-        status: normalizeMemoStatus(elements.taskMemoEditStatusEl?.value || "todo"),
+        status,
         scheduled_date: memoDateValue(elements.taskMemoEditDateEl?.value || selectedDate),
-        end_date: memoEndDateValue(elements.taskMemoEditEndDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate)
+        end_date: memoEndDateValue(elements.taskMemoEditEndDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate),
+        completed_at: status === "done" ? memoTerminalDateValue(elements.taskMemoEditCompletedDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate) : "",
+        closed_at: status === "closed" ? memoTerminalDateValue(elements.taskMemoEditClosedDateEl?.value, elements.taskMemoEditDateEl?.value || selectedDate) : ""
       };
       if (editorMode === "edit") {
         payload.created_task_id = currentDraftTaskLinkId(selectedMemo());
@@ -1058,6 +1280,7 @@
       editorMode = "create";
       draftTaskLinkMemoId = "";
       draftTaskLinkId = "";
+      draftTaskLinkDirty = false;
       clearEditorForCreate();
       render();
       memoMarkdownTools?.setMode?.("edit");
@@ -1069,6 +1292,7 @@
       editorMode = "empty";
       draftTaskLinkMemoId = "";
       draftTaskLinkId = "";
+      draftTaskLinkDirty = false;
       render();
       memoMarkdownTools?.setMode?.("preview", { focus: false });
       setState("");
@@ -1082,6 +1306,7 @@
       if (editorMode !== "edit" || !selectedMemo()) return;
       draftTaskLinkMemoId = "";
       draftTaskLinkId = "";
+      draftTaskLinkDirty = false;
       taskPickerOpen = false;
       taskPickerError = "";
       renderEditor();
@@ -1115,6 +1340,7 @@
         editorMode = "edit";
         draftTaskLinkMemoId = response?.memo?.id || "";
         draftTaskLinkId = String(response?.memo?.created_task_id || "").trim();
+        draftTaskLinkDirty = false;
         writePersistedSelectedMemoId(selectedMemoId);
         setState(t("memo.saved", "Memo saved."));
       }
@@ -1130,6 +1356,7 @@
       if (nextTaskId === currentTaskId) return;
       draftTaskLinkMemoId = String(memo.id || "").trim();
       draftTaskLinkId = nextTaskId;
+      draftTaskLinkDirty = true;
       taskPickerOpen = false;
       renderTaskLinkPicker(memo, true);
       updateSaveState();
@@ -1160,6 +1387,11 @@
     async function convertSelected() {
       const memo = editorMode === "edit" ? selectedMemo() : null;
       if (!memo) return;
+      if (editorCanSave()) {
+        updateSaveState();
+        await showTaskActionSaveFirstDialog();
+        return;
+      }
       const draftMemo = memoWithDraftTaskLink(memo);
       if (draftMemo?.created_task_id) {
         const taskId = String(draftMemo.created_task_id || "").trim();
@@ -1245,6 +1477,7 @@
         const status = normalizeMemoStatus(button.dataset.memoStatusOption || "todo");
         if (elements.taskMemoEditStatusEl) elements.taskMemoEditStatusEl.value = status;
         renderStatusOptions(status, false);
+        syncTerminalDateFields({ defaultDate: true });
         updateSaveState();
       });
       const handleFieldInput = () => {
@@ -1253,9 +1486,16 @@
       elements.taskMemoEditTitleEl?.addEventListener("input", handleFieldInput);
       elements.taskMemoEditDateEl?.addEventListener("input", () => {
         syncEndDateInputBounds();
+        syncDateInputEmptyStates();
         updateSaveState();
       });
-      elements.taskMemoEditEndDateEl?.addEventListener("input", handleFieldInput);
+      const handleDateFieldInput = () => {
+        syncDateInputEmptyStates();
+        updateSaveState();
+      };
+      elements.taskMemoEditEndDateEl?.addEventListener("input", handleDateFieldInput);
+      elements.taskMemoEditCompletedDateEl?.addEventListener("input", handleDateFieldInput);
+      elements.taskMemoEditClosedDateEl?.addEventListener("input", handleDateFieldInput);
       elements.taskMemoEditDescriptionEl?.addEventListener("input", () => {
         memoMarkdownTools?.renderDescriptionEditor?.();
         updateSaveState();
@@ -1301,10 +1541,6 @@
         event.preventDefault();
         event.stopPropagation();
         closeTaskPicker();
-      });
-      elements.taskMemoImageUploadEl?.addEventListener("click", () => {
-        if (editorMode === "empty") return;
-        elements.taskMemoImageFileEl?.click?.();
       });
       elements.taskMemoImageFileEl?.addEventListener("change", () => {
         const files = Array.from(elements.taskMemoImageFileEl?.files || []);

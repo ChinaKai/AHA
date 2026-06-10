@@ -142,5 +142,5 @@ def parse_multipart_form(headers: dict[str, str], body: bytes) -> tuple[dict[str
         if filename is None:
             fields[str(name)] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
         else:
-            files[str(name)] = {"filename": filename, "body": payload}
+            files[str(name)] = {"filename": filename, "body": payload, "content_type": part.get_content_type()}
     return fields, files

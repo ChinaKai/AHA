@@ -36,9 +36,9 @@ from aha_cli.store.task_memos import (
     read_task_memos,
     update_task_memo,
 )
-from aha_cli.store.task_memo_assets import create_task_memo_asset, read_task_memo_asset
+from aha_cli.store.task_memo_assets import create_task_memo_asset, create_task_memo_asset_from_bytes, read_task_memo_asset
 from aha_cli.web.execution_fields import parse_execution_fields
-from aha_cli.web.http_utils import parse_json_body, parse_optional_bool
+from aha_cli.web.http_utils import parse_json_body, parse_multipart_form, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.status import recover_stale_running_agents
 from aha_cli.web.task_actions import (
@@ -388,26 +388,53 @@ def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, que
         return route_result({"error": str(exc)}, "404 Not Found")
 
 
-def handle_task_memo_assets_route(root: Path, run_id: str, method: str, path: str, body: bytes) -> dict:
+def create_task_memo_asset_from_request(root: Path, run_id: str, headers: dict[str, str] | None, body: bytes) -> dict:
+    content_type = str((headers or {}).get("content-type") or "").lower()
+    if content_type.startswith("multipart/form-data"):
+        fields, files = parse_multipart_form(headers or {}, body)
+        upload = files.get("image") or files.get("file") or files.get("asset")
+        if not upload:
+            raise ValueError("memo attachment file is required")
+        upload_body = upload.get("body")
+        if not isinstance(upload_body, bytes):
+            raise ValueError("memo attachment file is required")
+        filename = fields.get("filename") or upload.get("filename") or "image"
+        upload_content_type = fields.get("content_type") or fields.get("type") or upload.get("content_type") or ""
+        return create_task_memo_asset_from_bytes(
+            root,
+            run_id,
+            filename=filename,
+            content_type=upload_content_type,
+            data=upload_body,
+        )
+    return create_task_memo_asset(root, run_id, parse_json_body(body))
+
+
+def handle_task_memo_assets_route(root: Path, run_id: str, method: str, path: str, body: bytes, headers: dict[str, str] | None = None) -> dict:
     try:
         if path == "/api/task-memo-assets" and method == "POST":
-            asset = create_task_memo_asset(root, run_id, parse_json_body(body))
+            asset = create_task_memo_asset_from_request(root, run_id, headers, body)
             return route_result({"ok": True, "asset": asset}, "201 Created")
         if path.startswith("/api/task-memo-assets/") and method in {"GET", "HEAD"}:
-            filename = unquote(path.removeprefix("/api/task-memo-assets/")).split("/", 1)[0]
+            filename = unquote(path.removeprefix("/api/task-memo-assets/")).strip("/")
             data, content_type, safe_name = read_task_memo_asset(root, run_id, filename)
+            disposition = "inline" if content_type.startswith("image/") else "attachment"
+            download_name = Path(safe_name).name
             return binary_route_result(
                 data,
                 content_type,
                 headers={
-                    "Content-Disposition": f'inline; filename="{safe_name}"',
+                    "Content-Disposition": f'{disposition}; filename="{download_name}"',
                     "X-Content-Type-Options": "nosniff",
                 },
             )
         return route_not_handled()
     except FileNotFoundError as exc:
         return route_result({"error": f"memo image asset not found: {exc}"}, "404 Not Found")
-    except (SystemExit, ValueError) as exc:
+    except ValueError as exc:
+        print(f"task memo asset upload failed: {exc}", flush=True)
+        return route_result({"error": str(exc)}, "400 Bad Request")
+    except SystemExit as exc:
         return route_result({"error": str(exc)}, "400 Bad Request")
 
 
@@ -506,9 +533,10 @@ def route_task_agent_request(
     path: str,
     query: dict[str, list[str]],
     body: bytes,
+    headers: dict[str, str] | None = None,
 ) -> dict:
     if path == "/api/task-memo-assets" or path.startswith("/api/task-memo-assets/"):
-        return handle_task_memo_assets_route(root, require_api_run_id(root, default_run_id, query), method, path, body)
+        return handle_task_memo_assets_route(root, require_api_run_id(root, default_run_id, query), method, path, body, headers)
     if path == "/api/task-memos" or path.startswith("/api/task-memos/"):
         return handle_task_memos_route(root, require_api_run_id(root, default_run_id, query), method, path, query, body)
     if method in {"GET", "HEAD"} and path.startswith("/api/task/"):
