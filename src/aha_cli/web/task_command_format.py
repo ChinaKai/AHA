@@ -123,10 +123,28 @@ def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = No
     )
 
 
+def memo_completion_report_prompt(memo: dict, task: dict, rounds: list[dict] | None = None, report_context: dict | None = None) -> str:
+    context = report_context or {}
+    return render_prompt_template(
+        "memo_completion_report.md",
+        memo_id=memo.get("id") or "",
+        memo_title=memo.get("title") or "",
+        memo_status=memo.get("status") or "",
+        memo_completed_at=memo.get("completed_at") or "",
+        memo_description=memo.get("description") or "",
+        task_id=task.get("id") or context.get("task_id") or "",
+        task_title=task.get("title") or "",
+        requested_at=context.get("requested_at") or "",
+        attachment_dir=context.get("attachment_dir") or "-",
+        task_journal=format_task_journal_for_prompt(rounds or []),
+    )
+
+
 __all__ = [
     "finalization_prompt",
     "format_finalization_context_for_prompt",
     "format_agent_command",
     "format_aha_command",
     "format_task_journal_for_prompt",
+    "memo_completion_report_prompt",
 ]

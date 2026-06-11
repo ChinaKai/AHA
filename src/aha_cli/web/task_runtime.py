@@ -16,8 +16,10 @@ from aha_cli.store.filesystem import (
     set_task_status,
     task_snapshot,
 )
+from aha_cli.store.task_memo_assets import task_memo_assets_dir
+from aha_cli.store.task_memos import read_task_memos, update_task_memo
 from aha_cli.web.status import TERMINAL_TASK_STATUSES, invalidate_backend_status_cache
-from aha_cli.web.task_command_format import finalization_prompt, format_task_journal_for_prompt
+from aha_cli.web.task_command_format import finalization_prompt, format_task_journal_for_prompt, memo_completion_report_prompt
 
 
 def is_task_supervision_host_target(task: dict, target_id: str | None) -> bool:
@@ -168,6 +170,91 @@ def request_task_finalization_with_backend(
     autostart = prepare_task_main_autostart(root, run_id, task_id) if autostart_backend else None
     message = request_task_finalization(root, run_id, task_id, command)
     payload: dict = {"message": message}
+    backend = start_prepared_backend(root, run_id, autostart)
+    if backend:
+        payload["backend"] = backend
+    return payload
+
+
+def find_task_memo(root: Path, run_id: str, memo_id: str) -> dict:
+    memo = next((item for item in read_task_memos(root, run_id) if item.get("id") == memo_id), None)
+    if not memo:
+        raise KeyError(f"memo not found: {memo_id}")
+    return memo
+
+
+def memo_report_context(root: Path, run_id: str, memo: dict, task: dict, requested_at: str) -> dict:
+    return {
+        "source": "memo_completion",
+        "memo_id": memo.get("id") or "",
+        "task_id": task.get("id") or "",
+        "requested_at": requested_at,
+        "attachment_dir": str(task_memo_assets_dir(root, run_id).resolve()),
+    }
+
+
+def request_memo_completion_report(root: Path, run_id: str, memo_id: str) -> dict:
+    memo = find_task_memo(root, run_id, memo_id)
+    task_id = str(memo.get("created_task_id") or "").strip()
+    if not task_id:
+        raise ValueError("memo has no linked task")
+    detail = task_snapshot(root, run_id, task_id)
+    task = detail["task"]
+    requested_at = utc_now()
+    updated = update_task_memo(
+        root,
+        run_id,
+        memo_id,
+        {
+            "status": "done",
+            "report_status": "generating",
+            "completion_report": "",
+            "report_task_id": task_id,
+            "report_requested_at": requested_at,
+            "report_completed_at": "",
+            "report_error": "",
+        },
+    )
+    rounds = list_task_rounds(root, run_id, task_id)
+    context = memo_report_context(root, run_id, updated, task, requested_at)
+    append_message(
+        root,
+        run_id,
+        "main",
+        memo_completion_report_prompt(updated, task, rounds, context),
+        sender="aha",
+        task_id=task_id,
+        role="main",
+        from_agent="aha",
+        to_agent="main",
+        command_namespace="aha",
+        original_command=f"/aha memo-report {memo_id}",
+        result_policy="memo_report",
+        memo_report_context=context,
+    )
+    append_event(
+        root,
+        run_id,
+        "task_memo_report_requested",
+        {"memo_id": memo_id, "task_id": task_id, "target": "main", "requested_at": requested_at},
+    )
+    return updated
+
+
+def request_memo_completion_report_with_backend(
+    root: Path,
+    run_id: str,
+    memo_id: str,
+    *,
+    autostart_backend: bool = True,
+) -> dict:
+    memo = find_task_memo(root, run_id, memo_id)
+    task_id = str(memo.get("created_task_id") or "").strip()
+    if not task_id:
+        raise ValueError("memo has no linked task")
+    autostart = prepare_task_main_autostart(root, run_id, task_id) if autostart_backend else None
+    updated = request_memo_completion_report(root, run_id, memo_id)
+    payload: dict = {"memo": updated}
     backend = start_prepared_backend(root, run_id, autostart)
     if backend:
         payload["backend"] = backend

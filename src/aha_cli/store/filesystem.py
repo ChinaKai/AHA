@@ -194,6 +194,7 @@ def append_message(
     display_sender: str | None = None,
     display_target: str | None = None,
     final_context: dict | None = None,
+    memo_report_context: dict | None = None,
     recovery_context: str | None = None,
 ) -> dict:
     payload = {
@@ -229,6 +230,8 @@ def append_message(
         payload["display_target"] = display_target
     if final_context:
         payload["final_context"] = final_context
+    if memo_report_context:
+        payload["memo_report_context"] = memo_report_context
     if recovery_context:
         payload["recovery_context"] = recovery_context
     append_jsonl(inbox_path(root, run_id, target), payload)

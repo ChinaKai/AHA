@@ -9,6 +9,7 @@ from aha_cli.store.paths import run_dir
 from aha_cli.store.runs import require_plan
 
 MEMO_STATUSES = {"todo", "doing", "done", "closed"}
+MEMO_REPORT_STATUSES = {"none", "generating", "ready", "failed"}
 MEMO_STATUS_ALIASES = {
     "open": "todo",
     "incomplete": "todo",
@@ -21,6 +22,16 @@ MEMO_STATUS_ALIASES = {
     "completed": "done",
     "archived": "closed",
 }
+MEMO_REPORT_STATUS_ALIASES = {
+    "": "none",
+    "idle": "none",
+    "pending": "generating",
+    "running": "generating",
+    "complete": "ready",
+    "completed": "ready",
+    "done": "ready",
+    "error": "failed",
+}
 
 
 def task_memos_path(root: Path, run_id: str) -> Path:
@@ -31,6 +42,12 @@ def normalize_memo_status(value: object) -> str:
     status = str(value or "todo").strip().lower().replace("-", "_")
     status = MEMO_STATUS_ALIASES.get(status, status)
     return status if status in MEMO_STATUSES else "todo"
+
+
+def normalize_memo_report_status(value: object) -> str:
+    status = str(value or "none").strip().lower().replace("-", "_")
+    status = MEMO_REPORT_STATUS_ALIASES.get(status, status)
+    return status if status in MEMO_REPORT_STATUSES else "none"
 
 
 def normalize_memo_date(value: object) -> str:
@@ -102,6 +119,12 @@ def normalize_memo(raw: dict | None = None) -> dict:
         "preferred_sub_backend": str(source.get("preferred_sub_backend") or source.get("backend") or "").strip(),
         "created_task_id": str(source.get("created_task_id") or "").strip(),
         "converted_at": str(source.get("converted_at") or "").strip(),
+        "report_status": normalize_memo_report_status(source.get("report_status")),
+        "completion_report": str(source.get("completion_report") or "").strip(),
+        "report_task_id": str(source.get("report_task_id") or "").strip(),
+        "report_requested_at": str(source.get("report_requested_at") or "").strip(),
+        "report_completed_at": str(source.get("report_completed_at") or "").strip(),
+        "report_error": str(source.get("report_error") or "").strip(),
         "completed_at": normalize_memo_terminal_timestamp(source.get("completed_at"), scheduled_date) if status == "done" else "",
         "closed_at": normalize_memo_terminal_timestamp(source.get("closed_at"), scheduled_date) if status == "closed" else "",
         "created_at": str(source.get("created_at") or now).strip(),

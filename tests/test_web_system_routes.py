@@ -192,7 +192,7 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(loaded and loaded.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(json_response_body(loaded)["last_selected_task_id"], "task-001")
         self.assertEqual(global_state_file_payload, {"last_selected_run_id": run_id})
-        self.assertEqual(state_file_payload, {"last_selected_task_id": "task-001"})
+        self.assertEqual(state_file_payload, {"last_selected_task_id": "task-001", "last_selected_memo_id": ""})
         self.assertTrue(missing_field and missing_field.startswith(b"HTTP/1.1 400 Bad Request"))
 
     def test_system_routes_return_events_and_conversation_views(self) -> None:

@@ -626,7 +626,9 @@ def chat_prompt(
 ) -> str:
     plan = require_plan(root, run_id)
     task_id = item.get("task_id")
-    is_finalization = item.get("result_policy") == "finalize"
+    result_policy = item.get("result_policy")
+    is_finalization = result_policy == "finalize"
+    is_memo_report = result_policy == "memo_report"
     is_agent_command = item.get("command_namespace") == "agent"
     task = None
     agent = None
@@ -700,10 +702,10 @@ def chat_prompt(
             final_context = ""
             if is_finalization and existing_final:
                 final_context = f"- existing Final chars: {len(existing_final)}\n"
-            compact_context = compact_summary_context(root, run_id, session) if is_finalization else ""
+            compact_context = compact_summary_context(root, run_id, session) if is_finalization or is_memo_report else ""
             rounds = detail.get("rounds", [])
             journal_context = ""
-            if rounds and is_finalization:
+            if rounds and (is_finalization or is_memo_report):
                 recent_rounds = rounds[-10:]
                 journal_lines = ["Task journal:"]
                 for round_item in recent_rounds:
@@ -797,9 +799,13 @@ def chat_prompt(
     model_guidance = _model_guidance_for_prompt(prompt_backend, prompt_requested_model, prompt_resolved_model)
     if model_guidance:
         components["model_guidance"] = model_guidance
-    mode_instruction = render_prompt_template(
-        "mode_instruction_final.md" if is_finalization else "mode_instruction_default.md"
-    ).strip()
+    if is_finalization:
+        mode_template = "mode_instruction_final.md"
+    elif is_memo_report:
+        mode_template = "mode_instruction_memo_report.md"
+    else:
+        mode_template = "mode_instruction_default.md"
+    mode_instruction = render_prompt_template(mode_template).strip()
     event_limit = 0 if is_finalization else PROMPT_CONVERSATION_CHAIN_LIMIT
     conversation_chain_limit = event_limit
     if sticky_delta:

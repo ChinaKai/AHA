@@ -62,7 +62,20 @@
 
   function safeMarkdownLinkHref(value) {
     const href = String(value || "").trim();
+    if (/^www\./i.test(href)) return `https://${href}`;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(href)) return `https://${href}`;
     return /^(https?:|mailto:|\/|#|\.)/i.test(href) ? href : "";
+  }
+
+  function createMarkdownLinkNode(documentRef, label, href) {
+    const safeHref = safeMarkdownLinkHref(href);
+    if (!safeHref) return null;
+    const link = documentRef.createElement("a");
+    link.href = safeHref;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = label || safeHref;
+    return link;
   }
 
   function createImageMarkdownNode(documentRef, markdown, alt, path, options = {}) {
@@ -87,7 +100,7 @@
     const documentRef = options.documentRef || parent?.ownerDocument;
     if (!documentRef) return;
     const source = String(text || "");
-    const pattern = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_/g;
+    const pattern = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|<((?:https?:\/\/|mailto:)[^>\s]+)>|((?:https?:\/\/|www\.)[^\s<]+)|\*([^*]+)\*|_([^_]+)_/g;
     let cursor = 0;
     let match = pattern.exec(source);
     while (match) {
@@ -95,13 +108,8 @@
       if (match[1] !== undefined) {
         parent.appendChild(createImageMarkdownNode(documentRef, match[0], match[1], match[2], options));
       } else if (match[3] !== undefined) {
-        const href = safeMarkdownLinkHref(match[4]);
-        if (href) {
-          const link = documentRef.createElement("a");
-          link.href = href;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          link.textContent = match[3];
+        const link = createMarkdownLinkNode(documentRef, match[3], match[4]);
+        if (link) {
           parent.appendChild(link);
         } else {
           parent.appendChild(documentRef.createTextNode(match[0]));
@@ -114,9 +122,22 @@
         const strong = documentRef.createElement("strong");
         strong.textContent = match[6] || match[7] || "";
         parent.appendChild(strong);
+      } else if (match[8] !== undefined) {
+        const deleted = documentRef.createElement("del");
+        deleted.textContent = match[8] || "";
+        parent.appendChild(deleted);
+      } else if (match[9] !== undefined) {
+        const link = createMarkdownLinkNode(documentRef, match[9], match[9]);
+        parent.appendChild(link || documentRef.createTextNode(match[0]));
+      } else if (match[10] !== undefined) {
+        const trailing = /[),.;:!?]+$/.exec(match[10])?.[0] || "";
+        const href = trailing ? match[10].slice(0, -trailing.length) : match[10];
+        const link = createMarkdownLinkNode(documentRef, href, href);
+        parent.appendChild(link || documentRef.createTextNode(match[0]));
+        if (trailing) parent.appendChild(documentRef.createTextNode(trailing));
       } else {
         const emphasis = documentRef.createElement("em");
-        emphasis.textContent = match[8] || match[9] || "";
+        emphasis.textContent = match[11] || match[12] || "";
         parent.appendChild(emphasis);
       }
       cursor = match.index + match[0].length;
@@ -131,12 +152,103 @@
     parent.appendChild(paragraph);
   }
 
-  function appendMarkdownCodeBlock(parent, lines, documentRef) {
+  function appendMarkdownCodeBlock(parent, lines, documentRef, language = "") {
     const pre = documentRef.createElement("pre");
     const code = documentRef.createElement("code");
+    const lang = String(language || "").trim().replace(/[^\w-]/g, "");
+    if (lang) {
+      code.className = `language-${lang}`;
+      code.dataset.language = lang;
+    }
     code.textContent = lines.join("\n");
     pre.appendChild(code);
     parent.appendChild(pre);
+  }
+
+  function appendMarkdownTaskItem(parent, checked, text, options = {}) {
+    const documentRef = options.documentRef;
+    const item = documentRef.createElement("li");
+    item.className = "task-memo-task-list-item";
+    const checkbox = documentRef.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(checked);
+    checkbox.disabled = true;
+    checkbox.setAttribute("aria-hidden", "true");
+    item.appendChild(checkbox);
+    const label = documentRef.createElement("span");
+    appendInlineMarkdown(label, text, options);
+    item.appendChild(label);
+    parent.appendChild(item);
+  }
+
+  function splitMarkdownTableRow(line) {
+    let text = String(line || "").trim();
+    if (!text.includes("|")) return [];
+    if (text.startsWith("|")) text = text.slice(1);
+    if (text.endsWith("|")) text = text.slice(0, -1);
+    return text.split("|").map(cell => cell.trim());
+  }
+
+  function markdownTableAlignments(line) {
+    const cells = splitMarkdownTableRow(line);
+    if (!cells.length) return null;
+    const alignments = [];
+    for (const cell of cells) {
+      const marker = cell.replace(/\s+/g, "");
+      if (!/^:?-{3,}:?$/.test(marker)) return null;
+      if (marker.startsWith(":") && marker.endsWith(":")) {
+        alignments.push("center");
+      } else if (marker.endsWith(":")) {
+        alignments.push("right");
+      } else {
+        alignments.push("");
+      }
+    }
+    return alignments;
+  }
+
+  function markdownTableAt(lines, index) {
+    if (index + 1 >= lines.length) return null;
+    const header = splitMarkdownTableRow(lines[index]);
+    const alignments = markdownTableAlignments(lines[index + 1]);
+    if (!header.length || !alignments || header.length !== alignments.length) return null;
+    const rows = [];
+    let cursor = index + 2;
+    while (cursor < lines.length && lines[cursor].trim() && lines[cursor].includes("|")) {
+      const cells = splitMarkdownTableRow(lines[cursor]);
+      if (!cells.length) break;
+      rows.push(cells);
+      cursor += 1;
+    }
+    return { header, alignments, rows, nextIndex: cursor - 1 };
+  }
+
+  function appendMarkdownTable(parent, table, options = {}) {
+    const documentRef = options.documentRef;
+    const element = documentRef.createElement("table");
+    const thead = documentRef.createElement("thead");
+    const headRow = documentRef.createElement("tr");
+    table.header.forEach((cell, index) => {
+      const th = documentRef.createElement("th");
+      if (table.alignments[index]) th.style.textAlign = table.alignments[index];
+      appendInlineMarkdown(th, cell, options);
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    element.appendChild(thead);
+    const tbody = documentRef.createElement("tbody");
+    for (const row of table.rows) {
+      const tr = documentRef.createElement("tr");
+      for (let index = 0; index < table.header.length; index += 1) {
+        const td = documentRef.createElement("td");
+        if (table.alignments[index]) td.style.textAlign = table.alignments[index];
+        appendInlineMarkdown(td, row[index] || "", options);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    element.appendChild(tbody);
+    parent.appendChild(element);
   }
 
   function renderMemoAttachmentList(parent, markdown, options = {}) {
@@ -173,6 +285,7 @@
     let listType = "";
     let inCodeBlock = false;
     let codeLines = [];
+    let codeLanguage = "";
     const closeList = () => {
       listEl = null;
       listType = "";
@@ -185,14 +298,18 @@
       parent.appendChild(listEl);
       return listEl;
     };
-    for (const line of lines) {
-      if (/^```/.test(line.trim())) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const fence = /^```\s*([^`]*)$/.exec(line.trim());
+      if (fence) {
         if (inCodeBlock) {
-          appendMarkdownCodeBlock(parent, codeLines, documentRef);
+          appendMarkdownCodeBlock(parent, codeLines, documentRef, codeLanguage);
           codeLines = [];
+          codeLanguage = "";
           inCodeBlock = false;
         } else {
           closeList();
+          codeLanguage = String(fence[1] || "").trim().split(/\s+/, 1)[0] || "";
           inCodeBlock = true;
         }
         continue;
@@ -206,6 +323,18 @@
         parent.appendChild(documentRef.createElement("br"));
         continue;
       }
+      const table = markdownTableAt(lines, index);
+      if (table) {
+        closeList();
+        appendMarkdownTable(parent, table, previewOptions);
+        index = table.nextIndex;
+        continue;
+      }
+      if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+        closeList();
+        parent.appendChild(documentRef.createElement("hr"));
+        continue;
+      }
       const heading = /^(#{1,6})\s+(.+)$/.exec(line);
       if (heading) {
         closeList();
@@ -213,6 +342,13 @@
         const title = documentRef.createElement(`h${level}`);
         appendInlineMarkdown(title, heading[2], previewOptions);
         parent.appendChild(title);
+        continue;
+      }
+      const task = /^\s*[-*+]\s+\[([ xX])\]\s+(.+)$/.exec(line);
+      if (task) {
+        const list = ensureList("ul");
+        list.classList.add("task-memo-task-list");
+        appendMarkdownTaskItem(list, task[1].toLowerCase() === "x", task[2], previewOptions);
         continue;
       }
       const unordered = /^\s*[-*+]\s+(.+)$/.exec(line);
@@ -241,7 +377,7 @@
       appendMarkdownParagraph(parent, line, previewOptions);
     }
     closeList();
-    if (inCodeBlock) appendMarkdownCodeBlock(parent, codeLines, documentRef);
+    if (inCodeBlock) appendMarkdownCodeBlock(parent, codeLines, documentRef, codeLanguage);
   }
 
   function createTaskMemoMarkdownTools(options = {}) {
@@ -256,13 +392,22 @@
     let detachImagePaste = null;
     let detachModeControls = null;
     let markdownMode = "preview";
+    let markdownDisabled = false;
+    let reportState = { status: "none", report: "", error: "" };
+
+    function reportModeAvailable() {
+      return ["generating", "ready", "failed"].includes(reportState.status) || Boolean(reportState.report.trim());
+    }
 
     function syncMarkdownMode() {
+      if (markdownMode === "report" && !reportModeAvailable()) markdownMode = "preview";
       const isEdit = markdownMode === "edit";
+      const isReport = markdownMode === "report";
       if (elements.taskMemoMarkdownEditorEl) {
         elements.taskMemoMarkdownEditorEl.dataset.mode = markdownMode;
         elements.taskMemoMarkdownEditorEl.classList.toggle("is-edit", isEdit);
-        elements.taskMemoMarkdownEditorEl.classList.toggle("is-preview", !isEdit);
+        elements.taskMemoMarkdownEditorEl.classList.toggle("is-preview", markdownMode === "preview");
+        elements.taskMemoMarkdownEditorEl.classList.toggle("is-report", isReport);
       }
       if (elements.taskMemoEditDescriptionEl) {
         elements.taskMemoEditDescriptionEl.hidden = !isEdit;
@@ -274,17 +419,24 @@
         elements.taskMemoDescriptionEditorEl.tabIndex = isEdit ? -1 : 0;
       }
       if (elements.taskMemoPreviewModeEl) {
-        elements.taskMemoPreviewModeEl.classList.toggle("active", !isEdit);
-        elements.taskMemoPreviewModeEl.setAttribute("aria-pressed", String(!isEdit));
+        elements.taskMemoPreviewModeEl.classList.toggle("active", markdownMode === "preview");
+        elements.taskMemoPreviewModeEl.setAttribute("aria-pressed", String(markdownMode === "preview"));
       }
       if (elements.taskMemoEditModeEl) {
         elements.taskMemoEditModeEl.classList.toggle("active", isEdit);
         elements.taskMemoEditModeEl.setAttribute("aria-pressed", String(isEdit));
       }
+      if (elements.taskMemoReportModeEl) {
+        const hasReportMode = reportModeAvailable();
+        elements.taskMemoReportModeEl.hidden = !hasReportMode;
+        elements.taskMemoReportModeEl.setAttribute("aria-hidden", String(!hasReportMode));
+        elements.taskMemoReportModeEl.classList.toggle("active", isReport);
+        elements.taskMemoReportModeEl.setAttribute("aria-pressed", String(isReport));
+      }
     }
 
     function setMode(mode, controlOptions = {}) {
-      markdownMode = mode === "edit" ? "edit" : "preview";
+      markdownMode = mode === "edit" ? "edit" : (mode === "report" ? "report" : "preview");
       renderDescriptionEditor();
       syncMarkdownMode();
       if (markdownMode === "edit" && controlOptions.focus !== false) {
@@ -293,16 +445,55 @@
     }
 
     function setDisabled(disabled) {
-      const isDisabled = Boolean(disabled);
-      [elements.taskMemoPreviewModeEl, elements.taskMemoEditModeEl].forEach(element => {
-        if (element) element.disabled = isDisabled;
+      markdownDisabled = Boolean(disabled);
+      [elements.taskMemoPreviewModeEl, elements.taskMemoEditModeEl, elements.taskMemoReportModeEl].forEach(element => {
+        if (element) element.disabled = markdownDisabled;
       });
-      if (elements.taskMemoEditDescriptionEl) elements.taskMemoEditDescriptionEl.disabled = isDisabled;
+      if (elements.taskMemoEditDescriptionEl) elements.taskMemoEditDescriptionEl.disabled = markdownDisabled;
       if (elements.taskMemoDescriptionEditorEl) {
-        elements.taskMemoDescriptionEditorEl.setAttribute("aria-disabled", String(isDisabled));
+        elements.taskMemoDescriptionEditorEl.setAttribute("aria-disabled", String(markdownDisabled));
       }
-      if (isDisabled) markdownMode = "preview";
+      if (markdownDisabled && markdownMode === "edit") markdownMode = "preview";
       syncMarkdownMode();
+    }
+
+    function setReport(report = {}) {
+      reportState = {
+        status: String(report.status || "none").trim().toLowerCase().replace(/-/g, "_"),
+        report: String(report.report || ""),
+        error: String(report.error || ""),
+      };
+      if (markdownMode === "report" && !reportModeAvailable()) markdownMode = "preview";
+      renderDescriptionEditor();
+    }
+
+    function renderReportEditor(editorEl) {
+      const status = ["none", "generating", "ready", "failed"].includes(reportState.status) ? reportState.status : "none";
+      const report = reportState.report.trim();
+      const error = reportState.error.trim();
+      editorEl.classList.toggle("task-memo-report-view", true);
+      if (status === "generating") {
+        const message = documentRef.createElement("div");
+        message.className = "task-memo-report-status";
+        message.textContent = t("memo.report_generating", "Completion report is generating. Memo is read-only.");
+        editorEl.appendChild(message);
+        return;
+      }
+      if (status === "failed") {
+        const message = documentRef.createElement("div");
+        message.className = "task-memo-report-status";
+        message.textContent = error || t("memo.report_failed", "Report generation failed.");
+        editorEl.appendChild(message);
+        return;
+      }
+      if (report) {
+        renderMarkdownPreview(editorEl, report, { documentRef, apiUrl, t });
+        return;
+      }
+      const empty = documentRef.createElement("div");
+      empty.className = "task-memo-report-status";
+      empty.textContent = t("memo.report_empty", "No completion report yet.");
+      editorEl.appendChild(empty);
     }
 
     function renderDescriptionEditor() {
@@ -310,10 +501,15 @@
       const markdown = elements.taskMemoEditDescriptionEl?.value || "";
       if (editorEl && documentRef) {
         editorEl.innerHTML = "";
-        renderMarkdownPreview(editorEl, markdown, { documentRef, apiUrl, t });
+        editorEl.classList.toggle("task-memo-report-view", markdownMode === "report");
+        if (markdownMode === "report") {
+          renderReportEditor(editorEl);
+        } else {
+          renderMarkdownPreview(editorEl, markdown, { documentRef, apiUrl, t });
+        }
         if (!editorEl.childNodes.length) editorEl.appendChild(documentRef.createElement("br"));
       }
-      renderMemoAttachmentList(elements.taskMemoAttachmentListEl, markdown, { documentRef, apiUrl, t });
+      renderMemoAttachmentList(elements.taskMemoAttachmentListEl, markdownMode === "report" ? "" : markdown, { documentRef, apiUrl, t });
       syncMarkdownMode();
     }
 
@@ -382,6 +578,7 @@
 
     function insertDescriptionImageMarkdown(markdown) {
       const textarea = elements.taskMemoEditDescriptionEl;
+      if (markdownDisabled || markdownMode === "report") return;
       if (!textarea || !markdown) return;
       if (imagePaste?.insertTextareaImageMarkdown) {
         imagePaste.insertTextareaImageMarkdown(textarea, markdown, { windowRef });
@@ -519,6 +716,7 @@
     function attachImagePaste() {
       if (detachImagePaste || !elements.taskMemoEditDescriptionEl || !imagePaste?.clipboardImageFiles) return;
       const listener = event => {
+        if (markdownDisabled || markdownMode === "report") return;
         const files = imagePaste.clipboardImageFiles(event);
         if (!files.length) return;
         event.preventDefault();
@@ -539,11 +737,14 @@
       if (detachModeControls) return;
       const previewListener = () => setMode("preview", { focus: false });
       const editListener = () => setMode("edit");
+      const reportListener = () => setMode("report", { focus: false });
       elements.taskMemoPreviewModeEl?.addEventListener("click", previewListener);
       elements.taskMemoEditModeEl?.addEventListener("click", editListener);
+      elements.taskMemoReportModeEl?.addEventListener("click", reportListener);
       detachModeControls = () => {
         elements.taskMemoPreviewModeEl?.removeEventListener("click", previewListener);
         elements.taskMemoEditModeEl?.removeEventListener("click", editListener);
+        elements.taskMemoReportModeEl?.removeEventListener("click", reportListener);
       };
     }
 
@@ -560,7 +761,8 @@
       renderDescriptionEditor,
       renderMemoAttachmentList,
       setDisabled,
-      setMode
+      setMode,
+      setReport
     });
   }
 

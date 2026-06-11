@@ -36,7 +36,13 @@ from aha_cli.store.task_memos import (
     read_task_memos,
     update_task_memo,
 )
-from aha_cli.store.task_memo_assets import create_task_memo_asset, create_task_memo_asset_from_bytes, read_task_memo_asset
+from aha_cli.store.task_memo_assets import (
+    TASK_MEMO_ASSET_DIR,
+    create_task_memo_asset,
+    create_task_memo_asset_from_bytes,
+    read_task_memo_asset,
+    task_memo_assets_dir,
+)
 from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import parse_json_body, parse_multipart_form, parse_optional_bool
 from aha_cli.web.run_api import require_api_run_id
@@ -51,6 +57,7 @@ from aha_cli.web.task_actions import (
     start_prepared_backend,
     start_dispatched_task_backend,
 )
+from aha_cli.web.task_runtime import request_memo_completion_report_with_backend
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
@@ -66,6 +73,24 @@ def binary_route_result(body: bytes, content_type: str, status: str = "200 OK", 
 
 def route_not_handled() -> dict:
     return {"handled": False}
+
+
+def task_description_with_memo_attachment_context(root: Path, run_id: str, description: str, source_memo_id: str) -> str:
+    if not source_memo_id or f"{TASK_MEMO_ASSET_DIR}/" not in description:
+        return description
+    if "AHA memo attachment resolution:" in description:
+        return description
+    attachment_dir = task_memo_assets_dir(root, run_id).resolve()
+    note = "\n".join(
+        [
+            "AHA memo attachment resolution:",
+            f"- Markdown links beginning with `{TASK_MEMO_ASSET_DIR}/` refer to files under this run attachment directory:",
+            f"  `{attachment_dir}`",
+            f"- Example: `{TASK_MEMO_ASSET_DIR}/ab/file.png` should be opened as `{attachment_dir}/ab/file.png`.",
+            "- These files are outside the task workspace; do not search for them relative to the workspace.",
+        ]
+    )
+    return f"{description.rstrip()}\n\n{note}"
 
 
 def task_final_view_snapshot(root: Path, run_id: str, task_id: str) -> dict:
@@ -221,6 +246,8 @@ def validate_runtime_options(sandbox: str | None, approval: str | None) -> str |
 def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
     title = str(payload.get("title", "")).strip()
     description = str(payload.get("description", "") or "").strip()
+    source_memo_id = str(payload.get("source_memo_id") or "").strip()
+    description = task_description_with_memo_attachment_context(root, run_id, description, source_memo_id)
     if not title:
         return route_result({"error": "title cannot be empty"}, "400 Bad Request")
     backend = str(payload.get("backend", "codex") or "codex")
@@ -281,7 +308,6 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
     except ValueError as exc:
         return route_result({"error": str(exc)}, "400 Bad Request")
     backend_state = start_dispatched_task_backend(root, run_id, task, dispatch)
-    source_memo_id = str(payload.get("source_memo_id") or "").strip()
     memo = None
     if source_memo_id:
         try:
@@ -374,9 +400,23 @@ def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, que
             if method == "POST":
                 return route_result({"ok": True, "memo": enrich_task_memo(root, run_id, create_task_memo(root, run_id, parse_json_body(body)))})
         if path.startswith("/api/task-memos/"):
-            memo_id = unquote(path.removeprefix("/api/task-memos/")).split("/", 1)[0]
+            suffix = unquote(path.removeprefix("/api/task-memos/"))
+            memo_id, _, action = suffix.partition("/")
             if not memo_id:
                 return route_result({"error": "memo id is required"}, "400 Bad Request")
+            if action == "completion-report" and method == "POST":
+                try:
+                    result = request_memo_completion_report_with_backend(root, run_id, memo_id)
+                except KeyError as exc:
+                    return route_result({"error": str(exc)}, "404 Not Found")
+                except (SystemExit, ValueError) as exc:
+                    return route_result({"error": str(exc)}, "400 Bad Request")
+                payload = {"ok": True, "memo": enrich_task_memo(root, run_id, result["memo"])}
+                if result.get("backend"):
+                    payload["backend"] = result["backend"]
+                return route_result(payload)
+            if action:
+                return route_not_handled()
             if method in {"PATCH", "POST"}:
                 return route_result({"ok": True, "memo": enrich_task_memo(root, run_id, update_task_memo(root, run_id, memo_id, parse_json_body(body)))})
             if method == "DELETE":

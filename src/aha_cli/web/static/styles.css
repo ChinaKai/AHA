@@ -3865,6 +3865,50 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   background: transparent;
   color: inherit;
 }
+.task-memo-description-editor table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.task-memo-description-editor th,
+.task-memo-description-editor td {
+  padding: 7px 8px;
+  border: 1px solid #d0d5dd;
+  text-align: left;
+  vertical-align: top;
+}
+.task-memo-description-editor th {
+  background: #f2f4f7;
+  color: #344054;
+  font-weight: 700;
+}
+.task-memo-description-editor hr {
+  height: 1px;
+  margin: 14px 0;
+  border: 0;
+  background: #d0d5dd;
+}
+.task-memo-description-editor .task-memo-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+.task-memo-description-editor .task-memo-task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.task-memo-description-editor .task-memo-task-list-item input {
+  margin-top: 3px;
+}
+.task-memo-markdown-editor.is-report .task-memo-description-editor {
+  background: #f8fafc;
+  color: #344054;
+}
+.task-memo-report-status {
+  color: #667085;
+  font-size: 12px;
+}
 .task-memo-attachments {
   border-top: 1px solid #eaecf0;
   display: grid;

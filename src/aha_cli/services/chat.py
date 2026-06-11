@@ -54,6 +54,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     write_task_result,
 )
+from aha_cli.store.task_memos import update_task_memo
 from aha_cli.services.native_subagents import text_claims_subagent_created
 
 
@@ -363,6 +364,50 @@ def append_agent_error_notice(
     )
 
 
+def write_memo_report_result(root: Path, run_id: str, item: dict, reply: str, exit_code: int) -> dict | None:
+    context = item.get("memo_report_context") if isinstance(item.get("memo_report_context"), dict) else {}
+    memo_id = str(context.get("memo_id") or "").strip()
+    task_id = str(context.get("task_id") or item.get("task_id") or "").strip()
+    if not memo_id:
+        append_event(root, run_id, "task_memo_report_failed", {"task_id": task_id, "reason": "missing memo_id"})
+        return None
+    now = utc_now()
+    if exit_code == 0 and reply.strip():
+        memo = update_task_memo(
+            root,
+            run_id,
+            memo_id,
+            {
+                "report_status": "ready",
+                "completion_report": reply.strip(),
+                "report_task_id": task_id,
+                "report_completed_at": now,
+                "report_error": "",
+            },
+        )
+        append_event(
+            root,
+            run_id,
+            "task_memo_report_completed",
+            {"memo_id": memo_id, "task_id": task_id, "chars": len(reply.strip()), "completed_at": now},
+        )
+        return memo
+    error = agent_error_notice("main", exit_code, reply)
+    memo = update_task_memo(
+        root,
+        run_id,
+        memo_id,
+        {
+            "report_status": "failed",
+            "report_task_id": task_id,
+            "report_completed_at": now,
+            "report_error": error,
+        },
+    )
+    append_event(root, run_id, "task_memo_report_failed", {"memo_id": memo_id, "task_id": task_id, "error": error})
+    return memo
+
+
 def auto_reply(root: Path, run_id: str, args) -> int:
     require_plan(root, run_id)
     inbox = inbox_path(root, run_id, args.target)
@@ -452,8 +497,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 plan = require_plan(root, run_id) if item_task_id else {}
                 task = detail["task"] if detail else {}
                 is_agent_command = item.get("command_namespace") == "agent"
-                is_finalization = item.get("result_policy") == "finalize"
-                manages_task_status = bool(item_task_id and not is_agent_command)
+                result_policy = str(item.get("result_policy") or "")
+                is_finalization = result_policy == "finalize"
+                is_memo_report = result_policy == "memo_report"
+                manages_task_status = bool(item_task_id and not is_agent_command and not is_memo_report)
                 writes_task_final = bool(item_task_id and is_finalization)
                 agent = next((entry for entry in task.get("agents", []) if entry.get("id") == agent_id), None)
                 if args.target == "main" and original_sender.startswith("sub-") and item_task_id:
@@ -645,6 +692,38 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     reply = f"{backend_name.title()} backend crashed while handling agent turn: {type(exc).__name__}: {exc}"
                 if session:
                     save_session(root, session)
+                if is_memo_report:
+                    try:
+                        write_memo_report_result(root, run_id, item, reply, exit_code)
+                    except (KeyError, ValueError, SystemExit) as exc:
+                        append_event(
+                            root,
+                            run_id,
+                            "task_memo_report_failed",
+                            {"task_id": item_task_id, "error": str(exc), "reason": "writeback_failed"},
+                        )
+                    if exit_code != 0 or not reply.strip():
+                        append_agent_error_notice(
+                            root,
+                            run_id,
+                            source=source_name,
+                            target=args.target,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            exit_code=exit_code,
+                            reply=reply,
+                            role=item.get("role") or "main",
+                        )
+                    append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                    print(f"{args.sender} -> aha: MEMO report {'generated' if exit_code == 0 and reply.strip() else 'failed'}", flush=True)
+                    if worker_task_id:
+                        save_chat_offset(offset_file, item_offset)
+                        mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                        return exit_code
+                    if args.once:
+                        save_chat_offset(offset_file, item_offset)
+                        return exit_code
+                    continue
                 if exit_code == 0 and reply.strip():
                     schema_error = _reply_action_schema_error(reply)
                     if schema_error and item.get("coordination") != "action_schema_retry":
