@@ -213,13 +213,14 @@ class BackendRuntimeTests(unittest.TestCase):
     def test_backend_status_reports_context_pressure_from_latest_codex_token_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            aha_root = root / ".aha"
             home = root / "home"
             with (
                 mock.patch("pathlib.Path.cwd", return_value=root),
                 mock.patch("pathlib.Path.home", return_value=home),
             ):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Context pressure", "--agents", "1")
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Context pressure", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
@@ -230,8 +231,8 @@ class BackendRuntimeTests(unittest.TestCase):
                     mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
                     mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
                 ):
-                    start_backend(root / ".aha", run_id, "main", task_id="task-001")
-                session_file = session_path(root / ".aha", run_id, "task-001", "main")
+                    start_backend(aha_root, run_id, "main", task_id="task-001")
+                session_file = session_path(aha_root, run_id, "task-001", "main")
                 session = read_json(session_file)
                 session["backend_session_id"] = "codex-session-123"
                 write_json(session_file, session)
@@ -276,13 +277,13 @@ class BackendRuntimeTests(unittest.TestCase):
                         + "\n"
                     )
                 append_event(
-                    root / ".aha",
+                    aha_root,
                     run_id,
                     "agent_usage",
                     {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 99999999}},
                 )
                 append_event(
-                    root / ".aha",
+                    aha_root,
                     run_id,
                     "agent_prompt_metrics",
                     {
@@ -293,7 +294,7 @@ class BackendRuntimeTests(unittest.TestCase):
                     },
                 )
 
-                status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
+                status = backend_status(aha_root, run_id, "main", task_id="task-001")
 
         self.assertEqual(status["latest_usage"]["input_tokens"], 99999999)
         self.assertEqual(status["latest_prompt_metrics"]["total"]["tokens"], 219640)
@@ -305,6 +306,10 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(status["context_pressure"]["ratio"], 226853 / 258400, places=6)
         self.assertEqual(status["context_pressure"]["level"], "high")
         self.assertEqual(status["context_pressure"]["input_tokens"], 226853)
+        self.assertEqual(status["context_pressure"]["aha_prompt_tokens"], 219640)
+        self.assertEqual(status["context_pressure"]["backend_input_tokens"], 226853)
+        self.assertEqual(status["context_pressure"]["estimated_backend_history_tokens"], 7213)
+        self.assertEqual(status["context_pressure"]["aha_overhead_ratio"], round(219640 / 226853, 6))
         self.assertEqual(status["context_pressure"]["prompt_tokens"], 219640)
         self.assertEqual(status["context_pressure"]["runtime_input_tokens"], 226853)
         self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.input_tokens")

@@ -122,6 +122,13 @@ def context_pressure(
     if normalized_backend == "claude" and runtime_input_tokens is not None:
         runtime_effective_input_tokens = runtime_input_tokens + int(runtime_cached_input_tokens or 0) + int(runtime_cache_creation_input_tokens or 0)
     input_tokens = runtime_effective_input_tokens or prompt_tokens
+    backend_input_tokens = runtime_effective_input_tokens
+    estimated_backend_history_tokens = None
+    aha_overhead_ratio = None
+    if backend_input_tokens is not None and prompt_tokens is not None:
+        estimated_backend_history_tokens = max(backend_input_tokens - prompt_tokens, 0)
+        if backend_input_tokens > 0:
+            aha_overhead_ratio = round(prompt_tokens / backend_input_tokens, 6)
     ratio = (input_tokens / context_window) if input_tokens is not None and context_window else None
     level = "unknown"
     if ratio is not None:
@@ -143,6 +150,10 @@ def context_pressure(
         "backend": normalized_backend,
         "model": str(model).strip() if model else None,
         "input_tokens": input_tokens,
+        "aha_prompt_tokens": prompt_tokens,
+        "backend_input_tokens": backend_input_tokens,
+        "estimated_backend_history_tokens": estimated_backend_history_tokens,
+        "aha_overhead_ratio": aha_overhead_ratio,
         "prompt_tokens": prompt_tokens,
         "runtime_input_tokens": runtime_input_tokens,
         "runtime_effective_input_tokens": runtime_effective_input_tokens,

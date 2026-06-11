@@ -26,13 +26,16 @@ def backend_session_has_active_id(root: Path, run_id: str, task_id: str, agent_i
     return bool(session.get("backend_session_id"))
 
 
-def auto_compact_agent_context_before_backend_start(
+def _auto_compact_agent_context(
     root: Path,
     run_id: str,
     task_id: str | None,
     agent_id: str,
     *,
     backend_state: dict | None = None,
+    allowed_statuses: set[str],
+    stop_backend_before_reset: bool,
+    trigger: str,
 ) -> dict | None:
     task_id = str(task_id or "")
     agent_id = str(agent_id or "main")
@@ -49,7 +52,8 @@ def auto_compact_agent_context_before_backend_start(
     if not policy.get("auto_compact_enabled"):
         return None
     state = backend_state if backend_state is not None else backend_status(root, run_id, agent_id, task_id=task_id)
-    if str(state.get("status") or "stopped").lower() != "stopped":
+    status = str(state.get("status") or "stopped").lower()
+    if status not in allowed_statuses:
         return None
     pressure = state.get("context_pressure") if isinstance(state.get("context_pressure"), dict) else {}
     try:
@@ -60,7 +64,15 @@ def auto_compact_agent_context_before_backend_start(
     if percent < threshold or not backend_session_has_active_id(root, run_id, task_id, agent_id):
         return None
     try:
-        compact_result = compact_reset_backend_session(root, run_id, task_id, agent_id, reason="large", restart=False)
+        compact_result = compact_reset_backend_session(
+            root,
+            run_id,
+            task_id,
+            agent_id,
+            reason="large",
+            restart=False,
+            stop_backend_before_reset=stop_backend_before_reset,
+        )
     except (KeyError, ValueError):
         return None
     append_message(
@@ -84,9 +96,51 @@ def auto_compact_agent_context_before_backend_start(
     return {
         **compact_result,
         "auto_context_compact": True,
+        "trigger": trigger,
+        "backend_status": status,
         "context_percent": percent,
         "threshold_percent": threshold,
     }
+
+
+def auto_compact_agent_context_before_backend_start(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    agent_id: str,
+    *,
+    backend_state: dict | None = None,
+) -> dict | None:
+    return _auto_compact_agent_context(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        backend_state=backend_state,
+        allowed_statuses={"stopped"},
+        stop_backend_before_reset=True,
+        trigger="before_backend_start",
+    )
+
+
+def auto_compact_agent_context_after_turn(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    agent_id: str,
+    *,
+    backend_state: dict | None = None,
+) -> dict | None:
+    return _auto_compact_agent_context(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        backend_state=backend_state,
+        allowed_statuses={"running", "stopped"},
+        stop_backend_before_reset=False,
+        trigger="turn_end",
+    )
 
 
 def start_backend_after_auto_compact(
@@ -132,6 +186,7 @@ def start_backend_after_auto_compact(
 
 
 __all__ = [
+    "auto_compact_agent_context_after_turn",
     "auto_compact_agent_context_before_backend_start",
     "backend_session_has_active_id",
     "start_backend_after_auto_compact",

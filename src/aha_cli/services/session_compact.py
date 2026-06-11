@@ -157,6 +157,7 @@ def compact_reset_backend_session(
     reason: str = "manual",
     restart: bool = False,
     dry_run: bool = False,
+    stop_backend_before_reset: bool = True,
 ) -> dict:
     detail = task_snapshot(root, run_id, task_id)
     task = detail["task"]
@@ -219,7 +220,7 @@ def compact_reset_backend_session(
     summary_path.write_text(summary, encoding="utf-8")
     meta_path.write_text(json.dumps({"archive": archive, "created_at": created_at}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    if backend_status(root, run_id, agent_id, task_id=task_id).get("status") != "stopped":
+    if stop_backend_before_reset and backend_status(root, run_id, agent_id, task_id=task_id).get("status") != "stopped":
         result["stopped_backend"] = stop_backend(root, run_id, agent_id, task_id=task_id, timeout=3.0)
 
     history = session.get("history_backend_sessions")

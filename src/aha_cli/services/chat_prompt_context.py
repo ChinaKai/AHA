@@ -596,7 +596,14 @@ def chat_prompt_with_metrics(
     return prompt, metrics
 
 
-def compact_summary_context(root: Path, run_id: str, session: dict | None) -> str:
+def _limit_compact_summary_text(text: str, limit: int = 4800) -> str:
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[: max(0, limit - 120)].rstrip() + "\n\n[compact summary truncated to prompt budget]"
+
+
+def compact_summary_context(root: Path, run_id: str, session: dict | None, *, limit_chars: int = 4800) -> str:
     summary_meta = session.get("compact_summary") if isinstance(session, dict) else None
     if not isinstance(summary_meta, dict):
         return ""
@@ -606,7 +613,7 @@ def compact_summary_context(root: Path, run_id: str, session: dict | None) -> st
     path = run_dir(root, run_id) / relpath
     if not path.exists():
         return f"Backend compact summary: `{relpath}` was referenced but not found.\n"
-    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    text = _limit_compact_summary_text(path.read_text(encoding="utf-8", errors="replace"), limit_chars)
     if not text:
         return ""
     return f"Backend compact summary from previous session:\n{text}\n"
@@ -702,7 +709,18 @@ def chat_prompt(
             final_context = ""
             if is_finalization and existing_final:
                 final_context = f"- existing Final chars: {len(existing_final)}\n"
-            compact_context = compact_summary_context(root, run_id, session) if is_finalization or is_memo_report else ""
+            should_resume_from_compact = bool(
+                not is_finalization
+                and not is_memo_report
+                and session
+                and isinstance(session.get("compact_summary"), dict)
+                and not session.get("backend_session_id")
+            )
+            compact_context = (
+                compact_summary_context(root, run_id, session)
+                if is_finalization or is_memo_report or should_resume_from_compact
+                else ""
+            )
             rounds = detail.get("rounds", [])
             journal_context = ""
             if rounds and (is_finalization or is_memo_report):

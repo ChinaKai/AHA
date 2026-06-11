@@ -114,6 +114,36 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("second", run_agent.call_args_list[1].args[0])
         self.assertEqual([item["message"] for item in browser_messages[-2:]], ["reply one", "reply two"])
 
+    def test_codex_chat_runs_turn_end_auto_context_compact_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Turn end compact hook", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(aha_root, run_id, "main", "trigger hook", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)),
+                    mock.patch("aha_cli.services.chat.auto_compact_agent_context_after_turn", return_value=None) as auto_compact,
+                ):
+                    code, _ = self.run_cli(
+                        "--home",
+                        str(aha_root),
+                        "codex-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+
+        self.assertEqual(code, 0)
+        auto_compact.assert_called_once_with(aha_root, run_id, "task-001", "main")
+
     def test_codex_chat_surfaces_backend_error_to_browser_chat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -11,6 +11,7 @@ from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, c
 from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
 from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
+from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
 from aha_cli.services.chat_prompt_context import chat_prompt, chat_prompt_with_metrics, model_family_for_guidance
@@ -1114,6 +1115,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset, target=args.target):
                     exit_after_message = True
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
+                if item_task_id and backend_name in {"codex", "claude"}:
+                    auto_compact_agent_context_after_turn(root, run_id, item_task_id, agent_id)
                 if exit_after_message and worker_task_id:
                     save_chat_offset(offset_file, item_offset)
                     mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())

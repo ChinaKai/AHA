@@ -635,14 +635,15 @@ class BackendRunnerSessionTests(unittest.TestCase):
     def test_compact_reset_archives_backend_session_and_keeps_prompt_lean(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:
             root = Path(tmp)
+            aha_root = root / ".aha"
             home = Path(home_tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Compact reset", "--agents", "1")
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Compact reset", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 session_id = "compact-reset-session-1"
-                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session_file = run_dir(aha_root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = session_id
                 session_file.write_text(json.dumps(session), encoding="utf-8")
@@ -650,18 +651,18 @@ class BackendRunnerSessionTests(unittest.TestCase):
                     home / ".codex" / "sessions" / "2026" / "05" / "21" / f"rollout-{session_id}.jsonl",
                     {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "old prompt"}]}},
                 )
-                append_message(root, run_id, "main", "previous request", sender="browser", task_id="task-001", role="main")
+                append_message(aha_root, run_id, "main", "previous request", sender="browser", task_id="task-001", role="main")
 
                 with mock.patch("aha_cli.services.session_compact.Path.home", return_value=home):
-                    payload = compact_reset_backend_session(root, run_id, "task-001", "main", reason="manual")
+                    payload = compact_reset_backend_session(aha_root, run_id, "task-001", "main", reason="manual")
 
                 updated = read_json(session_file)
-                summary_exists = (run_dir(root, run_id) / payload["summary_path"]).exists()
-                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                summary_exists = (run_dir(aha_root, run_id) / payload["summary_path"]).exists()
+                offset_file = chat_offset_path(run_dir(aha_root, run_id), "main", "task-001")
                 offset = read_json(offset_file)
-                inbox_size = inbox_path(root, run_id, "main").stat().st_size
+                inbox_size = inbox_path(aha_root, run_id, "main").stat().st_size
                 prompt = chat_prompt(
-                    root,
+                    aha_root,
                     run_id,
                     "main",
                     {"sender": "browser", "message": "next request", "task_id": "task-001", "role": "main"},
@@ -674,7 +675,8 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(updated["compact_summary"]["archived_backend_session_id"], session_id)
         self.assertTrue(summary_exists)
         self.assertEqual(offset["offset"], inbox_size)
-        self.assertNotIn("Backend compact summary from previous session", prompt)
+        self.assertIn("Backend compact summary from previous session", prompt)
+        self.assertIn("- reason: `manual`", prompt)
         self.assertIn("previous request", prompt)
         self.assertIn("Recent conversation chains", prompt)
         self.assertIn("Intent priority policy:", prompt)

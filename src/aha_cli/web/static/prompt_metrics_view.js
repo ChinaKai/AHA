@@ -132,6 +132,10 @@
       const contextRows = [
         ["model", contextPressure?.model || "-"],
         ["input_tokens", contextPressure?.input_tokens ?? "-"],
+        ["aha_prompt_tokens", contextPressure?.aha_prompt_tokens ?? "-"],
+        ["backend_input_tokens", contextPressure?.backend_input_tokens ?? "-"],
+        ["estimated_backend_history_tokens", contextPressure?.estimated_backend_history_tokens ?? "-"],
+        ["aha_overhead_ratio", contextPressure?.aha_overhead_ratio ?? "-"],
         ["prompt_tokens", contextPressure?.prompt_tokens ?? "-"],
         ["runtime_input_tokens", contextPressure?.runtime_input_tokens ?? "-"],
         ["runtime_effective_input_tokens", contextPressure?.runtime_effective_input_tokens ?? "-"],

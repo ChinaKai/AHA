@@ -10,6 +10,10 @@ class ContextPressureTests(unittest.TestCase):
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"tokens": 735000, "chars": 1234, "bytes": 1234}})
 
         self.assertEqual(pressure["backend"], "codex")
+        self.assertEqual(pressure["aha_prompt_tokens"], 735000)
+        self.assertIsNone(pressure["backend_input_tokens"])
+        self.assertIsNone(pressure["estimated_backend_history_tokens"])
+        self.assertIsNone(pressure["aha_overhead_ratio"])
         self.assertEqual(pressure["prompt_tokens"], 735000)
         self.assertEqual(pressure["prompt_chars"], 1234)
         self.assertEqual(pressure["context_window"], 258_000)
@@ -45,6 +49,10 @@ class ContextPressureTests(unittest.TestCase):
         )
 
         self.assertEqual(pressure["input_tokens"], 226853)
+        self.assertEqual(pressure["aha_prompt_tokens"], 1000)
+        self.assertEqual(pressure["backend_input_tokens"], 226853)
+        self.assertEqual(pressure["estimated_backend_history_tokens"], 225853)
+        self.assertEqual(pressure["aha_overhead_ratio"], round(1000 / 226853, 6))
         self.assertEqual(pressure["prompt_tokens"], 1000)
         self.assertEqual(pressure["runtime_input_tokens"], 226853)
         self.assertEqual(pressure["runtime_cached_input_tokens"], 226176)
