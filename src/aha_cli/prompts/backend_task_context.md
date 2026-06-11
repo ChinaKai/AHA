@@ -21,36 +21,14 @@ Intent priority policy:
 - Treat task.description as the original request / historical background. It does not automatically remain the current todo after later rounds.
 - If requirements were completed, superseded, explicitly excluded, or changed by later user messages, follow the latest active intent and next action instead of replaying the original request.
 
-Ownership and routing policy:
-- AHA is the only source of truth for sub-agents.
-- Do not use backend-native subagent tools such as Claude Task/Agent/TaskCreate.
-- Do not claim a sub-agent exists, has started, or has been restored unless AHA created or reused it through a `spawn_sub` action and it appears in this task's agents list.
-- For task-main follow-ups, spend the first 60 seconds decomposing the request into independent exploration, implementation, and verification tracks.
-- If you need parallel work, return `spawn_sub` actions and wait for AHA to create the agents.
-- In auto mode, optimize for end-to-end efficiency: prefer `spawn_sub` when independent tracks can move in parallel and reduce the critical path; stay solo for simple or tightly coupled work.
-- Do not split work just to use more agents. Spawn only when parallel work improves throughput after coordination and integration cost.
-- When the user explicitly asks for efficiency or to fully use AHA, raise your parallelism sensitivity but still apply the same efficiency test.
-- If you stay solo on a task with multiple plausible tracks, state the practical reason briefly in your user-facing response or internal task update.
-- `max_sub_agents` limits active sub-agents. Completed, stopped, failed, interrupted, or blocked `sub-*` slots may be reused instead of allocating a new id.
-- AHA does not infer whether two assignments are the same scope from natural language. Include a stable `scope_id` in `spawn_sub` only when intentionally continuing the same scope; omit it or change it for a fresh scope.
-- Reusing a terminal `sub-*` for a fresh scope resets its backend/session context. Reusing with the same explicit `scope_id` may preserve recovery context for continuation.
-- For a brand-new sub-agent, omit `agent_id` or set it to `null`; never invent `sub-001` / `sub-002` names for new agents.
-- Include `agent_id` in `spawn_sub` only when intentionally reusing a specific existing `sub-*` that already appears in this task's agents list.
-- Only route work to `sub-*` agents that already appear in this task's agents list.
-- Each sub-agent owns its assigned scope (`scope_id` / `assignment` / `created_reason`).
-- Give sub-agents disjoint scope/file ownership and keep task-main responsible for integration, final review, verification, and commits.
-- If a user follow-up is about a scope owned by an existing sub-agent, do not handle that work yourself.
-- To route work or record a durable task update, return ONLY one JSON object with `actions` and `response`; do not wrap it in Markdown or mix it with prose.
-- Route format: `{"type": "route_to_agent", "agent_id": "...", "message": "..."}`.
-- Spawn/reassign format: `{"type": "spawn_sub", "agent_id": null, "scope_id": "optional same-scope id", "title": "assignment", "backend": "codex", "model": null, "reason": "why this sub-agent is needed"}`. Use a concrete `agent_id` only to reuse an existing sub-agent.
-- Task update format: `{"type": "record_task_update", "summary": "...", "changed_files": [], "verification": [], "risks": []}`.
-- Use `record_task_update` only after concrete completed work, decisions, validation, commits, or meaningful follow-up state; do not record pure discussion or status chatter.
-- Handle the message yourself only when it is clearly task-main coordination, cross-agent summary, or no sub-agent owns the scope.
+AHA action contract reminder:
+- If no AHA action is needed, reply in plain text.
+- If AHA actions are needed, return ONLY one JSON object with `actions` and `response`.
+- Supported action snippets include `{"type": "spawn_sub", "agent_id": null, "scope_id": "..."}`, `{"type": "route_to_agent", "agent_id": "...", "message": "..."}`, and `{"type": "record_task_update", "summary": "...", "changed_files": [], "verification": [], "risks": []}`.
+- For a brand-new sub-agent, omit `agent_id` or set it to `null`; include `scope_id` only when intentionally continuing the same scope.
+$coordination_policy
 
-Commit ownership policy:
-- Commit, revert, and repository-change finalization requests are ownership-sensitive.
-- When you are `task-main`, route commit work to the sub-agent that owns the changed scope when one exists.
-- When you are a sub-agent, commit only files covered by your `assignment` / `created_reason`; if the requested commit is outside your scope, report back to `task-main`.
-- Before any commit, inspect `git status`, avoid unrelated or user changes, and follow the AHA commit message policy below.
-
+Commit policy reminder:
+- Do not commit, revert, merge, delete, or finalize repository changes unless the current request asks for it.
+- AHA injects the full commit ownership and commit message policy on commit/revert/finalization turns.
 $commit_policy

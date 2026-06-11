@@ -811,29 +811,110 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("Foreign verbose task title that should stay out", prompt)
         self.assertNotIn("foreign-event", prompt)
 
+    def test_full_prompt_uses_compact_policy_reminders_without_coordination_or_commit_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Compact policy reminder", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "hello", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+
+        self.assertEqual(metrics["prompt_mode"], "full")
+        self.assertIn("AHA action contract reminder:", prompt)
+        self.assertIn('"type": "spawn_sub"', prompt)
+        self.assertIn("For a brand-new sub-agent", prompt)
+        self.assertIn("Commit policy reminder:", prompt)
+        self.assertNotIn("Ownership and routing policy:", prompt)
+        self.assertNotIn("Commit ownership policy:", prompt)
+        self.assertNotIn("Commit message policy:", prompt)
+        self.assertNotIn("Generated-by:", prompt)
+        self.assertEqual(metrics["components"]["coordination_policy"]["chars"], 0)
+        self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
+
+    def test_full_prompt_expands_coordination_policy_on_delegation_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Coordination policy", "--agents", "2")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "请并行拆给子 agent", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+
+        self.assertIn("Ownership and routing policy:", prompt)
+        self.assertIn("Do not split work just to use more agents", prompt)
+        self.assertIn("Spawn/reassign format:", prompt)
+        self.assertIn('"type": "route_to_agent"', prompt)
+        self.assertNotIn("Commit message policy:", prompt)
+        self.assertGreater(metrics["components"]["coordination_policy"]["chars"], 0)
+        self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
+
+    def test_full_prompt_expands_commit_policy_on_commit_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Commit policy", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "请提交代码", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+
+        self.assertIn("Commit ownership policy:", prompt)
+        self.assertIn("Commit message policy:", prompt)
+        self.assertIn("Generated-by: AHA Codex GPT-5.5", prompt)
+        self.assertIn("aha commit --type <type>", prompt)
+        self.assertGreater(metrics["components"]["commit_policy"]["chars"], 0)
+
     def test_chat_prompt_uses_delta_for_existing_sticky_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            aha_root = root / ".aha"
             with mock.patch("pathlib.Path.cwd", return_value=root):
-                self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Sticky prompt", "--agents", "1")
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Sticky prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session_file = run_dir(aha_root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"
                 session_file.write_text(json.dumps(session), encoding="utf-8")
                 append_event(
-                    root,
+                    aha_root,
                     run_id,
                     "agent_message",
                     {"task_id": "task-001", "target": "main", "text": "already-in-backend-session"},
                 )
-                append_event(root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
-                append_event(root, run_id, "task_hidden", {"task_id": "task-001"})
+                append_event(aha_root, run_id, "agent_finished", {"task_id": "task-001", "target": "main", "exit_code": 0})
+                append_event(aha_root, run_id, "task_hidden", {"task_id": "task-001"})
 
                 prompt, metrics = chat_prompt_with_metrics(
-                    root,
+                    aha_root,
                     run_id,
                     "main",
                     {

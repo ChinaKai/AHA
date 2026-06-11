@@ -51,6 +51,43 @@ PROMPT_CONVERSATION_SCAN_LIMIT = 200
 PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT = 700
 PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT = 240
 PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
+COMMIT_POLICY_INTENT_TERMS = (
+    "commit",
+    "git commit",
+    "revert",
+    "merge",
+    "cherry-pick",
+    "amend",
+    "finalize",
+    "提交",
+    "提交代码",
+    "提交改动",
+    "回滚",
+    "撤销提交",
+    "合并",
+    "收口",
+)
+COORDINATION_POLICY_INTENT_TERMS = (
+    "spawn_sub",
+    "route_to_agent",
+    "record_task_update",
+    "sub-agent",
+    "sub agent",
+    "sub-",
+    "delegate",
+    "delegation",
+    "route",
+    "routing",
+    "parallel",
+    "并行",
+    "子 agent",
+    "子agent",
+    "分派",
+    "委派",
+    "路由",
+    "协作",
+    "拆分",
+)
 
 
 def model_family_for_guidance(backend: str | None, *model_values: object) -> str | None:
@@ -192,6 +229,66 @@ def _current_message_sender_label(item: dict) -> str:
     if (item.get("display_sender") or item.get("display_target")) and recipient:
         return f"{sender} -> {recipient}"
     return sender
+
+
+def _intent_text_for_prompt(item: dict) -> str:
+    values = [
+        item.get("message"),
+        item.get("original_command"),
+        item.get("command_namespace"),
+        item.get("result_policy"),
+    ]
+    return " ".join(str(value or "") for value in values).lower()
+
+
+def _has_intent_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term.lower() in text for term in terms)
+
+
+def _prompt_needs_commit_policy(item: dict, *, is_finalization: bool) -> bool:
+    if is_finalization:
+        return True
+    return _has_intent_term(_intent_text_for_prompt(item), COMMIT_POLICY_INTENT_TERMS)
+
+
+def _prompt_needs_coordination_policy(
+    task: dict,
+    target: str,
+    item: dict,
+    *,
+    commit_policy_needed: bool,
+    visible_agents: list[dict],
+) -> bool:
+    text = _intent_text_for_prompt(item)
+    if _has_intent_term(text, COORDINATION_POLICY_INTENT_TERMS):
+        return True
+    target_is_main = target == "main" or str(item.get("role") or "").strip() == "main"
+    visible_sub_agents = [agent for agent in visible_agents if str(agent.get("id") or "").startswith("sub-")]
+    if target_is_main and visible_sub_agents and commit_policy_needed:
+        return True
+    coordination = str(task.get("coordination") or "").lower()
+    return target_is_main and bool(visible_sub_agents) and coordination in {"waiting_for_subagents", "subagents_complete"}
+
+
+def _coordination_policy_for_prompt(needed: bool) -> str:
+    if not needed:
+        return ""
+    return render_prompt_template("backend_coordination_policy_full.md").rstrip()
+
+
+def _commit_policy_for_prompt(
+    needed: bool,
+    task_id: str,
+    target: str,
+    backend: str | None,
+    model: str | None,
+) -> str:
+    if not needed:
+        return ""
+    return render_prompt_template(
+        "backend_commit_policy_full.md",
+        commit_message_policy=commit_message_policy_prompt(task_id, target, backend=backend, model=model).rstrip(),
+    ).rstrip()
 
 
 def _recovery_context_for_prompt(item: dict) -> str:
@@ -731,18 +828,30 @@ def chat_prompt(
                         f"- {round_item.get('round_id')} [{round_item.get('trigger')}] {round_item.get('summary')}"
                     )
                 journal_context = "\n".join(journal_lines)
-            commit_policy = commit_message_policy_prompt(
-                task_id,
-                target,
-                backend=(session or {}).get("backend") or (agent or {}).get("backend") or task.get("preferred_backend"),
-                model=(
-                    (session or {}).get("resolved_model")
-                    or (session or {}).get("model")
-                    or (agent or {}).get("model")
-                    or task.get("preferred_model")
-                ),
-            ).rstrip()
             visible_agents = agents_visible_to_prompt(detail["task"], target)
+            policy_backend = (session or {}).get("backend") or (agent or {}).get("backend") or task.get("preferred_backend")
+            policy_model = (
+                (session or {}).get("resolved_model")
+                or (session or {}).get("model")
+                or (agent or {}).get("model")
+                or task.get("preferred_model")
+            )
+            commit_policy_needed = _prompt_needs_commit_policy(item, is_finalization=is_finalization)
+            coordination_policy_needed = _prompt_needs_coordination_policy(
+                detail["task"],
+                target,
+                item,
+                commit_policy_needed=commit_policy_needed,
+                visible_agents=visible_agents,
+            )
+            commit_policy = _commit_policy_for_prompt(
+                commit_policy_needed,
+                str(task_id),
+                target,
+                policy_backend,
+                policy_model,
+            )
+            coordination_policy = _coordination_policy_for_prompt(coordination_policy_needed)
             visible_agent_constraints = [_agent_constraints_for_prompt(entry) for entry in visible_agents]
             current_agent_constraints = _agent_constraints_for_prompt(agent)
             components.update(
@@ -750,6 +859,7 @@ def chat_prompt(
                     "task_agents": visible_agent_constraints,
                     "task_journal": journal_context,
                     "commit_policy": commit_policy,
+                    "coordination_policy": coordination_policy,
                     "compact_summary": compact_context,
                 }
             )
@@ -780,6 +890,7 @@ def chat_prompt(
                 final_context=final_context.rstrip(),
                 task_journal=journal_context,
                 compact_summary=compact_context.rstrip(),
+                coordination_policy=coordination_policy,
                 commit_policy=commit_policy,
             )
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):
@@ -877,7 +988,14 @@ def chat_prompt(
         if root_cause_reaudit_gate:
             sticky_context = f"{sticky_context.rstrip()}\n\n{root_cause_reaudit_gate}\n"
             components["root_cause_reaudit_gate"] = root_cause_reaudit_gate
-        for stale_component in ("task_context", "task_agents", "task_journal", "commit_policy", "supervision_host_context"):
+        for stale_component in (
+            "task_context",
+            "task_agents",
+            "task_journal",
+            "commit_policy",
+            "coordination_policy",
+            "supervision_host_context",
+        ):
             components.pop(stale_component, None)
         components.update(
             {
