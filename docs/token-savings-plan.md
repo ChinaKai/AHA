@@ -30,7 +30,7 @@ history, and replacing large repeated context with durable references.
 | P2. Turn-end auto compact | Done | `3bfb34c` | Added turn-end auto compact/reset that archives the old native session without stopping the idle worker. |
 | P3. Protocol/rules on-demand injection | Done | `dc1afb5` | Full chat prompts now keep short action/commit reminders by default and inject long coordination/commit policies only on matching intent. |
 | P4. Tool output references | Done | `d479fbd` | Large Codex command output and Claude tool results now keep bounded `output_tail` plus `output_ref` artifact metadata. |
-| P5. Phase fresh session | Done | this slice | Added explicit `/aha phase <phase> [summary]` checkpointing that clears oversized native sessions without stopping the worker. |
+| P5. Phase fresh session | Done | `9a3460f` | Added explicit `/aha phase <phase> [summary]` checkpointing that clears oversized native sessions without stopping the worker. |
 
 ## P3: Protocol And Rules On-Demand Injection
 
@@ -107,8 +107,15 @@ Acceptance:
 - The task remains recoverable from docs plus AHA journal without relying on a
   long backend sticky thread.
 
-## Next Step
+## Completion Status
 
-Run the focused P5 verification, then do a final cross-slice smoke over prompt
-policy injection, output references, phase transitions, compact continuation,
-and frontend static command coverage.
+The planned P0-P5 implementation is complete. Remaining work is operational
+observation, not required implementation:
+
+- Watch real AHA long-task metrics for `aha_overhead_ratio`,
+  `estimated_backend_history_tokens`, and context pressure before changing
+  defaults further.
+- Tune auto compact thresholds only after observing at least a few real
+  high-context turns.
+- Consider richer UI affordances for browsing `output_ref` artifacts if users
+  need one-click inspection beyond existing event metadata.
