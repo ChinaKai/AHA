@@ -255,12 +255,19 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 target="sub-001",
             )
             rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+            artifact_text = (events.parent / rows[1]["data"]["output_ref"]["path"]).read_text(encoding="utf-8")
 
         self.assertEqual(rows[0]["type"], "agent_command_started")
         self.assertEqual(rows[1]["type"], "agent_command_finished")
         self.assertEqual(rows[1]["data"]["command"], "pwd")
         self.assertEqual(rows[1]["data"]["target"], "sub-001")
         self.assertEqual(len(rows[1]["data"]["output_tail"]), 1200)
+        self.assertEqual(rows[1]["data"]["output_chars"], 1300)
+        output_ref = rows[1]["data"]["output_ref"]
+        self.assertEqual(output_ref["kind"], "command_output")
+        self.assertEqual(output_ref["chars"], 1300)
+        self.assertTrue(output_ref["path"].startswith("tasks/task-001/artifacts/command-output/sub-001-"))
+        self.assertEqual(artifact_text, "x" * 1300)
 
     def test_codex_event_ignores_non_object_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,12 +450,39 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(rows[1]["data"]["text"], "hello")
         self.assertEqual(rows[2]["data"]["command"], "pwd")
         self.assertEqual(rows[3]["data"]["output_tail"], "ok")
+        self.assertEqual(rows[3]["data"]["output_chars"], 2)
+        self.assertNotIn("output_ref", rows[3]["data"])
         self.assertEqual(rows[4]["data"]["usage"]["input_tokens"], 1)
         self.assertEqual(text_result["events"][0][0], "agent_message")
         self.assertEqual(started_result["events"][0][0], "agent_command_started")
         self.assertEqual(started_result["events"][0][1]["command"], "pwd")
         self.assertEqual(finished_result["events"][0][0], "agent_command_finished")
         self.assertEqual(finished_result["events"][0][1]["output_tail"], "ok")
+
+    def test_claude_large_tool_result_records_output_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            content = "y" * 1300
+            result = handle_claude_event(
+                json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": content}]}}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+            artifact_text = (events.parent / rows[0]["data"]["output_ref"]["path"]).read_text(encoding="utf-8")
+
+        self.assertEqual(rows[0]["type"], "agent_command_finished")
+        self.assertEqual(rows[0]["data"]["output_chars"], 1300)
+        self.assertEqual(len(rows[0]["data"]["output_tail"]), 1200)
+        output_ref = rows[0]["data"]["output_ref"]
+        self.assertEqual(output_ref["kind"], "command_output")
+        self.assertEqual(output_ref["chars"], 1300)
+        self.assertTrue(output_ref["path"].startswith("tasks/task-001/artifacts/command-output/main-"))
+        self.assertEqual(artifact_text, content)
+        self.assertEqual(result["events"][0][1]["output_ref"]["path"], output_ref["path"])
 
     def test_claude_native_subagent_claims_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

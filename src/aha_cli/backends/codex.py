@@ -11,6 +11,7 @@ import sys
 
 from aha_cli.backends.registry import normalize_model_selector, resolve_model
 from aha_cli.domain.models import utc_now
+from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
@@ -250,7 +251,18 @@ def handle_codex_event(
             data["status"] = item.get("status", "")
             data["exit_code"] = item.get("exit_code")
             if raw_type == "item.completed":
-                data["output_tail"] = tail_text(item.get("aggregated_output", ""))
+                output = str(item.get("aggregated_output") or "")
+                data["output_tail"] = tail_text(output)
+                data["output_chars"] = len(output)
+                if len(output) > OUTPUT_TAIL_LIMIT:
+                    output_ref = save_command_output_artifact(
+                        events_file,
+                        task_id=task_id,
+                        target=target,
+                        output=output,
+                    )
+                    if output_ref:
+                        data["output_ref"] = output_ref
             append_event_to_file(
                 events_file,
                 run_id,

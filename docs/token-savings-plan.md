@@ -28,8 +28,8 @@ history, and replacing large repeated context with durable references.
 | P0. Quantify overhead | Done | `3bfb34c` | Added `aha_prompt_tokens`, `backend_input_tokens`, `estimated_backend_history_tokens`, and `aha_overhead_ratio`; surfaced them in backend usage breakdown. |
 | P1. Compact reset continuation | Done | `3bfb34c` | Normal full prompts can inject a bounded compact summary after `backend_session_id` is cleared. |
 | P2. Turn-end auto compact | Done | `3bfb34c` | Added turn-end auto compact/reset that archives the old native session without stopping the idle worker. |
-| P3. Protocol/rules on-demand injection | Done | this slice | Full chat prompts now keep short action/commit reminders by default and inject long coordination/commit policies only on matching intent. |
-| P4. Tool output references | Not started | - | Store large owned outputs as artifacts and inject compact references/previews. |
+| P3. Protocol/rules on-demand injection | Done | `dc1afb5` | Full chat prompts now keep short action/commit reminders by default and inject long coordination/commit policies only on matching intent. |
+| P4. Tool output references | Done | this slice | Large Codex command output and Claude tool results now keep bounded `output_tail` plus `output_ref` artifact metadata. |
 | P5. Phase fresh session | Not started | - | Add explicit phase boundaries that can checkpoint and start a fresh backend session. |
 
 ## P3: Protocol And Rules On-Demand Injection

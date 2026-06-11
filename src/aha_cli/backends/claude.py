@@ -8,13 +8,14 @@ import shlex
 import subprocess
 import sys
 
-from aha_cli.backends.codex import is_context_overflow_message, tail_text
+from aha_cli.backends.codex import OUTPUT_TAIL_LIMIT, is_context_overflow_message, tail_text
 from aha_cli.backends.registry import normalize_model_selector
 from aha_cli.domain.models import utc_now
 from aha_cli.services.native_subagents import (
     CLAUDE_NATIVE_SUBAGENT_TOOLS,
     text_claims_subagent_created,
 )
+from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 
@@ -257,6 +258,14 @@ def handle_claude_event(
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False)
             is_error = bool(item.get("is_error"))
+            output_ref = None
+            if len(content) > OUTPUT_TAIL_LIMIT:
+                output_ref = save_command_output_artifact(
+                    events_file,
+                    task_id=task_id,
+                    target=target,
+                    output=content,
+                )
             append_event_to_file(
                 events_file,
                 run_id,
@@ -268,6 +277,8 @@ def handle_claude_event(
                     "status": "failed" if is_error else "completed",
                     "exit_code": 1 if is_error else 0,
                     "output_tail": tail_text(content),
+                    "output_chars": len(content),
+                    **({"output_ref": output_ref} if output_ref else {}),
                 },
             )
             result.setdefault("events", []).append(("agent_command_finished", command_data))
