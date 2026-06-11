@@ -2670,6 +2670,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("prompt_chars", script)
         self.assertIn("pressure_source", script)
         self.assertIn("/aha session compact-reset", frontend_scripts)
+        self.assertIn("/aha phase", frontend_scripts)
         self.assertIn("compactResetStates", script)
         self.assertIn("Compacting", script)
         self.assertIn("Restarting", script)

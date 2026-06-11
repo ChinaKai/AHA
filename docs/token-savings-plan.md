@@ -29,8 +29,8 @@ history, and replacing large repeated context with durable references.
 | P1. Compact reset continuation | Done | `3bfb34c` | Normal full prompts can inject a bounded compact summary after `backend_session_id` is cleared. |
 | P2. Turn-end auto compact | Done | `3bfb34c` | Added turn-end auto compact/reset that archives the old native session without stopping the idle worker. |
 | P3. Protocol/rules on-demand injection | Done | `dc1afb5` | Full chat prompts now keep short action/commit reminders by default and inject long coordination/commit policies only on matching intent. |
-| P4. Tool output references | Done | this slice | Large Codex command output and Claude tool results now keep bounded `output_tail` plus `output_ref` artifact metadata. |
-| P5. Phase fresh session | Not started | - | Add explicit phase boundaries that can checkpoint and start a fresh backend session. |
+| P4. Tool output references | Done | `d479fbd` | Large Codex command output and Claude tool results now keep bounded `output_tail` plus `output_ref` artifact metadata. |
+| P5. Phase fresh session | Done | this slice | Added explicit `/aha phase <phase> [summary]` checkpointing that clears oversized native sessions without stopping the worker. |
 
 ## P3: Protocol And Rules On-Demand Injection
 
@@ -109,5 +109,6 @@ Acceptance:
 
 ## Next Step
 
-Implement P3 first because it directly reduces repeated AHA injection and has a
-smaller blast radius than tool artifact or phase-session changes.
+Run the focused P5 verification, then do a final cross-slice smoke over prompt
+policy injection, output references, phase transitions, compact continuation,
+and frontend static command coverage.

@@ -29,6 +29,10 @@ class TaskCommandRouterTests(unittest.TestCase):
                 "compact reset",
                 {"old_backend_session_id": "session-1", "target": target},
             ),
+            transition_selected_agent_phase=lambda root, run_id, task_id, target, command: (
+                "phase changed",
+                {"phase": command.split()[2], "target": target},
+            ),
             prepare_task_main_autostart=lambda root, run_id, task_id: {"backend": "codex", "target": "main", "task_id": task_id},
             append_message=append_message,
             append_event=append_event,
@@ -141,6 +145,22 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertEqual(interrupt_payload["interrupt"]["target"], "sub-001")
         self.assertTrue(reset_handled)
         self.assertEqual(reset_payload["compact_reset"]["old_backend_session_id"], "session-1")
+
+    def test_phase_command_attaches_phase_transition_payload(self) -> None:
+        handlers, _ = self.make_handlers()
+
+        handled, forwarded, payload = handle_slash_command(
+            Path("/tmp/root"),
+            "run-1",
+            {"sender": "browser", "target": "main"},
+            "/aha phase implement start coding",
+            "task-001",
+            handlers=handlers,
+        )
+
+        self.assertTrue(handled)
+        self.assertIsNone(forwarded)
+        self.assertEqual(payload["phase_transition"], {"phase": "implement", "target": "main"})
 
 
 if __name__ == "__main__":

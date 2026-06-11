@@ -7,6 +7,7 @@ from aha_cli.web.task_command_actions import (
     reopen_selected_task,
     request_task_finalization,
     request_task_finalization_with_backend,
+    transition_selected_agent_phase,
 )
 from aha_cli.web.task_command_format import (
     finalization_prompt,
@@ -28,4 +29,5 @@ __all__ = [
     "reopen_selected_task",
     "request_task_finalization",
     "request_task_finalization_with_backend",
+    "transition_selected_agent_phase",
 ]

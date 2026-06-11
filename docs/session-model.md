@@ -42,7 +42,8 @@ sub-agent: sticky
   "backend": "codex",
   "policy": "sticky",
   "backend_session_id": "019e...",
-  "status": "active"
+  "status": "active",
+  "phase": "implement"
 }
 ```
 
@@ -51,6 +52,20 @@ Backends that do not expose resumable sessions leave `backend_session_id` empty.
 `backend_session_id` stores the backend-native resumable session identifier. For Codex this is the Codex thread id. For Claude this is the Claude session id. The durable field stays backend-neutral so task and session storage do not need provider-specific columns.
 
 Some events still expose the backend-native id as `thread_id` for compatibility with older logs and UI replay code. Treat that event field as a legacy transport name, not as a Codex-only concept.
+
+`phase` is an optional task-agent execution phase such as `research`, `plan`,
+`implement`, `verify`, or `finalize`. Users can explicitly transition the
+selected agent with:
+
+```text
+/aha phase <phase> [summary]
+```
+
+When a phase transition has an active `backend_session_id`, AHA writes a compact
+checkpoint summary, archives the old backend session id, clears it, and stores
+the new `phase` plus `phase_history`. The worker process is not stopped by this
+transition; the next turn starts from the compact summary and creates a fresh
+backend-native session.
 
 Session files live beside the scope they belong to:
 

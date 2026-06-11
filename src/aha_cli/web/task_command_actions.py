@@ -5,6 +5,7 @@ from pathlib import Path
 from aha_cli.services.backend_runtime import backend_status, stop_backend
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import request_round_summary_if_ready
+from aha_cli.services.session_phase import transition_agent_phase
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.subagent_state import pending_current_round_sub_agents
 from aha_cli.store.filesystem import (
@@ -56,6 +57,31 @@ def record_task_checkpoint(root: Path, run_id: str, task_id: str | None, command
     except KeyError:
         return f"Task not found: {task_id}"
     return f"Checkpoint recorded for {task_id}: {record['round_id']}"
+
+
+def transition_selected_agent_phase(root: Path, run_id: str, task_id: str | None, target: str, command: str) -> tuple[str, dict]:
+    if not task_id:
+        return "No task is selected.", {"ok": False, "reason": "no_task"}
+    parts = command.split(maxsplit=3)
+    if len(parts) < 3 or not parts[2].strip():
+        return "Usage: /aha phase <phase> [summary]", {"ok": False, "reason": "missing_phase"}
+    phase = parts[2].strip()
+    summary = parts[3].strip() if len(parts) > 3 else ""
+    agent_id = target or "main"
+    try:
+        payload = transition_agent_phase(root, run_id, task_id, agent_id, phase, summary=summary, restart=False)
+    except KeyError as exc:
+        return f"Task or agent not found: {exc}", {"ok": False, "reason": "not_found"}
+    except ValueError as exc:
+        return str(exc), {"ok": False, "reason": "invalid"}
+    suffix = ""
+    compact = payload.get("compact_reset") if isinstance(payload.get("compact_reset"), dict) else None
+    if compact:
+        suffix = f" Fresh backend session will start from `{compact.get('summary_path')}`."
+    return (
+        f"Phase changed for {task_id}/{agent_id}: {payload.get('old_phase') or '-'} -> {payload.get('phase')}.{suffix}",
+        payload,
+    )
 
 
 def reopen_selected_task(root: Path, run_id: str, task_id: str | None) -> str:

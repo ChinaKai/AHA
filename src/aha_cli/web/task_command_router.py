@@ -16,6 +16,7 @@ class SlashCommandHandlers:
     reopen_selected_task: Callable[[Path, str, str | None], str]
     interrupt_selected_agent: Callable[[Path, str, str | None, str], tuple[str, dict]]
     compact_reset_selected_agent: Callable[[Path, str, str | None, str], tuple[str, dict]]
+    transition_selected_agent_phase: Callable[[Path, str, str | None, str, str], tuple[str, dict]]
     prepare_task_main_autostart: Callable[[Path, str, str | None], dict | None]
     append_message: Callable[..., dict]
     append_event: Callable[..., dict]
@@ -28,6 +29,7 @@ def default_slash_command_handlers() -> SlashCommandHandlers:
         record_task_checkpoint,
         request_task_finalization,
         reopen_selected_task,
+        transition_selected_agent_phase,
     )
     from aha_cli.web.task_command_actions import prepare_task_main_autostart
     from aha_cli.web.task_command_format import format_agent_command, format_aha_command
@@ -46,6 +48,7 @@ def default_slash_command_handlers() -> SlashCommandHandlers:
             target,
             restart=True,
         ),
+        transition_selected_agent_phase=transition_selected_agent_phase,
         prepare_task_main_autostart=prepare_task_main_autostart,
         append_message=append_message,
         append_event=append_event,
@@ -71,6 +74,7 @@ def handle_slash_command(
     backend_autostart = None
     interrupt_payload = None
     compact_reset_payload = None
+    phase_transition_payload = None
     target = selected_target(payload)
 
     if not stripped.startswith("/"):
@@ -109,6 +113,8 @@ def handle_slash_command(
             reply, interrupt_payload = handlers.interrupt_selected_agent(root, run_id, task_id, target)
         elif name == "session" and len(parts) > 2 and parts[2] == "compact-reset":
             reply, compact_reset_payload = handlers.compact_reset_selected_agent(root, run_id, task_id, target)
+        elif name == "phase":
+            reply, phase_transition_payload = handlers.transition_selected_agent_phase(root, run_id, task_id, target, stripped)
         else:
             reply = handlers.format_aha_command(root, run_id, task_id, stripped, target)
     else:
@@ -134,6 +140,8 @@ def handle_slash_command(
         command_response["interrupt"] = interrupt_payload
     if compact_reset_payload is not None:
         command_response["compact_reset"] = compact_reset_payload
+    if phase_transition_payload is not None:
+        command_response["phase_transition"] = phase_transition_payload
     return True, None, command_response
 
 
