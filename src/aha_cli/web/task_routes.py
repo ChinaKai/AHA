@@ -280,6 +280,11 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
             if not isinstance(payload.get("supervision"), dict):
                 return route_result({"error": "supervision must be an object"}, "400 Bad Request")
             supervision = parse_task_supervision_fields(payload["supervision"])
+        context_management = None
+        if "context_management" in payload:
+            if not isinstance(payload.get("context_management"), dict):
+                return route_result({"error": "context_management must be an object"}, "400 Bad Request")
+            context_management = parse_task_context_management_fields(payload["context_management"])
         dispatch = bool(payload.get("dispatch", True))
         task = create_task_and_dispatch(
             root,
@@ -303,6 +308,7 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
             preferred_sub_model=str(payload.get("preferred_sub_model", "") or "") or None,
             description=description,
             supervision=supervision,
+            context_management=context_management,
             dispatch=dispatch,
         )
     except ValueError as exc:

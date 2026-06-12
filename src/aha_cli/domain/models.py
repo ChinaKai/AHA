@@ -238,9 +238,11 @@ def default_task_context_management() -> dict:
     }
 
 
-def normalize_task_context_management(value: object | None = None) -> dict:
+def normalize_task_context_management(value: object | None = None, *, default_enabled: bool = False) -> dict:
     raw = value if isinstance(value, dict) else {}
     context = default_task_context_management()
+    if default_enabled:
+        context["auto_compact_enabled"] = True
     if "auto_compact_enabled" in raw:
         context["auto_compact_enabled"] = normalize_bool(raw.get("auto_compact_enabled"))
     elif "enabled" in raw:
@@ -395,7 +397,7 @@ def make_task(
         "delegation_policy": resolved_delegation_policy,
         "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
-        "context_management": normalize_task_context_management(context_management),
+        "context_management": normalize_task_context_management(context_management, default_enabled=True),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
         "output_file": f"results/{task_id}.md",

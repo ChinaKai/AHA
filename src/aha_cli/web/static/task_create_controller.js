@@ -142,6 +142,17 @@
       return deps.readAskUserGateControls?.(elements.taskSupervisionAskUserGatesEl) || {};
     }
 
+    function syncCreateTaskContextFields() {
+      const enabled = elements.taskContextAutoCompactEnabledEl?.checked !== false;
+      if (elements.taskContextThresholdFieldEl) {
+        elements.taskContextThresholdFieldEl.hidden = !enabled;
+        elements.taskContextThresholdFieldEl.classList.toggle("hidden", !enabled);
+      }
+      if (elements.taskContextThresholdEl) {
+        elements.taskContextThresholdEl.disabled = !enabled;
+      }
+    }
+
     function readFormDraft() {
       return {
         values: {
@@ -162,7 +173,9 @@
           supervision_host_model: elements.taskSupervisionHostModelEl?.value || "",
           supervision_host_proxy_enabled: Boolean(elements.taskSupervisionHostProxyEnabledEl?.checked),
           supervision_max_rounds: elements.taskSupervisionMaxRoundsEl?.value || "",
-          supervision_ask_user_gates: readAskUserGates()
+          supervision_ask_user_gates: readAskUserGates(),
+          context_auto_compact_enabled: elements.taskContextAutoCompactEnabledEl?.checked !== false,
+          context_threshold_percent: elements.taskContextThresholdEl?.value || ""
         }
       };
     }
@@ -353,6 +366,9 @@
       setCheckboxValue(elements.taskSupervisionHostProxyEnabledEl, values.supervision_host_proxy_enabled);
       setInputValue(elements.taskSupervisionMaxRoundsEl, values.supervision_max_rounds);
       restoreAskUserGates(values);
+      setCheckboxValue(elements.taskContextAutoCompactEnabledEl, values.context_auto_compact_enabled);
+      setInputValue(elements.taskContextThresholdEl, values.context_threshold_percent);
+      syncCreateTaskContextFields();
       setCheckboxValue(elements.taskProxyEnabledEl, values.proxy_enabled);
     }
 
@@ -370,6 +386,8 @@
         workflow_template: memo.workflow_template || "auto",
         max_sub_agents: memo.max_sub_agents ?? "",
         supervision_mode: "manual",
+        context_auto_compact_enabled: true,
+        context_threshold_percent: "75",
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
       };
     }
@@ -496,6 +514,8 @@
       );
       deps.setCreateProxyDefaultsFromInputs?.();
       const createProxyEnabled = Boolean(elements.taskProxyEnabledEl?.checked);
+      const contextThreshold = deps.normalizeTaskContextThreshold?.(elements.taskContextThresholdEl?.value || 75) || 75;
+      if (elements.taskContextThresholdEl) elements.taskContextThresholdEl.value = String(contextThreshold);
       const payload = deps.createTaskPayload?.({
         title,
         description,
@@ -512,6 +532,8 @@
         maxSubAgents,
         preferredSubBackend: elements.taskBackendEl.value,
         supervision,
+        contextAutoCompactEnabled: elements.taskContextAutoCompactEnabledEl?.checked !== false,
+        contextThreshold,
         dispatch: true
       });
       if (payload && activeTaskMemoId) payload.source_memo_id = activeTaskMemoId;
@@ -527,7 +549,8 @@
           workspace_id: payload?.workspace_id || "",
           workspace_path: payload?.workspace_path || "",
           collaboration_mode: payload?.collaboration_mode || "",
-          workflow_template: payload?.workflow_template || ""
+          workflow_template: payload?.workflow_template || "",
+          context_auto_compact_enabled: payload?.context_management?.auto_compact_enabled
         });
         const confirmed = await confirmAddTask(payload);
         realtimeDebug("task_create.confirm_result", { confirmed: Boolean(confirmed) });
@@ -608,6 +631,7 @@
         if (!option) return;
         restoreDraft(option.dataset.taskMemoOption || "", { showStatus: true });
       });
+      elements.taskContextAutoCompactEnabledEl?.addEventListener("change", syncCreateTaskContextFields);
       if (elements.taskCreateDialogEl && windowRef.MutationObserver) {
         const observer = new windowRef.MutationObserver(() => {
           if (elements.taskCreateDialogEl.open) {
@@ -620,6 +644,7 @@
         observer.observe(elements.taskCreateDialogEl, { attributes: true, attributeFilter: ["open"] });
       }
       renderDraftBox();
+      syncCreateTaskContextFields();
       void loadTaskMemoOptions().catch(err => {
         const message = err?.message || String(err);
         setDraftStatus(message);

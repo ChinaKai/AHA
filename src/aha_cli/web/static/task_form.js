@@ -1,7 +1,27 @@
 (function () {
+  const defaultTaskContextThresholdPercent = 75;
+
+  function normalizeTaskContextThreshold(value) {
+    const rawThreshold = Number(value ?? defaultTaskContextThresholdPercent);
+    return Number.isFinite(rawThreshold)
+      ? Math.max(1, Math.min(99, Math.round(rawThreshold)))
+      : defaultTaskContextThresholdPercent;
+  }
+
+  function taskContextConfirmLabel(payload) {
+    const policy = payload.context_management && typeof payload.context_management === "object"
+      ? payload.context_management
+      : {};
+    const enabled = policy.auto_compact_enabled !== false;
+    const threshold = normalizeTaskContextThreshold(policy.auto_compact_threshold_percent);
+    return enabled ? `auto at ${threshold}%` : "auto off";
+  }
+
   function createTaskPayload(input = {}) {
     const proxyEnabled = Boolean(input.proxyEnabled);
     const backend = input.backend || "";
+    const contextAutoCompactEnabled = input.contextAutoCompactEnabled !== false;
+    const contextThreshold = normalizeTaskContextThreshold(input.contextThreshold);
     return {
       title: String(input.title || "").trim(),
       description: String(input.description || "").trim(),
@@ -17,6 +37,10 @@
       max_sub_agents: Number(input.maxSubAgents ?? 3),
       preferred_sub_backend: input.preferredSubBackend || backend,
       supervision: input.supervision || {},
+      context_management: {
+        auto_compact_enabled: contextAutoCompactEnabled,
+        auto_compact_threshold_percent: contextThreshold
+      },
       dispatch: input.dispatch !== false,
       model: input.model || null
     };
@@ -43,6 +67,7 @@
       ["Supervision", context.supervisionSummary || "manual"],
       ["Host model", supervision.real_agent_enabled ? `${supervision.host_backend || "stub"} / ${hostModel}` : "-"],
       ["Host proxy", supervision.real_agent_enabled ? hostProxy : "-"],
+      ["Context", taskContextConfirmLabel(payload)],
       ["Proxy", taskProxyConfirmLabel(payload)]
     ];
   }

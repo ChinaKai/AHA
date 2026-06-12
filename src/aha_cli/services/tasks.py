@@ -28,6 +28,7 @@ def create_task_and_dispatch(
     preferred_sub_model: str | None = None,
     description: str | None = None,
     supervision: dict[str, object] | None = None,
+    context_management: dict[str, object] | None = None,
     dispatch: bool = True,
 ) -> dict:
     task = add_task(
@@ -52,6 +53,7 @@ def create_task_and_dispatch(
         preferred_sub_model=preferred_sub_model,
         description=description,
         supervision=supervision,
+        context_management=context_management,
     )
     policy = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     if policy.get("mode") == "assisted" and policy.get("real_agent_enabled") and policy.get("host_backend") != "stub":

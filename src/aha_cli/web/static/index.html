@@ -472,6 +472,20 @@
               <select id="task-model"></select>
             </label>
           </div>
+          <div class="field-row task-defaults-grid task-create-context-grid">
+            <label class="field-label checkbox-field">
+              <span data-i18n="task.context_management">Context management</span>
+              <span class="checkbox-line">
+                <input id="task-context-auto-compact-enabled" type="checkbox" checked>
+                <span data-i18n="task.context_auto">Agent context auto compact</span>
+              </span>
+              <div class="field-help" data-i18n="task.context_auto_help">Automatically compact and reset long backend sessions when they approach the context limit.</div>
+            </label>
+            <label id="task-context-threshold-field" class="field-label">
+              <span data-i18n="task.context_threshold">Trigger percent</span>
+              <input id="task-context-threshold" type="number" min="1" max="99" value="75">
+            </label>
+          </div>
         </fieldset>
         <details class="form-section advanced-task-options">
           <summary data-i18n="task.advanced">Advanced</summary>

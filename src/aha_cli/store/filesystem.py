@@ -412,6 +412,7 @@ def add_task(
     preferred_sub_model: str | None = None,
     description: str | None = None,
     supervision: dict | None = None,
+    context_management: dict | None = None,
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -446,6 +447,7 @@ def add_task(
             preferred_sub_model=preferred_sub_model,
             description=description,
             supervision=supervision,
+            context_management=context_management,
         )
         for _ in range(max(0, sub_agents)):
             add_agent_to_task_dict(

@@ -83,7 +83,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["agents"][0]["sandbox"], "danger-full-access")
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 99)
         self.assertFalse(any(body["task"]["supervision"]["ask_user_gates"].values()))
-        self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
+        self.assertTrue(body["task"]["context_management"]["auto_compact_enabled"])
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(status["tasks"][-1]["collaboration_mode"], "team")
@@ -97,6 +97,38 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(task_created["data"]["preferred_sub_backend"], "codex")
         self.assertIsNone(task_created["data"]["preferred_sub_model"])
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
+
+    def test_api_task_create_accepts_context_management_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task context create config", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Context configured task",
+                            "dispatch": False,
+                            "context_management": {
+                                "auto_compact_enabled": False,
+                                "auto_compact_threshold_percent": 82,
+                            },
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                status = status_snapshot(root, run_id)
+
+        self.assertTrue(body["ok"])
+        self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
+        self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 82)
+        self.assertEqual(status["tasks"][-1]["context_management"], body["task"]["context_management"])
 
     def test_task_memo_api_crud_and_task_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
