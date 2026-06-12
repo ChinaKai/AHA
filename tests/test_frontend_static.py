@@ -2350,6 +2350,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('id="task-context-auto-compact-enabled" type="checkbox" checked', html)
         self.assertIn('id="task-context-threshold" type="number" min="1" max="99" value="75"', html)
         self.assertIn("taskContextAutoCompactEnabledEl", controller_registry_script)
+        self.assertGreaterEqual(app_controller_factory_script.count("taskContextAutoCompactEnabledEl, taskContextThresholdEl, taskContextThresholdFieldEl"), 2)
         self.assertIn("syncCreateTaskContextFields", task_create_controller_script)
         self.assertIn("contextAutoCompactEnabled", task_create_controller_script)
         self.assertIn("contextThreshold", task_create_controller_script)
