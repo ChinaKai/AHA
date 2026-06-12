@@ -6,6 +6,12 @@
       return window.AHAI18n?.t?.(key, fallback) || fallback;
     }
 
+    function promptForAuth(err) {
+      if (!deps.isAuthRequiredError?.(err)) return false;
+      deps.renderLoginState?.(t("auth.session_expired", "Login expired. Enter the token again."), true);
+      return true;
+    }
+
     function currentRunId() {
       return String(state.currentRunId?.() || "").trim();
     }
@@ -109,6 +115,7 @@
         applyRunListData(payload);
         state.setRunsError?.("");
       } catch (err) {
+        if (promptForAuth(err)) return;
         state.setRunsError?.(err?.message || String(err || t("run.list_unavailable", "Run list unavailable")));
         const fallback = fallbackCurrentRun();
         state.setRunsData?.(fallback ? [fallback] : []);

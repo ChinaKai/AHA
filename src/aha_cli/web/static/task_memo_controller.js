@@ -57,6 +57,12 @@
       return windowRef.AHAI18n?.t?.(key, fallback) || fallback;
     }
 
+    function promptForAuth(err) {
+      if (!deps.isAuthRequiredError?.(err)) return false;
+      deps.renderLoginState?.(t("auth.session_expired", "Login expired. Enter the token again."), true);
+      return true;
+    }
+
     const memoMarkdownTools = (deps.taskMemoMarkdown || windowRef.AHATaskMemoMarkdown)?.createTaskMemoMarkdownTools?.({
       windowRef,
       documentRef,
@@ -274,6 +280,7 @@
         remoteSelectedMemoId = String(payload?.last_selected_memo_id || "").trim();
         return remoteSelectedMemoId || readStoredSelectedMemoId();
       } catch (err) {
+        if (promptForAuth(err)) return readStoredSelectedMemoId();
         deps.consoleRef?.warn?.("Failed to load memo UI state", err);
         remoteSelectedMemoId = "";
         return readStoredSelectedMemoId();
@@ -516,6 +523,7 @@
       try {
         return await taskPickerRequestPromise;
       } catch (err) {
+        if (promptForAuth(err)) return taskPickerTasks;
         if (requestSeq === taskPickerRequestSeq) {
           taskPickerError = err?.message || String(err);
           deps.consoleRef?.warn?.("Failed to load memo task options", err);
@@ -607,6 +615,7 @@
     }
 
     function reportError(err) {
+      if (promptForAuth(err)) return;
       const message = err?.message || String(err);
       setState(message);
       deps.alert?.(message);
