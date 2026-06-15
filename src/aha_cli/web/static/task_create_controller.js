@@ -143,7 +143,7 @@
     }
 
     function syncCreateTaskContextFields() {
-      const enabled = elements.taskContextAutoCompactEnabledEl?.checked !== false;
+      const enabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
       if (elements.taskContextThresholdFieldEl) {
         elements.taskContextThresholdFieldEl.hidden = !enabled;
         elements.taskContextThresholdFieldEl.classList.toggle("hidden", !enabled);
@@ -174,7 +174,7 @@
           supervision_host_proxy_enabled: Boolean(elements.taskSupervisionHostProxyEnabledEl?.checked),
           supervision_max_rounds: elements.taskSupervisionMaxRoundsEl?.value || "",
           supervision_ask_user_gates: readAskUserGates(),
-          context_auto_compact_enabled: elements.taskContextAutoCompactEnabledEl?.checked !== false,
+          context_auto_compact_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
           context_threshold_percent: elements.taskContextThresholdEl?.value || ""
         }
       };
@@ -386,7 +386,7 @@
         workflow_template: memo.workflow_template || "auto",
         max_sub_agents: memo.max_sub_agents ?? "",
         supervision_mode: "manual",
-        context_auto_compact_enabled: true,
+        context_auto_compact_enabled: false,
         context_threshold_percent: "75",
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
       };
@@ -532,7 +532,7 @@
         maxSubAgents,
         preferredSubBackend: elements.taskBackendEl.value,
         supervision,
-        contextAutoCompactEnabled: elements.taskContextAutoCompactEnabledEl?.checked !== false,
+        contextAutoCompactEnabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
         contextThreshold,
         dispatch: true
       });

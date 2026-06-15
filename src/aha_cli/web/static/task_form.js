@@ -12,7 +12,7 @@
     const policy = payload.context_management && typeof payload.context_management === "object"
       ? payload.context_management
       : {};
-    const enabled = policy.auto_compact_enabled !== false;
+    const enabled = policy.auto_compact_enabled === true;
     const threshold = normalizeTaskContextThreshold(policy.auto_compact_threshold_percent);
     return enabled ? `auto at ${threshold}%` : "auto off";
   }
@@ -20,7 +20,7 @@
   function createTaskPayload(input = {}) {
     const proxyEnabled = Boolean(input.proxyEnabled);
     const backend = input.backend || "";
-    const contextAutoCompactEnabled = input.contextAutoCompactEnabled !== false;
+    const contextAutoCompactEnabled = Boolean(input.contextAutoCompactEnabled);
     const contextThreshold = normalizeTaskContextThreshold(input.contextThreshold);
     return {
       title: String(input.title || "").trim(),

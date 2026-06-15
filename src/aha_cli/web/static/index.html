@@ -476,14 +476,14 @@
             <label class="field-label checkbox-field">
               <span data-i18n="task.context_management">Context management</span>
               <span class="checkbox-line">
-                <input id="task-context-auto-compact-enabled" type="checkbox" checked>
+                <input id="task-context-auto-compact-enabled" type="checkbox">
                 <span data-i18n="task.context_auto">Agent context auto compact</span>
               </span>
               <div class="field-help" data-i18n="task.context_auto_help">Automatically compact and reset long backend sessions when they approach the context limit.</div>
             </label>
-            <label id="task-context-threshold-field" class="field-label">
+            <label id="task-context-threshold-field" class="field-label" hidden>
               <span data-i18n="task.context_threshold">Trigger percent</span>
-              <input id="task-context-threshold" type="number" min="1" max="99" value="75">
+              <input id="task-context-threshold" type="number" min="1" max="99" value="75" disabled>
             </label>
           </div>
         </fieldset>

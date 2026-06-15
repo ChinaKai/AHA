@@ -83,7 +83,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["agents"][0]["sandbox"], "danger-full-access")
         self.assertEqual(body["task"]["supervision"]["max_rounds"], 99)
         self.assertFalse(any(body["task"]["supervision"]["ask_user_gates"].values()))
-        self.assertTrue(body["task"]["context_management"]["auto_compact_enabled"])
+        self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(status["tasks"][-1]["collaboration_mode"], "team")

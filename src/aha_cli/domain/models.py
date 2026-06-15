@@ -397,7 +397,7 @@ def make_task(
         "delegation_policy": resolved_delegation_policy,
         "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
-        "context_management": normalize_task_context_management(context_management, default_enabled=True),
+        "context_management": normalize_task_context_management(context_management),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
         "output_file": f"results/{task_id}.md",

@@ -131,11 +131,12 @@ use `/aha phase <phase> [summary]` to checkpoint and freshen the selected agent 
 keep backend sessions as execution continuity, not as the source of truth
 ```
 
-New tasks enable agent context auto compact by default at a 75% context-pressure
-threshold. The task creation dialog exposes this policy so users can turn it off
-or adjust the threshold before the first backend session starts. Existing tasks
-without stored context-management metadata keep legacy compatibility defaults
-until they are explicitly edited.
+New tasks keep agent context auto compact off by default, with a 75%
+context-pressure threshold prefilled for users who choose to enable it. The task
+creation dialog exposes this policy so users can turn it on or adjust the
+threshold before the first backend session starts. Existing tasks without stored
+context-management metadata keep legacy compatibility defaults until they are
+explicitly edited.
 
 The durable source of truth should be AHA state, task journals, round summaries,
 finals, decisions, changed files, verification, and risks. Backend sticky
