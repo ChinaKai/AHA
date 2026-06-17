@@ -543,9 +543,12 @@ def handle_agent_config_route(root: Path, run_id: str, payload: dict) -> dict:
             backend_restart = restart_agent_backend(root, run_id, task_id, agent_id)
         if agent is None:
             agent = update_agent_config(root, run_id, task_id, agent_id)
-        return route_result({"ok": True, "agent": agent, "backend_switch": backend_switch, "backend_restart": backend_restart})
+        task = task_snapshot(root, run_id, task_id)["task"]
+        return route_result({"ok": True, "agent": agent, "task": task, "backend_switch": backend_switch, "backend_restart": backend_restart})
     except (SystemExit, ValueError) as exc:
         return route_result({"error": str(exc)}, "404 Not Found")
+    except OSError as exc:
+        return route_result({"error": str(exc)}, "500 Internal Server Error")
 
 
 def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:

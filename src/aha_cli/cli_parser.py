@@ -264,6 +264,8 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     commit_p.add_argument("--type", choices=CONVENTIONAL_TYPES, required=True)
     commit_p.add_argument("--scope", default=None)
     commit_p.add_argument("--summary", required=True)
+    commit_p.add_argument("--body", action="append", default=[], help="Commit body paragraph; repeatable")
+    commit_p.add_argument("--body-file", default=None, help="Read commit body from a file")
     commit_p.add_argument("--generated-by", default=None)
     commit_p.add_argument("--task-id", default=None, help="Deprecated; task tracking stays in the AHA journal")
     commit_p.add_argument("--agent", default=None, help="Deprecated; agent tracking stays in the AHA journal")

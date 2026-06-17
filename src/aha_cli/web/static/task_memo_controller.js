@@ -241,6 +241,18 @@
       return String(deps.currentRunId?.() || "").trim();
     }
 
+    function bootstrapMemoSummary() {
+      const summary = deps.bootstrapData?.()?.memo_summary || null;
+      if (!summary || typeof summary !== "object") return null;
+      const runId = currentRunId();
+      if (!runId || String(summary.run_id || "").trim() !== runId) return null;
+      return summary;
+    }
+
+    function bootstrapSelectedMemoId() {
+      return String(bootstrapMemoSummary()?.last_selected_memo_id || "").trim();
+    }
+
     function readStoredSelectedMemoId() {
       const key = selectedMemoStorageKey();
       if (!key) return "";
@@ -285,6 +297,10 @@
         remoteSelectedMemoId = "";
         return readStoredSelectedMemoId();
       }
+    }
+
+    async function preferredSelectedMemoId() {
+      return bootstrapSelectedMemoId() || await readPersistedSelectedMemoId();
     }
 
     function writePersistedSelectedMemoId(memoId = "") {
@@ -574,7 +590,7 @@
 
     function writeStoredPageMode(active) {
       try {
-        windowRef.localStorage?.setItem("aha.taskMemoView", active ? "memo" : "task");
+        windowRef.localStorage?.setItem("aha.taskMemoViewExplicit", active ? "memo" : "task");
       } catch (_err) {
         // localStorage can be unavailable in restricted browser modes.
       }
@@ -621,9 +637,37 @@
       deps.alert?.(message);
     }
 
+    function resetMemoRunState() {
+      memos = [];
+      selectedMemoRunId = "";
+      selectedMemoId = "";
+      editorMode = "empty";
+      draftTaskLinkMemoId = "";
+      draftTaskLinkId = "";
+      draftTaskLinkDirty = false;
+      taskPickerRunId = "";
+      taskPickerLoaded = false;
+      taskPickerTasks = [];
+      taskPickerRequestPromise = null;
+    }
+
+    function renderMemoHomeWithoutRun() {
+      resetMemoRunState();
+      render();
+      setState(t("memo.create_run_first", "Create a run to start using memos."));
+    }
+
     function openDialog() {
       if (!deps.currentRunId?.()) {
-        deps.alert?.(t("task.create_run_first", "Create a run before adding a task."));
+        if (isPageMode()) {
+          elements.taskMemoDialogEl?.setAttribute("open", "");
+          setPageMode(true);
+          updateViewToggle();
+          deps.closeMobileSheets?.();
+          renderMemoHomeWithoutRun();
+          return;
+        }
+        deps.alert?.(t("memo.create_run_first", "Create a run to start using memos."));
         return;
       }
       if (isPageMode()) {
@@ -665,6 +709,10 @@
     }
 
     async function loadMemos() {
+      if (!currentRunId()) {
+        renderMemoHomeWithoutRun();
+        return [];
+      }
       const payload = await deps.fetchJson(deps.apiUrl("/api/task-memos"), {}, "Failed to load task memos");
       const runId = currentRunId();
       if (selectedMemoRunId !== runId) {
@@ -680,6 +728,13 @@
         taskPickerRequestPromise = null;
       }
       memos = Array.isArray(payload?.memos) ? payload.memos : [];
+      if (!selectedMemoId && editorMode === "empty") {
+        const persistedMemoId = await preferredSelectedMemoId();
+        if (persistedMemoId && memos.some(memo => memo.id === persistedMemoId)) {
+          selectedMemoId = persistedMemoId;
+          editorMode = "edit";
+        }
+      }
       if (selectedMemoId && !memos.some(memo => memo.id === selectedMemoId)) {
         selectedMemoId = "";
         writePersistedSelectedMemoId("");
@@ -928,6 +983,10 @@
     function renderList() {
       if (!elements.taskMemoListEl || !documentRef) return;
       elements.taskMemoListEl.innerHTML = "";
+      if (!currentRunId()) {
+        elements.taskMemoListEl.innerHTML = `<div class="empty compact">${escapeHtml(t("memo.create_run_first", "Create a run to start using memos."))}</div>`;
+        return;
+      }
       const { items, showDate, sections } = filteredMemos();
       if (sections) {
         const renderedSections = sections.map(renderMemoSection).filter(Boolean);
@@ -1247,6 +1306,7 @@
     }
 
     function renderEditor() {
+      const hasRun = Boolean(currentRunId());
       let memo = editorMode === "edit" ? selectedMemo() : null;
       if (editorMode === "edit" && !memo) {
         selectedMemoId = "";
@@ -1284,14 +1344,18 @@
         ? t("memo.editor_edit", "Edit memo")
         : isCreate
           ? t("memo.editor_create", "New memo")
-          : t("memo.editor_empty", "Select or create a memo"));
+          : hasRun
+            ? t("memo.editor_empty", "Select or create a memo")
+            : t("memo.workspace_needed", "Create a run"));
       setText(elements.taskMemoEditorHintEl, isEdit
         ? (reportGenerating
           ? t("memo.report_generating", "Completion report is generating. Memo is read-only.")
           : t("memo.editor_edit_hint", "Update this memo or turn it into a task."))
         : isCreate
           ? t("memo.editor_create_hint", "Fill in a future task idea, then save it as a memo.")
-          : t("memo.editor_empty_hint", "Choose a memo from the list, or click New Memo to create one."));
+          : hasRun
+            ? t("memo.editor_empty_hint", "Choose a memo from the list, or click New Memo to create one.")
+            : t("memo.create_run_first", "Create a run to start using memos."));
       [
         elements.taskMemoEditTitleEl,
         elements.taskMemoEditDateEl,
@@ -1313,6 +1377,7 @@
       setHidden(elements.taskMemoCancelEl, !isCreate);
       setHidden(elements.taskMemoConvertEl, !isEdit);
       setHidden(elements.taskMemoDeleteEl, !isEdit);
+      setDisabled(elements.taskMemoNewEl, !hasRun);
       setDisabled(elements.taskMemoDeleteEl, !isEdit || reportGenerating);
       setDisabled(elements.taskMemoConvertEl, !isEdit || reportGenerating);
       setText(elements.taskMemoSaveEl, t("memo.save", "Save"));
@@ -1348,6 +1413,10 @@
     }
 
     function enterCreateMode() {
+      if (!currentRunId()) {
+        setState(t("memo.create_run_first", "Create a run to start using memos."));
+        return;
+      }
       selectedMemoId = "";
       editorMode = "create";
       draftTaskLinkMemoId = "";
@@ -1654,7 +1723,11 @@
         }
         setPageMode(true);
         updateViewToggle();
-        if (deps.currentRunId?.()) void loadMemos().catch(reportError);
+        if (deps.currentRunId?.()) {
+          void loadMemos().catch(reportError);
+        } else {
+          renderMemoHomeWithoutRun();
+        }
       }
       updateViewToggle();
     }

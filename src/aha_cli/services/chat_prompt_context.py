@@ -829,9 +829,11 @@ def chat_prompt(
                     )
                 journal_context = "\n".join(journal_lines)
             visible_agents = agents_visible_to_prompt(detail["task"], target)
-            policy_backend = (session or {}).get("backend") or (agent or {}).get("backend") or task.get("preferred_backend")
+            policy_backend = backend or (session or {}).get("backend") or (agent or {}).get("backend") or task.get("preferred_backend")
             policy_model = (
-                (session or {}).get("resolved_model")
+                resolved_model
+                or requested_model
+                or (session or {}).get("resolved_model")
                 or (session or {}).get("model")
                 or (agent or {}).get("model")
                 or task.get("preferred_model")
@@ -988,15 +990,25 @@ def chat_prompt(
         if root_cause_reaudit_gate:
             sticky_context = f"{sticky_context.rstrip()}\n\n{root_cause_reaudit_gate}\n"
             components["root_cause_reaudit_gate"] = root_cause_reaudit_gate
+        sticky_commit_policy = str(components.get("commit_policy") or "").strip()
+        sticky_coordination_policy = str(components.get("coordination_policy") or "").strip()
         for stale_component in (
             "task_context",
             "task_agents",
             "task_journal",
-            "commit_policy",
-            "coordination_policy",
             "supervision_host_context",
         ):
             components.pop(stale_component, None)
+        if sticky_coordination_policy:
+            sticky_context = f"{sticky_context.rstrip()}\n\n{sticky_coordination_policy}\n"
+            components["coordination_policy"] = sticky_coordination_policy
+        else:
+            components.pop("coordination_policy", None)
+        if sticky_commit_policy:
+            sticky_context = f"{sticky_context.rstrip()}\n\n{sticky_commit_policy}\n"
+            components["commit_policy"] = sticky_commit_policy
+        else:
+            components.pop("commit_policy", None)
         components.update(
             {
                 "mode_instruction": mode_instruction,

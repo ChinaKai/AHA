@@ -25,6 +25,8 @@ FORBIDDEN_TRAILER_KEYS = {
 
 def _model_label(model: str | None) -> str:
     normalized = str(model or "default").strip() or "default"
+    if normalized.lower().startswith("env:"):
+        normalized = normalized.split(":", 1)[1].strip() or "default"
     if normalized.startswith("gpt-"):
         return f"GPT-{normalized[4:]}"
     return normalized
@@ -46,10 +48,12 @@ def format_commit_message(
     scope: str | None = None,
     aha_scope: str | None = None,
     generated_by: str = DEFAULT_GENERATED_BY,
+    body: str | None = None,
 ) -> str:
     normalized_type = commit_type.strip()
     normalized_scope = (scope or "").strip()
     normalized_summary = summary.strip()
+    normalized_body = (body or "").strip()
     normalized_generated_by = generated_by.strip()
     if normalized_type not in CONVENTIONAL_TYPES:
         raise ValueError(f"Invalid conventional commit type: {commit_type}")
@@ -61,8 +65,10 @@ def format_commit_message(
     lines = [
         f"{normalized_type}{subject_scope}: {normalized_summary}",
         "",
-        f"Generated-by: {normalized_generated_by}",
     ]
+    if normalized_body:
+        lines.extend([normalized_body, ""])
+    lines.append(f"Generated-by: {normalized_generated_by}")
     return "\n".join(lines) + "\n"
 
 def validate_commit_message(message: str, expected_generated_by: str | None = None) -> list[str]:
@@ -91,6 +97,11 @@ def validate_commit_message(message: str, expected_generated_by: str | None = No
         errors.append("commit body must include exactly one Generated-by trailer")
     elif expected_generated_by and generated_by_values[0] != expected_generated_by:
         errors.append(f"commit body Generated-by value must be exactly: {expected_generated_by}")
+    if len(generated_by_values) == 1:
+        last_non_empty = next((line for line in reversed(lines) if line.strip()), "")
+        last_key = last_non_empty.split(":", 1)[0].strip() if ":" in last_non_empty else ""
+        if last_key != "Generated-by":
+            errors.append("commit body Generated-by trailer must be the last non-empty line")
     if legacy_aha_trailers:
         errors.append("commit body should not include AHA task/agent/scope trailers; keep that tracking in the AHA journal")
     extra_forbidden_trailers = sorted({key for key in forbidden_trailers if key not in {"AHA-Task", "AHA-Agent", "AHA-Scope"}})

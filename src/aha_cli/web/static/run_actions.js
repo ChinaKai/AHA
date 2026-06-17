@@ -73,8 +73,10 @@
         } else {
           await deps.switchRun?.(nextRunId);
         }
+        return nextRunId;
       } catch (err) {
         alertUser(err?.message || String(err));
+        return "";
       } finally {
         setRunActionInFlight(false);
         deps.renderSessionMenu?.();

@@ -662,6 +662,13 @@ class ChatPromptTests(unittest.TestCase):
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "claude")
+                config_file = root / ".aha" / "config.json"
+                config = read_json(config_file)
+                config["claude"] = {
+                    "model": "env:kimi",
+                    "env": [{"name": "kimi", "ANTHROPIC_MODEL": "kimi-k2.6"}],
+                }
+                config_file.write_text(json.dumps(config), encoding="utf-8")
                 code, plan_output = self.run_cli("plan", "Kimi chat prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -681,11 +688,52 @@ class ChatPromptTests(unittest.TestCase):
                     )
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 metrics_events = [row for row in rows if row["type"] == "agent_prompt_metrics"]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
 
         self.assertEqual(code, 0)
         prompt = run_agent.call_args.args[0]
         self.assertIn("AHA model-specific operating guidance for `kimi`:", prompt)
         self.assertIn("model_guidance", metrics_events[-1]["data"]["components"])
+        self.assertEqual(session["requested_model"], "env:kimi")
+        self.assertEqual(session["resolved_model"], "kimi-k2.6")
+        self.assertEqual(session["model"], "kimi-k2.6")
+
+    def test_commit_policy_uses_current_claude_model_over_stale_session_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Stale session model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend"] = "codex"
+                session["requested_model"] = "gpt-5.5"
+                session["resolved_model"] = "gpt-5.5"
+                session["model"] = "gpt-5.5"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                prompt, _metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "提交代码",
+                        "task_id": "task-001",
+                        "role": "main",
+                        "ts": "2026-01-01T00:00:00+00:00",
+                    },
+                    "",
+                    backend="claude",
+                    requested_model="env:kimi-k2.7",
+                    resolved_model="kimi-k2.7",
+                )
+
+        self.assertIn("Generated-by: AHA Claude kimi-k2.7", prompt)
+        self.assertNotIn("Generated-by: AHA Claude GPT-5.5", prompt)
 
     def test_chat_prompt_uses_recent_conversation_chains_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -943,6 +991,51 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("sticky_context", metrics["components"])
         self.assertIn("recent_conversation", metrics["components"])
         self.assertNotIn("delta_status", metrics["components"])
+        self.assertNotIn("task_context", metrics["components"])
+        self.assertNotIn("Commit message policy:", prompt)
+        self.assertNotIn("commit_policy", metrics["components"])
+
+    def test_sticky_delta_expands_commit_policy_on_commit_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Sticky commit policy", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(aha_root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend"] = "claude"
+                session["backend_session_id"] = "claude-session-1"
+                session["requested_model"] = "env:MiniMax-M2.7-highspeed"
+                session["resolved_model"] = "MiniMax-M2.7-highspeed"
+                session["model"] = "MiniMax-M2.7-highspeed"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                prompt, metrics = chat_prompt_with_metrics(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "在写个文件提交",
+                        "task_id": "task-001",
+                        "role": "main",
+                        "ts": "2026-01-01T00:00:00+00:00",
+                    },
+                    "prefix",
+                    backend="claude",
+                    requested_model="env:MiniMax-M2.7-highspeed",
+                    resolved_model="MiniMax-M2.7-highspeed",
+                )
+
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("Commit ownership policy:", prompt)
+        self.assertIn("Commit message policy:", prompt)
+        self.assertIn("Generated-by: AHA Claude MiniMax-M2.7-highspeed", prompt)
+        self.assertGreater(metrics["components"]["commit_policy"]["chars"], 0)
+        self.assertIn("sticky_context", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
 
     def test_host_sticky_delta_uses_compact_supervision_context(self) -> None:

@@ -12,7 +12,7 @@ from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, code
 from aha_cli.backends.registry import resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
-from aha_cli.services.backend_runtime import mark_backend_stopped, stop_task_backends
+from aha_cli.services.backend_runtime import mark_backend_stopped, start_backend, stop_task_backends
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
 from aha_cli.services.chat_prompt_context import chat_prompt, chat_prompt_with_metrics, model_family_for_guidance
 from aha_cli.services.chat_supervision import (
@@ -21,7 +21,7 @@ from aha_cli.services.chat_supervision import (
     apply_supervision_real_host,
     is_task_supervision_host_agent,
 )
-from aha_cli.services.action_payloads import action_response_text, extract_action_payload, invalid_action_schema_reason
+from aha_cli.services.action_payloads import action_response_text, extract_action_payload, extract_action_payload_result, invalid_action_schema_reason
 from aha_cli.services.commit_policy import generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.orchestrator import (
     append_visible_sub_agent_result,
@@ -131,14 +131,20 @@ def commit_policy_retry_message(errors: list[str], expected_generated_by: str) -
 
 
 def _reply_action_schema_error(reply: str) -> str | None:
-    payload = extract_action_payload(reply)
+    result = extract_action_payload_result(reply)
+    if result.error:
+        return result.error
+    payload = result.payload
     if not payload:
         return None
     return invalid_action_schema_reason(payload)
 
 
 def _reply_has_action_type(reply: str, action_type: str) -> bool:
-    payload = extract_action_payload(reply)
+    result = extract_action_payload_result(reply)
+    if result.error:
+        return False
+    payload = result.payload
     if not payload or invalid_action_schema_reason(payload):
         return False
     actions = payload.get("actions")
@@ -268,6 +274,52 @@ def append_agent_retry_request(
     if manages_task_status and task_id:
         set_agent_status(root, run_id, task_id, agent_id, "pending")
         set_task_status(root, run_id, task_id, "running")
+
+
+def finish_retry_turn(
+    root: Path,
+    run_id: str,
+    args,
+    *,
+    worker_task_id: str | None,
+    offset_file: Path,
+    item_offset: int,
+    backend_name: str,
+    model: str | None,
+    sandbox: str,
+    approval: str,
+    gate: str,
+) -> None:
+    save_chat_offset(offset_file, item_offset)
+    if not worker_task_id:
+        return
+    mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+    if args.once:
+        return
+    try:
+        start_backend(
+            root,
+            run_id,
+            args.target,
+            backend=backend_name,
+            model=model,
+            sandbox=sandbox,
+            approval=approval,
+            from_start=False,
+            task_id=worker_task_id,
+        )
+    except Exception as exc:
+        append_event(
+            root,
+            run_id,
+            "agent_retry_backend_start_failed",
+            {
+                "task_id": worker_task_id,
+                "target": args.target,
+                "gate": gate,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
 
 
 def append_agent_completion_blocked(
@@ -589,10 +641,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend_name == "claude" else None
                 command_model = claude_cli_model(model) if backend_name == "claude" else codex_cli_model(codex_config, model) if backend_name == "codex" else model
                 resolved_model = claude_resolved_model(claude_config, model) if backend_name == "claude" else codex_resolved_model(codex_config, model) if backend_name == "codex" else resolve_model(backend_name, command_model)
-                if backend_name == "codex":
-                    session["requested_model"] = requested_model
-                    session["resolved_model"] = resolved_model
-                    session["model"] = resolved_model
+                session["requested_model"] = requested_model
+                session["resolved_model"] = resolved_model
+                session["model"] = resolved_model or command_model or model
                 sandbox = codex_sandbox("research", requested_sandbox) if backend_name == "codex" else requested_sandbox
                 workspace = Path(task.get("workspace_path") or root)
                 if not workspace.exists():
@@ -648,8 +699,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     else None
                 )
                 try:
+                    runner_session = session
                     if backend_name == "claude":
-                        exit_code, reply, session = run_claude_exec(
+                        exit_code, reply, returned_session = run_claude_exec(
                             prompt,
                             cwd=workspace,
                             output_file=output_file,
@@ -668,7 +720,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             event_callback=progress_heartbeat.handle_event if progress_heartbeat else None,
                         )
                     else:
-                        exit_code, reply, session = run_codex_exec(
+                        exit_code, reply, returned_session = run_codex_exec(
                             prompt,
                             cwd=workspace,
                             output_file=output_file,
@@ -687,6 +739,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             proxy_env=proxy_env,
                             codex_config=codex_config,
                         )
+                    session = returned_session if returned_session is not None else runner_session
                 except Exception as exc:
                     traceback.print_exc()
                     exit_code = 1
@@ -743,8 +796,19 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                         print(f"AHA requested {args.target} retry: invalid action schema ({schema_error})", flush=True)
                         if worker_task_id:
-                            save_chat_offset(offset_file, item_offset)
-                            mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            finish_retry_turn(
+                                root,
+                                run_id,
+                                args,
+                                worker_task_id=worker_task_id,
+                                offset_file=offset_file,
+                                item_offset=item_offset,
+                                backend_name=backend_name,
+                                model=configured_model or requested_model or model,
+                                sandbox=sandbox,
+                                approval=requested_approval,
+                                gate="action_schema_retry",
+                            )
                             return exit_code
                         if args.once:
                             save_chat_offset(offset_file, item_offset)
@@ -792,8 +856,23 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                         print(f"AHA blocked {args.target} normal completion: commit message policy violation", flush=True)
                         if worker_task_id:
-                            save_chat_offset(offset_file, item_offset)
-                            mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            if commit_policy_retry_active:
+                                save_chat_offset(offset_file, item_offset)
+                                mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            else:
+                                finish_retry_turn(
+                                    root,
+                                    run_id,
+                                    args,
+                                    worker_task_id=worker_task_id,
+                                    offset_file=offset_file,
+                                    item_offset=item_offset,
+                                    backend_name=backend_name,
+                                    model=configured_model or requested_model or model,
+                                    sandbox=sandbox,
+                                    approval=requested_approval,
+                                    gate="commit_policy_retry",
+                                )
                             return exit_code
                         if args.once:
                             save_chat_offset(offset_file, item_offset)
@@ -834,8 +913,23 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                         print(f"AHA blocked {args.target} normal completion: {reason}", flush=True)
                         if worker_task_id:
-                            save_chat_offset(offset_file, item_offset)
-                            mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            if task_update_retry_active:
+                                save_chat_offset(offset_file, item_offset)
+                                mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+                            else:
+                                finish_retry_turn(
+                                    root,
+                                    run_id,
+                                    args,
+                                    worker_task_id=worker_task_id,
+                                    offset_file=offset_file,
+                                    item_offset=item_offset,
+                                    backend_name=backend_name,
+                                    model=configured_model or requested_model or model,
+                                    sandbox=sandbox,
+                                    approval=requested_approval,
+                                    gate="task_update_required_retry",
+                                )
                             return exit_code
                         if args.once:
                             save_chat_offset(offset_file, item_offset)

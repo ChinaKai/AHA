@@ -2,26 +2,78 @@ from __future__ import annotations
 
 import json
 import re
+from typing import NamedTuple
 
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 
 
-def extract_action_payload(text: str) -> dict | None:
+class ActionPayloadExtraction(NamedTuple):
+    payload: dict | None
+    recovered: bool = False
+    error: str | None = None
+
+
+def _template_value(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip() == "..."
+    if isinstance(value, list):
+        return any(_template_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(_template_value(item) for item in value.values())
+    return False
+
+
+def _loads_payload(candidate: str) -> dict | None:
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or _template_value(payload):
+        return None
+    return payload
+
+
+def _action_like_payload(payload: dict) -> bool:
+    return "actions" in payload or "action" in payload or payload.get("type") in AHA_ACTION_TYPES
+
+
+def _payload_candidates(text: str) -> list[tuple[dict, bool]]:
     stripped = text.strip()
-    candidates: list[str] = []
+    candidates: list[tuple[str, bool]] = []
     if stripped.startswith("{") and stripped.endswith("}"):
-        candidates.append(stripped)
-    fenced_match = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", stripped, flags=re.DOTALL)
+        candidates.append((stripped, False))
+    fenced_match = re.fullmatch(r"```\s*(?:json)?\s*(\{.*\})\s*```", stripped, flags=re.DOTALL | re.IGNORECASE)
     if fenced_match:
-        candidates.append(fenced_match.group(1))
-    for candidate in candidates:
-        try:
-            payload = json.loads(candidate)
-        except json.JSONDecodeError:
+        candidates.append((fenced_match.group(1), True))
+    for match in re.finditer(r"```\s*(?:json)?\s*(\{.*?\})\s*```", stripped, flags=re.DOTALL | re.IGNORECASE):
+        candidates.append((match.group(1), True))
+
+    payloads: list[tuple[dict, bool]] = []
+    seen: set[str] = set()
+    for candidate, recovered in candidates:
+        payload = _loads_payload(candidate)
+        if payload is None:
             continue
-        if isinstance(payload, dict):
-            return payload
-    return None
+        key = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        payloads.append((payload, recovered))
+    return payloads
+
+
+def extract_action_payload_result(text: str) -> ActionPayloadExtraction:
+    candidates = [(payload, recovered) for payload, recovered in _payload_candidates(text) if _action_like_payload(payload)]
+    if len(candidates) > 1:
+        return ActionPayloadExtraction(None, error="multiple action payloads found")
+    if candidates:
+        payload, recovered = candidates[0]
+        return ActionPayloadExtraction(payload, recovered=recovered)
+    return ActionPayloadExtraction(None)
+
+
+def extract_action_payload(text: str) -> dict | None:
+    return extract_action_payload_result(text).payload
 
 
 def invalid_action_schema_reason(payload: dict) -> str | None:

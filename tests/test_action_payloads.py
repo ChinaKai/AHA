@@ -7,6 +7,7 @@ import unittest
 from aha_cli.services.action_payloads import (
     action_response_text,
     extract_action_payload,
+    extract_action_payload_result,
     invalid_action_schema_reason,
 )
 from aha_cli.services.orchestrator import extract_action_payload as orchestrator_extract_action_payload
@@ -22,6 +23,19 @@ class ActionPayloadTests(unittest.TestCase):
         self.assertEqual(extract_action_payload(json.dumps(payload)), payload)
         self.assertEqual(extract_action_payload(f"```json\n{json.dumps(payload)}\n```"), payload)
 
+    def test_extract_action_payload_recovers_single_fenced_action_from_mixed_text(self) -> None:
+        payload = {
+            "actions": [{"type": "record_task_update", "summary": "done", "changed_files": [], "verification": [], "risks": []}],
+            "response": "完成",
+        }
+        reply = f"已完成。\n\n``` JSON\n{json.dumps(payload, ensure_ascii=False)}\n```"
+        result = extract_action_payload_result(reply)
+
+        self.assertEqual(result.payload, payload)
+        self.assertTrue(result.recovered)
+        self.assertIsNone(result.error)
+        self.assertEqual(action_response_text(reply), "完成")
+
     def test_extract_action_payload_ignores_embedded_json_examples(self) -> None:
         reply = textwrap.dedent(
             """\
@@ -35,6 +49,16 @@ class ActionPayloadTests(unittest.TestCase):
 
         self.assertIsNone(extract_action_payload(reply))
         self.assertEqual(action_response_text(reply), reply)
+
+    def test_extract_action_payload_rejects_multiple_action_payloads(self) -> None:
+        first = {"actions": [], "response": "one"}
+        second = {"actions": [], "response": "two"}
+        reply = f"```json\n{json.dumps(first)}\n```\n```json\n{json.dumps(second)}\n```"
+
+        result = extract_action_payload_result(reply)
+
+        self.assertIsNone(result.payload)
+        self.assertEqual(result.error, "multiple action payloads found")
 
     def test_invalid_action_schema_reason_rejects_legacy_top_level_actions(self) -> None:
         self.assertEqual(

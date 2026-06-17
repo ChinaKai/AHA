@@ -11,6 +11,7 @@
     }
 
     function isAgentsPanelEditing() {
+      if (agentSettingsOpen) return true;
       return Date.now() < agentsPanelEditingUntil;
     }
 
@@ -52,6 +53,9 @@
         panel.id = "agent-settings-panel";
         panel.className = "agent-settings-panel hidden";
         panel.setAttribute("aria-labelledby", "agent-settings-title");
+        panel.addEventListener("pointerdown", () => markAgentsPanelEditing());
+        panel.addEventListener("focusin", () => markAgentsPanelEditing());
+        panel.addEventListener("change", () => markAgentsPanelEditing());
         documentRef.body?.appendChild(panel);
       }
       return panel;
@@ -139,6 +143,7 @@
       }
       agentSettingsOpen = true;
       agentSettingsAgentId = agentId;
+      markAgentsPanelEditing();
       renderAgents();
     }
 
@@ -316,6 +321,7 @@
         const panel = ensureAgentSettingsPanel();
         if (panel.contains(target)) return;
         if (target.closest("[data-agent-settings-trigger]")) return;
+        if (target.closest("dialog, .confirm-dialog")) return;
         closeAgentSettings();
       });
       documentRef.addEventListener("keydown", event => {

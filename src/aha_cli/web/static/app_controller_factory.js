@@ -582,6 +582,7 @@
       allTasks: deps.allTasks,
       apiUrl: deps.apiUrl,
       applyTaskMemoToForm: memo => taskCreateController.applyTaskMemoToForm?.(memo),
+      bootstrapData: deps.bootstrapData,
       confirmDialogAction: deps.confirmDialogAction,
       currentRunId: deps.currentRunId,
       documentRef: deps.documentRef,

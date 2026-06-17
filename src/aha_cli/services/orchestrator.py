@@ -8,6 +8,7 @@ from aha_cli.services.action_payloads import (
     AHA_ACTION_TYPES,
     action_response_text,
     extract_action_payload,
+    extract_action_payload_result,
     invalid_action_schema_message,
     invalid_action_schema_reason,
 )
@@ -579,13 +580,24 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         task = task_snapshot(root, run_id, task_id)["task"]
     except KeyError:
         return []
-    payload = extract_action_payload(text)
+    extraction = extract_action_payload_result(text)
+    payload = extraction.payload
     if not payload:
         return []
     invalid_reason = invalid_action_schema_reason(payload)
     if invalid_reason:
         append_event(root, run_id, "invalid_action_schema", {"task_id": task_id, "reason": invalid_reason})
         return []
+    if extraction.recovered:
+        append_event(
+            root,
+            run_id,
+            "action_payload_recovered",
+            {
+                "task_id": task_id,
+                "action_count": len(payload.get("actions", [])) if isinstance(payload.get("actions"), list) else 0,
+            },
+        )
     executed: list[dict] = []
     used_sub_agent_ids: set[str] = set()
     followup_started_at: str | None = None

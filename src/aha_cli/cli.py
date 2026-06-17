@@ -60,7 +60,6 @@ from aha_cli.store.filesystem import (
     default_aha_home,
     event_path,
     find_aha_home,
-    find_project_root,
     iter_jsonl_from,
     latest_run_id,
     list_sessions,
@@ -848,8 +847,36 @@ def _generated_by_from_runtime(args: argparse.Namespace) -> str | None:
     return None
 
 
+def _git_project_root(start: Path | None = None) -> Path | None:
+    cwd = (start or Path.cwd()).resolve()
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    root = result.stdout.strip()
+    return Path(root).resolve() if root else None
+
+
+def _commit_body_from_args(args: argparse.Namespace) -> str:
+    parts = [str(item).strip() for item in getattr(args, "body", []) if str(item).strip()]
+    body_file = str(getattr(args, "body_file", "") or "").strip()
+    if body_file:
+        parts.append(Path(body_file).expanduser().read_text(encoding="utf-8").strip())
+    return "\n\n".join(part for part in parts if part)
+
+
 def cmd_commit(args: argparse.Namespace) -> int:
     generated_by = _generated_by_from_runtime(args) or DEFAULT_GENERATED_BY
+    try:
+        body = _commit_body_from_args(args)
+    except OSError as exc:
+        print(f"Commit body error: {exc}", file=sys.stderr)
+        return 2
     try:
         message = format_commit_message(
             args.type,
@@ -858,6 +885,7 @@ def cmd_commit(args: argparse.Namespace) -> int:
             args.agent,
             scope=args.scope,
             aha_scope=args.aha_scope,
+            body=body,
             generated_by=generated_by,
         )
     except ValueError as exc:
@@ -866,16 +894,20 @@ def cmd_commit(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(message, end="")
         return 0
-    root = find_project_root()
+    root = _git_project_root()
+    if root is None:
+        print("Unable to locate a Git repository for aha commit.", file=sys.stderr)
+        return 1
     add_paths = [path for group in args.add for path in group]
     if add_paths:
         subprocess.run(["git", "add", "--", *add_paths], cwd=root, check=True)
-    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=root)
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=root, stderr=subprocess.PIPE, text=True)
     if staged.returncode == 0:
         print("No staged changes to commit. Stage files first or pass --add <path>.", file=sys.stderr)
         return 1
     if staged.returncode != 1:
-        print("Unable to inspect staged changes with git diff --cached.", file=sys.stderr)
+        detail = f": {staged.stderr.strip()}" if staged.stderr.strip() else "."
+        print(f"Unable to inspect staged changes with git diff --cached{detail}", file=sys.stderr)
         return staged.returncode
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(message)

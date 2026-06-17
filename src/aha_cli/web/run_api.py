@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backends
@@ -13,7 +14,8 @@ from aha_cli.store.filesystem import (
     run_exists,
     run_summary,
 )
-from aha_cli.store.ui_state import read_global_ui_state
+from aha_cli.store.task_memos import normalize_memo_status, read_task_memos
+from aha_cli.store.ui_state import read_global_ui_state, read_ui_state
 
 
 class ApiRunNotFound(Exception):
@@ -122,8 +124,71 @@ def runs_payload(root: Path, default_run_id: str) -> dict:
     }
 
 
+def _memo_date(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        return ""
+
+
+def _memo_end_date(memo: dict) -> str:
+    scheduled_date = _memo_date(memo.get("scheduled_date"))
+    end_date = _memo_date(memo.get("end_date"))
+    if end_date and scheduled_date and end_date >= scheduled_date:
+        return end_date
+    return scheduled_date
+
+
+def task_memo_summary(root: Path, run_id: str) -> dict:
+    base_counts = {
+        "total": 0,
+        "active": 0,
+        "todo": 0,
+        "doing": 0,
+        "done": 0,
+        "closed": 0,
+        "today": 0,
+        "overdue": 0,
+    }
+    if not run_id or not run_exists(root, run_id):
+        return {
+            "available": False,
+            "run_id": "",
+            "last_selected_memo_id": "",
+            "counts": base_counts,
+        }
+
+    today = date.today().isoformat()
+    memos = read_task_memos(root, run_id)
+    counts = dict(base_counts)
+    counts["total"] = len(memos)
+    for memo in memos:
+        status = normalize_memo_status(memo.get("status"))
+        counts[status] = counts.get(status, 0) + 1
+        active = status not in {"done", "closed"}
+        if active:
+            counts["active"] += 1
+        scheduled_date = _memo_date(memo.get("scheduled_date"))
+        end_date = _memo_end_date(memo)
+        if scheduled_date and end_date and scheduled_date <= today <= end_date:
+            counts["today"] += 1
+        if active and end_date and end_date < today:
+            counts["overdue"] += 1
+
+    return {
+        "available": True,
+        "run_id": run_id,
+        "last_selected_memo_id": read_ui_state(root, run_id).get("last_selected_memo_id", ""),
+        "counts": counts,
+    }
+
+
 def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
     cfg = load_config(root)
+    selected_run_id = default_api_run_id(root, default_run_id)
     return {
         "aha_home": str(root),
         "aha_version": aha_version(root),
@@ -131,9 +196,10 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "config": cfg,
         "config_backend_options": ["codex", "claude"],
         "default_workspace_path": str(cwd or Path.cwd()),
-        "default_run_id": default_api_run_id(root, default_run_id),
+        "default_run_id": selected_run_id,
         "ui_state": read_global_ui_state(root),
         "runs": list_run_summaries(root),
+        "memo_summary": task_memo_summary(root, selected_run_id),
         "workspaces": workspace_options(aha_home=root),
         "backends": agent_backends(),
         "workflow_templates": workflow_template_metadata(),

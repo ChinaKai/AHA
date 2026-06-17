@@ -75,7 +75,7 @@
       }
 
       enterEmptyWorkspace({
-        summaryText: "No runs yet",
+        summaryText: "No memo workspace yet",
         selectedTitle: "Create a run"
       });
       if (!force && elements.panelEl?.querySelector("[data-bootstrap-run-form]")) return;
@@ -83,9 +83,10 @@
       elements.panelEl.innerHTML = `
         <div class="bootstrap-panel">
           <div class="bootstrap-head">
-            <h3>First Run</h3>
+            <h3>Memo Workspace</h3>
             <code>${deps.escapeHtml?.(deps.bootstrapData?.()?.aha_home || "")}</code>
           </div>
+          <p class="meta">Create a run container for memos first. Tasks can be created later from selected memos.</p>
           <form class="bootstrap-form" data-bootstrap-run-form>
             <label class="field-label">
               <span>Run name</span>
@@ -164,7 +165,8 @@
       }
       if (submit) submit.disabled = true;
       try {
-        await deps.createRun?.(goal, "research", { createInitialTask: false });
+        const createdRunId = await deps.createRun?.(goal, "research", { createInitialTask: false });
+        if (createdRunId) deps.openTaskMemoHome?.();
       } catch (err) {
         deps.alertError?.(err?.message || String(err));
       } finally {

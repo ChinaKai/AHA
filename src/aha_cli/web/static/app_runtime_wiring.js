@@ -565,6 +565,7 @@ bootstrapController = window.AHABootstrapController.createBootstrapController({
   loadStatus,
   locationOrigin: () => location.origin,
   modelOptionsForBackend: backend => runtimeOptions.modelOptionsForBackend(backend),
+  openTaskMemoHome: () => taskMemoController.openDialog?.(),
   renderEmptyWorkspace: renderOrchestrator.renderEmptyWorkspace,
   resetEmptyRunState: () => {
     document.body.classList.add("empty-run");

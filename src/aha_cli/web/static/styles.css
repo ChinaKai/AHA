@@ -4637,9 +4637,9 @@ body.empty-run .panel {
 }
 .bootstrap-config-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
-  align-items: end;
+  align-items: stretch;
 }
 .bootstrap-config-stack {
   display: grid;
@@ -4670,6 +4670,7 @@ body.empty-run .panel {
 }
 .bootstrap-env-fields {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 .bootstrap-env-group-head {

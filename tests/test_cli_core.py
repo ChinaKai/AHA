@@ -17,7 +17,11 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_dashboard_html, task_snapshot
 from aha_cli.services.chat import chat_prompt
-from aha_cli.services.commit_policy import format_commit_message, validate_commit_message
+from aha_cli.services.commit_policy import (
+    format_commit_message,
+    generated_by_for_backend_model,
+    validate_commit_message,
+)
 from aha_cli.services.orchestrator import task_assignment_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.io import write_json
@@ -955,6 +959,8 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("Never ask a sub-agent to commit files outside its assignment", assignment_prompt)
         self.assertIn("Commit message policy:", assignment_prompt)
         self.assertIn("Generated-by: AHA Codex GPT-5.5", assignment_prompt)
+        self.assertIn("Include a concise commit body", assignment_prompt)
+        self.assertIn("last non-empty line", assignment_prompt)
         self.assertIn("Keep task, agent, and scope tracking in the AHA journal", assignment_prompt)
         self.assertNotIn("AHA-Task: task-001", assignment_prompt)
         self.assertIn("return ONLY one JSON object", assignment_prompt)
@@ -999,6 +1005,8 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("route commit work to the sub-agent that owns the changed scope", main_prompt)
                 self.assertIn("Commit message policy:", main_prompt)
                 self.assertIn("Generated-by: AHA Codex GPT-5.5", main_prompt)
+                self.assertIn("Include a concise commit body", main_prompt)
+                self.assertIn("--body <change-summary>", main_prompt)
                 self.assertIn("Keep task, agent, and scope tracking in the AHA journal", main_prompt)
                 self.assertNotIn("AHA-Task: task-001", main_prompt)
                 self.assertNotIn("AHA-Agent: main", main_prompt)
@@ -1025,6 +1033,7 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("commit only files covered by your `assignment` / `created_reason`", sub_prompt)
                 self.assertIn("report back to `task-main`", sub_prompt)
                 self.assertIn("Generated-by: AHA Codex GPT-5.5", sub_prompt)
+                self.assertIn("last non-empty line", sub_prompt)
                 self.assertNotIn("AHA-Task: task-001", sub_prompt)
                 self.assertNotIn("AHA-Agent: sub-001", sub_prompt)
 
@@ -1083,10 +1092,21 @@ class CliCoreTests(unittest.TestCase):
 
     def test_commit_policy_formats_validates_and_prints_dry_run_messages(self) -> None:
         message = format_commit_message("feat", "add lazy loading", scope="web")
+        body_message = format_commit_message(
+            "fix",
+            "resolve staged diff root",
+            scope="commit",
+            body="- Resolve the Git root before inspecting staged changes.\n- Print git stderr when inspection fails.",
+        )
 
         self.assertEqual(validate_commit_message(message), [])
         self.assertIn("feat(web): add lazy loading", message)
         self.assertIn("Generated-by: AHA Codex GPT-5.5", message)
+        self.assertEqual(validate_commit_message(body_message), [])
+        self.assertIn("- Resolve the Git root before inspecting staged changes.", body_message)
+        self.assertTrue(body_message.rstrip().endswith("Generated-by: AHA Codex GPT-5.5"))
+        self.assertEqual(generated_by_for_backend_model("claude", "env:kimi-k2.6"), "AHA Claude kimi-k2.6")
+        self.assertEqual(generated_by_for_backend_model("claude", "env:MiniMax-M3"), "AHA Claude MiniMax-M3")
         self.assertNotIn("AHA-Task:", message)
         self.assertNotIn("AHA-Agent:", message)
         self.assertNotIn("AHA-Scope:", message)
@@ -1101,6 +1121,14 @@ class CliCoreTests(unittest.TestCase):
             validate_commit_message(
                 "fix(web): wrong generator\n\nGenerated-by: AHA Codex GPT-5.4\n",
                 expected_generated_by="AHA Codex GPT-5.5",
+            ),
+        )
+        self.assertIn(
+            "commit body Generated-by trailer must be the last non-empty line",
+            validate_commit_message(
+                "fix(web): generated trailer not last\n\n"
+                "Generated-by: AHA Codex GPT-5.5\n\n"
+                "- Late body line\n"
             ),
         )
         self.assertIn(
@@ -1144,6 +1172,24 @@ class CliCoreTests(unittest.TestCase):
         self.assertIn("Generated-by: AHA Codex GPT-5.5", output)
         self.assertNotIn("AHA-Task:", output)
         self.assertNotIn("AHA-Agent:", output)
+        code, body_output = self.run_cli(
+            "commit",
+            "--type",
+            "fix",
+            "--scope",
+            "web",
+            "--summary",
+            "keep logs scroll stable",
+            "--body",
+            "- Preserve the selected log viewport.",
+            "--body",
+            "- Keep the generated trailer last.",
+            "--dry-run",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("- Preserve the selected log viewport.", body_output)
+        self.assertIn("- Keep the generated trailer last.", body_output)
+        self.assertTrue(body_output.rstrip().endswith("Generated-by: AHA Codex GPT-5.5"))
         with mock.patch.dict(os.environ, {"AHA_BACKEND": "codex", "AHA_MODEL": "gpt-5.4", "AHA_GENERATED_BY": ""}, clear=False):
             code, dynamic_output = self.run_cli(
                 "commit",
@@ -1181,12 +1227,62 @@ class CliCoreTests(unittest.TestCase):
         self.assertNotIn("AHA-Scope:", legacy_output)
         with tempfile.TemporaryDirectory() as tmp:
             message_file = Path(tmp) / "COMMIT_EDITMSG"
+            body_file = Path(tmp) / "body.txt"
             message_file.write_text(message, encoding="utf-8")
+            body_file.write_text("- Read commit details from a file.\n", encoding="utf-8")
             code, output = self.run_cli("commit-check", str(message_file))
             self.assertEqual(code, 0)
             expected_code, _ = self.run_cli("commit-check", "--generated-by", "AHA Codex GPT-5.4", str(message_file))
+            body_file_code, body_file_output = self.run_cli(
+                "commit",
+                "--type",
+                "docs",
+                "--scope",
+                "commit",
+                "--summary",
+                "document body files",
+                "--body-file",
+                str(body_file),
+                "--dry-run",
+            )
         self.assertIn("Commit message OK", output)
         self.assertEqual(expected_code, 1)
+        self.assertEqual(body_file_code, 0)
+        self.assertIn("- Read commit details from a file.", body_file_output)
+
+    def test_commit_uses_git_root_when_parent_has_aha_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            (parent / ".aha").mkdir()
+            repo = parent / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+            (repo / "file.txt").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+
+            with mock.patch("pathlib.Path.cwd", return_value=repo):
+                code, _ = self.run_cli(
+                    "commit",
+                    "--type",
+                    "chore",
+                    "--scope",
+                    "test",
+                    "--summary",
+                    "use git root",
+                    "--body",
+                    "- Resolve the Git root before inspecting staged changes.",
+                )
+
+            self.assertEqual(code, 0)
+            commit = subprocess.run(["git", "log", "-1", "--pretty=%B"], cwd=repo, check=True, stdout=subprocess.PIPE, text=True)
+            self.assertIn("chore(test): use git root", commit.stdout)
+            self.assertIn("- Resolve the Git root before inspecting staged changes.", commit.stdout)
+            self.assertIn("Generated-by: AHA Codex GPT-5.5", commit.stdout)
+            self.assertTrue(commit.stdout.rstrip().endswith("Generated-by: AHA Codex GPT-5.5"))
+            staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+            self.assertEqual(staged.returncode, 0)
 
     def test_task_dashboard_and_metadata_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

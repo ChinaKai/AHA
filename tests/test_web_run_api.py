@@ -22,6 +22,8 @@ from aha_cli.store.filesystem import (
     set_task_status,
     status_snapshot,
 )
+from aha_cli.store.task_memos import create_task_memo
+from aha_cli.store.ui_state import update_ui_state
 from aha_cli.web.run_routes import handle_run_workspace_route
 from tests.helpers import (
     AHA_RUNTIME_ENV_KEYS,
@@ -79,6 +81,65 @@ class WebRunApiTests(unittest.TestCase):
         self.assertIn("default_workspace_path", body)
         self.assertEqual(body["default_run_id"], "")
         self.assertEqual(body["runs"], [])
+        self.assertFalse(body["memo_summary"]["available"])
+        self.assertEqual(body["memo_summary"]["counts"]["total"], 0)
+
+    def test_api_bootstrap_includes_current_run_memo_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Memo summary run", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                create_task_memo(
+                    root / ".aha",
+                    run_id,
+                    {
+                        "title": "Today memo",
+                        "scheduled_date": "2026-06-16",
+                        "status": "todo",
+                    },
+                )
+                create_task_memo(
+                    root / ".aha",
+                    run_id,
+                    {
+                        "title": "Overdue memo",
+                        "scheduled_date": "2026-06-01",
+                        "end_date": "2026-06-02",
+                        "status": "doing",
+                    },
+                )
+                create_task_memo(
+                    root / ".aha",
+                    run_id,
+                    {
+                        "title": "Closed memo",
+                        "scheduled_date": "2026-06-15",
+                        "status": "closed",
+                        "closed_at": "2026-06-16",
+                    },
+                )
+                update_ui_state(root / ".aha", run_id, {"last_selected_memo_id": "memo-002"})
+                with mock.patch("aha_cli.web.run_api.date") as date_mock:
+                    date_mock.today.return_value.isoformat.return_value = "2026-06-16"
+                    date_mock.fromisoformat.side_effect = lambda value: __import__("datetime").date.fromisoformat(value)
+                    response = asyncio.run(fetch_ui_response(root, run_id, "/api/bootstrap"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        summary = body["memo_summary"]
+        self.assertTrue(summary["available"])
+        self.assertEqual(summary["run_id"], run_id)
+        self.assertEqual(summary["last_selected_memo_id"], "memo-002")
+        self.assertEqual(summary["counts"]["total"], 3)
+        self.assertEqual(summary["counts"]["active"], 2)
+        self.assertEqual(summary["counts"]["todo"], 1)
+        self.assertEqual(summary["counts"]["doing"], 1)
+        self.assertEqual(summary["counts"]["closed"], 1)
+        self.assertEqual(summary["counts"]["today"], 1)
+        self.assertEqual(summary["counts"]["overdue"], 1)
 
     def test_api_bootstrap_can_initialize_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

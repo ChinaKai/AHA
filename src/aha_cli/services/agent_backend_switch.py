@@ -238,7 +238,7 @@ def switch_agent_backend(
             new_backend=new_backend,
             old_model=old_model,
             new_model=new_model,
-            summary_path=summary_ref,
+            summary_path=str(summary_path),
         ),
         sender="aha",
         task_id=task_id,

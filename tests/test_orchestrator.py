@@ -674,6 +674,44 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIsNone(extract_action_payload(reply))
         self.assertEqual(action_response_text(reply), reply)
 
+    def test_action_parser_recovers_single_fenced_json_action_from_mixed_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Mixed action reply", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                payload = {
+                    "actions": [
+                        {
+                            "type": "record_task_update",
+                            "summary": "记录混合输出中的 action",
+                            "changed_files": ["src/example.py"],
+                            "verification": ["manual check"],
+                            "risks": [],
+                        }
+                    ],
+                    "response": "已记录",
+                }
+                reply = f"已完成。\n\n```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
+
+                executed = execute_actions(root, run_id, "task-001", reply)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                journal = list_task_rounds(root, run_id, "task-001")
+
+        self.assertEqual(action_response_text(reply), "已记录")
+        self.assertEqual(executed[0]["type"], "record_task_update")
+        self.assertEqual(journal[-1]["summary"], "记录混合输出中的 action")
+        self.assertTrue(
+            any(
+                event["type"] == "action_payload_recovered"
+                and event["data"].get("task_id") == "task-001"
+                and event["data"].get("action_count") == 1
+                for event in events
+            )
+        )
+
     def test_invalid_top_level_action_schema_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -732,6 +770,63 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(any(event["type"] == "agent_retry_requested" and event["data"]["gate"] == "action_schema_retry" for event in events))
         self.assertEqual(detail["status"], "running")
         self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == "main")["status"], "pending")
+
+    def test_chat_retry_restarts_task_scoped_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Bad chat schema restart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "route this", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps({"type": "route_to_agent", "response": "sent"})
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
+                    mock.patch("aha_cli.services.chat.start_backend", return_value={"status": "running", "started": True}) as start_backend,
+                ):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start")
+
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        self.assertIn("invalid action schema", output)
+        self.assertEqual(main_messages[-1]["coordination"], "action_schema_retry")
+        start_backend.assert_called_once()
+        self.assertEqual(start_backend.call_args.args[:3], (root / ".aha", run_id, "main"))
+        self.assertEqual(start_backend.call_args.kwargs["backend"], "codex")
+        self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
+        self.assertFalse(start_backend.call_args.kwargs["from_start"])
+        self.assertTrue(any(event["type"] == "backend_stopped" and event["data"].get("task_id") == "task-001" for event in events))
+
+    def test_chat_retries_when_multiple_action_payloads_are_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Multiple actions", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "finish", sender="browser", task_id="task-001", role="main")
+                first = json.dumps({"actions": [], "response": "one"})
+                second = json.dumps({"actions": [], "response": "two"})
+                reply = f"done\n```json\n{first}\n```\n```json\n{second}\n```"
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        self.assertIn("multiple action payloads found", output)
+        self.assertEqual(main_messages[-1]["coordination"], "action_schema_retry")
+        self.assertIn("multiple action payloads found", main_messages[-1]["message"])
+        self.assertEqual(browser_messages, [])
+        self.assertTrue(any(event["type"] == "agent_retry_requested" and event["data"]["gate"] == "action_schema_retry" for event in events))
 
     def test_kimi_chat_requires_record_task_update_after_repo_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

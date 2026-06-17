@@ -29,6 +29,7 @@
     const apiUrl = options.apiUrl || (path => path);
     const runScopedPayload = options.runScopedPayload || (payload => payload);
     const alertUser = options.alert || (message => window.alert(message));
+    const agentConfigRequestTimeoutMs = Number(options.agentConfigRequestTimeoutMs) || 45000;
 
     function t(key, fallback = "") {
       return window.AHAI18n?.t?.(key, fallback) || fallback;
@@ -92,6 +93,26 @@
       return ["running", "busy"].includes(agentBackendProcessStatus(agent));
     }
 
+    function replaceObjectContents(target, source) {
+      if (!target || !source) return;
+      for (const key of Object.keys(target)) delete target[key];
+      Object.assign(target, source);
+    }
+
+    function applyAgentConfigResponse(currentTask, body = {}) {
+      if (!currentTask || !body) return;
+      const nextTask = body.task && String(body.task.id || "") === String(currentTask.id || "") ? body.task : null;
+      if (nextTask) {
+        replaceObjectContents(currentTask, nextTask);
+        return;
+      }
+      const nextAgent = body.agent;
+      if (!nextAgent || !Array.isArray(currentTask.agents)) return;
+      const index = currentTask.agents.findIndex(agent => String(agent.id || "") === String(nextAgent.id || ""));
+      if (index >= 0) currentTask.agents[index] = { ...currentTask.agents[index], ...nextAgent };
+      else currentTask.agents.push(nextAgent);
+    }
+
     function requestAgentRuntimeConfigAction(agent, field, value) {
       const label = agentRuntimeFieldLabel(field);
       const valueLabel = value === true
@@ -140,52 +161,64 @@
         payload.model = normalized.model || null;
       }
       if (options.restartBackend) payload.restart_backend = true;
-      const res = await fetchWithTimeout(apiUrl("/api/agent-config"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(runScopedPayload(payload))
-      });
-      if (!res.ok) {
+      try {
+        const res = await fetchWithTimeout(apiUrl("/api/agent-config"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(runScopedPayload(payload))
+        }, agentConfigRequestTimeoutMs);
         const body = await res.json().catch(() => ({}));
-        alertUser(body.error || "Failed to update agent config");
+        if (!res.ok) {
+          throw new Error(body.error || "Failed to update agent config");
+        }
+        await loadStatus({ forceAgents: true });
+        applyAgentConfigResponse(selectedTask() || task, body);
+        renderAgents();
+        contextDetails.delete(task.id);
+        await ensureActiveTabData();
+        renderPanel();
+      } catch (err) {
+        alertUser(err?.message || "Failed to update agent config");
         return;
       }
-      await loadStatus({ forceAgents: true });
-      renderAgents();
-      contextDetails.delete(task.id);
-      await ensureActiveTabData();
-      renderPanel();
     }
 
     function bindAgentConfigEditor(card, agent, currentConfig) {
-      card.addEventListener("change", event => {
+      const editor = card.matches?.("[data-agent-config-editor]") ? card : card.querySelector("[data-agent-config-editor]");
+      if (!editor) return;
+      editor.addEventListener("change", event => {
         const target = event.target instanceof HTMLElement ? event.target : null;
-        if (target?.dataset.agentConfigPart === "backend") syncAgentConfigEditorModel(card);
+        if (target?.dataset.agentConfigPart === "backend") syncAgentConfigEditorModel(editor);
       });
-      card.addEventListener("click", event => {
+      editor.addEventListener("click", event => {
         const target = event.target instanceof HTMLElement ? event.target : null;
         if (!target?.matches("[data-agent-config-apply]")) return;
-        const nextConfig = readAgentConfigEditor(card);
+        const nextConfig = readAgentConfigEditor(editor);
         const backendModelChanged = agentBackendModelChanged(currentConfig, nextConfig);
         const runtimeChanged = agentRuntimeConfigChanged(currentConfig, nextConfig);
         if (!backendModelChanged && !runtimeChanged) return;
         void (async () => {
+          target.disabled = true;
           let restartBackend = false;
-          if (backendModelChanged) {
-            const confirmed = await confirmAgentConfigChange(agent, currentConfig, nextConfig);
-            if (!confirmed) {
-              renderAgents();
-              return;
+          try {
+            if (backendModelChanged) {
+              const confirmed = await confirmAgentConfigChange(agent, currentConfig, nextConfig);
+              if (!confirmed) {
+                renderAgents();
+                return;
+              }
+            } else if (runtimeChanged && agentRuntimeChangeNeedsRestartChoice(agent, "agent_config")) {
+              const action = await requestAgentRuntimeConfigAction(agent, "agent_config", agentConfigLabel(nextConfig));
+              if (action === "cancel") {
+                renderAgents();
+                return;
+              }
+              restartBackend = action === "restart";
             }
-          } else if (runtimeChanged && agentRuntimeChangeNeedsRestartChoice(agent, "agent_config")) {
-            const action = await requestAgentRuntimeConfigAction(agent, "agent_config", agentConfigLabel(nextConfig));
-            if (action === "cancel") {
-              renderAgents();
-              return;
-            }
-            restartBackend = action === "restart";
+            await updateAgentConfig(agent.id, nextConfig, { includeBackendModel: backendModelChanged, restartBackend });
+          } finally {
+            target.disabled = false;
           }
-          await updateAgentConfig(agent.id, nextConfig, { includeBackendModel: backendModelChanged, restartBackend });
         })();
       });
     }

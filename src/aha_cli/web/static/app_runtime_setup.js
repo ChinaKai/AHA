@@ -36,14 +36,13 @@ const initialSelectedTaskId = String(queryParams.get("selected_task_id") || quer
 const initialTaskMemoQueryView = String(queryParams.get("view") || "").trim().toLowerCase();
 function readStoredTaskMemoView() {
   try {
-    return String(window.localStorage?.getItem("aha.taskMemoView") || "").trim().toLowerCase();
+    return String(window.localStorage?.getItem("aha.taskMemoViewExplicit") || "").trim().toLowerCase();
   } catch (_err) {
     return "";
   }
 }
 const initialTaskMemoStoredView = readStoredTaskMemoView();
-const initialTaskMemoView = initialTaskMemoQueryView || initialTaskMemoStoredView;
-const initialTaskMemoHomeActive = initialTaskMemoQueryView === "memo" || (!initialSelectedTaskId && initialTaskMemoView !== "task");
+const initialTaskMemoHomeActive = initialTaskMemoQueryView === "memo" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "memo");
 let selectedTaskId = initialTaskMemoHomeActive ? null : (initialSelectedTaskId || null);
 
 function applyInitialTaskMemoHomeState() {
