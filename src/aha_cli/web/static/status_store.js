@@ -86,6 +86,53 @@
       return `${runId || ""}:${taskId || ""}:${agentId || "main"}`;
     }
 
+    function clearRuntimeCacheForAgent(taskId, agentId = "main") {
+      const normalizedTaskId = String(taskId || "").trim();
+      if (!normalizedTaskId) return false;
+      const normalizedAgentId = String(agentId || "main").trim() || "main";
+      const deleted = agentsRuntimeCache.delete(agentRuntimeCacheKey(normalizedTaskId, normalizedAgentId));
+      if (deleted && normalizedTaskId === getSelectedTaskId() && normalizedAgentId === deps.backendTarget?.()) {
+        setBackendStatusData(null);
+      }
+      return deleted;
+    }
+
+    function clearRuntimeCacheForTask(taskId) {
+      const normalizedTaskId = String(taskId || "").trim();
+      if (!normalizedTaskId) return false;
+      const prefix = `${getCurrentRunId() || ""}:${normalizedTaskId}:`;
+      let deleted = false;
+      for (const key of Array.from(agentsRuntimeCache.keys())) {
+        if (!String(key).startsWith(prefix)) continue;
+        agentsRuntimeCache.delete(key);
+        deleted = true;
+      }
+      if (deleted && normalizedTaskId === getSelectedTaskId()) setBackendStatusData(null);
+      return deleted;
+    }
+
+    function clearRuntimeCacheForEvents(events = []) {
+      let changed = false;
+      for (const event of events || []) {
+        const type = String(event?.type || "");
+        const data = event?.data || {};
+        const taskId = String(data.task_id || "").trim();
+        if (!taskId) continue;
+        if (type === "task_status_changed") {
+          const status = String(data.status || "").toLowerCase();
+          if (status && status !== "running") changed = clearRuntimeCacheForTask(taskId) || changed;
+        } else if (type === "backend_stopped") {
+          changed = clearRuntimeCacheForAgent(taskId, data.target || data.agent_id || "main") || changed;
+        } else if (["agent_finished", "agent_error", "agent_interrupted"].includes(type)) {
+          changed = clearRuntimeCacheForAgent(taskId, data.target || data.agent_id || "main") || changed;
+        } else if (type === "agent_status_changed") {
+          const status = String(data.status || "").toLowerCase();
+          if (status && status !== "running") changed = clearRuntimeCacheForAgent(taskId, data.agent_id || data.target || "main") || changed;
+        }
+      }
+      return changed;
+    }
+
     function normalizeBackendRuntimeState(runtimeState) {
       if (!runtimeState) return null;
       const taskId = String(runtimeState.task_id || getSelectedTaskId() || "");
@@ -95,9 +142,14 @@
 
     function refreshTaskActivityFromAgents(task) {
       const agents = task?.agents || [];
+      const currentStatus = deps.taskCurrentStatus?.(task);
+      if (currentStatus !== "running") {
+        task.activity_status = "idle";
+        return;
+      }
       if (agents.some(agent => deps.agentBackendProcessStatus?.(agent) === "busy")) {
         task.activity_status = "busy";
-      } else if (deps.taskCurrentStatus?.(task) === "running" || agents.some(agent => deps.agentLifecycleStatus?.(agent) === "running")) {
+      } else if (agents.some(agent => deps.agentLifecycleStatus?.(agent) === "running") || currentStatus === "running") {
         task.activity_status = "running";
       } else {
         task.activity_status = "idle";
@@ -157,6 +209,7 @@
       applyCachedAgentsRuntime,
       applyRunListData,
       applyStatusData,
+      clearRuntimeCacheForEvents,
       mergeAgentsRuntime,
       normalizeBackendRuntimeState,
       resetRunScopedState

@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from aha_cli.cli import main
-from aha_cli.store.filesystem import add_agent, append_event
-from aha_cli.websocket.server import realtime_debug_log
+from aha_cli.store.event_notifications import EventNotificationListener
+from aha_cli.store.filesystem import add_agent, append_event, append_event_to_file
+from aha_cli.store.paths import event_path
+from aha_cli.websocket import server as ws_server
+from aha_cli.websocket.server import handle_ws_client, realtime_debug_log, ws_read_text
 from tests.helpers import fetch_initial_ws_messages, fetch_ws_messages
 
 
@@ -57,6 +61,89 @@ class WebSocketTests(unittest.TestCase):
             realtime_debug_log("ws", _root=root, run_id="missing-run", phase="heartbeat_sent")
 
             self.assertFalse((root / ".aha" / "runs" / "missing-run").exists())
+
+    def test_append_event_to_file_notifies_event_listener(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-notify"
+            events_file = event_path(root, run_id)
+            try:
+                listener = EventNotificationListener(events_file)
+            except OSError as exc:
+                self.skipTest(f"event notifications unavailable: {exc}")
+            try:
+
+                async def wait_for_notification() -> None:
+                    wait_task = asyncio.create_task(listener.wait())
+                    await asyncio.sleep(0)
+                    append_event_to_file(events_file, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "wake"})
+                    await asyncio.wait_for(wait_task, timeout=0.5)
+
+                asyncio.run(wait_for_notification())
+            finally:
+                listener.close()
+
+    def test_websocket_wakes_from_event_notification_before_poll_fallback(self) -> None:
+        async def fetch_notified_event(root: Path, run_id: str) -> tuple[list[dict], int]:
+            position_calls = 0
+            original_event_stream_position = ws_server.event_stream_position
+
+            def counted_event_stream_position(call_root: Path, call_run_id: str) -> int:
+                nonlocal position_calls
+                position_calls += 1
+                return original_event_stream_position(call_root, call_run_id)
+
+            with mock.patch("aha_cli.websocket.server.event_stream_position", side_effect=counted_event_stream_position):
+                server = await asyncio.start_server(
+                    lambda reader, writer: handle_ws_client(root, run_id, reader, writer, 10.0),
+                    "127.0.0.1",
+                    0,
+                )
+                host, port = server.sockets[0].getsockname()
+                writer = None
+                try:
+                    reader, writer = await asyncio.open_connection(host, port)
+                    writer.write(
+                        (
+                            "GET / HTTP/1.1\r\n"
+                            "Host: test\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "\r\n"
+                        ).encode("ascii")
+                    )
+                    await writer.drain()
+                    await reader.readuntil(b"\r\n\r\n")
+                    status = json.loads(await asyncio.wait_for(ws_read_text(reader), timeout=0.5))
+                    for _ in range(100):
+                        if position_calls >= 3:
+                            break
+                        await asyncio.sleep(0.01)
+                    append_event(root, run_id, "agent_message", {"task_id": "task-001", "target": "main", "text": "notified"})
+                    event = json.loads(await asyncio.wait_for(ws_read_text(reader), timeout=0.5))
+                    return [status, event], position_calls
+                finally:
+                    if writer and not writer.is_closing():
+                        writer.close()
+                        await writer.wait_closed()
+                    server.close()
+                    await server.wait_closed()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Websocket notify wake", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                messages, position_calls = asyncio.run(fetch_notified_event(root, run_id))
+
+        self.assertEqual([message["type"] for message in messages], ["status", "event"])
+        self.assertEqual(messages[1]["data"]["data"]["text"], "notified")
+        self.assertLessEqual(position_calls, 4)
 
     def test_websocket_status_supports_lite_selected_task_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

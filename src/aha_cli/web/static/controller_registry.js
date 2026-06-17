@@ -356,6 +356,7 @@
       renderPendingMessages: deps.renderPendingMessages,
       renderSelectedHeader: deps.renderSelectedHeader,
       renderTaskList: deps.renderTaskList,
+      realtimeConnected: deps.realtimeConnected,
       selectedTask: deps.selectedTask,
       selectedTaskRealtimeActive: deps.selectedTaskRealtimeActive,
       syncRealtimeEvents: deps.syncRealtimeEvents,

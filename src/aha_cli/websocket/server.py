@@ -10,12 +10,14 @@ from urllib.parse import parse_qs, urlparse
 
 from aha_cli.constants import WS_GUID
 from aha_cli.domain.models import utc_now
+from aha_cli.store.event_notifications import open_event_notification_listener
 from aha_cli.store.filesystem import append_message, event_stream_page, event_stream_position
 from aha_cli.web.realtime_debug import realtime_debug_log
 from aha_cli.web.status import web_tasks_snapshot
 
 WS_EVENTS_LIMIT = 500
 WS_HEARTBEAT_INTERVAL = 5.0
+WS_EVENT_FALLBACK_INTERVAL = 1.0
 
 
 async def ws_send_text(writer: asyncio.StreamWriter, message: str) -> None:
@@ -174,6 +176,22 @@ async def _send_heartbeat(writer: asyncio.StreamWriter, last_event_id: int) -> N
     await ws_send_text(writer, json.dumps({"type": "heartbeat", "ts": utc_now(), "last_event_id": last_event_id}, ensure_ascii=False))
 
 
+def _event_wait_timeout(interval: float, notification_enabled: bool) -> float:
+    if not notification_enabled:
+        return max(0.01, interval)
+    return max(interval, WS_EVENT_FALLBACK_INTERVAL)
+
+
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 async def handle_ws_connection(
     root: Path,
     run_id: str,
@@ -193,29 +211,40 @@ async def handle_ws_connection(
         cursor=cursor if cursor is not None else "",
         peer=writer.get_extra_info("peername"),
     )
-    await _send_status(root, run_id, writer, status_options)
-    last_heartbeat_at = asyncio.get_running_loop().time()
-    realtime_debug_log("ws", _root=root, phase="status_sent", conn_id=conn_id, run_id=run_id)
-    offset = cursor
-    if cursor is not None:
-        snapshot_event_id = event_stream_position(root, run_id)
-        before_offset = cursor
-        offset = await _send_events(root, run_id, writer, cursor, snapshot_event_id)
-        realtime_debug_log(
-            "ws",
-            _root=root,
-            phase="replay_sent",
-            conn_id=conn_id,
-            run_id=run_id,
-            from_event_id=before_offset,
-            to_event_id=offset,
-            snapshot_event_id=snapshot_event_id,
-            sent_count=max(0, offset - before_offset),
-        )
-    else:
-        offset = event_stream_position(root, run_id)
-        realtime_debug_log("ws", _root=root, phase="tail_start", conn_id=conn_id, run_id=run_id, offset=offset)
+    listener = open_event_notification_listener(root, run_id)
+    realtime_debug_log(
+        "ws",
+        _root=root,
+        phase="event_notify_listener",
+        conn_id=conn_id,
+        run_id=run_id,
+        enabled=bool(listener),
+    )
+    offset = cursor if cursor is not None else 0
+    read_task: asyncio.Task | None = None
     try:
+        await _send_status(root, run_id, writer, status_options)
+        last_heartbeat_at = asyncio.get_running_loop().time()
+        realtime_debug_log("ws", _root=root, phase="status_sent", conn_id=conn_id, run_id=run_id)
+        if cursor is not None:
+            snapshot_event_id = event_stream_position(root, run_id)
+            before_offset = cursor
+            offset = await _send_events(root, run_id, writer, cursor, snapshot_event_id)
+            realtime_debug_log(
+                "ws",
+                _root=root,
+                phase="replay_sent",
+                conn_id=conn_id,
+                run_id=run_id,
+                from_event_id=before_offset,
+                to_event_id=offset,
+                snapshot_event_id=snapshot_event_id,
+                sent_count=max(0, offset - before_offset),
+            )
+        else:
+            offset = event_stream_position(root, run_id)
+            realtime_debug_log("ws", _root=root, phase="tail_start", conn_id=conn_id, run_id=run_id, offset=offset)
+        read_task = asyncio.create_task(ws_read_text(reader))
         while True:
             snapshot_event_id = event_stream_position(root, run_id)
             before_offset = offset
@@ -233,18 +262,50 @@ async def handle_ws_connection(
                     snapshot_event_id=snapshot_event_id,
                     sent_count=max(0, offset - before_offset),
                 )
-            try:
-                message = await asyncio.wait_for(ws_read_text(reader), timeout=interval)
-            except asyncio.TimeoutError:
+            notify_task = asyncio.create_task(listener.wait()) if listener is not None else None
+            wait_tasks = {read_task}
+            if notify_task is not None:
+                wait_tasks.add(notify_task)
+            now = asyncio.get_running_loop().time()
+            heartbeat_timeout = max(0.0, WS_HEARTBEAT_INTERVAL - (now - last_heartbeat_at))
+            done, _pending = await asyncio.wait(
+                wait_tasks,
+                timeout=min(_event_wait_timeout(interval, listener is not None), heartbeat_timeout),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            notified = False
+            if notify_task is not None and notify_task in done:
+                try:
+                    notify_task.result()
+                    notified = True
+                except OSError as exc:
+                    realtime_debug_log(
+                        "ws",
+                        _root=root,
+                        phase="event_notify_error",
+                        conn_id=conn_id,
+                        run_id=run_id,
+                        error=type(exc).__name__,
+                    )
+                    listener.close()
+                    listener = None
+            elif notify_task is not None:
+                await _cancel_task(notify_task)
+            if notified:
+                realtime_debug_log("ws", _root=root, phase="event_notify_received", conn_id=conn_id, run_id=run_id, offset=offset)
+            if read_task not in done:
                 now = asyncio.get_running_loop().time()
                 if now - last_heartbeat_at >= WS_HEARTBEAT_INTERVAL:
                     await _send_heartbeat(writer, offset)
                     last_heartbeat_at = now
                     realtime_debug_log("ws", _root=root, phase="heartbeat_sent", conn_id=conn_id, run_id=run_id, offset=offset)
                 continue
+            message = read_task.result()
+            read_task = None
             if message is None:
                 realtime_debug_log("ws", _root=root, phase="client_close_frame", conn_id=conn_id, run_id=run_id, offset=offset)
                 break
+            read_task = asyncio.create_task(ws_read_text(reader))
             if not message:
                 realtime_debug_log("ws", _root=root, phase="client_non_text_frame", conn_id=conn_id, run_id=run_id)
                 continue
@@ -286,6 +347,9 @@ async def handle_ws_connection(
     except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as exc:
         realtime_debug_log("ws", _root=root, phase="disconnect_error", conn_id=conn_id, run_id=run_id, error=type(exc).__name__, offset=offset)
     finally:
+        await _cancel_task(read_task)
+        if listener is not None:
+            listener.close()
         realtime_debug_log("ws", _root=root, phase="closed", conn_id=conn_id, run_id=run_id, offset=offset)
         writer.close()
         await writer.wait_closed()

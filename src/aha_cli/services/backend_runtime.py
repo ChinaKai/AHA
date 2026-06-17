@@ -110,69 +110,82 @@ def _event_time(event: dict) -> str:
 
 
 def _backend_activity(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
+    return _backend_event_runtime(root, run_id, target, task_id)["activity"]
+
+
+def _event_matches_metric_target(data: dict, target: str, task_id: str | None) -> bool:
+    if data.get("target") != target:
+        return False
+    if task_id and data.get("task_id") != task_id:
+        return False
+    if task_id is None and data.get("task_id"):
+        return False
+    return True
+
+
+def _backend_event_runtime(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
     latest_started: dict | None = None
     latest_finished: dict | None = None
     latest_reply: dict | None = None
     latest_error: dict | None = None
+    latest_usage: dict | None = None
+    latest_prompt_metrics: dict | None = None
     scanned = 0
     for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
         scanned += 1
-        if scanned > BACKEND_ACTIVITY_SCAN_LIMIT:
-            break
-        data = event.get("data") or {}
-        if task_id and data.get("task_id") != task_id:
-            continue
-        if latest_started is None and event.get("type") == "agent_started" and data.get("target") == target:
-            latest_started = event
-        elif latest_finished is None and event.get("type") == "agent_finished" and data.get("target") == target:
-            latest_finished = event
-        elif latest_error is None and event.get("type") == "agent_error" and data.get("target") == target:
-            latest_error = event
-        elif latest_reply is None and event.get("type") == "message" and data.get("sender") == target:
-            latest_reply = event
-        if latest_started and latest_finished and latest_reply and latest_error:
+        event_type = event.get("type")
+        raw_data = event.get("data")
+        data = raw_data if isinstance(raw_data, dict) else {}
+
+        if scanned <= BACKEND_ACTIVITY_SCAN_LIMIT and (not task_id or data.get("task_id") == task_id):
+            if latest_started is None and event_type == "agent_started" and data.get("target") == target:
+                latest_started = event
+            elif latest_finished is None and event_type == "agent_finished" and data.get("target") == target:
+                latest_finished = event
+            elif latest_error is None and event_type == "agent_error" and data.get("target") == target:
+                latest_error = event
+            elif latest_reply is None and event_type == "message" and data.get("sender") == target:
+                latest_reply = event
+
+        if latest_usage is None and event_type == "agent_usage":
+            metric_data = data if isinstance(data, dict) else {}
+            if _event_matches_metric_target(metric_data, target, task_id):
+                usage = metric_data.get("usage")
+                latest_usage = usage if isinstance(usage, dict) else {}
+
+        if latest_prompt_metrics is None and event_type == "agent_prompt_metrics":
+            metric_data = data if isinstance(data, dict) else {}
+            if _event_matches_metric_target(metric_data, target, task_id):
+                latest_prompt_metrics = metric_data
+
+        activity_complete = (
+            scanned > BACKEND_ACTIVITY_SCAN_LIMIT
+            or (latest_started and latest_finished and latest_reply and latest_error)
+        )
+        if activity_complete and latest_usage is not None and latest_prompt_metrics is not None:
             break
     started_at = _event_time(latest_started or {})
     finished_at = _event_time(latest_finished or {})
     busy = bool(started_at and (not finished_at or started_at > finished_at))
     return {
-        "busy": busy,
-        "last_started_at": started_at or None,
-        "last_finished_at": finished_at or None,
-        "last_reply_at": _event_time(latest_reply or {}) or None,
-        "last_error_at": _event_time(latest_error or {}) or None,
+        "activity": {
+            "busy": busy,
+            "last_started_at": started_at or None,
+            "last_finished_at": finished_at or None,
+            "last_reply_at": _event_time(latest_reply or {}) or None,
+            "last_error_at": _event_time(latest_error or {}) or None,
+        },
+        "latest_usage": latest_usage or {},
+        "latest_prompt_metrics": latest_prompt_metrics or {},
     }
 
 
 def _latest_agent_usage(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
-    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
-        if event.get("type") != "agent_usage":
-            continue
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        if data.get("target") != target:
-            continue
-        if task_id and data.get("task_id") != task_id:
-            continue
-        if task_id is None and data.get("task_id"):
-            continue
-        usage = data.get("usage")
-        return usage if isinstance(usage, dict) else {}
-    return {}
+    return _backend_event_runtime(root, run_id, target, task_id)["latest_usage"]
 
 
 def _latest_agent_prompt_metrics(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
-    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)) or ():
-        if event.get("type") != "agent_prompt_metrics":
-            continue
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        if data.get("target") != target:
-            continue
-        if task_id and data.get("task_id") != task_id:
-            continue
-        if task_id is None and data.get("task_id"):
-            continue
-        return data
-    return {}
+    return _backend_event_runtime(root, run_id, target, task_id)["latest_prompt_metrics"]
 
 
 def _positive_int(value: object) -> int | None:
@@ -317,12 +330,13 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         pid, discovered_backend = discovered
         running = True
         managed = bool(state.get("managed")) if state and state.get("pid") == pid else False
-    activity = _backend_activity(root, run_id, target, task_id)
+    event_runtime = _backend_event_runtime(root, run_id, target, task_id)
+    activity = event_runtime["activity"]
     status = "busy" if running and activity["busy"] else "running" if running else "stopped"
     backend_name = _backend_name_from_state(state, discovered_backend or "unknown")
     resolved_model = state.get("resolved_model") or state.get("model")
-    latest_usage = _latest_agent_usage(root, run_id, target, task_id)
-    latest_prompt_metrics = _latest_agent_prompt_metrics(root, run_id, target, task_id)
+    latest_usage = event_runtime["latest_usage"]
+    latest_prompt_metrics = event_runtime["latest_prompt_metrics"]
     runtime_context = (
         _codex_runtime_context(root, run_id, target, task_id)
         if str(backend_name).removesuffix("-chat") == "codex"

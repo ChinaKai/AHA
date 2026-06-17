@@ -16,6 +16,8 @@
     const conversationFiltersEl = state.conversationFiltersEl;
     const logPageLimit = Number(state.logPageLimit || 200);
     const conversationPageLimit = Number(state.conversationPageLimit || 30);
+    const realtimeEventCacheLimit = Math.max(200, Number(state.realtimeEventCacheLimit || 2000));
+    const realtimeSeenEventCacheLimit = Math.max(realtimeEventCacheLimit, Number(state.realtimeSeenEventCacheLimit || realtimeEventCacheLimit * 2));
     const sessionRefreshFallbackMs = Number(state.sessionRefreshFallbackMs || 5000);
     const getCurrentRunId = state.currentRunId || (() => "");
     const getSelectedTaskId = state.selectedTaskId || (() => "");
@@ -774,11 +776,54 @@
       return String(event?.event_id || event?._cursor || (startOffset !== "" ? `${startOffset}-${index}` : deps.eventIdentity(event))).trim();
     }
 
+    function realtimeEventDedupeKey(event) {
+      return event?.event_id ? `event_id:${event.event_id}` : `event:${deps.eventIdentity(event)}`;
+    }
+
+    function trimSeenRealtimeEvents() {
+      if (seenRealtimeEvents.size <= realtimeSeenEventCacheLimit) return;
+      const retained = new Set();
+      for (let index = allEvents.length - 1; index >= 0 && retained.size < realtimeSeenEventCacheLimit; index -= 1) {
+        const key = realtimeEventDedupeKey(allEvents[index]);
+        if (key) retained.add(key);
+      }
+      for (const key of seenRealtimeEvents) {
+        if (seenRealtimeEvents.size <= realtimeSeenEventCacheLimit) break;
+        if (!retained.has(key)) seenRealtimeEvents.delete(key);
+      }
+      for (const key of seenRealtimeEvents) {
+        if (seenRealtimeEvents.size <= realtimeSeenEventCacheLimit) break;
+        seenRealtimeEvents.delete(key);
+      }
+    }
+
+    function trimRealtimeEventCaches() {
+      let overflow = allEvents.length - realtimeEventCacheLimit;
+      for (let index = 0; overflow > 0 && index < allEvents.length;) {
+        if (allEvents[index]?._optimistic) {
+          index += 1;
+          continue;
+        }
+        const [removed] = allEvents.splice(index, 1);
+        const key = realtimeEventDedupeKey(removed);
+        if (key) seenRealtimeEvents.delete(key);
+        overflow -= 1;
+      }
+      if (overflow > 0) {
+        const removedEvents = allEvents.splice(0, overflow);
+        removedEvents.forEach(event => {
+          const key = realtimeEventDedupeKey(event);
+          if (key) seenRealtimeEvents.delete(key);
+        });
+      }
+      trimSeenRealtimeEvents();
+    }
+
     function appendRealtimeEvents(events, startOffset = "") {
       const accepted = [];
       events.forEach((event, index) => {
         const cursor = realtimeEventCursor(event, index, startOffset);
-        const dedupeKey = event?.event_id ? `event_id:${event.event_id}` : `event:${deps.eventIdentity(event)}`;
+        const dedupeKey = realtimeEventDedupeKey(event);
         if (seenRealtimeEvents.has(dedupeKey)) return;
         seenRealtimeEvents.add(dedupeKey);
         if (!event._uiKey) event._uiKey = `event-${cursor || index}-${event.type || "event"}`;
@@ -787,6 +832,8 @@
       });
       if (!accepted.length) return accepted;
       allEvents.push(...accepted);
+      trimRealtimeEventCaches();
+      deps.clearRuntimeCacheForEvents?.(accepted);
       appendRealtimeConversationEvents(accepted);
       deps.removeOptimisticEventsMatchedBy(accepted);
       invalidateRealtimeTaskDetails(accepted);

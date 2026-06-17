@@ -24,6 +24,7 @@ from aha_cli.store.filesystem import (
     update_task_context_management_config,
     update_agent_runtime,
 )
+from aha_cli.store.snapshots import status_snapshot_projection as raw_status_snapshot_projection
 from aha_cli.store.sessions import ensure_session, save_session
 from aha_cli.web import status as web_status_module
 from aha_cli.web.server import handle_send_payload, recover_stale_running_agent, web_status_snapshot
@@ -134,15 +135,65 @@ class WebStatusTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
 
                 with mock.patch("aha_cli.web.status.backend_status") as backend_status_mock:
+                    selected_snapshot = web_status_snapshot(root, run_id, lite=True, selected_task_id="task-001")
                     snapshot = web_status_snapshot(root, run_id, lite=True, selected_task_id="task-other")
                     snapshot_without_selection = web_status_snapshot(root, run_id, lite=True)
 
         backend_status_mock.assert_not_called()
+        selected_task = selected_snapshot["tasks"][0]
+        self.assertEqual(selected_task["agent_count"], 2)
+        self.assertEqual([agent["id"] for agent in selected_task["agents"]], ["main", sub["id"]])
+        self.assertNotIn("backend_process_status", selected_task["agents"][0])
         task = snapshot["tasks"][0]
         self.assertEqual(task["agent_count"], 2)
         self.assertEqual(task["agents"], [])
         self.assertEqual(snapshot_without_selection["tasks"][0]["agent_count"], 2)
         self.assertEqual(snapshot_without_selection["tasks"][0]["agents"], [])
+
+    def test_lite_status_projection_only_ensures_selected_task_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Lite projection", "--agents", "2")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                ensured: list[tuple[str | None, str]] = []
+
+                def fake_ensure_session(
+                    _root: Path,
+                    _run_id: str,
+                    task_id: str | None,
+                    agent_id: str,
+                    _backend: str,
+                    **_kwargs: object,
+                ) -> dict:
+                    ensured.append((task_id, agent_id))
+                    return {
+                        "id": f"{task_id}-{agent_id}",
+                        "backend_session_id": None,
+                        "scope": "task",
+                        "status": "active",
+                        "updated_at": "2026-05-15T00:00:00+00:00",
+                    }
+
+                snapshot = raw_status_snapshot_projection(
+                    root,
+                    run_id,
+                    lite=True,
+                    selected_task_id="task-001",
+                    ensure_session_func=fake_ensure_session,
+                    event_stream_position_func=lambda _root, _run_id: 99,
+                )
+
+        tasks = {task["id"]: task for task in snapshot["tasks"]}
+        self.assertEqual(snapshot["snapshot_event_id"], 99)
+        self.assertEqual(ensured, [("task-001", "main")])
+        self.assertEqual(tasks["task-001"]["agent_count"], 1)
+        self.assertEqual(tasks["task-001"]["agents"][0]["session_id"], "task-001-main")
+        self.assertEqual(tasks["task-002"]["agent_count"], 1)
+        self.assertEqual(tasks["task-002"]["agents"], [])
 
     def test_web_tasks_snapshot_skips_backend_status_and_outcome_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -215,10 +266,14 @@ class WebStatusTests(unittest.TestCase):
                         "latest_prompt_metrics": {"total": {"chars": 99}},
                     }
 
-                with mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status):
+                with (
+                    mock.patch("aha_cli.web.status.backend_status", side_effect=fake_backend_status),
+                    mock.patch("aha_cli.web.status.status_snapshot") as status_snapshot_mock,
+                ):
                     runtime = web_agents_runtime_snapshot(root, run_id, "task-001")
 
         agents = {agent["id"]: agent for agent in runtime["agents"]}
+        status_snapshot_mock.assert_not_called()
         self.assertEqual(runtime["agent_count"], 3)
         self.assertEqual(runtime["activity_status"], "busy")
         self.assertEqual(set(agents), {"main", sub["id"], host["id"]})

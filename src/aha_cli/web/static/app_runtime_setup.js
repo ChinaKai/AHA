@@ -11,7 +11,7 @@ const eventTransport = String(queryParams.get("transport") || queryParams.get("e
 const wsConfig = String(queryParams.get("ws") || "").trim();
 const wsDisabled = eventTransport === "poll" || eventTransport === "polling" || ["0", "false", "off"].includes(wsConfig.toLowerCase());
 const realtimeDebugParam = String(queryParams.get("realtime_debug") || queryParams.get("debug") || "").toLowerCase();
-const realtimeDebugEnabled = !["0", "false", "off", "no", "none"].includes(realtimeDebugParam);
+const realtimeDebugEnabled = ["1", "true", "on", "yes"].includes(realtimeDebugParam);
 const {
   confirmDialogAction,
   escapeHtml,
@@ -80,6 +80,8 @@ let appSelectors = null;
 let appBridge = null;
 const allEvents = [];
 const seenRealtimeEvents = new Set();
+const realtimeEventCacheLimit = 2000;
+const realtimeSeenEventCacheLimit = 4000;
 const pendingMessages = [];
 const interruptedContexts = new Set();
 const conversationPageLimit = 30;
@@ -518,6 +520,50 @@ const {
   visibleTasks,
   writeStoredSelectedTaskId
 } = appBridge;
+const realtimeStatusRefreshEventTypes = new Set([
+  "agent_backend_switched",
+  "agent_config_updated",
+  "agent_created",
+  "agent_finished",
+  "agent_started",
+  "agent_status_changed",
+  "backend_session_compact_reset",
+  "backend_session_reset",
+  "backend_started",
+  "backend_stopped",
+  "task_completed",
+  "task_context_management_config_updated",
+  "task_created",
+  "task_reopened",
+  "task_status_changed",
+  "task_supervision_config_updated",
+  "task_waiting_for_subagents"
+]);
+let realtimeStatusRefreshTimer = null;
+let realtimeStatusRefreshInFlight = null;
+function acceptedEventsNeedStatusRefresh(events = []) {
+  return events.some(event => realtimeStatusRefreshEventTypes.has(String(event?.type || "")));
+}
+function scheduleRealtimeStatusRefresh(events = []) {
+  if (!acceptedEventsNeedStatusRefresh(events)) return false;
+  if (realtimeStatusRefreshTimer) clearTimeout(realtimeStatusRefreshTimer);
+  const eventTypes = events.map(event => String(event?.type || "")).filter(Boolean).slice(0, 8);
+  realtimeStatusRefreshTimer = setTimeout(() => {
+    realtimeStatusRefreshTimer = null;
+    realtimeDebug("status.event_refresh", { event_types: eventTypes });
+    const refresh = Promise.resolve(loadStatus())
+      .then(() => renderPanelForRealtime())
+      .catch(err => {
+        console.warn("Realtime status refresh failed", err);
+        realtimeDebug("status.event_refresh_error", { error: err?.message || String(err) });
+      });
+    realtimeStatusRefreshInFlight = refresh;
+    refresh.finally(() => {
+      if (realtimeStatusRefreshInFlight === refresh) realtimeStatusRefreshInFlight = null;
+    });
+  }, Math.min(250, pollInterval));
+  return true;
+}
 const realtimeClient = window.AHARealtimeClient.createRealtimeClient({
   queryParams,
   pollInterval,
@@ -560,6 +606,7 @@ const realtimeClient = window.AHARealtimeClient.createRealtimeClient({
   onHeartbeat: () => refreshRealtimeIndicator(),
   onEvent: event => appendRealtimeEvents([event]),
   onAcceptedEvents: accepted => {
+    scheduleRealtimeStatusRefresh(accepted);
     if (accepted.length) renderPanelForRealtime();
   }
 });

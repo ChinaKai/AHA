@@ -4,6 +4,7 @@ from pathlib import Path
 import threading
 
 from aha_cli.domain.models import utc_now
+from aha_cli.store.event_notifications import notify_event_appended
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from
 from aha_cli.store.paths import event_path
 
@@ -38,7 +39,9 @@ def append_event(root: Path, run_id: str, event_type: str, data: dict, ts: str |
         "data": data,
     }
     with _EVENT_LOCK:
-        event_id = append_jsonl(event_path(root, run_id), event)
+        path = event_path(root, run_id)
+        event_id = append_jsonl(path, event)
+    notify_event_appended(path)
     return with_event_id(event, event_id)
 
 
@@ -51,6 +54,7 @@ def append_event_to_file(events_file: Path | None, run_id: str, event_type: str,
     }
     if events_file is not None:
         event_id = append_jsonl(events_file, event)
+        notify_event_appended(events_file)
         return with_event_id(event, event_id)
     return event
 

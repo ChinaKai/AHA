@@ -13,6 +13,7 @@ from unittest import mock
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.backends.claude import run_claude_exec
 from aha_cli.cli import main
+from aha_cli.services import backend_runtime as backend_runtime_module
 from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
 from aha_cli.store.filesystem import add_agent, append_event, read_json, session_path, update_agent_config, write_json
 
@@ -515,6 +516,44 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["context_pressure"]["runtime_effective_input_tokens"], 6000)
         self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.effective_input_tokens")
         self.assertEqual(status["context_pressure"]["percent"], 3.0)
+
+    def test_backend_status_scans_event_log_once_for_activity_and_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Runtime event scan", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root / ".aha", run_id, "agent_started", {"task_id": "task-001", "target": "main"})
+                append_event(root / ".aha", run_id, "message", {"task_id": "task-001", "sender": "main", "message": "reply"})
+                append_event(
+                    root / ".aha",
+                    run_id,
+                    "agent_usage",
+                    {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 123}},
+                )
+                append_event(
+                    root / ".aha",
+                    run_id,
+                    "agent_prompt_metrics",
+                    {"task_id": "task-001", "target": "main", "total": {"tokens": 45}},
+                )
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime._discover_backend_process", return_value=None),
+                    mock.patch(
+                        "aha_cli.services.backend_runtime.iter_jsonl_reverse",
+                        wraps=backend_runtime_module.iter_jsonl_reverse,
+                    ) as reverse_events,
+                ):
+                    status = backend_status(root / ".aha", run_id, "main", task_id="task-001")
+
+        self.assertEqual(reverse_events.call_count, 1)
+        self.assertEqual(status["latest_usage"]["input_tokens"], 123)
+        self.assertEqual(status["latest_prompt_metrics"]["total"]["tokens"], 45)
+        self.assertIsNotNone(status["last_started_at"])
+        self.assertIsNotNone(status["last_reply_at"])
 
     def test_backend_process_home_matching_rejects_other_aha_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

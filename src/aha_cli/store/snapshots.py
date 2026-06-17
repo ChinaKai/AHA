@@ -15,6 +15,74 @@ from aha_cli.store.runs import require_plan
 from aha_cli.store.sessions import ensure_session as default_ensure_session, list_sessions
 
 
+def _agent_status_item(
+    root: Path,
+    run_id: str,
+    task: dict,
+    agent: dict,
+    *,
+    ensure_session_func: Callable[..., dict],
+) -> dict:
+    session = ensure_session_func(
+        root,
+        run_id,
+        task["id"],
+        agent["id"],
+        agent.get("backend", task.get("preferred_backend", "codex")),
+        model=agent.get("model"),
+        workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
+    )
+    merged = dict(agent)
+    merged["sandbox"] = agent.get("sandbox") or task.get("preferred_sandbox")
+    merged["approval"] = agent.get("approval") or task.get("preferred_approval")
+    merged["proxy_enabled"] = bool(agent.get("proxy_enabled"))
+    merged["session_id"] = session.get("id")
+    merged["backend_session_id"] = session.get("backend_session_id")
+    merged["session_scope"] = session.get("scope")
+    merged["session_status"] = session.get("status")
+    merged["session_updated_at"] = session.get("updated_at")
+    return merged
+
+
+def _task_status_item(
+    root: Path,
+    run_id: str,
+    plan: dict,
+    cfg: dict,
+    task: dict,
+    *,
+    include_agents: bool = True,
+    ensure_session_func: Callable[..., dict],
+) -> dict:
+    proxy_config = backend_proxy_config(cfg, task.get("preferred_backend"), plan, task)
+    return {
+        "id": task["id"],
+        "title": task["title"],
+        "description": task.get("description", ""),
+        **task_metadata_projection(task),
+        "run_proxy_enabled": bool(proxy_config.get("enabled")),
+        "run_proxy_configured": backend_has_proxy_config(cfg, task.get("preferred_backend"), plan, task),
+        "status": task["status"],
+        "exit_code": task["exit_code"],
+        "started_at": task["started_at"],
+        "finished_at": task["finished_at"],
+        "current_round_id": task.get("current_round_id"),
+        "round_sequence": task.get("round_sequence"),
+        "last_final_round_id": task.get("last_final_round_id"),
+        "last_final_at": task.get("last_final_at"),
+        "coordination": task.get("coordination"),
+        "hidden": bool(task.get("hidden")),
+        "hidden_at": task.get("hidden_at"),
+        "deleted_at": task.get("deleted_at"),
+        "agents": [
+            _agent_status_item(root, run_id, task, agent, ensure_session_func=ensure_session_func)
+            for agent in task.get("agents", [])
+        ]
+        if include_agents
+        else [],
+    }
+
+
 def status_snapshot(
     root: Path,
     run_id: str,
@@ -23,51 +91,6 @@ def status_snapshot(
 ) -> dict:
     plan = require_plan(root, run_id)
     cfg = load_config(root)
-
-    def with_session(task: dict, agent: dict) -> dict:
-        session = ensure_session_func(
-            root,
-            run_id,
-            task["id"],
-            agent["id"],
-            agent.get("backend", task.get("preferred_backend", "codex")),
-            model=agent.get("model"),
-            workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
-        )
-        merged = dict(agent)
-        merged["sandbox"] = agent.get("sandbox") or task.get("preferred_sandbox")
-        merged["approval"] = agent.get("approval") or task.get("preferred_approval")
-        merged["proxy_enabled"] = bool(agent.get("proxy_enabled"))
-        merged["session_id"] = session.get("id")
-        merged["backend_session_id"] = session.get("backend_session_id")
-        merged["session_scope"] = session.get("scope")
-        merged["session_status"] = session.get("status")
-        merged["session_updated_at"] = session.get("updated_at")
-        return merged
-
-    def task_status_item(task: dict) -> dict:
-        proxy_config = backend_proxy_config(cfg, task.get("preferred_backend"), plan, task)
-        return {
-            "id": task["id"],
-            "title": task["title"],
-            "description": task.get("description", ""),
-            **task_metadata_projection(task),
-            "run_proxy_enabled": bool(proxy_config.get("enabled")),
-            "run_proxy_configured": backend_has_proxy_config(cfg, task.get("preferred_backend"), plan, task),
-            "status": task["status"],
-            "exit_code": task["exit_code"],
-            "started_at": task["started_at"],
-            "finished_at": task["finished_at"],
-            "current_round_id": task.get("current_round_id"),
-            "round_sequence": task.get("round_sequence"),
-            "last_final_round_id": task.get("last_final_round_id"),
-            "last_final_at": task.get("last_final_at"),
-            "coordination": task.get("coordination"),
-            "hidden": bool(task.get("hidden")),
-            "hidden_at": task.get("hidden_at"),
-            "deleted_at": task.get("deleted_at"),
-            "agents": [with_session(task, agent) for agent in task.get("agents", [])],
-        }
 
     return {
         "run_id": run_id,
@@ -78,7 +101,11 @@ def status_snapshot(
         "aha_root": str(root),
         "main_agent": plan.get("main_agent"),
         "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
-        "tasks": [task_status_item(task) for task in plan["tasks"] if not task.get("deleted_at")],
+        "tasks": [
+            _task_status_item(root, run_id, plan, cfg, task, ensure_session_func=ensure_session_func)
+            for task in plan["tasks"]
+            if not task.get("deleted_at")
+        ],
     }
 
 
@@ -92,13 +119,42 @@ def status_snapshot_projection(
     event_stream_position_func: Callable[[Path, str], int] = default_event_stream_position,
 ) -> dict:
     snapshot_event_id = event_stream_position_func(root, run_id)
-    snapshot = status_snapshot(root, run_id, ensure_session_func=ensure_session_func)
-    if lite and selected_task_id:
-        for task in snapshot.get("tasks", []):
-            agents = task.get("agents") or []
-            task["agent_count"] = len(agents)
-            if str(task.get("id") or "") != selected_task_id:
-                task["agents"] = []
+    if not lite:
+        snapshot = status_snapshot(root, run_id, ensure_session_func=ensure_session_func)
+        snapshot["snapshot_event_id"] = snapshot_event_id
+        return snapshot
+
+    plan = require_plan(root, run_id)
+    cfg = load_config(root)
+    selected = str(selected_task_id or "").strip()
+    tasks: list[dict] = []
+    for source_task in plan["tasks"]:
+        if source_task.get("deleted_at"):
+            continue
+        agents = source_task.get("agents") or []
+        include_agents = bool(selected and str(source_task.get("id") or "") == selected)
+        task = _task_status_item(
+            root,
+            run_id,
+            plan,
+            cfg,
+            source_task,
+            include_agents=include_agents,
+            ensure_session_func=ensure_session_func,
+        )
+        task["agent_count"] = len(agents)
+        tasks.append(task)
+    snapshot = {
+        "run_id": run_id,
+        "goal": plan["goal"],
+        "mode": plan["mode"],
+        "updated_at": plan["updated_at"],
+        "selected_task_id": str((plan.get("ui") or {}).get("selected_task_id") or ""),
+        "aha_root": str(root),
+        "main_agent": plan.get("main_agent"),
+        "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
+        "tasks": tasks,
+    }
     snapshot["snapshot_event_id"] = snapshot_event_id
     return snapshot
 

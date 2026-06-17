@@ -25,8 +25,12 @@
       }
       tickInFlight = true;
       try {
-        await options.loadStatus?.();
-        await options.refreshTaskMemosIfOpen?.();
+        await options.syncRealtimeEvents?.({ allowStalePoll: Boolean(options.selectedTaskRealtimeActive?.()) });
+        const realtimeConnected = Boolean(options.realtimeConnected?.());
+        if (!realtimeConnected) {
+          await options.loadStatus?.();
+          await options.refreshTaskMemosIfOpen?.();
+        }
         options.renderPanelForRealtime?.();
         await options.ensureConversationLoaded?.();
         await options.maybeRefreshConversationBackendSessionFallback?.();
@@ -35,8 +39,7 @@
           await options.loadStatus?.({ forceAgents: true });
           await options.refreshTaskMemosIfOpen?.();
         }
-        await options.syncRealtimeEvents?.({ allowStalePoll: Boolean(options.selectedTaskRealtimeActive?.()) });
-        await options.refreshTaskMemosIfOpen?.();
+        if (!realtimeConnected) await options.refreshTaskMemosIfOpen?.();
         resetFailures();
         options.renderPendingMessages?.();
         options.renderPanelForRealtime?.();

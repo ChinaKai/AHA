@@ -358,15 +358,13 @@ def web_tasks_snapshot(
     selected_task_id: str | None = None,
     include_outcomes: bool = False,
 ) -> dict:
-    snapshot = status_snapshot_projection(root, run_id)
+    snapshot = status_snapshot_projection(root, run_id, lite=lite, selected_task_id=selected_task_id)
     snapshot["aha_version"] = aha_version(root)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
     outcomes = task_outcome_snapshots(root, run_id, task_ids) if include_outcomes else {}
     for task in snapshot.get("tasks", []):
         raw_task_id = str(task.get("id") or "")
         decorate_task_status(task, outcomes)
-        if lite and (not selected_task_id or raw_task_id != selected_task_id):
-            task["agents"] = []
     return snapshot
 
 
@@ -508,8 +506,15 @@ def attach_backend_runtime(
 
 
 def web_agents_runtime_snapshot(root: Path, run_id: str, task_id: str) -> dict:
-    snapshot = status_snapshot(root, run_id)
-    task = next((item for item in snapshot.get("tasks", []) if str(item.get("id") or "") == task_id), None)
+    plan = require_plan(root, run_id)
+    task = next(
+        (
+            item
+            for item in plan.get("tasks", [])
+            if str(item.get("id") or "") == task_id and not item.get("deleted_at")
+        ),
+        None,
+    )
     if task is None:
         raise KeyError(task_id)
     runtime_agents = []
@@ -568,6 +573,8 @@ def recover_stale_running_agents(
 
 def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
     snapshot = web_tasks_snapshot(root, run_id, lite=lite, selected_task_id=selected_task_id, include_outcomes=True)
+    if lite:
+        return snapshot
     return attach_backend_runtime(root, run_id, snapshot, recover_stale=False)
 
 __all__ = [

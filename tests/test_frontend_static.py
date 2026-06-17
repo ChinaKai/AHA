@@ -1056,6 +1056,69 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertLess(update_block.index("applyAgentConfigResponse(selectedTask() || task, body);"), update_block.index("renderAgents();"))
         self.assertLess(update_block.index("renderAgents();"), update_block.index("await ensureActiveTabData();"))
 
+    def test_realtime_status_refresh_avoids_fixed_task_polling_when_websocket_is_open(self) -> None:
+        root = static_root()
+        render_scheduler = (root / "render_scheduler.js").read_text(encoding="utf-8")
+        setup = (root / "app_runtime_setup.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        conversation_controller = (root / "conversation_controller.js").read_text(encoding="utf-8")
+
+        self.assertIn("const realtimeConnected = Boolean(options.realtimeConnected?.());", render_scheduler)
+        self.assertIn("if (!realtimeConnected) {\n          await options.loadStatus?.();\n          await options.refreshTaskMemosIfOpen?.();\n        }", render_scheduler)
+        self.assertIn("if (!realtimeConnected) await options.refreshTaskMemosIfOpen?.();", render_scheduler)
+        self.assertLess(
+            render_scheduler.index("await options.syncRealtimeEvents?."),
+            render_scheduler.index("if (!realtimeConnected) {"),
+        )
+        self.assertIn("realtimeConnected: deps.realtimeConnected", registry)
+        self.assertIn('realtimeConnected: () => realtimeClient.readyStateName() === "open"', wiring)
+        self.assertIn("const realtimeStatusRefreshEventTypes = new Set", setup)
+        self.assertIn('"task_status_changed"', setup)
+        self.assertIn('"agent_status_changed"', setup)
+        self.assertIn('"backend_started"', setup)
+        self.assertIn("scheduleRealtimeStatusRefresh(accepted);", setup)
+        self.assertIn("const refresh = Promise.resolve(loadStatus())", setup)
+        self.assertIn('String(event.type || "").startsWith("task_memo_")', conversation_controller)
+        self.assertIn("void deps.refreshTaskMemosIfOpen?.().catch", conversation_controller)
+
+    def test_realtime_debug_is_opt_in_and_event_cache_is_bounded(self) -> None:
+        root = static_root()
+        setup = (root / "app_runtime_setup.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        conversation_controller = (root / "conversation_controller.js").read_text(encoding="utf-8")
+
+        self.assertIn('const realtimeDebugEnabled = ["1", "true", "on", "yes"].includes(realtimeDebugParam);', setup)
+        self.assertNotIn('const realtimeDebugEnabled = !["0", "false", "off", "no", "none"].includes(realtimeDebugParam);', setup)
+        self.assertIn("const realtimeEventCacheLimit = 2000;", setup)
+        self.assertIn("const realtimeSeenEventCacheLimit = 4000;", setup)
+        self.assertIn("realtimeEventCacheLimit,", wiring)
+        self.assertIn("realtimeSeenEventCacheLimit,", wiring)
+        self.assertIn("const realtimeEventCacheLimit = Math.max(200, Number(state.realtimeEventCacheLimit || 2000));", conversation_controller)
+        self.assertIn("const realtimeSeenEventCacheLimit = Math.max(realtimeEventCacheLimit, Number(state.realtimeSeenEventCacheLimit || realtimeEventCacheLimit * 2));", conversation_controller)
+        self.assertIn("function trimRealtimeEventCaches", conversation_controller)
+        self.assertIn("function trimSeenRealtimeEvents", conversation_controller)
+        self.assertLess(
+            conversation_controller.index("allEvents.push(...accepted);"),
+            conversation_controller.index("trimRealtimeEventCaches();"),
+        )
+
+    def test_runtime_cache_does_not_keep_non_running_task_busy(self) -> None:
+        root = static_root()
+        status_store = (root / "status_store.js").read_text(encoding="utf-8")
+        conversation_controller = (root / "conversation_controller.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+
+        self.assertIn("function clearRuntimeCacheForEvents(events = [])", status_store)
+        self.assertIn('if (type === "task_status_changed")', status_store)
+        self.assertIn('if (status && status !== "running") changed = clearRuntimeCacheForTask(taskId) || changed;', status_store)
+        self.assertIn('} else if (type === "backend_stopped") {', status_store)
+        self.assertIn("const currentStatus = deps.taskCurrentStatus?.(task);", status_store)
+        self.assertIn('if (currentStatus !== "running") {\n        task.activity_status = "idle";\n        return;\n      }', status_store)
+        self.assertIn('currentStatus === "running"', status_store)
+        self.assertIn("deps.clearRuntimeCacheForEvents?.(accepted);", conversation_controller)
+        self.assertIn("clearRuntimeCacheForEvents: events => statusStore.clearRuntimeCacheForEvents(events),", wiring)
+
     def test_agent_settings_panel_blocks_auto_rerender_while_open(self) -> None:
         root = static_root()
         script = (root / "agent_controller.js").read_text(encoding="utf-8")
