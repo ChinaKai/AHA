@@ -68,28 +68,46 @@
       return `<div class="log-view">${older}<pre>${escapeHtml(body)}</pre></div>`;
     }
 
+    // Best-effort, display-only hint about what the board is currently waiting on.
+    // Deliberately NOT part of the stored data contract: the agent judges state from
+    // the raw stream, and these loose patterns only drive a UI chip.
+    function detectHardwarePromptState(text) {
+      const tail = String(text || "").slice(-400);
+      if (/(?:^|\n)[^\n]*login:\s*$/.test(tail)) return "waiting: login";
+      if (/(?:=>|U-Boot>|CCC)\s*$/.test(tail)) return "U-Boot prompt";
+      if (/\n[^\n]*[#$]\s*$/.test(tail)) return "shell prompt";
+      if (/stop autoboot/i.test(tail)) return "autoboot countdown";
+      if (/kernel panic|Oops|Call Trace/i.test(tail)) return "kernel panic";
+      return "";
+    }
+
     function renderHardwareIoPanelHtml(state = {}) {
       if (!state.initialized && state.loading) return '<div class="empty">Loading hardware I/O...</div>';
       const events = Array.isArray(state.events) ? state.events : [];
-      if (!events.length) return '<div class="empty">No hardware I/O yet.</div>';
-      const rows = events.map(item => {
+      if (!events.length) return '<div class="empty">No hardware I/O yet. Attach a session with <code>aha hardware-attach</code>.</div>';
+      let rxTail = "";
+      const parts = events.map(item => {
         const direction = String(item.direction || "system").toLowerCase();
-        const channel = String(item.channel || "hardware").toUpperCase();
-        const endpoint = item.endpoint ? ` · ${escapeHtml(item.endpoint)}` : "";
-        const agent = item.agent_id ? ` · ${escapeHtml(item.agent_id)}` : "";
+        const data = String(item.data || "");
         const truncated = item.truncated ? " …" : "";
-        return `
-          <div class="hardware-io-row hardware-io-${escapeHtml(direction)}">
-            <div class="hardware-io-meta">
-              <time>${escapeHtml(localizeTimestampText(item.ts || ""))}</time>
-              <strong>${escapeHtml(direction.toUpperCase())}</strong>
-              <span>${escapeHtml(channel)}${endpoint}${agent}</span>
-            </div>
-            <pre>${escapeHtml(String(item.data || ""))}${truncated}</pre>
-          </div>
-        `;
-      }).join("");
-      return `<div class="hardware-io-view">${rows}</div>`;
+        const ts = escapeHtml(localizeTimestampText(item.ts || ""));
+        if (direction === "rx") {
+          rxTail = (rxTail + data).slice(-600);
+          return `<span class="hio-rx">${escapeHtml(data)}${truncated}</span>`;
+        }
+        const source = item.source ? escapeHtml(String(item.source)) : "";
+        if (direction === "tx") {
+          const title = [ts, source].filter(Boolean).join(" · ");
+          return `<span class="hio-tx" title="${title}">⮞ ${escapeHtml(data)}${truncated}</span>`;
+        }
+        const tag = source ? `${direction} ${source}` : direction;
+        return `<span class="hio-sys" title="${ts}">‹${escapeHtml(tag)}› ${escapeHtml(data)}${truncated}\n</span>`;
+      });
+      const stateLabel = detectHardwarePromptState(rxTail);
+      const chip = stateLabel
+        ? `<div class="hardware-state-chip">${escapeHtml(stateLabel)}</div>`
+        : "";
+      return `<div class="hardware-io-view">${chip}<pre class="hardware-terminal">${parts.join("")}</pre></div>`;
     }
 
     function renderContextPanelHtml({ rawPromptHtml = "", promptMetricsHtml = "" } = {}) {

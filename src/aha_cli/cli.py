@@ -20,6 +20,12 @@ from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.hardware_io import append_hardware_io_record
+from aha_cli.services.hardware_session import (
+    HardwareSessionDaemon,
+    append_session_control,
+    open_uart_transport,
+    read_session_state,
+)
 from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
@@ -568,6 +574,107 @@ def cmd_hardware_io(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hardware_attach(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    device = str(args.device or "").strip()
+    if not device:
+        print("hardware-attach requires --device (e.g. /dev/ttyUSB0)", file=sys.stderr)
+        return 2
+    try:
+        transport = open_uart_transport(device, args.baudrate)
+    except OSError as exc:
+        print(f"Failed to open {device}: {exc}", file=sys.stderr)
+        return 1
+    endpoint = f"{device}@{args.baudrate}"
+    daemon = HardwareSessionDaemon(
+        root,
+        run_id,
+        args.task_id,
+        args.channel,
+        transport,
+        endpoint=endpoint,
+        agent_id=args.agent_id,
+        idle_timeout=args.idle_timeout,
+    )
+    print(f"Attached to {endpoint} on channel {args.channel}. Ctrl-C or `aha hardware-stop` to detach.")
+    try:
+        daemon.run()
+    except KeyboardInterrupt:
+        daemon._running = False
+    return 0
+
+
+def cmd_hardware_send(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    append_session_control(root, run_id, args.task_id, args.channel, {"cmd": "send", "data": args.data})
+    print(f"Queued send on {args.channel}: {args.data!r}")
+    return 0
+
+
+def cmd_hardware_arm(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    command = {
+        "cmd": "arm",
+        "id": args.id,
+        "pattern": args.pattern,
+        "regex": bool(args.regex),
+        "send": args.send,
+        "max_fires": args.max_fires,
+        "ttl_seconds": args.ttl,
+        "delay_seconds": args.delay,
+        "interval_seconds": args.interval,
+        "duration_seconds": args.duration,
+    }
+    record = append_session_control(root, run_id, args.task_id, args.channel, command)
+    print(f"Queued arm on {args.channel}: {json.dumps(record, ensure_ascii=False)}")
+    return 0
+
+
+def cmd_hardware_disarm(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    append_session_control(root, run_id, args.task_id, args.channel, {"cmd": "disarm", "id": args.id})
+    print(f"Queued disarm on {args.channel}: rule {args.id}")
+    return 0
+
+
+def cmd_hardware_rules(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    state = read_session_state(root, run_id, args.task_id, args.channel) or {"status": "detached", "rules": []}
+    if args.json:
+        print(json.dumps(state, ensure_ascii=False))
+        return 0
+    print(f"channel={args.channel} status={state.get('status')} endpoint={state.get('endpoint', '')}")
+    rules = state.get("rules") or []
+    if not rules:
+        print("(no armed rules)")
+    for rule in rules:
+        print(
+            f"- {rule.get('id')} [{rule.get('trigger')}] "
+            f"pattern={rule.get('pattern')!r} send={rule.get('send_display')!r} "
+            f"fires={rule.get('fires')}/{rule.get('max_fires') or '∞'}"
+        )
+    return 0
+
+
+def cmd_hardware_stop(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    append_session_control(root, run_id, args.task_id, args.channel, {"cmd": "stop"})
+    print(f"Queued stop on {args.channel}.")
+    return 0
+
+
 def cmd_chat(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
@@ -976,6 +1083,12 @@ def command_handlers() -> dict[str, object]:
         "watch": cmd_watch,
         "send": cmd_send,
         "hardware-io": cmd_hardware_io,
+        "hardware-attach": cmd_hardware_attach,
+        "hardware-send": cmd_hardware_send,
+        "hardware-arm": cmd_hardware_arm,
+        "hardware-disarm": cmd_hardware_disarm,
+        "hardware-rules": cmd_hardware_rules,
+        "hardware-stop": cmd_hardware_stop,
         "chat": cmd_chat,
         "auto-reply": cmd_auto_reply,
         "commit": cmd_commit,

@@ -57,6 +57,9 @@
           : '<div class="empty">No task selected.</div>';
         return;
       }
+      // Keep the mobile action bar's Hardware entry in sync with the selected task,
+      // not just on tab switches (selecting a task must re-evaluate visibility).
+      syncMobileActionPanel();
       const tab = activeTab();
       if (tab === "conversation") {
         const previousTop = options.previousTop ?? panelEl.scrollTop;

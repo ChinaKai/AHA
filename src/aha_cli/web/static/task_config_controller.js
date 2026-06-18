@@ -373,24 +373,34 @@
 
     function syncTaskHardwareDebugFields(options = {}) {
       const disabled = Boolean(options.disabled);
+      const masterToggle = els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]");
+      if (masterToggle) masterToggle.disabled = disabled;
+      const master = Boolean(masterToggle?.checked);
       const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
+      const channelList = els.taskHardwareFormEl?.querySelector("[data-selected-hardware-channels]");
+      if (channelList) {
+        channelList.hidden = !master;
+        channelList.classList.toggle("hidden", !master);
+      }
       cards.forEach(card => {
         const enabled = Boolean(card.querySelector("[data-hardware-channel-toggle]")?.checked);
         card.querySelectorAll("[data-hardware-channel-detail]").forEach(item => {
           item.hidden = !enabled;
           item.classList.toggle("hidden", !enabled);
           item.querySelectorAll("input, select").forEach(control => {
-            control.disabled = disabled || !enabled;
+            control.disabled = disabled || !master || !enabled;
           });
         });
         const toggle = card.querySelector("[data-hardware-channel-toggle]");
-        if (toggle) toggle.disabled = disabled;
+        if (toggle) toggle.disabled = disabled || !master;
       });
       const submit = els.taskHardwareFormEl?.querySelector('button[type="submit"]');
       if (submit) submit.disabled = disabled;
     }
 
     function resetTaskHardwareForm() {
+      const masterToggle = els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]");
+      if (masterToggle) masterToggle.checked = false;
       const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
       cards.forEach(card => {
         const toggle = card.querySelector("[data-hardware-channel-toggle]");
@@ -440,6 +450,8 @@
         return;
       }
       const policy = helpers.taskHardwareDebugPolicy?.(task) || {};
+      const masterToggle = els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]");
+      if (masterToggle) masterToggle.checked = Boolean(policy.enabled);
       setTaskHardwareChannels(policy.channels || []);
       syncTaskHardwareDebugFields({ disabled });
       if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = helpers.taskHardwareDebugSummary?.(task) || "off";
@@ -618,10 +630,12 @@
       const channels = Array.from(els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [])
         .map(readTaskHardwareChannel)
         .filter(Boolean);
+      const enabled = Boolean(els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]")?.checked);
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-debug`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(api.runScopedPayload({
+          enabled,
           channels
         }))
       }, "Failed to update task hardware debug");
@@ -701,7 +715,7 @@
       els.taskHardwareFormEl?.addEventListener("input", () => markTaskHardwareEditing());
       els.taskHardwareFormEl?.addEventListener("change", event => {
         markTaskHardwareEditing();
-        if (event.target instanceof Element && event.target.matches("[data-hardware-channel-toggle]")) {
+        if (event.target instanceof Element && event.target.matches("[data-hardware-channel-toggle], [data-hardware-master-toggle]")) {
           syncTaskHardwareDebugFields();
         }
       });

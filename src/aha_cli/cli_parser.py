@@ -29,6 +29,12 @@ COMMANDS = {
     "chat",
     "auto-reply",
     "hardware-io",
+    "hardware-attach",
+    "hardware-send",
+    "hardware-arm",
+    "hardware-disarm",
+    "hardware-rules",
+    "hardware-stop",
     "commit",
     "commit-check",
     "package",
@@ -255,6 +261,64 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_io_p.add_argument("--data", default="")
     hardware_io_p.add_argument("--json", action="store_true")
     hardware_io_p.set_defaults(func=handlers["hardware-io"])
+
+    hardware_attach_p = sub.add_parser(
+        "hardware-attach",
+        help="Hold a UART/serial port open, stream RX to the timeline, and run armed rules (blocks)",
+    )
+    hardware_attach_p.add_argument("run_id")
+    hardware_attach_p.add_argument("task_id")
+    hardware_attach_p.add_argument("--channel", default="uart")
+    hardware_attach_p.add_argument("--device", default="", help="Serial device path, e.g. /dev/ttyUSB0")
+    hardware_attach_p.add_argument("--baudrate", type=int, default=115200)
+    hardware_attach_p.add_argument("--agent-id", default="main")
+    hardware_attach_p.add_argument("--idle-timeout", type=float, default=None, help="Stop after N idle seconds")
+    hardware_attach_p.set_defaults(func=handlers["hardware-attach"])
+
+    hardware_send_p = sub.add_parser("hardware-send", help="Send (TX) data to an attached hardware session")
+    hardware_send_p.add_argument("run_id")
+    hardware_send_p.add_argument("task_id")
+    hardware_send_p.add_argument("--channel", default="uart")
+    hardware_send_p.add_argument("--data", required=True, help="Text to send; backslash escapes like \\r are honored")
+    hardware_send_p.set_defaults(func=handlers["hardware-send"])
+
+    hardware_arm_p = sub.add_parser(
+        "hardware-arm",
+        help="Arm a local auto-reaction (e.g. interrupt autoboot) that fires without an agent round-trip",
+    )
+    hardware_arm_p.add_argument("run_id")
+    hardware_arm_p.add_argument("task_id")
+    hardware_arm_p.add_argument("--channel", default="uart")
+    hardware_arm_p.add_argument("--id", default="", help="Optional rule id (auto-assigned if omitted)")
+    hardware_arm_p.add_argument("--pattern", default="", help="Substring/regex to watch for in the RX stream")
+    hardware_arm_p.add_argument("--regex", action="store_true", help="Treat --pattern as a regular expression")
+    hardware_arm_p.add_argument("--send", default="", help="Data to send when the rule fires (escapes honored)")
+    hardware_arm_p.add_argument("--max-fires", type=int, default=1, help="Auto-disarm after N fires (0 = unlimited)")
+    hardware_arm_p.add_argument("--ttl", type=float, default=0.0, help="Auto-disarm after N seconds (0 = never)")
+    hardware_arm_p.add_argument("--delay", type=float, default=0.0, help="Timer: first fire after N seconds")
+    hardware_arm_p.add_argument("--interval", type=float, default=0.0, help="Timer: repeat every N seconds")
+    hardware_arm_p.add_argument("--duration", type=float, default=0.0, help="Timer: stop arming after N seconds")
+    hardware_arm_p.set_defaults(func=handlers["hardware-arm"])
+
+    hardware_disarm_p = sub.add_parser("hardware-disarm", help="Remove an armed hardware rule by id")
+    hardware_disarm_p.add_argument("run_id")
+    hardware_disarm_p.add_argument("task_id")
+    hardware_disarm_p.add_argument("--channel", default="uart")
+    hardware_disarm_p.add_argument("--id", required=True)
+    hardware_disarm_p.set_defaults(func=handlers["hardware-disarm"])
+
+    hardware_rules_p = sub.add_parser("hardware-rules", help="Show the armed rules and status of a hardware session")
+    hardware_rules_p.add_argument("run_id")
+    hardware_rules_p.add_argument("task_id")
+    hardware_rules_p.add_argument("--channel", default="uart")
+    hardware_rules_p.add_argument("--json", action="store_true")
+    hardware_rules_p.set_defaults(func=handlers["hardware-rules"])
+
+    hardware_stop_p = sub.add_parser("hardware-stop", help="Ask an attached hardware session to stop")
+    hardware_stop_p.add_argument("run_id")
+    hardware_stop_p.add_argument("task_id")
+    hardware_stop_p.add_argument("--channel", default="uart")
+    hardware_stop_p.set_defaults(func=handlers["hardware-stop"])
 
     chat_p = sub.add_parser("chat")
     chat_p.add_argument("run_id")

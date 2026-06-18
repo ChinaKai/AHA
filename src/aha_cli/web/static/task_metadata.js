@@ -233,14 +233,17 @@
     const channels = rawChannels.length
       ? rawChannels.map(normalizeHardwareDebugChannel).filter(Boolean)
       : legacyHardwareDebugChannels(policy);
+    const enabled = typeof policy.enabled === "boolean" ? policy.enabled : channels.length > 0;
     return {
+      enabled,
       channels
     };
   }
 
   function taskHardwareDebugSummary(task) {
     const policy = taskHardwareDebugPolicy(task);
-    if (!policy.channels.length) return "off";
+    if (!policy.enabled) return "off";
+    if (!policy.channels.length) return "on | no channels";
     const types = policy.channels.map(channel => channel.type.toUpperCase()).join(", ");
     const skillCount = policy.channels.filter(channel => channel.operation_skill_path).length;
     return `${policy.channels.length} channel${policy.channels.length === 1 ? "" : "s"} | ${types} | ${skillCount} skill${skillCount === 1 ? "" : "s"}`;

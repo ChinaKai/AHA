@@ -207,12 +207,21 @@
     return `task ${task?.id === selectedTaskId ? "active" : ""} ${task?.hidden ? "hidden-task" : ""}`;
   }
 
-  function taskViewSwitcherHtml(activeTab = "conversation") {
+  function taskHardwareDebugEnabled(task) {
+    const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : null;
+    if (!policy) return false;
+    if (typeof policy.enabled === "boolean") return policy.enabled;
+    return Array.isArray(policy.channels) && policy.channels.length > 0;
+  }
+
+  function taskViewSwitcherHtml(activeTab = "conversation", task = null) {
     const items = [
       ["conversation", t("conversation.chat", "Chat"), t("conversation.chat", "Chat")],
       ["final", t("conversation.final", "Final"), t("conversation.final", "Final")],
       ["logs", t("conversation.logs", "Logs"), t("conversation.logs", "Logs")],
-      ["hardware", t("conversation.hardware", "Hardware"), t("conversation.hardware", "Hardware")],
+      ...(taskHardwareDebugEnabled(task)
+        ? [["hardware", t("conversation.hardware", "Hardware"), t("conversation.hardware", "Hardware")]]
+        : []),
       ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")]
     ];
     return `
@@ -250,7 +259,7 @@
         </div>
       </div>
       <div class="meta truncate">${escapeHtml(metaText)}</div>
-      ${options.selected ? taskViewSwitcherHtml(activeTab) : ""}
+      ${options.selected ? taskViewSwitcherHtml(activeTab, task) : ""}
     `;
   }
 
@@ -285,6 +294,7 @@
     taskCardMetaParts,
     taskListTitle,
     taskListItemClass,
-    taskListItemHtml
+    taskListItemHtml,
+    taskHardwareDebugEnabled
   });
 })();

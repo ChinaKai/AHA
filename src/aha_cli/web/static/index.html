@@ -248,6 +248,10 @@
           <section id="task-hardware-editor" class="task-detail-section task-hardware-editor">
             <h3 data-i18n="task.hardware_debug">Hardware debug</h3>
             <form id="task-hardware-form" class="hardware-form">
+              <label class="checkbox-line hardware-master-toggle">
+                <input id="selected-task-hardware-enabled" type="checkbox" data-hardware-master-toggle>
+                <span data-i18n="task.hardware_enable">Enable hardware debug</span>
+              </label>
               <div class="hardware-channel-list" data-selected-hardware-channels>
                 <section class="hardware-channel-card" data-hardware-channel="uart">
                   <label class="checkbox-line">
@@ -604,6 +608,10 @@
             </div>
             <div class="field-label">
               <span data-i18n="task.hardware_debug">Hardware debug</span>
+              <label class="checkbox-line hardware-master-toggle">
+                <input id="task-hardware-enabled" type="checkbox" data-hardware-master-toggle>
+                <span data-i18n="task.hardware_enable">Enable hardware debug</span>
+              </label>
               <div class="hardware-channel-list compact" data-create-hardware-channels>
                 <section class="hardware-channel-card" data-hardware-channel="uart">
                   <label class="checkbox-line">

@@ -267,6 +267,7 @@ def default_task_hardware_debug_permissions() -> dict:
 
 def default_task_hardware_debug() -> dict:
     return {
+        "enabled": False,
         "channels": [],
     }
 
@@ -412,6 +413,11 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
                 if channel:
                     channels.append(channel)
     hardware_debug["channels"] = channels
+    if "enabled" in raw:
+        hardware_debug["enabled"] = normalize_bool(raw.get("enabled"), default=bool(channels))
+    else:
+        # Legacy configs have no master switch: treat any configured channel as enabled.
+        hardware_debug["enabled"] = bool(channels)
     return hardware_debug
 
 

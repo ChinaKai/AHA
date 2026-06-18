@@ -16,6 +16,13 @@
     const loadAgentsRuntime = deps.loadAgentsRuntime || (() => Promise.resolve());
     const ensureActiveTabData = deps.ensureActiveTabData || (() => Promise.resolve());
     const hardwareIoState = deps.hardwareIoState || (() => ({}));
+    const allTasks = deps.allTasks || (() => []);
+    const setActiveTab = deps.setActiveTab || (() => {});
+
+    function hardwareTabEnabledFor(taskId) {
+      const task = (allTasks() || []).find(item => item?.id === taskId);
+      return Boolean(window.AHATaskList?.taskHardwareDebugEnabled?.(task));
+    }
 
     async function selectTask(taskId) {
       const changedTask = selectedTaskId() !== taskId;
@@ -24,6 +31,12 @@
       if (changedTask) deps.resetEventWebSocketReconnectState?.("task_selected");
       deps.resetTaskConfigEditing?.();
       setConversationAutoFollow(true);
+      // The Hardware tab only exists for hardware-enabled tasks: if we land on a task
+      // without it while that tab is active, fall back to the conversation view.
+      if (activeTab() === "hardware" && !hardwareTabEnabledFor(taskId)) {
+        setActiveTab("conversation");
+        setConversationAutoFollow(true);
+      }
       if (activeTab() === "logs") logState(taskId).autoFollow = true;
       if (activeTab() === "hardware") hardwareIoState(taskId).autoFollow = true;
       deps.closeMobileSheets?.();

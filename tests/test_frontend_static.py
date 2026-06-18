@@ -268,6 +268,26 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-debug`)', config_controller)
         self.assertIn("renderTaskHardwareEditor", factory + wiring)
         self.assertIn("isTaskHardwareEditing", factory + wiring)
+        # Master switch gates the card/tab and is sent to the backend on save/create.
+        self.assertIn('data-hardware-master-toggle', html)
+        self.assertIn('id="selected-task-hardware-enabled"', html)
+        self.assertIn('id="task-hardware-enabled"', html)
+        self.assertIn("enabled", config_controller)
+
+    def test_hardware_card_visibility_is_gated_by_master_switch(self) -> None:
+        root = static_root()
+        task_list = (root / "task_list.js").read_text(encoding="utf-8")
+        ui_shell = (root / "ui_shell.js").read_text(encoding="utf-8")
+        app_actions = (root / "app_actions.js").read_text(encoding="utf-8")
+
+        # Desktop tab switcher only renders the Hardware tab when enabled.
+        self.assertIn("taskHardwareDebugEnabled", task_list)
+        # Mobile action panel hides the Hardware entry when disabled.
+        self.assertIn("taskHardwareDebugEnabled", ui_shell)
+        self.assertIn('action === "hardware"', ui_shell)
+        # Switching to a task without hardware while on the Hardware tab falls back.
+        self.assertIn("hardwareTabEnabledFor", app_actions)
+        self.assertIn('setActiveTab("conversation")', app_actions)
 
     def test_hardware_io_timeline_is_wired(self) -> None:
         root = static_root()

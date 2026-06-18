@@ -48,7 +48,7 @@ def normalize_hardware_io_record(
     if encoding not in HARDWARE_IO_ENCODINGS:
         encoding = "text"
     data, truncated = _inline_data(payload.get("data", payload.get("text", "")))
-    return {
+    record = {
         "ts": _trim_text(payload.get("ts")) or utc_now(),
         "task_id": task_id,
         "agent_id": _trim_text(payload.get("agent_id"), default_agent_id) or default_agent_id,
@@ -59,6 +59,11 @@ def normalize_hardware_io_record(
         "data": data,
         "truncated": bool(payload.get("truncated")) or truncated,
     }
+    # Optional provenance for TX/system rows: "interactive", "rule:<id>", "session", etc.
+    source = _trim_text(payload.get("source"))
+    if source:
+        record["source"] = source
+    return record
 
 
 def append_hardware_io_record(

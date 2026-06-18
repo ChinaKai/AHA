@@ -46,12 +46,30 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertTrue(projection["context_management"]["auto_compact_enabled"])
         self.assertEqual(projection["context_management"]["auto_compact_threshold_percent"], 88)
         self.assertEqual(projection["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
+        self.assertTrue(projection["hardware_debug"]["enabled"])
         hardware_channel = projection["hardware_debug"]["channels"][0]
         self.assertEqual(hardware_channel["type"], "uart")
         self.assertEqual(hardware_channel["settings"], {"port": "/dev/ttyUSB0", "baudrate": 115200})
         self.assertEqual(hardware_channel["operation_skill_path"], "/repo/.aha/skills/uboot-uart/SKILL.md")
         self.assertTrue(hardware_channel["permissions"]["write"])
         self.assertNotIn("reset", hardware_channel["permissions"])
+
+    def test_hardware_debug_master_switch_independent_of_channels(self) -> None:
+        from aha_cli.domain.models import normalize_task_hardware_debug
+
+        # Legacy configs without a master switch derive enabled from channel presence.
+        self.assertFalse(normalize_task_hardware_debug({"channels": []})["enabled"])
+        self.assertTrue(
+            normalize_task_hardware_debug({"channels": [{"type": "uart", "settings": {"port": "/dev/ttyUSB0"}}]})["enabled"]
+        )
+
+        # The master switch is independent: turning it off preserves configured channels
+        # so toggling it back on restores the previous setup.
+        disabled = normalize_task_hardware_debug(
+            {"enabled": False, "channels": [{"type": "uart", "settings": {"port": "/dev/ttyUSB0"}}]}
+        )
+        self.assertFalse(disabled["enabled"])
+        self.assertEqual([channel["type"] for channel in disabled["channels"]], ["uart"])
 
     def test_old_plan_compatibility_fills_task_metadata_and_status_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

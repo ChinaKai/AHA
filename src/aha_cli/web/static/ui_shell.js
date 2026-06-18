@@ -168,8 +168,14 @@
     }
 
     function syncMobileActionPanel(activeTab = deps.activeTab?.()) {
+      const hardwareEnabled = Boolean(
+        windowRef.AHATaskList?.taskHardwareDebugEnabled?.(deps.selectedTask?.())
+      );
       elements.mobileActionPanelEl?.querySelectorAll("[data-mobile-action]").forEach(button => {
         const action = button.dataset.mobileAction || "";
+        if (action === "hardware") {
+          button.hidden = !hardwareEnabled;
+        }
         button.classList.toggle("active", action === activeTab);
       });
     }

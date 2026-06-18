@@ -1562,6 +1562,42 @@ body.auth-required .login-view:not(.hidden) {
   font-size: 12px;
   line-height: 1.45;
 }
+.hardware-state-chip {
+  justify-self: start;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--color-warning-soft, #fde68a);
+  color: var(--color-text-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
+.hardware-terminal {
+  margin: 0;
+  max-height: 460px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: #0b1020;
+  color: #d7dde8;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hardware-terminal .hio-rx { color: #d7dde8; }
+.hardware-terminal .hio-tx {
+  color: #fbbf24;
+  font-weight: 600;
+}
+.hardware-terminal .hio-sys {
+  color: #7c8aa5;
+  font-style: italic;
+}
+.hardware-master-toggle {
+  font-weight: 600;
+}
 .hardware-channel-list {
   display: grid;
   gap: 5px;

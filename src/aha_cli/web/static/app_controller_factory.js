@@ -219,6 +219,7 @@
       activateTab: deps.activateTab,
       alertError: deps.alertError,
       currentRunId: deps.currentRunId,
+      selectedTask: deps.selectedTask,
       hasMessage: () => deps.messageComposer?.()?.hasMessage(),
       pointerSubmitActive: () => deps.messageComposer?.()?.pointerSubmitActive(),
       requestComposerSubmit: () => deps.messageComposer?.()?.requestSubmit(),

@@ -594,6 +594,8 @@ bootstrapController = window.AHABootstrapController.createBootstrapController({
 });
 const appActions = window.AHAAppActions.createAppActions({
   activeTab: () => activeTab,
+  allTasks: () => statusData?.tasks || [],
+  setActiveTab: value => { activeTab = value || "conversation"; },
   apiUrl,
   closeMobileActionPanel: () => uiShell.closeMobileActionPanel(),
   closeMobileSheets: () => uiShell.closeMobileSheets(),

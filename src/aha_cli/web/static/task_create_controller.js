@@ -244,7 +244,9 @@
       const channels = Array.from(elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [])
         .map(readHardwareChannel)
         .filter(Boolean);
+      const enabled = Boolean(elements.taskFormEl?.querySelector("[data-hardware-master-toggle]")?.checked);
       return {
+        enabled,
         channels
       };
     }
@@ -261,20 +263,35 @@
     }
 
     function syncCreateHardwareDebugFields() {
+      const masterToggle = elements.taskFormEl?.querySelector("[data-hardware-master-toggle]");
+      const master = Boolean(masterToggle?.checked);
+      const channelList = elements.taskFormEl?.querySelector("[data-create-hardware-channels]");
+      if (channelList) {
+        channelList.hidden = !master;
+        channelList.classList.toggle("hidden", !master);
+      }
       const cards = elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [];
       cards.forEach(card => {
         const enabled = Boolean(card.querySelector("[data-hardware-channel-toggle]")?.checked);
+        const toggle = card.querySelector("[data-hardware-channel-toggle]");
+        if (toggle) toggle.disabled = !master;
         card.querySelectorAll("[data-hardware-channel-detail]").forEach(item => {
           item.hidden = !enabled;
           item.classList.toggle("hidden", !enabled);
           item.querySelectorAll("input, select").forEach(control => {
-            control.disabled = !enabled;
+            control.disabled = !master || !enabled;
           });
         });
       });
     }
 
-    function setHardwareChannelValues(channels = []) {
+    function setHardwareChannelValues(channels = [], options = {}) {
+      const masterToggle = elements.taskFormEl?.querySelector("[data-hardware-master-toggle]");
+      if (masterToggle) {
+        masterToggle.checked = typeof options.enabled === "boolean"
+          ? options.enabled
+          : (Array.isArray(channels) && channels.length > 0);
+      }
       const byType = new Map((Array.isArray(channels) ? channels : []).map(channel => [String(channel?.type || "").toLowerCase(), channel]));
       const cards = elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [];
       cards.forEach(card => {
@@ -321,6 +338,7 @@
           context_auto_compact_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
           context_threshold_percent: elements.taskContextThresholdEl?.value || "",
           task_skill_paths: selectedTaskSkillPaths(),
+          hardware_enabled: createHardwareDebugPayload().enabled,
           hardware_channels: createHardwareDebugPayload().channels
         }
       };
@@ -516,7 +534,9 @@
       setInputValue(elements.taskContextThresholdEl, values.context_threshold_percent);
       syncCreateTaskContextFields();
       renderTaskSkillOptions(values.task_skill_paths || []);
-      setHardwareChannelValues(values.hardware_channels || []);
+      setHardwareChannelValues(values.hardware_channels || [], {
+        enabled: typeof values.hardware_enabled === "boolean" ? values.hardware_enabled : undefined
+      });
       setCheckboxValue(elements.taskProxyEnabledEl, values.proxy_enabled);
     }
 
@@ -787,6 +807,7 @@
       elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel-toggle]").forEach(toggle => {
         toggle.addEventListener("change", syncCreateHardwareDebugFields);
       });
+      elements.taskFormEl?.querySelector("[data-hardware-master-toggle]")?.addEventListener("change", syncCreateHardwareDebugFields);
       elements.taskSkillSelectEl?.addEventListener("focus", () => renderTaskSkillOptions());
       if (elements.taskCreateDialogEl && windowRef.MutationObserver) {
         const observer = new windowRef.MutationObserver(() => {
