@@ -31,6 +31,7 @@ CLAUDE_CONFIG_ENV_ALIASES = {
 }
 CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
 CLAUDE_ENV_MODEL_PREFIX = "env:"
+CLAUDE_DISABLE_ENV_KEY = "_aha_disable_env"
 
 
 def claude_env_model_value(group_name: str) -> str:
@@ -46,7 +47,9 @@ def claude_env_group_from_model(model: str | None) -> str | None:
     return name or None
 
 
-def claude_cli_model(model: str | None) -> str | None:
+def claude_cli_model(model: str | None, claude_config: dict | None = None) -> str | None:
+    if claude_config is not None:
+        model = normalize_model_selector("claude", model, {"claude": claude_config})
     if claude_env_group_from_model(model):
         return None
     value = str(model or "").strip()
@@ -61,6 +64,7 @@ def claude_config_for_model(claude_config: dict | None, model: str | None) -> di
         cfg["env_active"] = env_group
     elif claude_cli_model(model):
         cfg["env_active"] = None
+        cfg[CLAUDE_DISABLE_ENV_KEY] = True
     return cfg
 
 
@@ -88,6 +92,8 @@ def _normalize_claude_env_key(key: str) -> str | None:
 
 def claude_config_env(claude_config: dict | None) -> dict[str, str]:
     if not isinstance(claude_config, dict):
+        return {}
+    if claude_config.get(CLAUDE_DISABLE_ENV_KEY):
         return {}
     configured = claude_config.get("env")
     if isinstance(configured, list):
@@ -330,9 +336,11 @@ def run_claude_exec(
     for raw in extra_args or []:
         cmd.extend(shlex.split(raw))
 
-    env = apply_claude_environment(os.environ.copy(), claude_config)
+    config_env = claude_config_env(claude_config)
+    env = os.environ.copy()
+    env.update(config_env)
     apply_proxy_environment(env, proxy_env)
-    if not claude_auth_configured(env):
+    if config_env and not claude_auth_configured(env):
         message = claude_missing_auth_message()
         append_event_to_file(
             events_file,

@@ -35,8 +35,9 @@ def run_claude_task(args) -> int:
     os.environ["AHA_AGENT_ID"] = "main"
     os.environ["AHA_BACKEND"] = "claude"
     cfg = load_config(root)
-    configured_model = args.model or (cfg.get("claude", {}) or {}).get("model")
-    claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), configured_model)
+    claude_cfg = cfg.get("claude", {}) or {}
+    configured_model = args.model or claude_cfg.get("model")
+    claude_config = claude_config_for_model(claude_cfg, configured_model)
     resolved_model = claude_resolved_model(claude_config, configured_model)
     os.environ["AHA_MODEL"] = resolved_model or ""
     os.environ["AHA_GENERATED_BY"] = generated_by_for_backend_model("claude", resolved_model)
@@ -65,7 +66,7 @@ def run_claude_task(args) -> int:
         cwd=root,
         output_file=output_file,
         claude_bin=args.claude_bin,
-        model=claude_cli_model(configured_model),
+        model=claude_cli_model(configured_model, claude_cfg),
         permission_mode=permission_mode,
         extra_args=args.extra_arg or [],
         events_file=events_file,

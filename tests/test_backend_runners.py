@@ -9,7 +9,15 @@ import textwrap
 import unittest
 from unittest import mock
 
-from aha_cli.backends.claude import build_claude_exec_command, claude_config_env, claude_permission_mode, handle_claude_event
+from aha_cli.backends.claude import (
+    build_claude_exec_command,
+    claude_cli_model,
+    claude_config_env,
+    claude_config_for_model,
+    claude_permission_mode,
+    handle_claude_event,
+    run_claude_exec,
+)
 from aha_cli.backends.codex import (
     build_codex_exec_command,
     codex_config_env,
@@ -81,6 +89,93 @@ class BackendRunnerSessionTests(unittest.TestCase):
 
         self.assertEqual(env["ANTHROPIC_API_KEY"], "test-key")
         self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://claude.test")
+
+    def test_claude_official_model_disables_env_group_injection(self) -> None:
+        base_config = {
+            "env_active": "work",
+            "env": [
+                {
+                    "name": "work",
+                    "ANTHROPIC_API_KEY": "work-key",
+                    "ANTHROPIC_BASE_URL": "https://claude.test",
+                    "ANTHROPIC_MODEL": "kimi-k2.6",
+                }
+            ],
+        }
+
+        config = claude_config_for_model(base_config, "claude-sonnet-4-6")
+
+        self.assertEqual(claude_config_env(config), {})
+        self.assertEqual(claude_cli_model("claude-sonnet-4-6", base_config), "claude-sonnet-4-6")
+
+    def test_claude_env_alias_uses_env_group_without_cli_model(self) -> None:
+        base_config = {
+            "env": [
+                {
+                    "name": "kimi-k2.6",
+                    "ANTHROPIC_API_KEY": "kimi-key",
+                    "ANTHROPIC_BASE_URL": "https://kimi.test",
+                    "ANTHROPIC_MODEL": "kimi-k2.6",
+                }
+            ],
+        }
+
+        config = claude_config_for_model(base_config, "kimi")
+
+        self.assertIsNone(claude_cli_model("kimi", base_config))
+        self.assertEqual(config["env_active"], "kimi-k2.6")
+        self.assertEqual(claude_config_env(config)["ANTHROPIC_MODEL"], "kimi-k2.6")
+
+    def test_claude_exec_allows_official_model_without_env_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            events = Path(tmp) / "events.jsonl"
+            base_config = {
+                "env_active": "work",
+                "env": [
+                    {
+                        "name": "work",
+                        "ANTHROPIC_API_KEY": "work-key",
+                        "ANTHROPIC_BASE_URL": "https://claude.test",
+                        "ANTHROPIC_MODEL": "kimi-k2.6",
+                    }
+                ],
+            }
+            claude_config = claude_config_for_model(base_config, "claude-sonnet-4-6")
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO(json.dumps({"type": "result", "result": "done", "session_id": "session-123"}) + "\n")
+
+                def wait(self) -> int:
+                    return 0
+
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("aha_cli.backends.claude.subprocess.Popen", return_value=FakeProcess()) as popen,
+            ):
+                code, reply, _ = run_claude_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    model=claude_cli_model("claude-sonnet-4-6", base_config),
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="claude-chat",
+                    target="main",
+                    claude_config=claude_config,
+                )
+
+        command = popen.call_args.args[0]
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], "claude-sonnet-4-6")
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("ANTHROPIC_BASE_URL", env)
+        self.assertNotIn("ANTHROPIC_MODEL", env)
 
     def test_codex_resume_command_keeps_workspace_write_scope(self) -> None:
         cmd = build_codex_exec_command(

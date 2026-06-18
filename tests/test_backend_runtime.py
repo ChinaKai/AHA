@@ -648,7 +648,49 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["requested_model"], "env:work")
         self.assertEqual(status["resolved_model"], "kimi-k2.6")
 
-    def test_claude_exec_reports_missing_auth_env_before_cli(self) -> None:
+    def test_start_backend_uses_official_claude_model_without_env_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg["claude"]["model"] = "claude-sonnet-4-6"
+                cfg["claude"]["env_active"] = "work"
+                cfg["claude"]["env"] = [
+                    {
+                        "name": "work",
+                        "ANTHROPIC_API_KEY": "work-key",
+                        "ANTHROPIC_BASE_URL": "https://claude.test",
+                        "ANTHROPIC_MODEL": "kimi-k2.6",
+                    }
+                ]
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+                code, plan_output = self.run_cli("plan", "Claude official model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4244
+
+                with (
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    status = start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        command = popen.call_args.args[0]
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("ANTHROPIC_BASE_URL", env)
+        self.assertNotIn("ANTHROPIC_MODEL", env)
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], "claude-sonnet-4-6")
+        self.assertEqual(status["requested_model"], "claude-sonnet-4-6")
+        self.assertEqual(status["resolved_model"], "claude-sonnet-4-6")
+
+    def test_claude_exec_reports_missing_custom_env_auth_before_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "reply.md"
             events = Path(tmp) / "events.jsonl"
@@ -665,6 +707,16 @@ class BackendRuntimeTests(unittest.TestCase):
                     task_id="task-001",
                     source="claude-chat",
                     target="main",
+                    claude_config={
+                        "env_active": "work",
+                        "env": [
+                            {
+                                "name": "work",
+                                "ANTHROPIC_BASE_URL": "https://claude.test",
+                                "ANTHROPIC_MODEL": "kimi-k2.6",
+                            }
+                        ],
+                    },
                 )
 
             self.assertEqual(code, 1)

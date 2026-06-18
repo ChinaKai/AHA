@@ -780,6 +780,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(session["requested_model"], "env:kimi")
         self.assertEqual(session["resolved_model"], "kimi-k2.6")
         self.assertEqual(session["model"], "kimi-k2.6")
+        self.assertIsNone(run_agent.call_args.kwargs["model"])
 
     def test_commit_policy_uses_current_claude_model_over_stale_session_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

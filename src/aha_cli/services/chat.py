@@ -638,8 +638,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 if raw_requested_model is None:
                     requested_model = configured_model if configured_model is not None else session.get("requested_model", model)
                 codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend_name == "codex" else None
-                claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend_name == "claude" else None
-                command_model = claude_cli_model(model) if backend_name == "claude" else codex_cli_model(codex_config, model) if backend_name == "codex" else model
+                claude_cfg = cfg.get("claude", {}) or {}
+                claude_config = claude_config_for_model(claude_cfg, model) if backend_name == "claude" else None
+                command_model = claude_cli_model(model, claude_cfg) if backend_name == "claude" else codex_cli_model(codex_config, model) if backend_name == "codex" else model
                 resolved_model = claude_resolved_model(claude_config, model) if backend_name == "claude" else codex_resolved_model(codex_config, model) if backend_name == "codex" else resolve_model(backend_name, command_model)
                 session["requested_model"] = requested_model
                 session["resolved_model"] = resolved_model
