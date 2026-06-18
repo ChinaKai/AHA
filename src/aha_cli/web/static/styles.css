@@ -2219,7 +2219,8 @@ body.task-memo-home .workspace {
   border: 1px solid #e4e7ec;
   border-radius: 6px;
   background: #f9fafb;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .prompt-metrics-head-actions button {
   appearance: none;
@@ -2378,6 +2379,7 @@ body.task-memo-home .workspace {
   border: 1px solid #ccfbf1;
   border-radius: 6px;
   background: #ffffff;
+  overflow-wrap: anywhere;
 }
 .session-breakdown-group {
   display: grid;
@@ -5095,7 +5097,7 @@ body.empty-run .panel {
   }
   header > div { min-width: 0; }
   main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto;
     height: auto;
     min-height: calc(var(--app-viewport-height) - 64px);
