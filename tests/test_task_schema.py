@@ -22,6 +22,13 @@ class TaskSchemaTests(unittest.TestCase):
                 "max_sub_agents": 3,
                 "supervision": {"max_rounds": 12},
                 "context_management": {"enabled": True, "threshold_percent": 88},
+                "task_skills": {"skills": "/repo/.aha/skills/board-debug/SKILL.md"},
+                "hardware_debug": {
+                    "enabled": True,
+                    "devices": {"id": "legacy-id", "type": "legacy", "port": "/dev/ttyUSB0", "baud": "115200", "prompt": "Sgs #"},
+                    "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
+                    "permissions": {"serial_write": "true", "reset": "on"},
+                },
             },
             default_backend="claude",
         )
@@ -38,6 +45,13 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(projection["supervision"]["max_rounds"], 12)
         self.assertTrue(projection["context_management"]["auto_compact_enabled"])
         self.assertEqual(projection["context_management"]["auto_compact_threshold_percent"], 88)
+        self.assertEqual(projection["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
+        hardware_channel = projection["hardware_debug"]["channels"][0]
+        self.assertEqual(hardware_channel["type"], "uart")
+        self.assertEqual(hardware_channel["settings"], {"port": "/dev/ttyUSB0", "baudrate": 115200})
+        self.assertEqual(hardware_channel["operation_skill_path"], "/repo/.aha/skills/uboot-uart/SKILL.md")
+        self.assertTrue(hardware_channel["permissions"]["write"])
+        self.assertNotIn("reset", hardware_channel["permissions"])
 
     def test_old_plan_compatibility_fills_task_metadata_and_status_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +101,8 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(enriched_task["preferred_sub_model"], "sonnet")
         self.assertEqual(enriched_task["supervision"]["mode"], "manual")
         self.assertFalse(enriched_task["context_management"]["auto_compact_enabled"])
+        self.assertEqual(enriched_task["hardware_debug"]["channels"], [])
+        self.assertEqual(enriched_task["task_skills"]["enabled_paths"], [])
         self.assertEqual(snapshot_task["workspace_id"], "ws-legacy")
         self.assertEqual(snapshot_task["preferred_sub_backend"], "claude")
         self.assertEqual(snapshot_task["preferred_sub_model"], "sonnet")

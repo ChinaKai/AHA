@@ -35,6 +35,8 @@
   });
   const defaultTaskSupervisionMaxRounds = 99;
   const defaultTaskContextThresholdPercent = 75;
+  const hardwareDebugChannelTypes = Object.freeze(["uart", "nfs", "telnet"]);
+  const hardwareDebugPermissionKeys = Object.freeze(["read", "write"]);
   const supervisionAskUserGateDefs = Object.freeze([
     Object.freeze(["real_ui_validation", "Real UI/device"]),
     Object.freeze(["scope_change", "Scope change"]),
@@ -161,6 +163,89 @@
     return policy.auto_compact_enabled ? `auto at ${policy.auto_compact_threshold_percent}%` : "auto off";
   }
 
+  function defaultHardwareDebugPermissions() {
+    return {
+      read: true,
+      write: false
+    };
+  }
+
+  function normalizeHardwareDebugPermissions(value) {
+    const permissions = defaultHardwareDebugPermissions();
+    if (value && typeof value === "object") {
+      if (Object.prototype.hasOwnProperty.call(value, "serial_read")) permissions.read = Boolean(value.serial_read);
+      if (Object.prototype.hasOwnProperty.call(value, "serial_write")) permissions.write = Boolean(value.serial_write);
+      hardwareDebugPermissionKeys.forEach(key => {
+        if (Object.prototype.hasOwnProperty.call(value, key)) permissions[key] = Boolean(value[key]);
+      });
+    }
+    return permissions;
+  }
+
+  function normalizeHardwareDebugChannel(value) {
+    if (!value || typeof value !== "object") return null;
+    const type = String(value.type || value.kind || "").trim().toLowerCase();
+    if (!hardwareDebugChannelTypes.includes(type)) return null;
+    return {
+      type,
+      settings: value.settings && typeof value.settings === "object" ? { ...value.settings } : {},
+      operation_skill_path: String(value.operation_skill_path || value.operation_skill || ""),
+      permissions: normalizeHardwareDebugPermissions(value.permissions)
+    };
+  }
+
+  function legacyHardwareDebugChannels(policy) {
+    if (!policy || typeof policy !== "object" || !policy.enabled) return [];
+    const devices = Array.isArray(policy.devices)
+      ? policy.devices
+      : (policy.devices && typeof policy.devices === "object" ? [policy.devices] : [{}]);
+    return devices.map(device => normalizeHardwareDebugChannel({
+      type: "uart",
+      settings: {
+        port: device?.port || device?.path || "",
+        baudrate: device?.baudrate || device?.baud || 115200
+      },
+      operation_skill_path: policy.operation_skill_path || policy.operation_skill || "",
+      permissions: policy.permissions || {}
+    })).filter(Boolean);
+  }
+
+  function splitTaskSkillPaths(value) {
+    if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean);
+    return String(value || "").split(/\r?\n|,/).map(item => item.trim()).filter(Boolean);
+  }
+
+  function taskSkillsPolicy(task) {
+    const policy = task?.task_skills && typeof task.task_skills === "object" ? task.task_skills : {};
+    return {
+      enabled_paths: splitTaskSkillPaths(policy.enabled_paths || policy.skill_paths || policy.paths || policy.skills || [])
+    };
+  }
+
+  function taskSkillsSummary(task) {
+    const count = taskSkillsPolicy(task).enabled_paths.length;
+    return count ? `${count} skill${count === 1 ? "" : "s"}` : "off";
+  }
+
+  function taskHardwareDebugPolicy(task) {
+    const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : {};
+    const rawChannels = Array.isArray(policy.channels) ? policy.channels : [];
+    const channels = rawChannels.length
+      ? rawChannels.map(normalizeHardwareDebugChannel).filter(Boolean)
+      : legacyHardwareDebugChannels(policy);
+    return {
+      channels
+    };
+  }
+
+  function taskHardwareDebugSummary(task) {
+    const policy = taskHardwareDebugPolicy(task);
+    if (!policy.channels.length) return "off";
+    const types = policy.channels.map(channel => channel.type.toUpperCase()).join(", ");
+    const skillCount = policy.channels.filter(channel => channel.operation_skill_path).length;
+    return `${policy.channels.length} channel${policy.channels.length === 1 ? "" : "s"} | ${types} | ${skillCount} skill${skillCount === 1 ? "" : "s"}`;
+  }
+
   function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates, hostOptions = {}) {
     const assisted = selectedMode !== "manual";
     const codexHost = selectedMode === "assisted_codex";
@@ -186,6 +271,8 @@
     workflowTemplateDescriptions,
     defaultTaskSupervisionMaxRounds,
     defaultTaskContextThresholdPercent,
+    hardwareDebugChannelTypes,
+    hardwareDebugPermissionKeys,
     supervisionAskUserGateDefs,
     collaborationModeDescription,
     workflowTemplateDescription,
@@ -202,6 +289,14 @@
     normalizeTaskContextThreshold,
     taskContextManagementPolicy,
     taskContextSummary,
+    defaultHardwareDebugPermissions,
+    normalizeHardwareDebugPermissions,
+    normalizeHardwareDebugChannel,
+    splitTaskSkillPaths,
+    taskSkillsPolicy,
+    taskSkillsSummary,
+    taskHardwareDebugPolicy,
+    taskHardwareDebugSummary,
     taskSupervisionPayloadFromMode
   });
 }());

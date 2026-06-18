@@ -6,6 +6,7 @@ from urllib.parse import unquote
 from aha_cli.backends.registry import agent_backend_names
 from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
+from aha_cli.services.hardware_io import append_hardware_io_record, hardware_io_page
 from aha_cli.services.proxy import backend_proxy_config
 from aha_cli.services.steward import apply_steward_decision, steward_decision_snapshot
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -27,7 +28,9 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_config,
     update_task_context_management_config,
+    update_task_hardware_debug_config,
     update_task_proxy_config,
+    update_task_skills_config,
     update_task_supervision_config,
 )
 from aha_cli.store.task_memos import (
@@ -50,7 +53,9 @@ from aha_cli.web.status import recover_stale_running_agents
 from aha_cli.web.task_actions import (
     handle_send_payload,
     parse_task_context_management_fields,
+    parse_task_hardware_debug_fields,
     parse_task_proxy_fields,
+    parse_task_skills_fields,
     parse_task_supervision_fields,
     request_task_finalization_with_backend,
     prepare_task_main_autostart,
@@ -119,6 +124,19 @@ def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str,
         except ValueError:
             before = None
         return task_log_page(root, run_id, task_id, limit=limit, before=before, source=source)
+    if detail_name == "hardware-io":
+        limit = int(query.get("limit", ["500"])[0] or "500")
+        after_values = query.get("after_offset", []) or query.get("after", [])
+        before_values = query.get("before_offset", []) or query.get("before", [])
+        try:
+            after = int(after_values[0]) if after_values and after_values[0] else None
+        except ValueError:
+            after = None
+        try:
+            before = int(before_values[0]) if before_values and before_values[0] else None
+        except ValueError:
+            before = None
+        return hardware_io_page(root, run_id, task_id, limit=limit, after=after, before=before)
     if detail_name == "final":
         return task_final_view_snapshot(root, run_id, task_id)
     if detail_name == "context":
@@ -170,6 +188,13 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             return route_result({"ok": True, "task": task, "proxy": backend_proxy_config(load_config(root), task.get("preferred_backend"), require_plan(root, run_id), task)})
         elif action == "context-management":
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(parse_json_body(body)))
+        elif action == "skills":
+            task = update_task_skills_config(root, run_id, task_id, **parse_task_skills_fields(parse_json_body(body)))
+        elif action == "hardware-debug":
+            task = update_task_hardware_debug_config(root, run_id, task_id, **parse_task_hardware_debug_fields(parse_json_body(body)))
+        elif action == "hardware-io":
+            result = append_hardware_io_record(root, run_id, task_id, parse_json_body(body))
+            return route_result({"ok": True, **result})
         elif action == "supervision":
             task = update_task_supervision_config(root, run_id, task_id, **parse_task_supervision_fields(parse_json_body(body)))
         elif action == "session/compact-reset":
@@ -285,6 +310,16 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
             if not isinstance(payload.get("context_management"), dict):
                 return route_result({"error": "context_management must be an object"}, "400 Bad Request")
             context_management = parse_task_context_management_fields(payload["context_management"])
+        task_skills = None
+        if "task_skills" in payload:
+            if not isinstance(payload.get("task_skills"), dict):
+                return route_result({"error": "task_skills must be an object"}, "400 Bad Request")
+            task_skills = parse_task_skills_fields(payload["task_skills"])
+        hardware_debug = None
+        if "hardware_debug" in payload:
+            if not isinstance(payload.get("hardware_debug"), dict):
+                return route_result({"error": "hardware_debug must be an object"}, "400 Bad Request")
+            hardware_debug = parse_task_hardware_debug_fields(payload["hardware_debug"])
         dispatch = bool(payload.get("dispatch", True))
         task = create_task_and_dispatch(
             root,
@@ -309,6 +344,8 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
             description=description,
             supervision=supervision,
             context_management=context_management,
+            task_skills=task_skills,
+            hardware_debug=hardware_debug,
             dispatch=dispatch,
         )
     except ValueError as exc:
@@ -558,6 +595,10 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
     try:
         if "context_management" in payload and isinstance(payload.get("context_management"), dict):
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(payload["context_management"]))
+        elif "task_skills" in payload and isinstance(payload.get("task_skills"), dict):
+            task = update_task_skills_config(root, run_id, task_id, **parse_task_skills_fields(payload["task_skills"]))
+        elif "hardware_debug" in payload and isinstance(payload.get("hardware_debug"), dict):
+            task = update_task_hardware_debug_config(root, run_id, task_id, **parse_task_hardware_debug_fields(payload["hardware_debug"]))
         elif "supervision" in payload and isinstance(payload.get("supervision"), dict):
             task = update_task_supervision_config(root, run_id, task_id, **parse_task_supervision_fields(payload["supervision"]))
         else:

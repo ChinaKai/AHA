@@ -142,6 +142,113 @@
       return deps.readAskUserGateControls?.(elements.taskSupervisionAskUserGatesEl) || {};
     }
 
+    function taskSkillOptions() {
+      return Array.isArray(deps.taskSkillOptions?.()) ? deps.taskSkillOptions() : [];
+    }
+
+    function selectedTaskSkillPaths(selectEl = elements.taskSkillSelectEl) {
+      if (!selectEl) return [];
+      const checked = [...(selectEl.querySelectorAll?.("input[data-task-skill-path]:checked") || [])]
+        .map(input => input.value)
+        .filter(Boolean);
+      if (checked.length || selectEl.tagName !== "SELECT") return checked;
+      return [...(selectEl.selectedOptions || [])].map(option => option.value).filter(Boolean);
+    }
+
+    function renderTaskSkillOptions(selectedPaths = selectedTaskSkillPaths()) {
+      const selectEl = elements.taskSkillSelectEl;
+      if (!selectEl) return;
+      const selected = new Set(selectedPaths);
+      const options = taskSkillOptions();
+      if (!options.length) {
+        selectEl.innerHTML = `<div class="skill-option-empty">${escapeHtml(t("task.skills_empty", "No skills found"))}</div>`;
+        return;
+      }
+      selectEl.innerHTML = options.map(option => {
+        const path = String(option.path || "").trim();
+        const label = String(option.label || option.id || path).trim();
+        const source = String(option.source || "").trim();
+        const text = source ? `${label} (${source})` : label;
+        return `
+          <label class="skill-option-chip">
+            <input type="checkbox" data-task-skill-path value="${escapeHtml(path)}" ${selected.has(path) ? "checked" : ""}>
+            <span>${escapeHtml(text)}</span>
+          </label>
+        `;
+      }).join("");
+    }
+
+    function renderHardwareOperationSkillSelect(selectEl, selectedPath = "") {
+      if (!selectEl) return;
+      const options = taskSkillOptions();
+      const emptyLabel = t("task.hardware_operation_skill_none", "None");
+      const rows = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
+      rows.push(...options.map(option => {
+        const path = String(option.path || "").trim();
+        const label = String(option.label || option.id || path).trim();
+        const source = String(option.source || "").trim();
+        const text = source ? `${label} (${source})` : label;
+        return `<option value="${escapeHtml(path)}" ${path === selectedPath ? "selected" : ""}>${escapeHtml(text)}</option>`;
+      }));
+      selectEl.innerHTML = rows.join("");
+    }
+
+    function renderHardwareOperationSkillOptions() {
+      elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-operation-skill]").forEach(selectEl => {
+        renderHardwareOperationSkillSelect(selectEl, String(selectEl.value || ""));
+      });
+    }
+
+    function createTaskSkillsPayload() {
+      return {
+        enabled_paths: selectedTaskSkillPaths()
+      };
+    }
+
+    function readHardwareChannelPermissions(card) {
+      return {
+        read: Boolean(card.querySelector('[data-hardware-permission="read"]')?.checked),
+        write: Boolean(card.querySelector('[data-hardware-permission="write"]')?.checked)
+      };
+    }
+
+    function readHardwareChannelSettings(card, type) {
+      const settings = {};
+      card.querySelectorAll("[data-hardware-setting]").forEach(input => {
+        const key = input.dataset.hardwareSetting || "";
+        if (!key) return;
+        const raw = String(input.value || "").trim();
+        if (input.type === "number") {
+          settings[key] = Number(raw || input.defaultValue || "0") || Number(input.defaultValue || "0") || 0;
+        } else {
+          settings[key] = raw;
+        }
+      });
+      if (type === "uart" && !settings.baudrate) settings.baudrate = 115200;
+      if (type === "telnet" && !settings.port) settings.port = 23;
+      return settings;
+    }
+
+    function readHardwareChannel(card) {
+      const type = String(card.dataset.hardwareChannel || "").trim().toLowerCase();
+      if (!type || !card.querySelector("[data-hardware-channel-toggle]")?.checked) return null;
+      return {
+        type,
+        settings: readHardwareChannelSettings(card, type),
+        operation_skill_path: String(card.querySelector("[data-hardware-operation-skill]")?.value || "").trim(),
+        permissions: readHardwareChannelPermissions(card)
+      };
+    }
+
+    function createHardwareDebugPayload() {
+      const channels = Array.from(elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [])
+        .map(readHardwareChannel)
+        .filter(Boolean);
+      return {
+        channels
+      };
+    }
+
     function syncCreateTaskContextFields() {
       const enabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
       if (elements.taskContextThresholdFieldEl) {
@@ -151,6 +258,43 @@
       if (elements.taskContextThresholdEl) {
         elements.taskContextThresholdEl.disabled = !enabled;
       }
+    }
+
+    function syncCreateHardwareDebugFields() {
+      const cards = elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [];
+      cards.forEach(card => {
+        const enabled = Boolean(card.querySelector("[data-hardware-channel-toggle]")?.checked);
+        card.querySelectorAll("[data-hardware-channel-detail]").forEach(item => {
+          item.hidden = !enabled;
+          item.classList.toggle("hidden", !enabled);
+          item.querySelectorAll("input, select").forEach(control => {
+            control.disabled = !enabled;
+          });
+        });
+      });
+    }
+
+    function setHardwareChannelValues(channels = []) {
+      const byType = new Map((Array.isArray(channels) ? channels : []).map(channel => [String(channel?.type || "").toLowerCase(), channel]));
+      const cards = elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [];
+      cards.forEach(card => {
+        const type = String(card.dataset.hardwareChannel || "").toLowerCase();
+        const channel = byType.get(type) || null;
+        const enabledEl = card.querySelector("[data-hardware-channel-toggle]");
+        if (enabledEl) enabledEl.checked = Boolean(channel);
+        renderHardwareOperationSkillSelect(card.querySelector("[data-hardware-operation-skill]"), channel?.operation_skill_path || "");
+        const settings = channel?.settings && typeof channel.settings === "object" ? channel.settings : {};
+        card.querySelectorAll("[data-hardware-setting]").forEach(input => {
+          const key = input.dataset.hardwareSetting || "";
+          input.value = settings[key] ?? input.defaultValue ?? "";
+        });
+        const permissions = channel?.permissions || {};
+        const readEl = card.querySelector('[data-hardware-permission="read"]');
+        const writeEl = card.querySelector('[data-hardware-permission="write"]');
+        if (readEl) readEl.checked = channel ? permissions.read !== false : true;
+        if (writeEl) writeEl.checked = Boolean(permissions.write);
+      });
+      syncCreateHardwareDebugFields();
     }
 
     function readFormDraft() {
@@ -175,7 +319,9 @@
           supervision_max_rounds: elements.taskSupervisionMaxRoundsEl?.value || "",
           supervision_ask_user_gates: readAskUserGates(),
           context_auto_compact_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
-          context_threshold_percent: elements.taskContextThresholdEl?.value || ""
+          context_threshold_percent: elements.taskContextThresholdEl?.value || "",
+          task_skill_paths: selectedTaskSkillPaths(),
+          hardware_channels: createHardwareDebugPayload().channels
         }
       };
     }
@@ -369,6 +515,8 @@
       setCheckboxValue(elements.taskContextAutoCompactEnabledEl, values.context_auto_compact_enabled);
       setInputValue(elements.taskContextThresholdEl, values.context_threshold_percent);
       syncCreateTaskContextFields();
+      renderTaskSkillOptions(values.task_skill_paths || []);
+      setHardwareChannelValues(values.hardware_channels || []);
       setCheckboxValue(elements.taskProxyEnabledEl, values.proxy_enabled);
     }
 
@@ -388,6 +536,8 @@
         supervision_mode: "manual",
         context_auto_compact_enabled: false,
         context_threshold_percent: "75",
+        task_skill_paths: [],
+        hardware_channels: [],
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
       };
     }
@@ -534,6 +684,8 @@
         supervision,
         contextAutoCompactEnabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
         contextThreshold,
+        taskSkills: createTaskSkillsPayload(),
+        hardwareDebug: createHardwareDebugPayload(),
         dispatch: true
       });
       if (payload && activeTaskMemoId) payload.source_memo_id = activeTaskMemoId;
@@ -632,9 +784,16 @@
         restoreDraft(option.dataset.taskMemoOption || "", { showStatus: true });
       });
       elements.taskContextAutoCompactEnabledEl?.addEventListener("change", syncCreateTaskContextFields);
+      elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel-toggle]").forEach(toggle => {
+        toggle.addEventListener("change", syncCreateHardwareDebugFields);
+      });
+      elements.taskSkillSelectEl?.addEventListener("focus", () => renderTaskSkillOptions());
       if (elements.taskCreateDialogEl && windowRef.MutationObserver) {
         const observer = new windowRef.MutationObserver(() => {
           if (elements.taskCreateDialogEl.open) {
+            renderTaskSkillOptions();
+            renderHardwareOperationSkillOptions();
+            syncCreateHardwareDebugFields();
             void loadTaskMemoOptions().catch(err => {
               const message = err?.message || String(err);
               setDraftStatus(message);
@@ -645,6 +804,9 @@
       }
       renderDraftBox();
       syncCreateTaskContextFields();
+      renderTaskSkillOptions();
+      renderHardwareOperationSkillOptions();
+      syncCreateHardwareDebugFields();
       void loadTaskMemoOptions().catch(err => {
         const message = err?.message || String(err);
         setDraftStatus(message);
@@ -658,6 +820,7 @@
       confirmAddTask,
       deleteDraft,
       loadTaskMemoOptions,
+      renderTaskSkillOptions,
       renderDraftBox,
       restoreDraft,
       selectedWorkspaceId,

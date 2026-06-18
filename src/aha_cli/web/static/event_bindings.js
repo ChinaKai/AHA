@@ -45,6 +45,7 @@
       handlers.renderTaskProxyEditor();
       handlers.renderTaskSupervisionEditor();
       handlers.renderTaskContextEditor();
+      handlers.renderTaskHardwareEditor();
       handlers.renderAgents();
       handlers.renderConversationFilters();
       handlers.renderPanel();
@@ -75,6 +76,8 @@
       } else if (handlers.activeTab() === "logs") {
         if (handlers.selectedTaskId()) handlers.logState(handlers.selectedTaskId()).autoFollow = handlers.isPanelNearBottom();
         if (panelEl.scrollTop < 48) handlers.loadOlderLogs();
+      } else if (handlers.activeTab() === "hardware") {
+        if (handlers.selectedTaskId()) handlers.hardwareIoState(handlers.selectedTaskId()).autoFollow = handlers.isPanelNearBottom();
       }
     });
     panelEl?.addEventListener("submit", event => {

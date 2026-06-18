@@ -1320,6 +1320,12 @@ body.auth-required .login-view:not(.hidden) {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+.field-row[hidden],
+.field-row.hidden,
+.field-label[hidden],
+.supervision-gates[hidden] {
+  display: none;
+}
 .field-label {
   display: grid;
   gap: 4px;
@@ -1474,6 +1480,126 @@ body.auth-required .login-view:not(.hidden) {
   min-height: auto;
   margin: 0;
 }
+.skill-option-list,
+.hardware-permission-list,
+.hardware-permissions .supervision-gate-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+}
+.skill-option-chip,
+.hardware-permission-list .checkbox-line,
+.hardware-permissions .supervision-gate-list label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 30px;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.skill-option-chip input,
+.hardware-permission-list input,
+.hardware-permissions .supervision-gate-list input {
+  min-width: auto;
+  min-height: auto;
+  margin: 0;
+}
+.skill-option-chip span,
+.hardware-permission-list span,
+.hardware-permissions .supervision-gate-list span {
+  color: inherit;
+  font-size: inherit;
+}
+.skill-option-empty {
+  color: #667085;
+  font-size: 12px;
+}
+.hardware-io-view {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+}
+.hardware-io-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.hardware-io-tx { border-left-color: #f59e0b; }
+.hardware-io-rx { border-left-color: #16a34a; }
+.hardware-io-system { border-left-color: #64748b; }
+.hardware-io-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.hardware-io-meta strong {
+  color: var(--color-text-strong);
+  font-size: 11px;
+}
+.hardware-io-row pre {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-strong);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.hardware-channel-list {
+  display: grid;
+  gap: 5px;
+}
+.hardware-channel-list.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.hardware-channel-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.hardware-channel-list.compact .hardware-channel-card:has([data-hardware-channel-toggle]:checked) {
+  grid-column: 1 / -1;
+}
+.hardware-channel-card > .checkbox-line {
+  min-height: 24px;
+  margin: 0;
+  font-weight: 700;
+}
+.hardware-channel-list.compact .hardware-channel-card > .checkbox-line {
+  justify-content: center;
+}
+.hardware-channel-card > .checkbox-line input {
+  min-width: auto;
+  min-height: auto;
+}
+.hardware-channel-detail {
+  display: grid;
+  gap: 6px;
+}
+.hardware-channel-detail.hidden {
+  display: none;
+}
 .task-create-row {
   padding: var(--space-2) var(--space-3) 0;
 }
@@ -1554,7 +1680,9 @@ body.auth-required .login-view:not(.hidden) {
 }
 .task-proxy-editor,
 .task-supervision-editor,
-.task-context-editor {
+.task-context-editor,
+.task-skills-editor,
+.task-hardware-editor {
   background: var(--color-surface);
 }
 .task-settings-danger-zone {
@@ -1563,7 +1691,9 @@ body.auth-required .login-view:not(.hidden) {
 }
 .proxy-form,
 .supervision-form,
-.context-form {
+.context-form,
+.skills-form,
+.hardware-form {
   display: grid;
   gap: 7px;
   padding: 0;
@@ -1571,14 +1701,18 @@ body.auth-required .login-view:not(.hidden) {
 .proxy-form input,
 .supervision-form input,
 .supervision-form select,
-.context-form input {
+.context-form input,
+.hardware-form input,
+.hardware-form select {
   min-height: 32px;
   padding: 0 8px;
   font-size: 12px;
 }
 .proxy-form button,
 .supervision-form button,
-.context-form button {
+.context-form button,
+.skills-form button,
+.hardware-form button {
   min-height: 32px;
   font-size: 12px;
 }

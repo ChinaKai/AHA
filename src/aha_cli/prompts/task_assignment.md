@@ -38,6 +38,8 @@ $preferred_sub_model
 Default agent permission:
 - sandbox: $sandbox
 - approval: $approval
+$task_skills_context
+$hardware_debug_context
 
 Responsibilities:
 1. Understand the task.

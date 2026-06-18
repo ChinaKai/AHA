@@ -15,6 +15,7 @@
     const loadStatus = deps.loadStatus || (() => Promise.resolve());
     const loadAgentsRuntime = deps.loadAgentsRuntime || (() => Promise.resolve());
     const ensureActiveTabData = deps.ensureActiveTabData || (() => Promise.resolve());
+    const hardwareIoState = deps.hardwareIoState || (() => ({}));
 
     async function selectTask(taskId) {
       const changedTask = selectedTaskId() !== taskId;
@@ -24,6 +25,7 @@
       deps.resetTaskConfigEditing?.();
       setConversationAutoFollow(true);
       if (activeTab() === "logs") logState(taskId).autoFollow = true;
+      if (activeTab() === "hardware") hardwareIoState(taskId).autoFollow = true;
       deps.closeMobileSheets?.();
       deps.closeMobileActionPanel?.();
       renderOrchestrator.renderSelectionShell?.();

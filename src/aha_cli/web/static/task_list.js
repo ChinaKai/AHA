@@ -175,6 +175,7 @@
       summaries.proxy ? `proxy ${summaries.proxy}` : "",
       summaries.supervision ? `supervision ${summaries.supervision}` : "",
       summaries.context ? `context ${summaries.context}` : "",
+      summaries.hardware ? `hardware ${summaries.hardware}` : "",
       pathName(task?.workspace_path),
       summaries.timing || ""
     ].filter(Boolean);
@@ -197,6 +198,7 @@
       `proxy=${summaries.proxy || "not configured"}`,
       `supervision=${summaries.supervision || "-"}`,
       `context=${summaries.context || "-"}`,
+      `hardware=${summaries.hardware || "-"}`,
       `workspace=${task?.workspace_path || "-"}`
     ].join("\n");
   }
@@ -210,6 +212,7 @@
       ["conversation", t("conversation.chat", "Chat"), t("conversation.chat", "Chat")],
       ["final", t("conversation.final", "Final"), t("conversation.final", "Final")],
       ["logs", t("conversation.logs", "Logs"), t("conversation.logs", "Logs")],
+      ["hardware", t("conversation.hardware", "Hardware"), t("conversation.hardware", "Hardware")],
       ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")]
     ];
     return `

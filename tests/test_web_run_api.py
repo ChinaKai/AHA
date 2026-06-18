@@ -83,6 +83,34 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(body["runs"], [])
         self.assertFalse(body["memo_summary"]["available"])
         self.assertEqual(body["memo_summary"]["counts"]["total"], 0)
+        self.assertEqual(body["skill_options"], [])
+
+    def test_api_bootstrap_includes_discovered_skill_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            workspace = Path(tmp) / "workspace"
+            skill_dir = root / "skills" / "board-debug"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Board Debug\n\nUse UART safely.\n", encoding="utf-8")
+            workspace_skill_dir = workspace / ".aha" / "skills" / "workspace-skill"
+            workspace_skill_dir.mkdir(parents=True)
+            (workspace_skill_dir / "SKILL.md").write_text("# Workspace Skill\n", encoding="utf-8")
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(
+            body["skill_options"],
+            [
+                {
+                    "id": "board-debug",
+                    "label": "Board Debug",
+                    "path": str(skill_dir / "SKILL.md"),
+                    "source": "aha_home",
+                }
+            ],
+        )
 
     def test_api_bootstrap_includes_current_run_memo_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

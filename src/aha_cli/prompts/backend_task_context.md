@@ -12,6 +12,8 @@ Current task constraints:
 - preferred_sub_model: $preferred_sub_model
 - current_agent: $current_agent
 - visible_agents: $agents
+$task_skills_context
+$hardware_debug_context
 $final_context
 $task_journal
 $compact_summary

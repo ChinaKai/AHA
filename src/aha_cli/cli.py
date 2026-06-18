@@ -19,6 +19,7 @@ from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
 from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
+from aha_cli.services.hardware_io import append_hardware_io_record
 from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
@@ -541,6 +542,32 @@ def cmd_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hardware_io(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    result = append_hardware_io_record(
+        root,
+        run_id,
+        args.task_id,
+        {
+            "agent_id": args.agent_id,
+            "channel": args.channel,
+            "endpoint": args.endpoint,
+            "direction": args.direction,
+            "encoding": args.encoding,
+            "data": args.data,
+        },
+        default_agent_id=args.agent_id,
+    )
+    if args.json:
+        print(json.dumps(result["record"], ensure_ascii=False))
+    else:
+        record = result["record"]
+        print(f"{record['ts']} {record['task_id']} {record['agent_id']} {record['channel']} {record['direction']} {record['data']}")
+    return 0
+
+
 def cmd_chat(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
@@ -948,6 +975,7 @@ def command_handlers() -> dict[str, object]:
         "workspace": cmd_workspace,
         "watch": cmd_watch,
         "send": cmd_send,
+        "hardware-io": cmd_hardware_io,
         "chat": cmd_chat,
         "auto-reply": cmd_auto_reply,
         "commit": cmd_commit,

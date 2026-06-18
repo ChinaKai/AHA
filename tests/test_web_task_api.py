@@ -130,6 +130,169 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 82)
         self.assertEqual(status["tasks"][-1]["context_management"], body["task"]["context_management"])
 
+    def test_api_task_create_and_update_accepts_hardware_debug_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Hardware debug config", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Board task",
+                            "dispatch": False,
+                            "task_skills": {
+                                "enabled_paths": ["/repo/.aha/skills/board-debug/SKILL.md"],
+                            },
+                            "hardware_debug": {
+                                "channels": [
+                                    {
+                                        "type": "uart",
+                                        "settings": {
+                                            "port": "/dev/ttyUSB0",
+                                            "baudrate": "115200",
+                                        },
+                                        "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
+                                        "permissions": {
+                                            "read": True,
+                                            "write": True,
+                                            "reset": True,
+                                        },
+                                    },
+                                    {
+                                        "type": "telnet",
+                                        "settings": {
+                                            "host": "192.168.1.20",
+                                            "port": "23",
+                                        },
+                                        "operation_skill_path": "/repo/.aha/skills/telnet-console/SKILL.md",
+                                        "permissions": {
+                                            "read": True,
+                                            "write": False,
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                task_id = body["task"]["id"]
+                skills_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/skills",
+                        method="POST",
+                        payload={
+                            "enabled_paths": ["/repo/.aha/skills/board-debug/SKILL.md", "/repo/.aha/skills/log/SKILL.md"],
+                        },
+                    )
+                )
+                skills_body = json_response_body(skills_response)
+                update_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/hardware-debug",
+                        method="POST",
+                        payload={
+                            "channels": [
+                                {
+                                    "type": "nfs",
+                                    "settings": {
+                                        "server": "192.168.1.10",
+                                        "remote_path": "/srv/nfs/rootfs",
+                                        "mount_path": "/mnt/rootfs",
+                                    },
+                                    "operation_skill_path": "/repo/.aha/skills/nfs-rootfs/SKILL.md",
+                                    "permissions": {
+                                        "read": True,
+                                        "write": False,
+                                        "reset": False,
+                                    },
+                                },
+                            ],
+                        },
+                    )
+                )
+                update_body = json_response_body(update_response)
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+                hardware_events = [event for event in events if event["type"] == "task_hardware_debug_config_updated"]
+                skills_events = [event for event in events if event["type"] == "task_skills_config_updated"]
+
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
+        hardware = body["task"]["hardware_debug"]
+        self.assertEqual([channel["type"] for channel in hardware["channels"]], ["uart", "telnet"])
+        self.assertEqual(hardware["channels"][0]["settings"], {"port": "/dev/ttyUSB0", "baudrate": 115200})
+        self.assertEqual(hardware["channels"][0]["operation_skill_path"], "/repo/.aha/skills/uboot-uart/SKILL.md")
+        self.assertTrue(hardware["channels"][0]["permissions"]["read"])
+        self.assertTrue(hardware["channels"][0]["permissions"]["write"])
+        self.assertNotIn("reset", hardware["channels"][0]["permissions"])
+        self.assertEqual(hardware["channels"][1]["settings"], {"host": "192.168.1.20", "port": 23, "username": ""})
+        self.assertNotIn("enabled", hardware)
+        self.assertNotIn("devices", hardware)
+        self.assertTrue(update_body["ok"])
+        self.assertTrue(skills_body["ok"])
+        self.assertEqual(skills_body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md", "/repo/.aha/skills/log/SKILL.md"])
+        self.assertEqual(update_body["task"]["hardware_debug"]["channels"][0]["type"], "nfs")
+        self.assertEqual(update_body["task"]["hardware_debug"]["channels"][0]["operation_skill_path"], "/repo/.aha/skills/nfs-rootfs/SKILL.md")
+        self.assertTrue(update_body["task"]["hardware_debug"]["channels"][0]["permissions"]["read"])
+        self.assertFalse(update_body["task"]["hardware_debug"]["channels"][0]["permissions"]["write"])
+        self.assertNotIn("reset", update_body["task"]["hardware_debug"]["channels"][0]["permissions"])
+        self.assertEqual(hardware_events[-1]["data"]["task_id"], task_id)
+        self.assertEqual(hardware_events[-1]["data"]["channel_count"], 1)
+        self.assertEqual(hardware_events[-1]["data"]["channel_types"], ["nfs"])
+        self.assertEqual(skills_events[-1]["data"]["task_id"], task_id)
+        self.assertEqual(skills_events[-1]["data"]["skill_count"], 2)
+
+    def test_api_task_hardware_io_records_are_persisted_and_streamed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Hardware io", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/hardware-io",
+                        method="POST",
+                        payload={
+                            "agent_id": "main",
+                            "channel": "uart",
+                            "endpoint": "/dev/ttyUSB0@115200",
+                            "direction": "tx",
+                            "data": "reset\\r",
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                page_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/hardware-io?limit=10"))
+                page_body = json_response_body(page_response)
+                hardware_rows, _ = iter_jsonl_from(run_dir(root, run_id) / "tasks" / "task-001" / "hardware_io.jsonl", 0)
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["record"]["task_id"], "task-001")
+        self.assertEqual(body["record"]["channel"], "uart")
+        self.assertEqual(body["record"]["direction"], "tx")
+        self.assertEqual(body["record"]["data"], "reset\\r")
+        self.assertEqual(page_body["events"][0]["endpoint"], "/dev/ttyUSB0@115200")
+        self.assertEqual(hardware_rows[0]["agent_id"], "main")
+        hardware_events = [event for event in events if event["type"] == "hardware_io"]
+        self.assertEqual(hardware_events[-1]["data"]["task_id"], "task-001")
+        self.assertEqual(hardware_events[-1]["data"]["offset"], body["record"]["offset"])
+
     def test_task_memo_api_crud_and_task_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

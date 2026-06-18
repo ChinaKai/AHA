@@ -55,6 +55,7 @@
         proxy: deps.taskProxySummary?.(task),
         supervision: deps.taskSupervisionSummary?.(task),
         context: deps.taskContextSummary?.(task),
+        hardware: deps.taskHardwareDebugSummary?.(task),
         timing: deps.taskTimingLabel?.(task?.id, task)
       };
     }
@@ -176,10 +177,12 @@
         if (forceEditors || !deps.isTaskProxyEditing?.()) deps.renderTaskProxyEditor?.(task);
         if (forceEditors || !deps.isTaskSupervisionEditing?.()) deps.renderTaskSupervisionEditor?.(task);
         if (forceEditors || !deps.isTaskContextEditing?.()) deps.renderTaskContextEditor?.(task);
+        if (forceEditors || !deps.isTaskHardwareEditing?.()) deps.renderTaskHardwareEditor?.(task);
       } else {
         deps.renderTaskProxyEditor?.(null);
         deps.renderTaskSupervisionEditor?.(null);
         deps.renderTaskContextEditor?.(null);
+        deps.renderTaskHardwareEditor?.(null);
       }
       if (open) positionTaskSettingsPanel(task);
       else clearTaskSettingsPosition();
@@ -318,6 +321,7 @@
       if (!deps.isTaskProxyEditing?.()) deps.renderTaskProxyEditor?.();
       if (!deps.isTaskSupervisionEditing?.()) deps.renderTaskSupervisionEditor?.();
       if (!deps.isTaskContextEditing?.()) deps.renderTaskContextEditor?.();
+      if (!deps.isTaskHardwareEditing?.()) deps.renderTaskHardwareEditor?.();
       deps.renderAgents?.();
       deps.renderConversationFilters?.();
       deps.renderPanel?.();

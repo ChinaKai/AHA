@@ -185,6 +185,103 @@ Tasks expose a `collaboration_mode` intent:
 
 New tasks also expose a `workflow_template` efficiency hint. It defaults to `auto` and does not by itself choose an agent count. Supported values are `auto`, `bugfix`, `feature`, `review`, `embedded-driver`, `fault-debug`, `hil-regression`, and `release`. The template gives `task-main` a domain-specific splitting strategy while `max_sub_agents` remains the hard concurrency/cost cap. The web UI treats execution as `auto` by default and keeps legacy `solo` / `pair` / `team` values as protocol-compatible options rather than the primary user-facing choice.
 
+Tasks may also carry optional task skills under `task_skills`. AHA discovers
+selectable skills only from the current AHA service home at
+`aha_home_path(root)/skills/<name>/SKILL.md` (normally
+`<project>/.aha/skills/<name>/SKILL.md`); tasks store only the enabled skill
+paths:
+
+```json
+{
+  "task_skills": {
+    "enabled_paths": ["/repo/.aha/skills/board-debug/SKILL.md"]
+  }
+}
+```
+
+When a selected skill is relevant, the backend prompt tells the agent to read
+the referenced `SKILL.md` before acting. Skills are independent from device
+configuration and can be reused for non-hardware capabilities.
+
+Tasks may also carry optional board-side automation context under
+`hardware_debug`. The setting is disabled by default for archive and old-plan
+compatibility. New tasks store a list of hardware channels. An empty channel
+list means `NONE`; one task can expose multiple channels such as `UART`, `NFS`,
+and `TELNET` at the same time. Each channel stores only connection settings,
+read/write permissions, and an optional operation skill that describes how to
+operate that channel. When channels are configured, AHA injects a compact
+hardware debug block into task assignment and chat prompts:
+
+```json
+{
+  "hardware_debug": {
+    "channels": [
+      {
+        "type": "uart",
+        "settings": {
+          "port": "/dev/ttyUSB0",
+          "baudrate": 115200
+        },
+        "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
+        "permissions": {
+          "read": true,
+          "write": true
+        }
+      },
+      {
+        "type": "nfs",
+        "settings": {
+          "server": "192.168.1.10",
+          "remote_path": "/srv/nfs/rootfs",
+          "mount_path": "/mnt/rootfs"
+        },
+        "operation_skill_path": "/repo/.aha/skills/nfs-rootfs/SKILL.md",
+        "permissions": {
+          "read": true,
+          "write": false
+        }
+      }
+    ]
+  }
+}
+```
+
+Channel entries describe the hardware access target. Permission flags are
+task-local policy for the agent; AHA stores and prompts them, but hardware
+resource locking and device-specific command wrappers are a separate runtime
+capability. Device operations such as reset, entering U-Boot, NFS mount
+workflow, flashing, and env inspection belong in the channel operation skill
+rather than in `hardware_debug`. Legacy `enabled`/`devices`/`serial_*`
+payloads are accepted as compatibility input and normalized to a `uart`
+channel.
+
+Hardware channel input/output can be mirrored to the Web UI through task-local
+hardware I/O records. AHA stores records under
+`runs/<run-id>/tasks/<task-id>/hardware_io.jsonl` and also appends a
+`hardware_io` event to the run event stream for realtime WebSocket updates:
+
+```json
+{
+  "type": "hardware_io",
+  "data": {
+    "task_id": "task-087",
+    "agent_id": "main",
+    "channel": "uart",
+    "endpoint": "/dev/ttyUSB0@115200",
+    "direction": "tx",
+    "encoding": "text",
+    "data": "reset\\r"
+  }
+}
+```
+
+Agents and channel operation skills should use the helper entrypoint when they
+want user-visible TX/RX traces:
+
+```text
+aha hardware-io <run-id> <task-id> --agent-id main --channel uart --endpoint /dev/ttyUSB0@115200 --direction tx --data 'reset\r'
+```
+
 The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard execution controls. If `task-main` needs sub-agents or must route follow-up work to an existing owner, it can include a JSON action payload in its response:
 
 ```json

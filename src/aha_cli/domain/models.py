@@ -105,6 +105,8 @@ TASK_COLLABORATION_DEFAULTS = {
 DEFAULT_TASK_SANDBOX = "danger-full-access"
 DEFAULT_TASK_SUPERVISION_MAX_ROUNDS = 99
 DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT = 75
+TASK_HARDWARE_DEBUG_CHANNEL_TYPES = ("uart", "nfs", "telnet")
+TASK_HARDWARE_DEBUG_PERMISSION_KEYS = ("read", "write")
 
 
 def default_task_supervision_ask_user_gates() -> dict:
@@ -256,6 +258,173 @@ def normalize_task_context_management(value: object | None = None, *, default_en
     return context
 
 
+def default_task_hardware_debug_permissions() -> dict:
+    return {
+        "read": True,
+        "write": False,
+    }
+
+
+def default_task_hardware_debug() -> dict:
+    return {
+        "channels": [],
+    }
+
+
+def default_task_skills() -> dict:
+    return {
+        "enabled_paths": [],
+    }
+
+
+def _normalize_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = value.replace("\r\n", "\n").replace(",", "\n").split("\n")
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = [value]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        normalized.append(text)
+        seen.add(text)
+    return normalized
+
+
+def normalize_task_hardware_debug_permissions(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    permissions = default_task_hardware_debug_permissions()
+    legacy_map = {
+        "serial_read": "read",
+        "serial_write": "write",
+    }
+    for old_key, new_key in legacy_map.items():
+        if old_key in raw:
+            permissions[new_key] = normalize_bool(raw.get(old_key), default=permissions[new_key])
+    for key in TASK_HARDWARE_DEBUG_PERMISSION_KEYS:
+        if key in raw:
+            permissions[key] = normalize_bool(raw.get(key), default=permissions[key])
+    return permissions
+
+
+def normalize_task_hardware_debug_uart_settings(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    port = str(raw.get("port") or raw.get("path") or "").strip()
+    baudrate_raw = raw.get("baudrate", raw.get("baud"))
+    try:
+        baudrate = int(baudrate_raw) if baudrate_raw not in (None, "") else 115200
+    except (TypeError, ValueError):
+        baudrate = 115200
+    return {
+        "port": port,
+        "baudrate": max(1, baudrate),
+    }
+
+
+def normalize_task_hardware_debug_nfs_settings(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "server": str(raw.get("server") or raw.get("host") or "").strip(),
+        "remote_path": str(raw.get("remote_path") or raw.get("export_path") or raw.get("path") or "").strip(),
+        "mount_path": str(raw.get("mount_path") or raw.get("target_path") or "").strip(),
+    }
+
+
+def normalize_task_hardware_debug_telnet_settings(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    port_raw = raw.get("port")
+    try:
+        port = int(port_raw) if port_raw not in (None, "") else 23
+    except (TypeError, ValueError):
+        port = 23
+    return {
+        "host": str(raw.get("host") or raw.get("server") or "").strip(),
+        "port": max(1, port),
+        "username": str(raw.get("username") or raw.get("user") or "").strip(),
+    }
+
+
+def normalize_task_hardware_debug_channel(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    channel_type = str(value.get("type") or value.get("kind") or "").strip().lower()
+    if channel_type in {"", "none"}:
+        return None
+    if channel_type not in TASK_HARDWARE_DEBUG_CHANNEL_TYPES:
+        return None
+    settings_raw = value.get("settings") if isinstance(value.get("settings"), dict) else value
+    if channel_type == "uart":
+        settings = normalize_task_hardware_debug_uart_settings(settings_raw)
+    elif channel_type == "nfs":
+        settings = normalize_task_hardware_debug_nfs_settings(settings_raw)
+    else:
+        settings = normalize_task_hardware_debug_telnet_settings(settings_raw)
+    return {
+        "type": channel_type,
+        "settings": settings,
+        "operation_skill_path": str(value.get("operation_skill_path") or value.get("operation_skill") or "").strip(),
+        "permissions": normalize_task_hardware_debug_permissions(value.get("permissions")),
+    }
+
+
+def normalize_task_hardware_debug(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    hardware_debug = default_task_hardware_debug()
+    channels_raw = raw.get("channels")
+    channels: list[dict] = []
+    if isinstance(channels_raw, list):
+        channels = [channel for item in channels_raw if (channel := normalize_task_hardware_debug_channel(item))]
+    elif isinstance(channels_raw, dict):
+        channel = normalize_task_hardware_debug_channel(channels_raw)
+        channels = [channel] if channel else []
+    else:
+        enabled = normalize_bool(raw.get("enabled", raw.get("hardware_debug_enabled")), default=False)
+        devices_raw = raw.get("devices")
+        legacy_devices = devices_raw if isinstance(devices_raw, list) else ([devices_raw] if isinstance(devices_raw, dict) else [])
+        if enabled:
+            if legacy_devices:
+                for device in legacy_devices:
+                    channel = normalize_task_hardware_debug_channel(
+                        {
+                            "type": "uart",
+                            "settings": device,
+                            "operation_skill_path": raw.get("operation_skill_path", raw.get("operation_skill")),
+                            "permissions": raw.get("permissions"),
+                        }
+                    )
+                    if channel:
+                        channels.append(channel)
+            else:
+                channel = normalize_task_hardware_debug_channel(
+                    {
+                        "type": "uart",
+                        "settings": {},
+                        "operation_skill_path": raw.get("operation_skill_path", raw.get("operation_skill")),
+                        "permissions": raw.get("permissions"),
+                    }
+                )
+                if channel:
+                    channels.append(channel)
+    hardware_debug["channels"] = channels
+    return hardware_debug
+
+
+def normalize_task_skills(value: object | None = None) -> dict:
+    if isinstance(value, dict):
+        raw_paths = value.get("enabled_paths", value.get("skill_paths", value.get("paths", value.get("skills"))))
+    else:
+        raw_paths = value
+    task_skills = default_task_skills()
+    task_skills["enabled_paths"] = _normalize_string_list(raw_paths)
+    return task_skills
+
+
 def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict:
     preferred_backend = task.get("preferred_backend") or default_backend
     preferred_model = task.get("preferred_model")
@@ -286,6 +455,8 @@ def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict
         "max_sub_agents": max_sub_agents,
         "supervision": normalize_task_supervision(task.get("supervision")),
         "context_management": normalize_task_context_management(task.get("context_management")),
+        "task_skills": normalize_task_skills(task.get("task_skills")),
+        "hardware_debug": normalize_task_hardware_debug(task.get("hardware_debug")),
     }
 
 
@@ -370,6 +541,8 @@ def make_task(
     description: str | None = None,
     supervision: dict | None = None,
     context_management: dict | None = None,
+    task_skills: dict | None = None,
+    hardware_debug: dict | None = None,
 ) -> dict:
     resolved_collaboration_mode, resolved_delegation_policy, resolved_max_sub_agents = resolve_task_collaboration(
         collaboration_mode,
@@ -398,6 +571,8 @@ def make_task(
         "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
         "context_management": normalize_task_context_management(context_management),
+        "task_skills": normalize_task_skills(task_skills),
+        "hardware_debug": normalize_task_hardware_debug(hardware_debug),
         "status": "pending",
         "prompt_file": f"prompts/{task_id}.md",
         "output_file": f"results/{task_id}.md",

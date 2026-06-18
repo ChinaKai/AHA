@@ -9,6 +9,7 @@
     const copyTextByKey = state.copyTextByKey || new Map();
     const finalDetails = state.finalDetails || new Map();
     const logStates = state.logStates || new Map();
+    const hardwareIoStates = state.hardwareIoStates || new Map();
     const promptArtifactCache = state.promptArtifactCache || new Map();
     const compactResetStates = state.compactResetStates || new Map();
     const seenRealtimeEvents = state.seenRealtimeEvents || new Set();
@@ -501,6 +502,13 @@
       return logStates.get(taskId);
     }
 
+    function hardwareIoState(taskId) {
+      if (!hardwareIoStates.has(taskId)) {
+        hardwareIoStates.set(taskId, { events: [], afterOffset: 0, initialized: false, loading: false, autoFollow: true });
+      }
+      return hardwareIoStates.get(taskId);
+    }
+
     async function loadLogPage(taskId, older = false, force = false) {
       if (!taskId) return null;
       const stateValue = logState(taskId);
@@ -523,6 +531,23 @@
       }
     }
 
+    async function loadHardwareIoPage(taskId, force = false) {
+      if (!taskId) return null;
+      const stateValue = hardwareIoState(taskId);
+      if (stateValue.loading || (!force && stateValue.initialized)) return stateValue;
+      stateValue.loading = true;
+      try {
+        const params = new URLSearchParams({ limit: "500" });
+        const payload = await deps.fetchJson(deps.apiUrl(`/api/task/${encodeURIComponent(taskId)}/hardware-io`, params), {}, "Failed to load hardware I/O");
+        stateValue.events = Array.isArray(payload.events) ? payload.events : [];
+        stateValue.afterOffset = Number(payload.after_offset || 0);
+        stateValue.initialized = true;
+        return stateValue;
+      } finally {
+        stateValue.loading = false;
+      }
+    }
+
     async function ensureActiveTabData() {
       const selectedTaskId = getSelectedTaskId();
       if (!selectedTaskId) return;
@@ -531,6 +556,8 @@
         await ensureConversationLoaded();
       } else if (activeTab === "logs") {
         await loadLogPage(selectedTaskId);
+      } else if (activeTab === "hardware") {
+        await loadHardwareIoPage(selectedTaskId);
       } else if (activeTab === "final") {
         await loadFinalDetail(selectedTaskId, true);
       } else if (activeTab === "context") {
@@ -835,6 +862,7 @@
       trimRealtimeEventCaches();
       deps.clearRuntimeCacheForEvents?.(accepted);
       appendRealtimeConversationEvents(accepted);
+      appendRealtimeHardwareIoEvents(accepted);
       deps.removeOptimisticEventsMatchedBy(accepted);
       invalidateRealtimeTaskDetails(accepted);
       if (accepted.some(event => event.type === "task_status_changed" || String(event.type || "").startsWith("task_memo_"))) {
@@ -847,6 +875,37 @@
         types: accepted.slice(0, 8).map(event => event.type || "")
       });
       return accepted;
+    }
+
+    function hardwareIoEventKey(item = {}) {
+      return [
+        item.ts || "",
+        item.task_id || "",
+        item.agent_id || "",
+        item.direction || "",
+        item.channel || "",
+        item.endpoint || "",
+        item.encoding || "",
+        item.data || ""
+      ].join(":");
+    }
+
+    function appendRealtimeHardwareIoEvents(events) {
+      const selectedTaskId = getSelectedTaskId();
+      let changedCurrent = false;
+      events.filter(event => event.type === "hardware_io").forEach(event => {
+        const item = event.data || {};
+        const taskId = String(item.task_id || "");
+        if (!taskId) return;
+        const stateValue = hardwareIoState(taskId);
+        const key = hardwareIoEventKey(item);
+        if (stateValue.events.some(existing => hardwareIoEventKey(existing) === key)) return;
+        stateValue.events.push(item);
+        if (stateValue.events.length > 2000) stateValue.events.splice(0, stateValue.events.length - 2000);
+        if (item.offset !== undefined && item.offset !== null) stateValue.afterOffset = Math.max(Number(stateValue.afterOffset || 0), Number(item.offset || 0));
+        if (taskId === selectedTaskId) changedCurrent = true;
+      });
+      if (changedCurrent && getActiveTab() === "hardware") deps.renderPanel?.();
     }
 
     async function pollEvents() {
@@ -1011,12 +1070,14 @@
       initializeEventTailOffset,
       latestKnownEventOrder,
       loadContextDetail,
+      loadHardwareIoPage,
       loadConversationPage,
       loadFinalDetail,
       loadLogPage,
       loadOlderConversation,
       loadOlderLogs,
       logState,
+      hardwareIoState,
       maybeRefreshConversationBackendSessionFallback,
       pollEvents,
       prepareRealtimeCatchupBaseline,

@@ -68,6 +68,30 @@
       return `<div class="log-view">${older}<pre>${escapeHtml(body)}</pre></div>`;
     }
 
+    function renderHardwareIoPanelHtml(state = {}) {
+      if (!state.initialized && state.loading) return '<div class="empty">Loading hardware I/O...</div>';
+      const events = Array.isArray(state.events) ? state.events : [];
+      if (!events.length) return '<div class="empty">No hardware I/O yet.</div>';
+      const rows = events.map(item => {
+        const direction = String(item.direction || "system").toLowerCase();
+        const channel = String(item.channel || "hardware").toUpperCase();
+        const endpoint = item.endpoint ? ` · ${escapeHtml(item.endpoint)}` : "";
+        const agent = item.agent_id ? ` · ${escapeHtml(item.agent_id)}` : "";
+        const truncated = item.truncated ? " …" : "";
+        return `
+          <div class="hardware-io-row hardware-io-${escapeHtml(direction)}">
+            <div class="hardware-io-meta">
+              <time>${escapeHtml(localizeTimestampText(item.ts || ""))}</time>
+              <strong>${escapeHtml(direction.toUpperCase())}</strong>
+              <span>${escapeHtml(channel)}${endpoint}${agent}</span>
+            </div>
+            <pre>${escapeHtml(String(item.data || ""))}${truncated}</pre>
+          </div>
+        `;
+      }).join("");
+      return `<div class="hardware-io-view">${rows}</div>`;
+    }
+
     function renderContextPanelHtml({ rawPromptHtml = "", promptMetricsHtml = "" } = {}) {
       return `
         <div class="context-view">
@@ -81,6 +105,7 @@
       renderConversationFiltersHtml,
       renderConversationPanelHtml,
       renderFinalPanelHtml,
+      renderHardwareIoPanelHtml,
       renderLogsPanelHtml,
       renderContextPanelHtml
     });

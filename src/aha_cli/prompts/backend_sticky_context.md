@@ -14,6 +14,8 @@ Current task constraints:
 - approval: $approval
 - session_policy: $session_policy
 - backend_session_id: $backend_session_id
+$task_skills_context
+$hardware_debug_context
 
 Sticky session note:
 - This backend session may already contain prior AHA runtime contract, previous AHA prompts, tool outputs, and replies.

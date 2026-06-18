@@ -234,6 +234,112 @@
               <div id="task-context-state" class="meta"></div>
             </form>
           </section>
+          <section id="task-skills-editor" class="task-detail-section task-skills-editor">
+            <h3 data-i18n="task.skills">Skills</h3>
+            <form id="task-skills-form" class="skills-form">
+              <div class="field-label">
+                <span data-i18n="task.skills_select">Enabled skills</span>
+                <div id="selected-task-skill-select" class="skill-option-list" role="group" aria-label="Enabled skills"></div>
+              </div>
+              <button type="submit" data-i18n="task.skills_save">Save Skills</button>
+              <div id="task-skills-state" class="meta"></div>
+            </form>
+          </section>
+          <section id="task-hardware-editor" class="task-detail-section task-hardware-editor">
+            <h3 data-i18n="task.hardware_debug">Hardware debug</h3>
+            <form id="task-hardware-form" class="hardware-form">
+              <div class="hardware-channel-list" data-selected-hardware-channels>
+                <section class="hardware-channel-card" data-hardware-channel="uart">
+                  <label class="checkbox-line">
+                    <input id="selected-task-hardware-uart-enabled" type="checkbox" data-hardware-channel-toggle>
+                    <span>UART</span>
+                  </label>
+                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_operation_skill">Operation skill</span>
+                      <select id="selected-task-hardware-uart-operation-skill" data-hardware-operation-skill></select>
+                    </label>
+                    <div class="field-row">
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_port">UART port</span>
+                        <input id="selected-task-hardware-uart-port" data-hardware-setting="port" placeholder="/dev/ttyUSB0">
+                      </label>
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_baudrate">Baudrate</span>
+                        <input id="selected-task-hardware-uart-baudrate" data-hardware-setting="baudrate" type="number" min="1" value="115200">
+                      </label>
+                    </div>
+                    <div class="hardware-permission-list" aria-label="Permissions">
+                      <label class="checkbox-line"><input id="selected-task-hardware-uart-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
+                      <label class="checkbox-line"><input id="selected-task-hardware-uart-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
+                    </div>
+                  </div>
+                </section>
+                <section class="hardware-channel-card" data-hardware-channel="nfs">
+                  <label class="checkbox-line">
+                    <input id="selected-task-hardware-nfs-enabled" type="checkbox" data-hardware-channel-toggle>
+                    <span>NFS</span>
+                  </label>
+                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_operation_skill">Operation skill</span>
+                      <select id="selected-task-hardware-nfs-operation-skill" data-hardware-operation-skill></select>
+                    </label>
+                    <div class="field-row">
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_nfs_server">NFS server</span>
+                        <input id="selected-task-hardware-nfs-server" data-hardware-setting="server" placeholder="192.168.1.10">
+                      </label>
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_nfs_remote_path">Remote path</span>
+                        <input id="selected-task-hardware-nfs-remote-path" data-hardware-setting="remote_path" placeholder="/srv/nfs/rootfs">
+                      </label>
+                    </div>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_nfs_mount_path">Mount path</span>
+                      <input id="selected-task-hardware-nfs-mount-path" data-hardware-setting="mount_path" placeholder="/mnt/rootfs">
+                    </label>
+                    <div class="hardware-permission-list" aria-label="Permissions">
+                      <label class="checkbox-line"><input id="selected-task-hardware-nfs-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
+                      <label class="checkbox-line"><input id="selected-task-hardware-nfs-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
+                    </div>
+                  </div>
+                </section>
+                <section class="hardware-channel-card" data-hardware-channel="telnet">
+                  <label class="checkbox-line">
+                    <input id="selected-task-hardware-telnet-enabled" type="checkbox" data-hardware-channel-toggle>
+                    <span>TELNET</span>
+                  </label>
+                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_operation_skill">Operation skill</span>
+                      <select id="selected-task-hardware-telnet-operation-skill" data-hardware-operation-skill></select>
+                    </label>
+                    <div class="field-row">
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_telnet_host">Host</span>
+                        <input id="selected-task-hardware-telnet-host" data-hardware-setting="host" placeholder="192.168.1.20">
+                      </label>
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_telnet_port">Port</span>
+                        <input id="selected-task-hardware-telnet-port" data-hardware-setting="port" type="number" min="1" value="23">
+                      </label>
+                    </div>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_telnet_username">Username</span>
+                      <input id="selected-task-hardware-telnet-username" data-hardware-setting="username">
+                    </label>
+                    <div class="hardware-permission-list" aria-label="Permissions">
+                      <label class="checkbox-line"><input id="selected-task-hardware-telnet-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
+                      <label class="checkbox-line"><input id="selected-task-hardware-telnet-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <button type="submit" data-i18n="task.hardware_save">Save Hardware</button>
+              <div id="task-hardware-state" class="meta"></div>
+            </form>
+          </section>
         </div>
         <section class="task-detail-section task-settings-danger-zone">
           <h3 data-i18n="task.settings_actions">Task actions</h3>
@@ -379,6 +485,7 @@
         <button type="button" data-mobile-action="conversation" data-i18n="conversation.chat">Chat</button>
         <button type="button" data-mobile-action="final" data-i18n="conversation.final">Final</button>
         <button type="button" data-mobile-action="logs" data-i18n="conversation.logs">Logs</button>
+        <button type="button" data-mobile-action="hardware" data-i18n="conversation.hardware">Hardware</button>
         <button type="button" data-mobile-action="context" data-i18n="conversation.context">Context</button>
         <button type="button" data-mobile-action="tasks" data-i18n="task.open">Tasks</button>
         <button type="button" data-mobile-action="agents" data-i18n="agents.open">Agents</button>
@@ -489,6 +596,105 @@
         </fieldset>
         <details class="form-section advanced-task-options">
           <summary data-i18n="task.advanced">Advanced</summary>
+          <div class="field-row task-defaults-grid task-create-context-grid">
+            <div class="field-label">
+              <span data-i18n="task.skills">Skills</span>
+              <div id="task-skill-select" class="skill-option-list" role="group" aria-label="Skills"></div>
+              <div class="field-help" data-i18n="task.skills_help">Choose skills discovered from this AHA service's .aha/skills directory.</div>
+            </div>
+            <div class="field-label">
+              <span data-i18n="task.hardware_debug">Hardware debug</span>
+              <div class="hardware-channel-list compact" data-create-hardware-channels>
+                <section class="hardware-channel-card" data-hardware-channel="uart">
+                  <label class="checkbox-line">
+                    <input id="task-hardware-uart-enabled" type="checkbox" data-hardware-channel-toggle>
+                    <span>UART</span>
+                  </label>
+                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_operation_skill">Operation skill</span>
+                      <select id="task-hardware-uart-operation-skill" data-hardware-operation-skill></select>
+                    </label>
+                    <div class="field-row task-defaults-grid">
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_port">UART port</span>
+                        <input id="task-hardware-uart-port" data-hardware-setting="port" placeholder="/dev/ttyUSB0">
+                      </label>
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_baudrate">Baudrate</span>
+                        <input id="task-hardware-uart-baudrate" data-hardware-setting="baudrate" type="number" min="1" value="115200">
+                      </label>
+                    </div>
+                    <div class="hardware-permission-list">
+                      <label class="checkbox-line"><input id="task-hardware-uart-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
+                      <label class="checkbox-line"><input id="task-hardware-uart-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
+                    </div>
+                  </div>
+                </section>
+                <section class="hardware-channel-card" data-hardware-channel="nfs">
+                  <label class="checkbox-line">
+                    <input id="task-hardware-nfs-enabled" type="checkbox" data-hardware-channel-toggle>
+                    <span>NFS</span>
+                  </label>
+                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_operation_skill">Operation skill</span>
+                      <select id="task-hardware-nfs-operation-skill" data-hardware-operation-skill></select>
+                    </label>
+                    <div class="field-row task-defaults-grid">
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_nfs_server">NFS server</span>
+                        <input id="task-hardware-nfs-server" data-hardware-setting="server" placeholder="192.168.1.10">
+                      </label>
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_nfs_remote_path">Remote path</span>
+                        <input id="task-hardware-nfs-remote-path" data-hardware-setting="remote_path" placeholder="/srv/nfs/rootfs">
+                      </label>
+                    </div>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_nfs_mount_path">Mount path</span>
+                      <input id="task-hardware-nfs-mount-path" data-hardware-setting="mount_path" placeholder="/mnt/rootfs">
+                    </label>
+                    <div class="hardware-permission-list">
+                      <label class="checkbox-line"><input id="task-hardware-nfs-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
+                      <label class="checkbox-line"><input id="task-hardware-nfs-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
+                    </div>
+                  </div>
+                </section>
+                <section class="hardware-channel-card" data-hardware-channel="telnet">
+                  <label class="checkbox-line">
+                    <input id="task-hardware-telnet-enabled" type="checkbox" data-hardware-channel-toggle>
+                    <span>TELNET</span>
+                  </label>
+                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_operation_skill">Operation skill</span>
+                      <select id="task-hardware-telnet-operation-skill" data-hardware-operation-skill></select>
+                    </label>
+                    <div class="field-row task-defaults-grid">
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_telnet_host">Host</span>
+                        <input id="task-hardware-telnet-host" data-hardware-setting="host" placeholder="192.168.1.20">
+                      </label>
+                      <label class="field-label">
+                        <span data-i18n="task.hardware_telnet_port">Port</span>
+                        <input id="task-hardware-telnet-port" data-hardware-setting="port" type="number" min="1" value="23">
+                      </label>
+                    </div>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_telnet_username">Username</span>
+                      <input id="task-hardware-telnet-username" data-hardware-setting="username">
+                    </label>
+                    <div class="hardware-permission-list">
+                      <label class="checkbox-line"><input id="task-hardware-telnet-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
+                      <label class="checkbox-line"><input id="task-hardware-telnet-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <div class="field-help" data-i18n="task.hardware_help">Choose board-side access channels exposed to the agent.</div>
+            </div>
+          </div>
           <div class="field-row">
             <label class="field-label">
               <span data-i18n="task.sandbox">Default sandbox</span>

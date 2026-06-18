@@ -401,12 +401,20 @@
       return controllers.conversationController?.()?.logState(taskId);
     }
 
+    function hardwareIoState(taskId) {
+      return controllers.conversationController?.()?.hardwareIoState(taskId);
+    }
+
     async function ensureActiveTabData() {
       return await controllers.conversationController?.()?.ensureActiveTabData();
     }
 
     async function loadOlderLogs() {
       return await controllers.conversationController?.()?.loadOlderLogs();
+    }
+
+    async function loadHardwareIoPage(taskId = selectedTaskId(), force = false) {
+      return await controllers.conversationController?.()?.loadHardwareIoPage(taskId, force);
     }
 
     async function loadConversationPage(taskId = selectedTaskId(), target = backendTarget(), older = false, force = false) {
@@ -605,12 +613,14 @@
       loadAgentsRuntime,
       loadBootstrap,
       loadConversationPage,
+      loadHardwareIoPage,
       loadOlderConversation,
       loadOlderLogs,
       loadRunMaintenance,
       loadRuns,
       loadStatus,
       logState,
+      hardwareIoState,
       maybeRefreshConversationBackendSessionFallback,
       pollEvents,
       prepareRealtimeCatchupBaseline,

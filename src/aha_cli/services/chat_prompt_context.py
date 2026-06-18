@@ -13,6 +13,8 @@ from aha_cli.services.chat_supervision import (
     task_supervision_host_id,
 )
 from aha_cli.services.commit_policy import commit_message_policy_prompt
+from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
+from aha_cli.services.task_skills import task_skills_context_for_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.event_views import event_agent_refs
 from aha_cli.store.filesystem import (
@@ -889,6 +891,8 @@ def chat_prompt(
                 ),
                 current_agent=current_agent_constraints,
                 agents=visible_agent_constraints,
+                task_skills_context=task_skills_context_for_prompt(detail["task"]).rstrip(),
+                hardware_debug_context=hardware_debug_context_for_prompt(detail["task"]).rstrip(),
                 final_context=final_context.rstrip(),
                 task_journal=journal_context,
                 compact_summary=compact_context.rstrip(),
@@ -975,6 +979,8 @@ def chat_prompt(
             approval=(agent or {}).get("approval") or (task or {}).get("preferred_approval") or "-",
             session_policy=(agent or {}).get("session_policy") or "-",
             backend_session_id=(agent or {}).get("backend_session_id") or "-",
+            task_skills_context=task_skills_context_for_prompt(task or {}).rstrip(),
+            hardware_debug_context=hardware_debug_context_for_prompt(task or {}).rstrip(),
         )
         if task and is_task_supervision_host_agent(task, target):
             host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)

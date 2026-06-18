@@ -918,6 +918,44 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("Observe agents", watch_output)
                 self.assertIn("message main -> task-001: hello agent", watch_output)
 
+    def test_hardware_io_command_records_timeline_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable")
+                code, plan_output = self.run_cli("plan", "Hardware I/O helper", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                code, output = self.run_cli(
+                    "hardware-io",
+                    run_id,
+                    "task-001",
+                    "--agent-id",
+                    "main",
+                    "--channel",
+                    "uart",
+                    "--endpoint",
+                    "/dev/ttyUSB0@115200",
+                    "--direction",
+                    "rx",
+                    "--data",
+                    "Sgs #",
+                    "--json",
+                )
+                record = json.loads(output)
+                hardware_rows, _ = iter_jsonl_from(root / ".aha" / "runs" / run_id / "tasks" / "task-001" / "hardware_io.jsonl", 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(record["task_id"], "task-001")
+        self.assertEqual(record["channel"], "uart")
+        self.assertEqual(record["direction"], "rx")
+        self.assertEqual(record["data"], "Sgs #")
+        self.assertEqual(hardware_rows[0]["endpoint"], "/dev/ttyUSB0@115200")
+        hardware_events = [event for event in events if event["type"] == "hardware_io"]
+        self.assertEqual(hardware_events[-1]["data"]["offset"], record["offset"])
+
     def test_auto_reply_writes_response_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

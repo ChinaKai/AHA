@@ -8,6 +8,7 @@
     const getSelectedTask = options.selectedTask || (() => null);
     const getStatusData = options.statusData || (() => null);
     const getConfigData = options.configData || (() => ({}));
+    const getSkillOptions = options.skillOptions || (() => []);
     const currentRunId = options.currentRunId || (() => "");
     const alertUser = options.alert || (message => window.alert(message));
     let createProxyOverride = false;
@@ -16,6 +17,7 @@
     let proxyEditingUntil = 0;
     let supervisionEditingUntil = 0;
     let contextEditingUntil = 0;
+    let hardwareEditingUntil = 0;
     let taskSettingsEditorTaskId = "";
 
     function taskById(taskId) {
@@ -309,6 +311,140 @@
       if (els.taskContextStateEl) els.taskContextStateEl.textContent = helpers.taskContextSummary(task);
     }
 
+    function selectedTaskSkillPaths(selectEl = els.selectedTaskSkillSelectEl) {
+      if (!selectEl) return [];
+      const checked = [...(selectEl.querySelectorAll?.("input[data-task-skill-path]:checked") || [])]
+        .map(input => input.value)
+        .filter(Boolean);
+      if (checked.length || selectEl.tagName !== "SELECT") return checked;
+      return [...(selectEl.selectedOptions || [])].map(option => option.value).filter(Boolean);
+    }
+
+    function renderSkillSelect(selectEl, selectedPaths = []) {
+      if (!selectEl) return;
+      const selected = new Set(selectedPaths);
+      const options = Array.isArray(getSkillOptions()) ? getSkillOptions() : [];
+      if (!options.length) {
+        selectEl.innerHTML = `<div class="skill-option-empty">${escapeHtml(window.AHAI18n?.t?.("task.skills_empty", "No skills found") || "No skills found")}</div>`;
+        return;
+      }
+      selectEl.innerHTML = options.map(option => {
+        const path = String(option.path || "").trim();
+        const label = String(option.label || option.id || path).trim();
+        const source = String(option.source || "").trim();
+        const text = source ? `${label} (${source})` : label;
+        return `
+          <label class="skill-option-chip">
+            <input type="checkbox" data-task-skill-path value="${escapeHtml(path)}" ${selected.has(path) ? "checked" : ""}>
+            <span>${escapeHtml(text)}</span>
+          </label>
+        `;
+      }).join("");
+    }
+
+    function renderOperationSkillSelect(selectEl, selectedPath = "") {
+      if (!selectEl) return;
+      const options = Array.isArray(getSkillOptions()) ? getSkillOptions() : [];
+      const emptyLabel = window.AHAI18n?.t?.("task.hardware_operation_skill_none", "None") || "None";
+      const rows = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
+      rows.push(...options.map(option => {
+        const path = String(option.path || "").trim();
+        const label = String(option.label || option.id || path).trim();
+        const source = String(option.source || "").trim();
+        const text = source ? `${label} (${source})` : label;
+        return `<option value="${escapeHtml(path)}" ${path === selectedPath ? "selected" : ""}>${escapeHtml(text)}</option>`;
+      }));
+      selectEl.innerHTML = rows.join("");
+    }
+
+    function renderTaskSkillsEditor(taskArg) {
+      const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
+      if (!els.taskSkillsEditorEl || !els.taskSkillsFormEl) return;
+      const disabled = !task;
+      const policy = helpers.taskSkillsPolicy?.(task) || { enabled_paths: [] };
+      renderSkillSelect(els.selectedTaskSkillSelectEl, disabled ? [] : policy.enabled_paths);
+      els.taskSkillsFormEl.querySelectorAll("input, button").forEach(item => {
+        item.disabled = disabled;
+      });
+      if (els.taskSkillsStateEl) {
+        els.taskSkillsStateEl.textContent = disabled ? "Select a task to edit skills." : (helpers.taskSkillsSummary?.(task) || "off");
+      }
+    }
+
+    function syncTaskHardwareDebugFields(options = {}) {
+      const disabled = Boolean(options.disabled);
+      const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
+      cards.forEach(card => {
+        const enabled = Boolean(card.querySelector("[data-hardware-channel-toggle]")?.checked);
+        card.querySelectorAll("[data-hardware-channel-detail]").forEach(item => {
+          item.hidden = !enabled;
+          item.classList.toggle("hidden", !enabled);
+          item.querySelectorAll("input, select").forEach(control => {
+            control.disabled = disabled || !enabled;
+          });
+        });
+        const toggle = card.querySelector("[data-hardware-channel-toggle]");
+        if (toggle) toggle.disabled = disabled;
+      });
+      const submit = els.taskHardwareFormEl?.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = disabled;
+    }
+
+    function resetTaskHardwareForm() {
+      const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
+      cards.forEach(card => {
+        const toggle = card.querySelector("[data-hardware-channel-toggle]");
+        if (toggle) toggle.checked = false;
+        renderOperationSkillSelect(card.querySelector("[data-hardware-operation-skill]"), "");
+        card.querySelectorAll("[data-hardware-setting]").forEach(input => {
+          input.value = input.defaultValue || "";
+        });
+        const readEl = card.querySelector('[data-hardware-permission="read"]');
+        const writeEl = card.querySelector('[data-hardware-permission="write"]');
+        if (readEl) readEl.checked = true;
+        if (writeEl) writeEl.checked = false;
+      });
+    }
+
+    function setTaskHardwareChannels(channels = []) {
+      const byType = new Map((Array.isArray(channels) ? channels : []).map(channel => [String(channel?.type || "").toLowerCase(), channel]));
+      const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
+      cards.forEach(card => {
+        const type = String(card.dataset.hardwareChannel || "").toLowerCase();
+        const channel = byType.get(type) || null;
+        const toggle = card.querySelector("[data-hardware-channel-toggle]");
+        if (toggle) toggle.checked = Boolean(channel);
+        renderOperationSkillSelect(card.querySelector("[data-hardware-operation-skill]"), channel?.operation_skill_path || "");
+        const settings = channel?.settings && typeof channel.settings === "object" ? channel.settings : {};
+        card.querySelectorAll("[data-hardware-setting]").forEach(input => {
+          const key = input.dataset.hardwareSetting || "";
+          input.value = settings[key] ?? input.defaultValue ?? "";
+        });
+        const permissions = channel?.permissions || {};
+        const readEl = card.querySelector('[data-hardware-permission="read"]');
+        const writeEl = card.querySelector('[data-hardware-permission="write"]');
+        if (readEl) readEl.checked = channel ? permissions.read !== false : true;
+        if (writeEl) writeEl.checked = Boolean(permissions.write);
+      });
+    }
+
+    function renderTaskHardwareEditor(taskArg) {
+      const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
+      renderTaskSkillsEditor(task, true);
+      if (!els.taskHardwareEditorEl || !els.taskHardwareFormEl) return;
+      const disabled = !task;
+      if (!task) {
+        resetTaskHardwareForm();
+        syncTaskHardwareDebugFields({ disabled });
+        if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = "Select a task to edit hardware debug.";
+        return;
+      }
+      const policy = helpers.taskHardwareDebugPolicy?.(task) || {};
+      setTaskHardwareChannels(policy.channels || []);
+      syncTaskHardwareDebugFields({ disabled });
+      if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = helpers.taskHardwareDebugSummary?.(task) || "off";
+    }
+
     function markTaskProxyEditing(durationMs = 10000) {
       proxyEditingUntil = Date.now() + durationMs;
     }
@@ -319,6 +455,10 @@
 
     function markTaskContextEditing(durationMs = 10000) {
       contextEditingUntil = Date.now() + durationMs;
+    }
+
+    function markTaskHardwareEditing(durationMs = 10000) {
+      hardwareEditingUntil = Date.now() + durationMs;
     }
 
     function isTaskProxyEditing() {
@@ -336,10 +476,16 @@
       return Date.now() < contextEditingUntil || (active instanceof Element && Boolean(els.taskContextFormEl?.contains(active)));
     }
 
+    function isTaskHardwareEditing() {
+      const active = document.activeElement;
+      return Date.now() < hardwareEditingUntil || (active instanceof Element && Boolean(els.taskHardwareFormEl?.contains(active)));
+    }
+
     function resetEditing() {
       proxyEditingUntil = 0;
       supervisionEditingUntil = 0;
       contextEditingUntil = 0;
+      hardwareEditingUntil = 0;
     }
 
     async function saveTaskProxyConfig() {
@@ -421,6 +567,68 @@
       await api.loadStatus({ forceTaskContext: true });
     }
 
+    async function saveTaskSkillsConfig() {
+      const task = getTaskSettingsTask();
+      if (!task) return;
+      await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/skills`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(api.runScopedPayload({
+          enabled_paths: selectedTaskSkillPaths()
+        }))
+      }, "Failed to update task skills");
+      hardwareEditingUntil = 0;
+      await api.loadStatus({ forceTaskHardware: true });
+    }
+
+    function readTaskHardwareChannelSettings(card, type) {
+      const settings = {};
+      card.querySelectorAll("[data-hardware-setting]").forEach(input => {
+        const key = input.dataset.hardwareSetting || "";
+        if (!key) return;
+        const raw = String(input.value || "").trim();
+        if (input.type === "number") {
+          settings[key] = Number(raw || input.defaultValue || "0") || Number(input.defaultValue || "0") || 0;
+        } else {
+          settings[key] = raw;
+        }
+      });
+      if (type === "uart" && !settings.baudrate) settings.baudrate = 115200;
+      if (type === "telnet" && !settings.port) settings.port = 23;
+      return settings;
+    }
+
+    function readTaskHardwareChannel(card) {
+      const type = String(card.dataset.hardwareChannel || "").trim().toLowerCase();
+      if (!type || !card.querySelector("[data-hardware-channel-toggle]")?.checked) return null;
+      return {
+        type,
+        settings: readTaskHardwareChannelSettings(card, type),
+        operation_skill_path: String(card.querySelector("[data-hardware-operation-skill]")?.value || "").trim(),
+        permissions: {
+          read: Boolean(card.querySelector('[data-hardware-permission="read"]')?.checked),
+          write: Boolean(card.querySelector('[data-hardware-permission="write"]')?.checked)
+        }
+      };
+    }
+
+    async function saveTaskHardwareConfig() {
+      const task = getTaskSettingsTask();
+      if (!task) return;
+      const channels = Array.from(els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [])
+        .map(readTaskHardwareChannel)
+        .filter(Boolean);
+      await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-debug`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(api.runScopedPayload({
+          channels
+        }))
+      }, "Failed to update task hardware debug");
+      hardwareEditingUntil = 0;
+      await api.loadStatus({ forceTaskHardware: true });
+    }
+
     function bind() {
       els.runProxyFormEl?.addEventListener("pointerdown", () => markTaskProxyEditing());
       els.runProxyFormEl?.addEventListener("focusin", () => markTaskProxyEditing());
@@ -476,6 +684,35 @@
           alertUser(err?.message || String(err));
         }
       });
+      els.taskSkillsFormEl?.addEventListener("pointerdown", () => markTaskHardwareEditing());
+      els.taskSkillsFormEl?.addEventListener("focusin", () => markTaskHardwareEditing());
+      els.taskSkillsFormEl?.addEventListener("change", () => markTaskHardwareEditing());
+      els.selectedTaskSkillSelectEl?.addEventListener("focus", () => renderTaskSkillsEditor());
+      els.taskSkillsFormEl?.addEventListener("submit", async event => {
+        event.preventDefault();
+        try {
+          await saveTaskSkillsConfig();
+        } catch (err) {
+          alertUser(err?.message || String(err));
+        }
+      });
+      els.taskHardwareFormEl?.addEventListener("pointerdown", () => markTaskHardwareEditing());
+      els.taskHardwareFormEl?.addEventListener("focusin", () => markTaskHardwareEditing());
+      els.taskHardwareFormEl?.addEventListener("input", () => markTaskHardwareEditing());
+      els.taskHardwareFormEl?.addEventListener("change", event => {
+        markTaskHardwareEditing();
+        if (event.target instanceof Element && event.target.matches("[data-hardware-channel-toggle]")) {
+          syncTaskHardwareDebugFields();
+        }
+      });
+      els.taskHardwareFormEl?.addEventListener("submit", async event => {
+        event.preventDefault();
+        try {
+          await saveTaskHardwareConfig();
+        } catch (err) {
+          alertUser(err?.message || String(err));
+        }
+      });
       [els.runHttpProxyEl, els.runHttpsProxyEl].forEach(input => {
         input?.addEventListener("input", () => {
           const configured = Boolean(els.runHttpProxyEl?.value.trim() || els.runHttpsProxyEl?.value.trim());
@@ -512,19 +749,25 @@
       fillTaskCreateProxyDefaultFor,
       fillRunProxyDefaultFor,
       isTaskContextEditing,
+      isTaskHardwareEditing,
       isTaskProxyEditing,
       isTaskSupervisionEditing,
       markTaskContextEditing,
+      markTaskHardwareEditing,
       markTaskProxyEditing,
       markTaskSupervisionEditing,
       readAskUserGateControls,
       renderAskUserGateControls,
       renderRunProxyEditor,
       renderTaskContextEditor,
+      renderTaskHardwareEditor,
+      renderTaskSkillsEditor,
       renderTaskProxyEditor,
       renderTaskSupervisionEditor,
       resetEditing,
       saveTaskContextConfig,
+      saveTaskHardwareConfig,
+      saveTaskSkillsConfig,
       saveRunProxyConfig,
       saveTaskProxyConfig,
       saveTaskSupervisionConfig,

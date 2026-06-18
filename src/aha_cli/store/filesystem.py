@@ -10,6 +10,8 @@ from aha_cli.domain.models import (
     make_task_round,
     next_task_id,
     normalize_task_context_management,
+    normalize_task_hardware_debug,
+    normalize_task_skills,
     normalize_task_supervision,
     task_metadata_projection,
     task_prompt,
@@ -413,6 +415,8 @@ def add_task(
     description: str | None = None,
     supervision: dict | None = None,
     context_management: dict | None = None,
+    task_skills: dict | None = None,
+    hardware_debug: dict | None = None,
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -448,6 +452,8 @@ def add_task(
             description=description,
             supervision=supervision,
             context_management=context_management,
+            task_skills=task_skills,
+            hardware_debug=hardware_debug,
         )
         for _ in range(max(0, sub_agents)):
             add_agent_to_task_dict(
@@ -894,6 +900,101 @@ def update_task_context_management_config(
             "task_id": task_id,
             "auto_compact_enabled": task["context_management"].get("auto_compact_enabled"),
             "auto_compact_threshold_percent": task["context_management"].get("auto_compact_threshold_percent"),
+        },
+    )
+    return task
+
+
+def update_task_hardware_debug_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    channels: object = UNSET,
+    enabled: object = UNSET,
+    devices: object = UNSET,
+    operation_skill_path: object = UNSET,
+    permissions: object = UNSET,
+) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        hardware_debug = normalize_task_hardware_debug(task.get("hardware_debug"))
+        if channels is not UNSET:
+            hardware_debug["channels"] = channels
+        elif enabled is not UNSET and not bool(enabled):
+            hardware_debug["channels"] = []
+        elif any(item is not UNSET for item in (enabled, devices, operation_skill_path, permissions)):
+            existing_uart = next(
+                (channel for channel in hardware_debug.get("channels") or [] if isinstance(channel, dict) and channel.get("type") == "uart"),
+                {},
+            )
+            legacy_device = existing_uart.get("settings") if isinstance(existing_uart.get("settings"), dict) else {}
+            if devices is not UNSET:
+                if isinstance(devices, list) and devices:
+                    legacy_device = devices[0]
+                elif isinstance(devices, dict):
+                    legacy_device = devices
+                else:
+                    legacy_device = {}
+            hardware_debug["channels"] = [
+                {
+                    "type": "uart",
+                    "settings": legacy_device,
+                    "operation_skill_path": (
+                        operation_skill_path
+                        if operation_skill_path is not UNSET
+                        else existing_uart.get("operation_skill_path", "")
+                    ),
+                    "permissions": permissions if permissions is not UNSET else existing_uart.get("permissions", {}),
+                }
+            ] if enabled is UNSET or bool(enabled) else []
+        task["hardware_debug"] = normalize_task_hardware_debug(hardware_debug)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    channels = task["hardware_debug"].get("channels") or []
+    append_event(
+        root,
+        run_id,
+        "task_hardware_debug_config_updated",
+        {
+            "task_id": task_id,
+            "channel_count": len(channels),
+            "channel_types": [str(channel.get("type") or "") for channel in channels if isinstance(channel, dict)],
+        },
+    )
+    return task
+
+
+def update_task_skills_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    enabled_paths: object = UNSET,
+) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        task_skills = normalize_task_skills(task.get("task_skills"))
+        if enabled_paths is not UNSET:
+            task_skills["enabled_paths"] = enabled_paths
+        task["task_skills"] = normalize_task_skills(task_skills)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "task_skills_config_updated",
+        {
+            "task_id": task_id,
+            "skill_count": len(task["task_skills"].get("enabled_paths") or []),
         },
     )
     return task

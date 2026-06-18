@@ -17,6 +17,24 @@
     return enabled ? `auto at ${threshold}%` : "auto off";
   }
 
+  function hardwareDebugConfirmLabel(payload) {
+    const policy = payload.hardware_debug && typeof payload.hardware_debug === "object"
+      ? payload.hardware_debug
+      : {};
+    const channels = Array.isArray(policy.channels) ? policy.channels : [];
+    if (!channels.length) return "off";
+    const types = channels.map(channel => String(channel?.type || "").toUpperCase()).filter(Boolean).join(", ");
+    return `${channels.length} channel${channels.length === 1 ? "" : "s"}${types ? ` (${types})` : ""}`;
+  }
+
+  function taskSkillsConfirmLabel(payload) {
+    const policy = payload.task_skills && typeof payload.task_skills === "object"
+      ? payload.task_skills
+      : {};
+    const skills = Array.isArray(policy.enabled_paths) ? policy.enabled_paths.length : 0;
+    return skills ? `${skills} skill${skills === 1 ? "" : "s"}` : "off";
+  }
+
   function createTaskPayload(input = {}) {
     const proxyEnabled = Boolean(input.proxyEnabled);
     const backend = input.backend || "";
@@ -41,6 +59,8 @@
         auto_compact_enabled: contextAutoCompactEnabled,
         auto_compact_threshold_percent: contextThreshold
       },
+      task_skills: input.taskSkills || {},
+      hardware_debug: input.hardwareDebug || {},
       dispatch: input.dispatch !== false,
       model: input.model || null
     };
@@ -68,6 +88,8 @@
       ["Host model", supervision.real_agent_enabled ? `${supervision.host_backend || "stub"} / ${hostModel}` : "-"],
       ["Host proxy", supervision.real_agent_enabled ? hostProxy : "-"],
       ["Context", taskContextConfirmLabel(payload)],
+      ["Skills", taskSkillsConfirmLabel(payload)],
+      ["Hardware", hardwareDebugConfirmLabel(payload)],
       ["Proxy", taskProxyConfirmLabel(payload)]
     ];
   }

@@ -28,6 +28,7 @@ COMMANDS = {
     "send",
     "chat",
     "auto-reply",
+    "hardware-io",
     "commit",
     "commit-check",
     "package",
@@ -242,6 +243,18 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     send_p.add_argument("message", nargs="+")
     send_p.add_argument("--sender", default="main")
     send_p.set_defaults(func=handlers["send"])
+
+    hardware_io_p = sub.add_parser("hardware-io", help="Append a task hardware I/O timeline entry")
+    hardware_io_p.add_argument("run_id")
+    hardware_io_p.add_argument("task_id")
+    hardware_io_p.add_argument("--agent-id", default="main")
+    hardware_io_p.add_argument("--channel", default="hardware")
+    hardware_io_p.add_argument("--endpoint", default="")
+    hardware_io_p.add_argument("--direction", choices=["tx", "rx", "system"], default="system")
+    hardware_io_p.add_argument("--encoding", choices=["text", "base64", "hex"], default="text")
+    hardware_io_p.add_argument("--data", default="")
+    hardware_io_p.add_argument("--json", action="store_true")
+    hardware_io_p.set_defaults(func=handlers["hardware-io"])
 
     chat_p = sub.add_parser("chat")
     chat_p.add_argument("run_id")

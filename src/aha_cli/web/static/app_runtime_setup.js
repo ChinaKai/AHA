@@ -96,6 +96,7 @@ const promptArtifactCache = new Map();
 const finalDetails = new Map();
 const contextDetails = new Map();
 const logStates = new Map();
+const hardwareIoStates = new Map();
 const compactResetStates = new Map();
 const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
 const terminalAgentStatuses = new Set(["completed", "failed", "blocked", "interrupted"]);
@@ -135,6 +136,12 @@ const {
   normalizeTaskContextThreshold,
   taskContextManagementPolicy,
   taskContextSummary,
+  taskSkillsPolicy,
+  taskSkillsSummary,
+  hardwareDebugPermissionKeys,
+  taskHardwareDebugPolicy,
+  taskHardwareDebugSummary,
+  normalizeHardwareDebugPermissions,
   taskSupervisionPayloadFromMode
 } = taskMetadata;
 const bootstrapConfigHelpers = window.AHABootstrapConfig;
@@ -306,6 +313,7 @@ const {
   renderConversationFiltersHtml,
   renderConversationPanelHtml,
   renderFinalPanelHtml,
+  renderHardwareIoPanelHtml,
   renderLogsPanelHtml,
   renderContextPanelHtml
 } = conversationPanelHelpers;
@@ -433,6 +441,7 @@ const {
   ensureConversationLoaded,
   fallbackCurrentRun,
   flushDeferredPanelRender,
+  hardwareIoState,
   initializeEventTailOffset,
   initSessionControl,
   initSettingsDialog,
@@ -445,6 +454,7 @@ const {
   loadAgentsRuntime,
   loadBootstrap,
   loadConversationPage,
+  loadHardwareIoPage,
   loadOlderConversation,
   loadOlderLogs,
   loadRunMaintenance,

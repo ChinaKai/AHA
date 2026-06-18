@@ -29,6 +29,8 @@ def create_task_and_dispatch(
     description: str | None = None,
     supervision: dict[str, object] | None = None,
     context_management: dict[str, object] | None = None,
+    task_skills: dict[str, object] | None = None,
+    hardware_debug: dict[str, object] | None = None,
     dispatch: bool = True,
 ) -> dict:
     task = add_task(
@@ -54,6 +56,8 @@ def create_task_and_dispatch(
         description=description,
         supervision=supervision,
         context_management=context_management,
+        task_skills=task_skills,
+        hardware_debug=hardware_debug,
     )
     policy = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
     if policy.get("mode") == "assisted" and policy.get("real_agent_enabled") and policy.get("host_backend") != "stub":

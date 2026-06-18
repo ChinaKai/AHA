@@ -15,6 +15,7 @@ from aha_cli.services.action_payloads import (
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.commit_policy import commit_message_policy_prompt
+from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.routing import (
     route_to_agent_request,
@@ -32,6 +33,7 @@ from aha_cli.services.subagent_state import (
     task_has_incomplete_sub_agents,
     waiting_for_subagents_message,
 )
+from aha_cli.services.task_skills import task_skills_context_for_prompt
 from aha_cli.services.task_updates import handle_record_task_update_action
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import (
@@ -101,6 +103,8 @@ def task_assignment_prompt(task: dict) -> str:
         preferred_sub_model=task.get("preferred_sub_model") or task.get("preferred_model") or "default",
         sandbox=task.get("preferred_sandbox") or "process default",
         approval=task.get("preferred_approval") or "process default",
+        task_skills_context=task_skills_context_for_prompt(task).rstrip(),
+        hardware_debug_context=hardware_debug_context_for_prompt(task).rstrip(),
         commit_policy=commit_message_policy_prompt(
             str(task.get("id") or "<task-id>"),
             "<agent-id>",

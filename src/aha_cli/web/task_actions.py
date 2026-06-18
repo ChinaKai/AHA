@@ -3,6 +3,7 @@ from __future__ import annotations
 from aha_cli.domain.models import (
     DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT,
     DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
+    TASK_HARDWARE_DEBUG_PERMISSION_KEYS,
     TASK_SUPERVISION_ASK_USER_GATES,
 )
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
@@ -99,6 +100,59 @@ def parse_task_context_management_fields(payload: dict) -> dict[str, object]:
     return update
 
 
+def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
+    update: dict[str, object] = {}
+    if "channels" in payload:
+        channels = payload.get("channels")
+        if not isinstance(channels, (list, dict)):
+            raise ValueError("channels must be a list or object")
+        update["channels"] = channels
+    if "enabled" in payload:
+        update["enabled"] = parse_optional_bool(payload.get("enabled"), "enabled")
+    elif "hardware_debug_enabled" in payload:
+        update["enabled"] = parse_optional_bool(payload.get("hardware_debug_enabled"), "hardware_debug_enabled")
+    if "devices" in payload:
+        devices = payload.get("devices")
+        if not isinstance(devices, (list, dict)):
+            raise ValueError("devices must be a list or object")
+        update["devices"] = devices
+    if "operation_skill_path" in payload:
+        update["operation_skill_path"] = str(payload.get("operation_skill_path") or "")
+    elif "operation_skill" in payload:
+        update["operation_skill_path"] = str(payload.get("operation_skill") or "")
+    if "permissions" in payload:
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, dict):
+            raise ValueError("permissions must be an object")
+        update["permissions"] = {
+            key: parse_optional_bool(permissions.get(key), key)
+            for key in TASK_HARDWARE_DEBUG_PERMISSION_KEYS
+            if key in permissions
+        }
+        for old_key, new_key in {"serial_read": "read", "serial_write": "write"}.items():
+            if old_key in permissions:
+                update["permissions"][new_key] = parse_optional_bool(permissions.get(old_key), old_key)
+    return update
+
+
+def parse_task_skills_fields(payload: dict) -> dict[str, object]:
+    update: dict[str, object] = {}
+    if "enabled_paths" in payload:
+        enabled_paths = payload.get("enabled_paths")
+    elif "skill_paths" in payload:
+        enabled_paths = payload.get("skill_paths")
+    elif "paths" in payload:
+        enabled_paths = payload.get("paths")
+    elif "skills" in payload:
+        enabled_paths = payload.get("skills")
+    else:
+        return update
+    if not isinstance(enabled_paths, (list, str)):
+        raise ValueError("enabled_paths must be a list or newline/comma-separated string")
+    update["enabled_paths"] = enabled_paths
+    return update
+
+
 __all__ = [
     "backend_status",
     "compact_reset_selected_agent",
@@ -115,7 +169,9 @@ __all__ = [
     "message_backend_autostart_config",
     "parse_task_proxy_fields",
     "parse_task_context_management_fields",
+    "parse_task_hardware_debug_fields",
     "parse_task_supervision_fields",
+    "parse_task_skills_fields",
     "prepare_task_main_autostart",
     "realtime_debug_log",
     "record_task_checkpoint",

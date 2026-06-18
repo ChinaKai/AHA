@@ -8,6 +8,7 @@
     const renderTaskProxyEditor = deps.renderTaskProxyEditor || noop;
     const renderTaskSupervisionEditor = deps.renderTaskSupervisionEditor || noop;
     const renderTaskContextEditor = deps.renderTaskContextEditor || noop;
+    const renderTaskHardwareEditor = deps.renderTaskHardwareEditor || noop;
     const renderAgents = deps.renderAgents || noop;
     const renderSelectedAgentInfo = deps.renderSelectedAgentInfo || noop;
     const renderPendingMessages = deps.renderPendingMessages || noop;
@@ -24,6 +25,7 @@
     const isTaskProxyEditing = deps.isTaskProxyEditing || (() => false);
     const isTaskSupervisionEditing = deps.isTaskSupervisionEditing || (() => false);
     const isTaskContextEditing = deps.isTaskContextEditing || (() => false);
+    const isTaskHardwareEditing = deps.isTaskHardwareEditing || (() => false);
     const isAgentsPanelEditing = deps.isAgentsPanelEditing || (() => false);
     const setSummaryText = deps.setSummaryText || noop;
     const setSelectedTitle = deps.setSelectedTitle || noop;
@@ -51,6 +53,7 @@
       if (options.forceTaskProxy || !isTaskProxyEditing()) renderTaskProxyEditor();
       if (options.forceTaskSupervision || !isTaskSupervisionEditing()) renderTaskSupervisionEditor();
       if (options.forceTaskContext || !isTaskContextEditing()) renderTaskContextEditor();
+      if (options.forceTaskHardware || !isTaskHardwareEditing()) renderTaskHardwareEditor();
       if (options.forceAgents || !isAgentsPanelEditing()) {
         renderAgents();
       } else {
@@ -67,7 +70,7 @@
     }
 
     function renderSelectionShell() {
-      renderTaskWorkspace({ forceTaskProxy: true, forceTaskSupervision: true, forceTaskContext: true, forceAgents: true });
+      renderTaskWorkspace({ forceTaskProxy: true, forceTaskSupervision: true, forceTaskContext: true, forceTaskHardware: true, forceAgents: true });
     }
 
     function renderSelectionPanel(options = {}) {

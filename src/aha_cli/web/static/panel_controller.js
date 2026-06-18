@@ -13,8 +13,10 @@
     const renderConversation = deps.renderConversation || (() => "");
     const renderFinalPanelHtml = deps.renderFinalPanelHtml || (() => "");
     const renderLogsPanelHtml = deps.renderLogsPanelHtml || (() => "");
+    const renderHardwareIoPanelHtml = deps.renderHardwareIoPanelHtml || (() => "");
     const renderContextPanelHtml = deps.renderContextPanelHtml || (() => "");
     const logState = deps.logState || (() => ({}));
+    const hardwareIoState = deps.hardwareIoState || (() => ({}));
     const finalDetail = deps.finalDetail || (() => null);
     const contextDetail = deps.contextDetail || (() => null);
     const promptMetricsState = deps.promptMetricsState || (() => ({}));
@@ -88,6 +90,14 @@
         } else if (state.initialized) {
           panelEl.scrollTop = shouldFollow ? panelEl.scrollHeight : previousTop;
         }
+      } else if (tab === "hardware") {
+        const state = hardwareIoState(task.id);
+        const previousTop = options.previousTop ?? panelEl.scrollTop;
+        const shouldFollow = state.autoFollow;
+        panelEl.innerHTML = renderHardwareIoPanelHtml(state);
+        if (state.initialized) {
+          panelEl.scrollTop = shouldFollow ? panelEl.scrollHeight : previousTop;
+        }
       } else {
         const detail = contextDetail(task.id);
         if (!detail) {
@@ -110,6 +120,7 @@
       setActiveTab(tab || "conversation");
       if (activeTab() === "conversation") setConversationAutoFollow(true);
       if (activeTab() === "logs" && selectedTaskId()) logState(selectedTaskId()).autoFollow = true;
+      if (activeTab() === "hardware" && selectedTaskId()) hardwareIoState(selectedTaskId()).autoFollow = true;
       documentRef.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item.dataset.tab === activeTab()));
       syncMobileActionPanel();
       await ensureActiveTabData();

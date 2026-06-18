@@ -17,7 +17,9 @@ from aha_cli.store.filesystem import (
     read_json,
     run_dir,
     status_snapshot,
+    update_task_hardware_debug_config,
     update_task_proxy_config,
+    update_task_skills_config,
     update_task_supervision_config,
 )
 
@@ -237,6 +239,86 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(proxy_env["HTTPS_PROXY"], "http://127.0.0.1:7890")
         self.assertEqual(proxy_env["NO_PROXY"], "localhost,127.0.0.1")
         self.assertEqual(proxy_env["http_proxy"], "http://127.0.0.1:8888")
+
+    def test_chat_prompt_includes_enabled_hardware_debug_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Hardware prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_hardware_debug_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    channels=[
+                        {
+                            "type": "uart",
+                            "settings": {
+                                "id": "dev-board-1",
+                                "port": "/dev/ttyUSB0",
+                                "baudrate": 115200,
+                                "prompt": "Sgs #",
+                            },
+                            "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
+                            "permissions": {"write": True, "reset": True, "flash": False},
+                        },
+                        {
+                            "type": "telnet",
+                            "settings": {
+                                "host": "192.168.1.20",
+                                "port": 23,
+                            },
+                            "operation_skill_path": "/repo/.aha/skills/telnet-console/SKILL.md",
+                            "permissions": {"read": True, "write": False},
+                        },
+                    ],
+                )
+                update_task_skills_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    enabled_paths=["/repo/.aha/skills/board-debug/SKILL.md"],
+                )
+                item = append_message(root, run_id, "main", "use hardware", sender="browser", task_id="task-001", role="main")
+                prompt = chat_prompt(root, run_id, "main", item, "")
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                sticky_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "use hardware again",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                sticky_prompt, sticky_metrics = chat_prompt_with_metrics(root, run_id, "main", sticky_item, "")
+
+        self.assertIn("Task skills context:", prompt)
+        self.assertIn("Hardware debug context:", prompt)
+        self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", prompt)
+        self.assertIn("channel 1: type=uart", prompt)
+        self.assertIn("channel 2: type=telnet", prompt)
+        self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", prompt)
+        self.assertIn("operation skill path: /repo/.aha/skills/telnet-console/SKILL.md", prompt)
+        self.assertIn("port=/dev/ttyUSB0", prompt)
+        self.assertIn("baudrate=115200", prompt)
+        self.assertIn("write=True", prompt)
+        self.assertNotIn("id=dev-board-1", prompt)
+        self.assertNotIn("prompt=Sgs #", prompt)
+        self.assertNotIn("flash=False", prompt)
+        self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("Task skills context:", sticky_prompt)
+        self.assertIn("Hardware debug context:", sticky_prompt)
+        self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", sticky_prompt)
+        self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", sticky_prompt)
+        self.assertIn("port=/dev/ttyUSB0", sticky_prompt)
+        self.assertIn("channel 2: type=telnet", sticky_prompt)
+        self.assertIn("write=True", sticky_prompt)
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

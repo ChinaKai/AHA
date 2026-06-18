@@ -162,7 +162,7 @@
         openTaskCreateDialog();
         return;
       }
-      if (["conversation", "final", "logs", "context"].includes(action)) {
+      if (["conversation", "final", "logs", "hardware", "context"].includes(action)) {
         await deps.activateTab?.(action);
       }
     }
