@@ -340,7 +340,8 @@ const messageFlow = window.AHAMessageFlow.createMessageFlow({
   loadStatus,
   renderPanel,
   setConversationAutoFollow: value => { conversationAutoFollow = Boolean(value); },
-  agentTarget: () => agentTargetEl.value || "main"
+  agentTarget: () => agentTargetEl.value || "main",
+  activeTab: () => activeTab
 });
 const {
   renderPendingMessages,
@@ -654,6 +655,14 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   formatDuration,
   formatLocalTimestamp,
   handleComposerSubmit,
+  handleHardwareRawKey,
+  onComposerInput: () => {
+    // Keep the terminal's live "pending line" preview in sync with the input box as the
+    // user types (line mode only; raw mode sends each key live instead).
+    if (activeTab !== "hardware" || !selectedTaskId) return;
+    if (hardwareIoState(selectedTaskId).rawMode) return;
+    renderPanel();
+  },
   loadBootstrap,
   loadStatus,
   normalizeAgentConfig,
@@ -902,6 +911,89 @@ const runController = window.AHARunController.createRunController({
   webRestartInFlight: () => webRestartInFlight,
   weixinConsoleOpen: () => weixinConsoleController.isOpen()
 });
+// Translate a keydown into the bytes a serial terminal would send. Returns null for keys
+// that should be ignored (modifiers alone, F-keys, unknown Ctrl combos).
+function hardwareRawKeyToBytes(event) {
+  const key = event.key;
+  if (event.ctrlKey) {
+    if (key && key.length === 1) {
+      const lower = key.toLowerCase();
+      if (lower >= "a" && lower <= "z") return String.fromCharCode(lower.charCodeAt(0) - 96);
+      const ctrlPunct = { "@": "\u0000", "[": "\u001b", "\\": "\u001c", "]": "\u001d", "^": "\u001e", "_": "\u001f", " ": "\u0000" };
+      if (key in ctrlPunct) return ctrlPunct[key];
+    }
+    return null;
+  }
+  switch (key) {
+    case "Enter": return "\r";
+    case "Backspace": return "\u007f";
+    case "Tab": return "\t";
+    case "Escape": return "\u001b";
+    case "ArrowUp": return "\u001b[A";
+    case "ArrowDown": return "\u001b[B";
+    case "ArrowRight": return "\u001b[C";
+    case "ArrowLeft": return "\u001b[D";
+    case "Home": return "\u001b[H";
+    case "End": return "\u001b[F";
+    case "Delete": return "\u001b[3~";
+    case "PageUp": return "\u001b[5~";
+    case "PageDown": return "\u001b[6~";
+    default:
+      if (key && key.length === 1) return key; // a printable character
+      return null;
+  }
+}
+
+// Named on-screen keys -> the bytes a serial terminal would send.
+function hardwareNamedKeyBytes(name) {
+  const map = {
+    enter: "\r", tab: "\t", esc: "\u001b", space: " ", backspace: "\u007f",
+    up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D",
+    home: "\u001b[H", end: "\u001b[F", "page-up": "\u001b[5~", "page-down": "\u001b[6~",
+    delete: "\u001b[3~",
+    "ctrl-a": "\u0001", "ctrl-c": "\u0003", "ctrl-d": "\u0004", "ctrl-e": "\u0005",
+    "ctrl-k": "\u000b", "ctrl-l": "\u000c", "ctrl-r": "\u0012", "ctrl-u": "\u0015",
+    "ctrl-w": "\u0017", "ctrl-z": "\u001a"
+  };
+  return map[name] || "";
+}
+
+// Raw-mode keystroke handler bound to the composer textarea. Returns true when it consumed
+// the key (so the composer's own keydown logic is skipped). Sending happens live, byte by
+// byte, exactly like a serial terminal.
+function handleHardwareRawKey(event) {
+  if (!selectedTaskId || activeTab !== "hardware") return false;
+  const st = hardwareIoState(selectedTaskId);
+  if (!st || !st.rawMode || st.readOnly || !st.device) return false;
+  if (event.isComposing || event.keyCode === 229) return false; // mid-IME composition
+  if (event.metaKey || event.altKey) return false;               // leave OS/browser shortcuts alone
+  const bytes = hardwareRawKeyToBytes(event);
+  if (bytes === null) return false;
+  event.preventDefault();
+  void sendHardwareRawBytes(bytes);
+  return true;
+}
+
+async function sendHardwareRawBytes(bytes) {
+  const taskId = selectedTaskId;
+  if (!taskId || !bytes) return;
+  try {
+    await fetchJson(apiUrl(`/api/task/${encodeURIComponent(taskId)}/hardware-send`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(runScopedPayload({ data: bytes }))
+    }, "Failed to send key");
+  } catch (err) {
+    return;
+  }
+  try {
+    await conversationController.loadHardwareIoPage(taskId, true);
+  } catch (err) {
+    return;
+  }
+  if (activeTab === "hardware") renderPanel();
+}
+
 window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   activeTab: () => activeTab,
   activateTab,
@@ -923,6 +1015,53 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   flushDeferredPanelRender,
   hasConversationFilter: key => key in conversationFilters,
   hardwareIoState,
+  hardwareBridgeControl: async action => {
+    // Pause releases the physical port (so an operator can use minicom); resume
+    // re-acquires it. Both target the machine-level bridge for this task's device.
+    if (!selectedTaskId) return;
+    const endpoint = action === "pause" ? "hardware-pause" : "hardware-resume";
+    try {
+      await fetchJson(apiUrl(`/api/task/${encodeURIComponent(selectedTaskId)}/${endpoint}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(runScopedPayload({}))
+      }, "Failed to control hardware bridge");
+    } catch (err) {
+      return;
+    }
+    try {
+      await conversationController.loadHardwareIoPage(selectedTaskId, true);
+    } catch (err) {
+      return;
+    }
+    if (activeTab === "hardware") renderPanel();
+  },
+  hardwareSendKey: key => {
+    // On-screen keys (line-mode quick keys + the raw-mode accessory bar) map a name to the
+    // bytes a terminal would send. The raw bar covers what mobile soft keyboards lack (Esc,
+    // Tab, arrows, Ctrl-combos) so vi / tab-completion work on phones too.
+    if (!selectedTaskId) return;
+    const bytes = hardwareNamedKeyBytes(key);
+    if (!bytes) return;
+    void sendHardwareRawBytes(bytes);
+    // Keep the composer focused so a mobile soft keyboard does not collapse between taps.
+    const input = document.getElementById("message");
+    if (input && typeof input.focus === "function") input.focus({ preventScroll: true });
+  },
+  hardwareToggleRawMode: () => {
+    // Raw mode sends every keystroke live (real minicom-style input): Tab completion, arrows,
+    // Ctrl-combos and vi all work. Capture happens on the persistent composer textarea (NOT
+    // the terminal), so a flood of serial output never steals input focus.
+    if (!selectedTaskId) return;
+    const st = hardwareIoState(selectedTaskId);
+    st.rawMode = !st.rawMode;
+    if (activeTab !== "hardware") return;
+    renderPanel();
+    if (st.rawMode) {
+      const input = document.getElementById("message");
+      if (input && typeof input.focus === "function") input.focus({ preventScroll: true });
+    }
+  },
   initDesktopSidebars: () => uiShell.initDesktopSidebars(),
   initMobileActionPanel: () => uiShell.initMobileActionPanel(),
   initMobileSheets: () => uiShell.initMobileSheets(),
@@ -974,6 +1113,24 @@ window.AHAAppRuntime = Object.freeze({
   start() {
     renderScheduler = window.AHAControllerRegistry.startApp({
       actionInFlight: () => taskActionInFlight || runActionInFlight,
+      pollHardwareStream: async () => {
+        // The device bridge writes a machine-level stream (not the run event bus),
+        // so the live Hardware console refreshes by polling while it is open.
+        if (activeTab !== "hardware" || !selectedTaskId) return;
+        const st = hardwareIoState(selectedTaskId);
+        const before = st.afterOffset;
+        try {
+          await conversationController.loadHardwareIoPage(selectedTaskId, true);
+        } catch (err) {
+          return;
+        }
+        if (activeTab !== "hardware") return;
+        // Only re-render when the stream actually advanced. An idle board (no new output)
+        // must not rebuild the panel — otherwise it would reset the key bar's scroll and
+        // interrupt an in-progress tap/drag every second.
+        if (hardwareIoState(selectedTaskId).afterOffset === before) return;
+        renderPanel();
+      },
       authRequired: () => authController.isRequired(),
       bootstrapError: () => bootstrapError,
       currentRunId: () => currentRunId,

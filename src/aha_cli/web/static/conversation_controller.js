@@ -541,6 +541,9 @@
         const payload = await deps.fetchJson(deps.apiUrl(`/api/task/${encodeURIComponent(taskId)}/hardware-io`, params), {}, "Failed to load hardware I/O");
         stateValue.events = Array.isArray(payload.events) ? payload.events : [];
         stateValue.afterOffset = Number(payload.after_offset || 0);
+        stateValue.bridge = payload.bridge || null;
+        stateValue.device = payload.device || null;
+        stateValue.readOnly = Boolean(payload.read_only);
         stateValue.initialized = true;
         return stateValue;
       } finally {

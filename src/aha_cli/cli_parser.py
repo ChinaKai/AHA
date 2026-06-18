@@ -29,6 +29,7 @@ COMMANDS = {
     "chat",
     "auto-reply",
     "hardware-io",
+    "hardware-bridge",
     "hardware-attach",
     "hardware-send",
     "hardware-arm",
@@ -261,6 +262,14 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_io_p.add_argument("--data", default="")
     hardware_io_p.add_argument("--json", action="store_true")
     hardware_io_p.set_defaults(func=handlers["hardware-io"])
+
+    hardware_bridge_p = sub.add_parser(
+        "hardware-bridge",
+        help="Run the machine-level serial bridge for a device (managed by the AHA runtime; blocks)",
+    )
+    hardware_bridge_p.add_argument("device", help="Serial device path, e.g. /dev/ttyUSB0")
+    hardware_bridge_p.add_argument("--baudrate", type=int, default=115200)
+    hardware_bridge_p.set_defaults(func=handlers["hardware-bridge"])
 
     hardware_attach_p = sub.add_parser(
         "hardware-attach",

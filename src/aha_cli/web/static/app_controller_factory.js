@@ -646,6 +646,8 @@
         return slashCommands.filter(item => item.name.toLowerCase().startsWith(query) || item.insert.toLowerCase().startsWith(query));
       },
       onSubmit: deps.handleComposerSubmit,
+      handleRawKey: deps.handleHardwareRawKey,
+      onInput: deps.onComposerInput,
       onError: err => {
         deps.realtimeDebug?.("composer.error", { error: err?.message || String(err) });
         deps.alert?.(err.message || String(err));

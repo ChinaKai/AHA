@@ -288,6 +288,13 @@ class FrontendStaticTests(unittest.TestCase):
         # Switching to a task without hardware while on the Hardware tab falls back.
         self.assertIn("hardwareTabEnabledFor", app_actions)
         self.assertIn('setActiveTab("conversation")', app_actions)
+        # On the Hardware tab the composer sends serial commands instead of chat.
+        message_flow = (root / "message_flow.js").read_text(encoding="utf-8")
+        self.assertIn("sendHardwareCommand", message_flow)
+        self.assertIn("hardware-send", message_flow)
+        # The terminal must not self-scroll (panel is the single scroller).
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+        self.assertNotIn("max-height: 460px", styles)
 
     def test_hardware_io_timeline_is_wired(self) -> None:
         root = static_root()
@@ -308,6 +315,90 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('tab === "hardware"', panel_controller)
         self.assertIn('handlers.activeTab() === "hardware"', event_bindings)
         self.assertIn(".hardware-io-row", styles)
+        # The bridge Pause/Resume control is wired end to end.
+        self.assertIn("renderHardwareBridgeToolbarHtml", conversation_panel)
+        self.assertIn("data-hardware-bridge-action", conversation_panel)
+        self.assertIn("data-hardware-bridge-action", event_bindings)
+        self.assertIn("hardwareBridgeControl", event_bindings)
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        self.assertIn("hardwareBridgeControl", wiring)
+        self.assertIn("hardware-pause", wiring)
+        self.assertIn("hardware-resume", wiring)
+        # Bridge status renders as a task-style status pill.
+        self.assertIn('class="status hardware-bridge-status', conversation_panel)
+        # Terminal is its own scroller with a pinned toolbar header (toolbar must not scroll).
+        panel_controller = (root / "panel_controller.js").read_text(encoding="utf-8")
+        factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
+        self.assertIn('querySelector(".hardware-terminal")', panel_controller)
+        self.assertIn("wasAtBottom", panel_controller)
+        self.assertIn("overflow: auto", styles[styles.index(".hardware-terminal {"):])
+        self.assertIn(".hardware-bridge-bar", styles)
+        # Serial output is decoded like a terminal (CR/backspace overwrite, ANSI stripped).
+        self.assertIn("decodeTerminalText", conversation_panel)
+        # Interactively-typed commands are not echoed locally (the board echoes them) —
+        # avoids the double display of every command.
+        self.assertIn('rawSource === "web" || rawSource === "interactive"', conversation_panel)
+        # A poll refresh must not wipe an in-progress text selection (copy).
+        self.assertIn("hasSelectionWithin", panel_controller)
+        # Quick keys are wired to a send handler.
+        self.assertIn("data-hardware-key", event_bindings)
+        self.assertIn("hardwareSendKey", event_bindings)
+        # The click handlers must be wired through bindTopLevelEvents (not startApp),
+        # otherwise the buttons silently do nothing.
+        self.assertIn("hardwareSendKey", wiring)
+        self.assertIn("hardwareBridgeControl", wiring)
+        bind_args = wiring[wiring.index("bindTopLevelEvents(domRefs, {"):]
+        self.assertIn("hardwareSendKey", bind_args)
+        self.assertIn("hardwareBridgeControl", bind_args)
+        self.assertIn("\\u0003", wiring)  # Ctrl+C (ETX)
+        self.assertIn(".hardware-key-btn", styles)
+        # Device + status sit together on the left of the bar (status no longer before Pause).
+        self.assertIn("hardware-bridge-identity", conversation_panel)
+        self.assertIn(".hardware-bridge-identity", styles)
+        # Quick keys live in a bottom bar (directly above the composer), not the top toolbar.
+        self.assertIn("renderHardwareBottomBarHtml", conversation_panel)
+        self.assertIn(".hardware-keybar", styles)
+        # One unified key bar: a single raw-keyboard toggle icon pinned left + the merged key
+        # row (Enter/Ctrl-C plus Esc/Tab/arrows/Ctrl-combos), scrollable.
+        # The raw per-keystroke toggle is hidden for now — input is always line mode, so the
+        # toggle button must not be rendered (its dormant handler/CSS may remain).
+        self.assertNotIn("data-hardware-rawmode-toggle", conversation_panel)
+        self.assertIn('data-hardware-key="${key}"', conversation_panel)  # keys are templated
+        for key in ("enter", "ctrl-c", "esc", "tab", "up", "down", "left", "right", "ctrl-d", "ctrl-z"):
+            self.assertIn(f'["{key}"', conversation_panel)
+        # The key row scrolls horizontally so keys never overflow the screen.
+        self.assertIn(".hardware-keybar-keys", styles)
+        keybar_css = styles[styles.index(".hardware-keybar-keys {"):]
+        self.assertIn("overflow-x: auto", keybar_css)
+        # A poll re-render must preserve the key row's horizontal scroll (so a user who
+        # scrolled to the right-hand keys can still tap them) and must not fire when idle.
+        self.assertIn("keybarScrollLeft", panel_controller)
+        self.assertIn("afterOffset === before", wiring)
+        # Line mode mirrors the composer text into the terminal as a live "pending line", kept
+        # in sync via the composer input event; Send is already Enter (sends line + CR).
+        self.assertIn("hio-pending", conversation_panel)
+        self.assertIn(".hio-pending", styles)
+        self.assertIn("pendingInput", panel_controller)
+        self.assertIn("onComposerInput", wiring)
+        self.assertIn("onInput: deps.onComposerInput", factory)
+        composer_js = (root / "message_composer.js").read_text(encoding="utf-8")
+        self.assertIn("options.onInput", composer_js)
+        # The toggle handler is wired through bindTopLevelEvents -> bindPanelEvents.
+        self.assertIn("hardwareToggleRawMode", bind_args)
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        for handler in ("hardwareSendKey", "hardwareBridgeControl", "hardwareToggleRawMode"):
+            self.assertIn(f"{handler}: deps.{handler}", registry)
+        # Raw keystrokes are captured on the persistent composer textarea (flood-proof input),
+        # not on the re-rendering terminal: the composer consults handleRawKey first.
+        self.assertIn("handleHardwareRawKey", wiring)
+        self.assertIn("handleRawKey: deps.handleHardwareRawKey", factory)
+        message_composer = (root / "message_composer.js").read_text(encoding="utf-8")
+        self.assertIn("options.handleRawKey", message_composer)
+        # Byte table covers the new keys (Backspace = DEL, arrows = CSI).
+        self.assertIn("hardwareRawKeyToBytes", wiring)
+        self.assertIn("hardwareNamedKeyBytes", wiring)
+        self.assertIn("\\u007f", wiring)  # Backspace (DEL)
+        self.assertIn("\\u001b[A", wiring)  # ArrowUp (CSI)
 
     def test_task_memo_dialog_uses_persistent_api(self) -> None:
         root = static_root()

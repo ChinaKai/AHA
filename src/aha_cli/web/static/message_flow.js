@@ -33,6 +33,30 @@
     const renderPanel = deps.renderPanel || (() => {});
     const setConversationAutoFollow = deps.setConversationAutoFollow || (() => {});
     const agentTarget = deps.agentTarget || (() => "main");
+    const activeTab = deps.activeTab || (() => "conversation");
+
+    function hardwareChannelType(task) {
+      const channels = task?.hardware_debug?.channels;
+      const first = Array.isArray(channels) && channels.length ? channels[0] : null;
+      return String(first?.type || "uart").toLowerCase();
+    }
+
+    async function sendHardwareCommand(task, message) {
+      const channel = hardwareChannelType(task);
+      try {
+        await fetchJson(apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-send`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // Append CR so the board executes the line, mirroring how a serial console submits.
+          body: JSON.stringify(runScopedPayload({ channel, data: `${message}\r` }))
+        }, "Failed to send hardware command");
+      } catch (err) {
+        showSendNotice(err?.message || String(err), task, "main", "error");
+        throw err;
+      }
+      await catchUpRealtimeEvents();
+      renderPanel();
+    }
 
     function t(key, fallback = "") {
       return window.AHAI18n?.t?.(key, fallback) || fallback;
@@ -287,6 +311,11 @@
     }
 
     async function handleComposerSubmit({ task, message }) {
+      // On the Hardware tab the composer is a serial console: send the line to the
+      // attached session instead of routing it to the backend agent.
+      if (activeTab() === "hardware") {
+        return await sendHardwareCommand(task, message);
+      }
       const agentId = agentTarget() || "main";
       const isAha = isAhaCommand(message);
       realtimeDebug("composer.submit", {

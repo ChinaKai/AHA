@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import select
 import threading
@@ -11,6 +12,7 @@ import tempfile
 
 from aha_cli.cli import main as cli_main
 from aha_cli.services.hardware_io import hardware_io_path
+from aha_cli.services.hardware_bridge import device_bridge_state_path, device_control_path
 from aha_cli.services.hardware_session import (
     ArmedRuleEngine,
     FdTransport,
@@ -20,7 +22,7 @@ from aha_cli.services.hardware_session import (
     hardware_session_control_path,
     read_session_state,
 )
-from aha_cli.store.filesystem import create_plan
+from aha_cli.store.filesystem import create_plan, update_task_hardware_debug_config
 from aha_cli.store.io import iter_jsonl_from
 
 
@@ -193,6 +195,22 @@ class HardwareSessionDaemonTests(unittest.TestCase):
             run_id = self._bootstrap(root)
             task_id = "task-001"
             home = str(root / ".aha")
+            device = str(root / "pty-uart")
+
+            # The CLI helpers now drive the machine-level device bridge, so the device
+            # is resolved from the task's UART channel config.
+            update_task_hardware_debug_config(
+                root, run_id, task_id,
+                channels=[{"type": "uart", "settings": {"port": device, "baudrate": 115200}}],
+            )
+            # Pre-seed a live-looking bridge so ensure_bridge sees an owner (this test
+            # process) and does not spawn a real bridge subprocess.
+            state_path = device_bridge_state_path(root, device)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps({"device": device, "pid": os.getpid(), "status": "running"}),
+                encoding="utf-8",
+            )
 
             self.assertEqual(
                 cli_main(["--home", home, "hardware-arm", run_id, task_id, "--channel", "uart",
@@ -209,7 +227,7 @@ class HardwareSessionDaemonTests(unittest.TestCase):
                 0,
             )
 
-            rows, _ = iter_jsonl_from(hardware_session_control_path(root, run_id, task_id, "uart"), 0)
+            rows, _ = iter_jsonl_from(device_control_path(root, device), 0)
             cmds = [row["cmd"] for row in rows]
             self.assertEqual(cmds, ["arm", "send", "stop"])
             arm = rows[0]

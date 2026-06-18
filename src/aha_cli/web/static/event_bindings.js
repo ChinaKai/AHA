@@ -69,6 +69,12 @@
     const panelEl = elements.panelEl;
     const documentRef = elements.documentRef || document;
     const windowRef = elements.windowRef || window;
+    // Tapping an on-screen hardware key must not blur the composer (or a mobile soft
+    // keyboard would collapse), so swallow the focus-stealing pointerdown on those buttons.
+    panelEl?.addEventListener("pointerdown", event => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("[data-hardware-key]")) event.preventDefault();
+    });
     panelEl?.addEventListener("scroll", () => {
       handlers.positionPromptMetricsPopover();
       if (handlers.activeTab() === "conversation") {
@@ -111,6 +117,24 @@
       if (firstTaskButton) {
         event.preventDefault();
         handlers.openTaskCreateDialog();
+        return;
+      }
+      const bridgeToggle = target?.closest("[data-hardware-bridge-action]");
+      if (bridgeToggle) {
+        event.preventDefault();
+        handlers.hardwareBridgeControl?.(bridgeToggle.getAttribute("data-hardware-bridge-action"));
+        return;
+      }
+      const hardwareKey = target?.closest("[data-hardware-key]");
+      if (hardwareKey) {
+        event.preventDefault();
+        handlers.hardwareSendKey?.(hardwareKey.getAttribute("data-hardware-key"));
+        return;
+      }
+      const rawModeToggle = target?.closest("[data-hardware-rawmode-toggle]");
+      if (rawModeToggle) {
+        event.preventDefault();
+        handlers.hardwareToggleRawMode?.();
         return;
       }
       const addConfigRow = target?.closest("[data-bootstrap-add-row]");

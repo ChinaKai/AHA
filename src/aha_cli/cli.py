@@ -20,11 +20,12 @@ from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
 from aha_cli.services.hardware_io import append_hardware_io_record
-from aha_cli.services.hardware_session import (
-    HardwareSessionDaemon,
-    append_session_control,
-    open_uart_transport,
-    read_session_state,
+from aha_cli.services.hardware_bridge import (
+    append_bridge_control,
+    bridge_status,
+    device_stream_page,
+    ensure_bridge,
+    task_devices,
 )
 from aha_cli.services.messages import format_event
 from aha_cli.services.onebin import build_onebin
@@ -574,31 +575,11 @@ def cmd_hardware_io(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_hardware_attach(args: argparse.Namespace) -> int:
+def cmd_hardware_bridge(args: argparse.Namespace) -> int:
+    from aha_cli.services.hardware_bridge import DeviceBridgeDaemon
+
     root = command_aha_home(args)
-    run_id = resolve_run_id(root, args.run_id)
-    require_plan(root, run_id)
-    device = str(args.device or "").strip()
-    if not device:
-        print("hardware-attach requires --device (e.g. /dev/ttyUSB0)", file=sys.stderr)
-        return 2
-    try:
-        transport = open_uart_transport(device, args.baudrate)
-    except OSError as exc:
-        print(f"Failed to open {device}: {exc}", file=sys.stderr)
-        return 1
-    endpoint = f"{device}@{args.baudrate}"
-    daemon = HardwareSessionDaemon(
-        root,
-        run_id,
-        args.task_id,
-        args.channel,
-        transport,
-        endpoint=endpoint,
-        agent_id=args.agent_id,
-        idle_timeout=args.idle_timeout,
-    )
-    print(f"Attached to {endpoint} on channel {args.channel}. Ctrl-C or `aha hardware-stop` to detach.")
+    daemon = DeviceBridgeDaemon(root, args.device, args.baudrate)
     try:
         daemon.run()
     except KeyboardInterrupt:
@@ -606,12 +587,80 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
     return 0
 
 
+def _bridge_target(root, run_id: str, task_id: str) -> tuple[str | None, int]:
+    """Resolve the (device, baudrate) a task's UART channel points at.
+
+    The CLI helpers drive the machine-level device bridge, so the device is taken
+    from the task's hardware-channel config rather than re-supplied per command.
+    """
+
+    from aha_cli.store.snapshots import task_lookup
+
+    try:
+        _plan, task, _run = task_lookup(root, run_id, task_id)
+    except Exception:
+        return None, 115200
+    devices = task_devices(task)
+    return devices[0] if devices else (None, 115200)
+
+
+def _tail_device_stream(root, device: str) -> None:
+    """Print the device bridge's RX/TX stream to stdout until interrupted."""
+
+    import time
+
+    after: int | None = None
+    while True:
+        page = device_stream_page(root, device, after=after, limit=1000)
+        after = page.get("after_offset", after)
+        for event in page.get("events") or []:
+            direction = str(event.get("direction") or "system")
+            data = str(event.get("data") or "")
+            if direction == "rx":
+                sys.stdout.write(data)
+            elif direction == "tx":
+                sys.stdout.write(data)
+            else:
+                sys.stdout.write(f"\n‹{direction} {event.get('source', '')}› {data}\n")
+        sys.stdout.flush()
+        time.sleep(0.2)
+
+
+def cmd_hardware_attach(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    device = str(args.device or "").strip()
+    baudrate = int(args.baudrate)
+    if not device:
+        device, baudrate = _bridge_target(root, run_id, args.task_id)
+    if not device:
+        print("hardware-attach requires --device (e.g. /dev/ttyUSB0) or a UART channel on the task", file=sys.stderr)
+        return 2
+    status = ensure_bridge(root, device, baudrate)
+    print(
+        f"Bridge owns {device}@{baudrate} (status={status.get('status')}). "
+        "Streaming RX; Ctrl-C to stop watching (the bridge keeps holding the port). "
+        "Use `aha hardware-stop` to release it."
+    )
+    try:
+        _tail_device_stream(root, device)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_hardware_send(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    append_session_control(root, run_id, args.task_id, args.channel, {"cmd": "send", "data": args.data})
-    print(f"Queued send on {args.channel}: {args.data!r}")
+    device, baudrate = _bridge_target(root, run_id, args.task_id)
+    if not device:
+        print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
+        return 2
+    ensure_bridge(root, device, baudrate)
+    append_bridge_control(root, device, {"cmd": "send", "data": args.data, "source": "interactive"})
+    print(f"Queued send on {device}: {args.data!r}")
     return 0
 
 
@@ -619,6 +668,11 @@ def cmd_hardware_arm(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
+    device, baudrate = _bridge_target(root, run_id, args.task_id)
+    if not device:
+        print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
+        return 2
+    ensure_bridge(root, device, baudrate)
     command = {
         "cmd": "arm",
         "id": args.id,
@@ -631,8 +685,8 @@ def cmd_hardware_arm(args: argparse.Namespace) -> int:
         "interval_seconds": args.interval,
         "duration_seconds": args.duration,
     }
-    record = append_session_control(root, run_id, args.task_id, args.channel, command)
-    print(f"Queued arm on {args.channel}: {json.dumps(record, ensure_ascii=False)}")
+    record = append_bridge_control(root, device, command)
+    print(f"Queued arm on {device}: {json.dumps(record, ensure_ascii=False)}")
     return 0
 
 
@@ -640,8 +694,12 @@ def cmd_hardware_disarm(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    append_session_control(root, run_id, args.task_id, args.channel, {"cmd": "disarm", "id": args.id})
-    print(f"Queued disarm on {args.channel}: rule {args.id}")
+    device, _baudrate = _bridge_target(root, run_id, args.task_id)
+    if not device:
+        print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
+        return 2
+    append_bridge_control(root, device, {"cmd": "disarm", "id": args.id})
+    print(f"Queued disarm on {device}: rule {args.id}")
     return 0
 
 
@@ -649,11 +707,12 @@ def cmd_hardware_rules(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    state = read_session_state(root, run_id, args.task_id, args.channel) or {"status": "detached", "rules": []}
+    device, _baudrate = _bridge_target(root, run_id, args.task_id)
+    state = bridge_status(root, device) if device else {"status": "stopped", "rules": []}
     if args.json:
         print(json.dumps(state, ensure_ascii=False))
         return 0
-    print(f"channel={args.channel} status={state.get('status')} endpoint={state.get('endpoint', '')}")
+    print(f"device={device} status={state.get('status')} paused={state.get('paused', False)}")
     rules = state.get("rules") or []
     if not rules:
         print("(no armed rules)")
@@ -670,8 +729,12 @@ def cmd_hardware_stop(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    append_session_control(root, run_id, args.task_id, args.channel, {"cmd": "stop"})
-    print(f"Queued stop on {args.channel}.")
+    device, _baudrate = _bridge_target(root, run_id, args.task_id)
+    if not device:
+        print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
+        return 2
+    append_bridge_control(root, device, {"cmd": "stop"})
+    print(f"Queued stop on {device} (bridge will release the port).")
     return 0
 
 
@@ -1083,6 +1146,7 @@ def command_handlers() -> dict[str, object]:
         "watch": cmd_watch,
         "send": cmd_send,
         "hardware-io": cmd_hardware_io,
+        "hardware-bridge": cmd_hardware_bridge,
         "hardware-attach": cmd_hardware_attach,
         "hardware-send": cmd_hardware_send,
         "hardware-arm": cmd_hardware_arm,

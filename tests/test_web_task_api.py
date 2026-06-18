@@ -288,11 +288,77 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["record"]["channel"], "uart")
         self.assertEqual(body["record"]["direction"], "tx")
         self.assertEqual(body["record"]["data"], "reset\\r")
-        self.assertEqual(page_body["events"][0]["endpoint"], "/dev/ttyUSB0@115200")
+        # GET now serves the device-level stream; this task has no device configured.
+        self.assertIsNone(page_body["device"])
+        self.assertEqual(page_body["events"], [])
         self.assertEqual(hardware_rows[0]["agent_id"], "main")
         hardware_events = [event for event in events if event["type"] == "hardware_io"]
         self.assertEqual(hardware_events[-1]["data"]["task_id"], "task-001")
         self.assertEqual(hardware_events[-1]["data"]["offset"], body["record"]["offset"])
+
+    def test_hardware_console_uses_device_bridge(self) -> None:
+        import subprocess
+
+        from aha_cli.services.hardware_bridge import device_bridge_state_path, device_control_path
+        from aha_cli.store.filesystem import complete_task, update_task_hardware_debug_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device = "/dev/fake-bridge-test"
+            sleeper = subprocess.Popen(["sleep", "30"])
+            try:
+                with mock.patch("pathlib.Path.cwd", return_value=root):
+                    self.run_cli("init", "--portable", "--backend", "codex")
+                    code, plan_output = self.run_cli("plan", "Bridge console", "--agents", "1")
+                    self.assertEqual(code, 0)
+                    run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                    update_task_hardware_debug_config(
+                        root, run_id, "task-001",
+                        channels=[{"type": "uart", "settings": {"port": device, "baudrate": 115200}}],
+                    )
+                    # Pretend a live bridge already owns the device (so the route reuses it,
+                    # never spawning a real serial daemon during the test).
+                    state_path = device_bridge_state_path(root, device)
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(json.dumps({"device": device, "pid": sleeper.pid, "status": "running"}), encoding="utf-8")
+
+                    stream = json_response_body(asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/hardware-io")))
+                    send = json_response_body(asyncio.run(fetch_ui_response(
+                        root, run_id, "/api/task/task-001/hardware-send",
+                        method="POST", payload={"data": "ps\\r"},
+                    )))
+                    pause = json_response_body(asyncio.run(fetch_ui_response(
+                        root, run_id, "/api/task/task-001/hardware-pause", method="POST", payload={},
+                    )))
+                    resume = json_response_body(asyncio.run(fetch_ui_response(
+                        root, run_id, "/api/task/task-001/hardware-resume", method="POST", payload={},
+                    )))
+                    control_rows, _ = iter_jsonl_from(device_control_path(root, device), 0)
+
+                    # Terminal task -> read-only console, sends rejected.
+                    complete_task(root, run_id, "task-001")
+                    session = json_response_body(asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/hardware-session")))
+                    blocked = asyncio.run(fetch_ui_response(
+                        root, run_id, "/api/task/task-001/hardware-send",
+                        method="POST", payload={"data": "x\\r"},
+                    ))
+            finally:
+                sleeper.terminate()
+
+        self.assertEqual(stream["device"], device)
+        self.assertTrue(stream["bridge"]["alive"])
+        self.assertFalse(stream["read_only"])
+        self.assertTrue(send["ok"])
+        self.assertTrue(pause["ok"])
+        self.assertEqual(pause["command"], "pause")
+        self.assertTrue(resume["ok"])
+        self.assertEqual(resume["command"], "resume")
+        cmds = [row["cmd"] for row in control_rows]
+        self.assertEqual(cmds, ["send", "pause", "resume"])
+        send_row = control_rows[0]
+        self.assertEqual(send_row["data"], "ps\\r")
+        self.assertTrue(session["read_only"])
+        self.assertIn(b"409", blocked.split(b"\r\n", 1)[0])
 
     def test_task_memo_api_crud_and_task_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

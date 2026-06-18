@@ -1523,9 +1523,115 @@ body.auth-required .login-view:not(.hidden) {
   font-size: 12px;
 }
 .hardware-io-view {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 8px;
+}
+.hardware-bridge-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+.hardware-bridge-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.hardware-bridge-device {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-strong);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+.hardware-bridge-controls {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  padding: 8px;
+  flex: 0 0 auto;
+}
+.hardware-keybar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0; /* allow the scrollable key row to shrink instead of widening the panel */
+}
+/* The raw-keyboard toggle is a single icon pinned on the left; it never scrolls away. */
+.hardware-rawmode-toggle {
+  flex: 0 0 auto;
+  min-height: 26px;
+  min-width: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+.hardware-rawmode-toggle.hardware-rawmode-on {
+  border-color: var(--color-primary, #2563eb);
+  background: var(--color-primary, #2563eb);
+  color: #fff;
+}
+/* The merged key row takes the remaining width and scrolls sideways on overflow, so the keys
+   never push past the screen — only this strip moves, not the page. */
+.hardware-keybar-keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.hardware-keybar-keys .hardware-key-btn {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 0 8px;
+  justify-content: center;
+}
+.hardware-key-btn,
+.hardware-bridge-toggle {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+.hardware-key-btn {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--color-text-muted);
+}
+.hardware-key-btn:hover,
+.hardware-key-btn:focus-visible,
+.hardware-bridge-toggle:hover,
+.hardware-bridge-toggle:focus-visible {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text-strong);
+}
+.hardware-terminal-empty {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .hardware-io-row {
   display: grid;
@@ -1562,19 +1668,11 @@ body.auth-required .login-view:not(.hidden) {
   font-size: 12px;
   line-height: 1.45;
 }
-.hardware-state-chip {
-  justify-self: start;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--color-warning-soft, #fde68a);
-  color: var(--color-text-strong);
-  font-size: 11px;
-  font-weight: 600;
-}
 .hardware-terminal {
-  margin: 0;
-  max-height: 460px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
@@ -1587,6 +1685,11 @@ body.auth-required .login-view:not(.hidden) {
   word-break: break-word;
 }
 .hardware-terminal .hio-rx { color: #d7dde8; }
+/* The live preview of the not-yet-sent composer line, shown right at the prompt. */
+.hardware-terminal .hio-pending {
+  color: #7fd1ff;
+  border-bottom: 1px solid rgba(127, 209, 255, 0.5);
+}
 .hardware-terminal .hio-tx {
   color: #fbbf24;
   font-weight: 600;

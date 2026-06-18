@@ -126,9 +126,13 @@
         syncInputHeight();
         syncMobileAction();
         renderCommandMenu();
+        options.onInput?.();
       });
       elements.messageEl?.addEventListener("focus", renderCommandMenu);
       elements.messageEl?.addEventListener("keydown", event => {
+        // Raw hardware-keyboard mode consumes the keystroke (sends it live to the serial
+        // port) before any line-composer behaviour runs.
+        if (options.handleRawKey?.(event)) return;
         if (event.isComposing || event.keyCode === 229) return;
         const commands = matchingCommands();
         const plainEnter = event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;

@@ -293,6 +293,9 @@
       syncBootstrapModelOptions: deps.syncBootstrapModelOptions,
       syncBootstrapProxyDefaultsForInput: deps.syncBootstrapProxyDefaultsForInput,
       openTaskCreateDialog: deps.openTaskCreateDialog,
+      hardwareBridgeControl: deps.hardwareBridgeControl,
+      hardwareSendKey: deps.hardwareSendKey,
+      hardwareToggleRawMode: deps.hardwareToggleRawMode,
       addBootstrapConfigRow: deps.addBootstrapConfigRow,
       removeBootstrapConfigRow: deps.removeBootstrapConfigRow,
       copyTimelineMessage: deps.copyTimelineMessage,
@@ -397,6 +400,7 @@
         deps.renderActiveTurn?.();
       }
     }, 1000);
+    setInterval(() => { deps.pollHardwareStream?.(); }, 1000);
 
     return renderScheduler;
   }

@@ -6,7 +6,44 @@ from urllib.parse import unquote
 from aha_cli.backends.registry import agent_backend_names
 from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
-from aha_cli.services.hardware_io import append_hardware_io_record, hardware_io_page
+from aha_cli.services.hardware_io import append_hardware_io_record
+from aha_cli.services.hardware_bridge import (
+    append_bridge_control,
+    bridge_status,
+    device_stream_page,
+    ensure_bridge,
+    task_devices,
+)
+
+_TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+
+
+def _resolve_task_device(task: dict) -> tuple[str | None, int]:
+    devices = task_devices(task)
+    return (devices[0] if devices else (None, 115200))
+
+
+def _task_is_terminal(task: dict) -> bool:
+    return bool(task.get("deleted_at")) or str(task.get("status")) in _TERMINAL_TASK_STATUSES
+
+
+def _hardware_stream_payload(root: Path, run_id: str, task_id: str, *, after: int | None, limit: int) -> dict:
+    task = task_snapshot(root, run_id, task_id)["task"]
+    device, baudrate = _resolve_task_device(task)
+    read_only = _task_is_terminal(task)
+    if not device:
+        return {"events": [], "after_offset": after or 0, "has_more": False, "device": None, "read_only": read_only, "bridge": None}
+    # Opening the live console on an active task lazily brings the device bridge up.
+    if not read_only:
+        try:
+            ensure_bridge(root, device, baudrate)
+        except Exception:
+            pass
+    page = device_stream_page(root, device, after=after, limit=limit)
+    page["device"] = device
+    page["read_only"] = read_only
+    page["bridge"] = bridge_status(root, device)
+    return page
 from aha_cli.services.proxy import backend_proxy_config
 from aha_cli.services.steward import apply_steward_decision, steward_decision_snapshot
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -127,16 +164,21 @@ def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str,
     if detail_name == "hardware-io":
         limit = int(query.get("limit", ["500"])[0] or "500")
         after_values = query.get("after_offset", []) or query.get("after", [])
-        before_values = query.get("before_offset", []) or query.get("before", [])
         try:
             after = int(after_values[0]) if after_values and after_values[0] else None
         except ValueError:
             after = None
-        try:
-            before = int(before_values[0]) if before_values and before_values[0] else None
-        except ValueError:
-            before = None
-        return hardware_io_page(root, run_id, task_id, limit=limit, after=after, before=before)
+        return _hardware_stream_payload(root, run_id, task_id, after=after, limit=limit)
+    if detail_name == "hardware-session":
+        task = task_snapshot(root, run_id, task_id)["task"]
+        device, _baudrate = _resolve_task_device(task)
+        status = bridge_status(root, device) if device else None
+        return {
+            "device": device,
+            "bridge": status,
+            "read_only": _task_is_terminal(task),
+            "attached": bool(status and status.get("alive") and not status.get("paused")),
+        }
     if detail_name == "final":
         return task_final_view_snapshot(root, run_id, task_id)
     if detail_name == "context":
@@ -195,6 +237,30 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
         elif action == "hardware-io":
             result = append_hardware_io_record(root, run_id, task_id, parse_json_body(body))
             return route_result({"ok": True, **result})
+        elif action == "hardware-send":
+            payload = parse_json_body(body)
+            data = str(payload.get("data") or "")
+            if not data:
+                return route_result({"ok": False, "error": "data is required"}, "400 Bad Request")
+            task = task_snapshot(root, run_id, task_id)["task"]
+            device, baudrate = _resolve_task_device(task)
+            if not device:
+                return route_result({"ok": False, "error": "Task has no UART device configured."}, "400 Bad Request")
+            if _task_is_terminal(task):
+                return route_result({"ok": False, "error": "Task is terminal; hardware console is read-only."}, "409 Conflict")
+            status = ensure_bridge(root, device, baudrate)
+            if status.get("paused"):
+                return route_result({"ok": False, "error": "Bridge is paused; resume it to send.", "bridge": status}, "409 Conflict")
+            record = append_bridge_control(root, device, {"cmd": "send", "data": data, "source": "web"})
+            return route_result({"ok": True, "device": device, "record": record})
+        elif action in {"hardware-pause", "hardware-resume"}:
+            task = task_snapshot(root, run_id, task_id)["task"]
+            device, _baudrate = _resolve_task_device(task)
+            if not device:
+                return route_result({"ok": False, "error": "Task has no UART device configured."}, "400 Bad Request")
+            cmd = "pause" if action == "hardware-pause" else "resume"
+            append_bridge_control(root, device, {"cmd": cmd})
+            return route_result({"ok": True, "device": device, "command": cmd})
         elif action == "supervision":
             task = update_task_supervision_config(root, run_id, task_id, **parse_task_supervision_fields(parse_json_body(body)))
         elif action == "session/compact-reset":
