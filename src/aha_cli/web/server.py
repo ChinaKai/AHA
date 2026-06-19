@@ -28,6 +28,7 @@ from aha_cli.web.auth import (
 )
 from aha_cli.web.http_utils import http_response, json_response, read_http_request, static_response
 from aha_cli.web.run_api import ApiRunNotFound, require_api_run_id, workspace_options
+from aha_cli.web.knowledge_routes import knowledge_route_response
 from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
 from aha_cli.web.status import recover_stale_running_agent, recover_stale_running_agents, web_status_snapshot
@@ -138,6 +139,8 @@ async def handle_ui_client(
             )
         else:
             response = handle_run_workspace_route(root, run_id, method, path, query, headers, body)
+            if response is None:
+                response = knowledge_route_response(root, method, path, query, body, headers)
             if response is None:
                 response = game_route_response(root, run_id, method, path)
             if response is None:

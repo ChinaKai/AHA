@@ -85,7 +85,7 @@ def task_has_active_followup(task: dict) -> bool:
     )
 
 
-def task_assignment_prompt(task: dict) -> str:
+def task_assignment_prompt(task: dict, knowledge_context: str = "") -> str:
     collaboration_mode = str(task.get("collaboration_mode") or "auto")
     workflow_template = str(task.get("workflow_template") or "auto")
     return render_prompt_template(
@@ -93,6 +93,7 @@ def task_assignment_prompt(task: dict) -> str:
         task_title=task.get("title", ""),
         task_description=task.get("description", ""),
         workspace_path=task.get("workspace_path") or "(not set)",
+        knowledge_context=(knowledge_context or "").rstrip(),
         collaboration_mode=collaboration_mode,
         collaboration_guidance=COLLABORATION_GUIDANCE.get(collaboration_mode, COLLABORATION_GUIDANCE["auto"]),
         workflow_template=workflow_template,
@@ -115,11 +116,14 @@ def task_assignment_prompt(task: dict) -> str:
 
 
 def dispatch_task_to_main(root: Path, run_id: str, task: dict) -> dict:
+    # Lazy import avoids a cycle (knowledge_retrieval -> store) at module load.
+    from aha_cli.services.knowledge_retrieval import knowledge_context_for_task
+
     payload = append_message(
         root,
         run_id,
         "main",
-        task_assignment_prompt(task),
+        task_assignment_prompt(task, knowledge_context_for_task(root, run_id, task)),
         sender="system",
         task_id=task["id"],
         role="main",

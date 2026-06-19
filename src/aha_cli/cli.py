@@ -14,7 +14,7 @@ from aha_cli.backends.claude import claude_runner_command
 from aha_cli.backends.codex import codex_runner_command
 from aha_cli.backends.registry import agent_backend_or_default
 from aha_cli.cli_parser import MAX_WATCH_EVENTS_LIMIT, build_parser as build_cli_parser, normalize_run_subcommand, with_default_command
-from aha_cli.domain.models import default_config
+from aha_cli.domain.models import default_config, utc_now
 from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
 from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
@@ -87,6 +87,25 @@ from aha_cli.store.filesystem import (
     update_task_proxy_config,
     write_json,
 )
+from aha_cli.services.knowledge_git import sync as knowledge_sync
+from aha_cli.store.knowledge import (
+    approve_candidate as knowledge_approve_candidate,
+    entry_exists as knowledge_entry_exists,
+    entry_path_for as knowledge_entry_path_for,
+    find_entry as knowledge_find_entry,
+    future_iso as knowledge_future_iso,
+    init_knowledge_base,
+    iter_all_entries as knowledge_iter_all_entries,
+    knowledge_status,
+    list_pending as knowledge_list_pending,
+    list_stale_entries as knowledge_list_stale,
+    read_entry as knowledge_read_entry,
+    remove_pending as knowledge_remove_pending,
+    search_entries as knowledge_search_entries,
+    slugify as knowledge_slugify,
+    write_entry as knowledge_write_entry,
+)
+from aha_cli.services.knowledge_git import auto_commit_after_change as knowledge_auto_commit
 from aha_cli.web.server import request_task_finalization_with_backend, run_ui_server
 from aha_cli.websocket.server import run_ws_server
 
@@ -513,6 +532,256 @@ def cmd_workspace(args: argparse.Namespace) -> int:
         for workspace in workspaces:
             print(f"{workspace['id']} {workspace.get('name') or '-'} {workspace['path']}")
     return 0
+
+
+def cmd_kb(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    cfg = load_config(root)
+    if args.kb_cmd == "init":
+        result = init_knowledge_base(root, cfg)
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            verb = "Created" if result["created"] else "Verified"
+            print(f"{verb} knowledge base at {result['path']} (schema v{result['schema_version']})")
+        return 0
+    if args.kb_cmd == "status":
+        status = knowledge_status(root, cfg)
+        if getattr(args, "json", False):
+            print(json.dumps(status, indent=2, ensure_ascii=False))
+        else:
+            print(format_knowledge_status(status), end="")
+        return 0
+    if args.kb_cmd == "pending":
+        pending = knowledge_list_pending(root, cfg)
+        if getattr(args, "json", False):
+            print(json.dumps(pending, indent=2, ensure_ascii=False))
+        else:
+            if not pending:
+                print("No pending candidates")
+            for cand in pending:
+                meta = cand.get("meta", {})
+                print(
+                    f"  {cand.get('id')}  [{cand.get('scope')}/{cand.get('kind')}] "
+                    f"{cand.get('title')}  (project={cand.get('project_key') or '-'}, "
+                    f"confidence={meta.get('confidence', '-')})"
+                )
+            print(f"total pending: {len(pending)}")
+        return 0
+    if args.kb_cmd == "sync":
+        message = args.message or f"chore(knowledge): manual sync {utc_now()}"
+        result = knowledge_sync(
+            root,
+            cfg,
+            message=message,
+            do_pull=not args.no_pull,
+            do_push=True if args.push else None,
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            steps = result.get("steps", {})
+            for name, step in steps.items():
+                detail = step.get("error") or step.get("reason") or step.get("skipped") or "ok"
+                print(f"  {name}: {'ok' if step.get('ok', True) else 'FAIL'} ({detail})")
+            print(f"sync {'ok' if result['ok'] else 'FAILED'}")
+        return 0 if result["ok"] else 1
+    if args.kb_cmd == "list":
+        entries = knowledge_iter_all_entries(root, cfg)
+        entries = [e for e in entries if _kb_entry_matches(e, args)]
+        if getattr(args, "json", False):
+            print(json.dumps([_kb_entry_summary(e) for e in entries], indent=2, ensure_ascii=False))
+        else:
+            if not entries:
+                print("No entries")
+            for entry in entries:
+                meta = entry.get("meta", {})
+                print(
+                    f"  {meta.get('id') or meta.get('slug')}  [{meta.get('scope')}/{meta.get('type')}] "
+                    f"{meta.get('title')}  (project={meta.get('project_key') or '-'})"
+                )
+            print(f"total: {len(entries)}")
+        return 0
+    if args.kb_cmd == "show":
+        entry = knowledge_find_entry(root, cfg, args.identifier)
+        if entry is None:
+            print(f"Entry not found: {args.identifier}", file=sys.stderr)
+            return 1
+        if getattr(args, "json", False):
+            print(json.dumps(entry, indent=2, ensure_ascii=False))
+        else:
+            meta = entry.get("meta", {})
+            print(f"# {meta.get('title')}  ({meta.get('id') or meta.get('slug')})")
+            print(f"scope={meta.get('scope')} type={meta.get('type')} project={meta.get('project_key') or '-'}")
+            print(f"path: {entry.get('path')}")
+            print()
+            print(entry.get("body", ""))
+        return 0
+    if args.kb_cmd == "search":
+        hits = knowledge_search_entries(root, cfg, args.query)
+        if getattr(args, "json", False):
+            print(json.dumps([_kb_entry_summary(e) for e in hits], indent=2, ensure_ascii=False))
+        else:
+            if not hits:
+                print("No matches")
+            for entry in hits:
+                meta = entry.get("meta", {})
+                print(f"  {meta.get('id') or meta.get('slug')}  {meta.get('title')}")
+            print(f"matches: {len(hits)}")
+        return 0
+    if args.kb_cmd == "approve":
+        pending = {c.get("id"): c for c in knowledge_list_pending(root, cfg)}
+        candidate = pending.get(args.candidate_id)
+        if candidate is None:
+            print(f"No pending candidate: {args.candidate_id}", file=sys.stderr)
+            return 1
+        # Dedup awareness scoped to the exact target identity (scope + kind +
+        # project + slug) — a same-named entry in another scope/project is NOT
+        # the same entry and must report "created".
+        cand_scope = candidate.get("scope", "project")
+        cand_kind = candidate.get("kind", "solutions")
+        cand_project = candidate.get("project_key")
+        cand_slug = knowledge_slugify(candidate.get("title", ""))
+        existing = knowledge_entry_exists(root, cfg, cand_scope, cand_kind, cand_project, cand_slug)
+        try:
+            entry_path = knowledge_approve_candidate(root, cfg, args.candidate_id)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        git_result = knowledge_auto_commit(
+            root, f"chore(knowledge): approve '{candidate.get('title', 'entry')}'", cfg
+        )
+        action = "updated" if existing else "created"
+        result = {"ok": True, "action": action, "path": str(entry_path), "git": git_result}
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(f"{action} entry: {entry_path}")
+            if not git_result.get("skipped"):
+                print(f"  git: {'committed' if git_result.get('committed') else git_result.get('reason') or git_result.get('error')}")
+        return 0
+    if args.kb_cmd == "reject":
+        removed = knowledge_remove_pending(root, cfg, args.candidate_id)
+        if not removed:
+            print(f"No pending candidate: {args.candidate_id}", file=sys.stderr)
+            return 1
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "rejected": args.candidate_id}, indent=2, ensure_ascii=False))
+        else:
+            print(f"rejected: {args.candidate_id}")
+        return 0
+    if args.kb_cmd == "add":
+        if args.scope == "project" and not args.project:
+            print("--project is required for --scope project", file=sys.stderr)
+            return 2
+        body = args.body
+        if args.body_file:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        meta: dict = {}
+        if args.tag:
+            meta["tags"] = args.tag
+        if args.review_days is not None:
+            meta["review_after"] = knowledge_future_iso(args.review_days)
+        slug = knowledge_slugify(args.title)
+        existing_path = knowledge_entry_path_for(root, cfg, args.scope, args.kind, args.project, slug)
+        action = "created"
+        if existing_path is not None:
+            action = "appended" if args.append else "updated"
+            existing = knowledge_read_entry(existing_path)
+            # Preserve existing metadata on any update; only the params the user
+            # actually passed (collected in `meta`) override.
+            carried = {
+                k: v for k, v in existing["meta"].items()
+                if k in ("tags", "review_after", "outcome", "confidence", "related_files", "source_tasks")
+            }
+            carried.update(meta)
+            meta = carried
+            if args.append:
+                body = (
+                    existing["body"].rstrip()
+                    + f"\n\n---\n_(追加于 {utc_now()})_\n\n"
+                    + body.strip()
+                    + "\n"
+                )
+        path = knowledge_write_entry(
+            root, config=cfg, scope=args.scope, kind=args.kind,
+            project_key_value=args.project, title=args.title, body=body, meta=meta,
+        )
+        git_result = knowledge_auto_commit(root, f"chore(knowledge): {action} '{args.title}'", cfg)
+        result = {"ok": True, "action": action, "path": str(path), "git": git_result}
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(f"{action} entry: {path}")
+        return 0
+    if args.kb_cmd == "stale":
+        stale = knowledge_list_stale(root, cfg)
+        if getattr(args, "json", False):
+            print(json.dumps([_kb_entry_summary(e) for e in stale], indent=2, ensure_ascii=False))
+        else:
+            if not stale:
+                print("No stale entries")
+            for entry in stale:
+                meta = entry.get("meta", {})
+                print(f"  {meta.get('id') or meta.get('slug')}  {meta.get('title')}  (review_after={meta.get('review_after')})")
+            print(f"stale: {len(stale)}")
+        return 0
+    return 0
+
+
+def _kb_entry_matches(entry: dict, args: argparse.Namespace) -> bool:
+    meta = entry.get("meta", {})
+    if getattr(args, "scope", None) and meta.get("scope") != args.scope:
+        return False
+    if getattr(args, "kind", None) and meta.get("type") != ("solution" if args.kind == "solutions" else "wiki"):
+        return False
+    if getattr(args, "project", None) and meta.get("project_key") != args.project:
+        return False
+    return True
+
+
+def _kb_entry_summary(entry: dict) -> dict:
+    meta = entry.get("meta", {})
+    return {
+        "id": meta.get("id"),
+        "slug": meta.get("slug"),
+        "title": meta.get("title"),
+        "scope": meta.get("scope"),
+        "type": meta.get("type"),
+        "project_key": meta.get("project_key"),
+        "tags": meta.get("tags", []),
+        "review_after": meta.get("review_after"),
+        "path": entry.get("path"),
+    }
+
+
+def format_knowledge_status(status: dict) -> str:
+    lines = [
+        f"Knowledge base: {status['path']}",
+        f"  initialized: {status['initialized']}  enabled: {status['enabled']}  schema: v{status['schema_version']}",
+    ]
+    git = status.get("git", {})
+    lines.append(
+        f"  git: repo={git.get('is_repo')} enabled={git.get('enabled')} "
+        f"remote={git.get('remote') or '-'} branch={git.get('branch') or '-'}"
+    )
+    lines.append(f"  curation gate: {status.get('curation_gate')}")
+    general = status.get("general", {})
+    lines.append(f"  general: wiki={general.get('wiki', 0)} solutions={general.get('solutions', 0)}")
+    projects = status.get("projects", [])
+    if projects:
+        lines.append(f"  projects ({len(projects)}):")
+        for proj in projects:
+            counts = proj["counts"]
+            lines.append(
+                f"    - {proj['project_key']}: wiki={counts.get('wiki', 0)} solutions={counts.get('solutions', 0)}"
+            )
+    else:
+        lines.append("  projects: none")
+    lines.append(f"  pending candidates: {status.get('pending', 0)}")
+    lines.append(f"  stale (need review): {status.get('stale', 0)}")
+    lines.append(f"  total entries: {status.get('total_entries', 0)}")
+    return "\n".join(lines) + "\n"
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -1143,6 +1412,7 @@ def command_handlers() -> dict[str, object]:
         "list": cmd_list,
         "runs": cmd_runs,
         "workspace": cmd_workspace,
+        "kb": cmd_kb,
         "watch": cmd_watch,
         "send": cmd_send,
         "hardware-io": cmd_hardware_io,

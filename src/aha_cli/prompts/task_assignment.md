@@ -11,6 +11,8 @@ $task_description
 Workspace path:
 $workspace_path
 
+$knowledge_context
+
 Collaboration mode:
 $collaboration_mode
 

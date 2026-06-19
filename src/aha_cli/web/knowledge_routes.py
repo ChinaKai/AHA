@@ -1,0 +1,212 @@
+"""HTTP API for the knowledge base Web console (Phase 4b).
+
+Root-scoped JSON endpoints under /api/kb for browsing entries, reviewing the
+pending curation queue (approve/reject), and reading/updating the knowledge
+settings (enabled / path / git remote+branch+auto flags / curation gate).
+
+These mirror the conventions in web/system_routes.py and are served from
+web/server.py. The matching UI lives in web/static/knowledge.html.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from aha_cli.domain.models import default_knowledge_config
+from aha_cli.services.knowledge_git import auto_commit_after_change
+from aha_cli.store.config import load_config
+from aha_cli.store.io import read_json, write_json
+from aha_cli.store.knowledge import (
+    approve_candidate,
+    entry_exists,
+    find_entry,
+    iter_all_entries,
+    knowledge_status,
+    list_pending,
+    remove_pending,
+    slugify,
+)
+from aha_cli.store.paths import config_path
+from aha_cli.web.http_utils import http_response, json_response, parse_json_body
+
+
+def _entry_summary(entry: dict) -> dict:
+    meta = entry.get("meta", {})
+    return {
+        "id": meta.get("id"),
+        "slug": meta.get("slug"),
+        "title": meta.get("title"),
+        "scope": meta.get("scope"),
+        "type": meta.get("type"),
+        "project_key": meta.get("project_key"),
+        "tags": meta.get("tags", []),
+        "updated_at": meta.get("updated_at"),
+    }
+
+
+def _ok(method: str, data: dict, status: str = "200 OK") -> bytes:
+    if method == "HEAD":
+        return http_response(status, b"", "application/json; charset=utf-8")
+    return json_response(data, status)
+
+
+def _knowledge_settings(cfg: dict) -> dict:
+    kb = cfg.get("knowledge") if isinstance(cfg.get("knowledge"), dict) else default_knowledge_config()
+    git = kb.get("git", {}) if isinstance(kb.get("git"), dict) else {}
+    curation = kb.get("curation", {}) if isinstance(kb.get("curation"), dict) else {}
+    return {
+        "enabled": bool(kb.get("enabled")),
+        "path": kb.get("path"),
+        "git": {
+            "enabled": bool(git.get("enabled")),
+            "remote": git.get("remote"),
+            "branch": git.get("branch"),
+            "auto_pull": bool(git.get("auto_pull")),
+            "auto_commit": bool(git.get("auto_commit")),
+            "auto_push": bool(git.get("auto_push")),
+        },
+        "curation": {"gate": curation.get("gate")},
+    }
+
+
+_ALLOWED_GATES = {"manual", "auto", "off"}
+
+
+def _apply_settings_patch(root: Path, payload: dict) -> dict:
+    """Merge an allow-listed knowledge settings patch into config.json."""
+    # Start from the raw on-disk config to avoid baking in every default.
+    path = config_path(root)
+    raw = read_json(path) if path.exists() else {}
+    kb = raw.get("knowledge")
+    if not isinstance(kb, dict):
+        kb = default_knowledge_config()
+    # Hand-written config may have non-dict git/curation; coerce instead of 500.
+    if not isinstance(kb.get("git"), dict):
+        kb["git"] = {}
+    if not isinstance(kb.get("curation"), dict):
+        kb["curation"] = {}
+
+    if "enabled" in payload:
+        kb["enabled"] = bool(payload["enabled"])
+    if "path" in payload:
+        value = payload["path"]
+        kb["path"] = str(value).strip() or None if value is not None else None
+
+    git_patch = payload.get("git")
+    if isinstance(git_patch, dict):
+        if "enabled" in git_patch:
+            kb["git"]["enabled"] = bool(git_patch["enabled"])
+        if "remote" in git_patch:
+            remote = git_patch["remote"]
+            kb["git"]["remote"] = str(remote).strip() or None if remote is not None else None
+        if "branch" in git_patch:
+            branch = str(git_patch.get("branch") or "").strip()
+            if branch:
+                kb["git"]["branch"] = branch
+        for flag in ("auto_pull", "auto_commit", "auto_push"):
+            if flag in git_patch:
+                kb["git"][flag] = bool(git_patch[flag])
+
+    curation_patch = payload.get("curation")
+    if isinstance(curation_patch, dict) and "gate" in curation_patch:
+        gate = str(curation_patch["gate"]).strip().lower()
+        if gate not in _ALLOWED_GATES:
+            raise ValueError(f"curation gate must be one of {sorted(_ALLOWED_GATES)}")
+        kb["curation"]["gate"] = gate
+
+    raw["knowledge"] = kb
+    write_json(path, raw)
+    return _knowledge_settings(load_config(root))
+
+
+def knowledge_route_response(
+    root: Path,
+    method: str,
+    path: str,
+    query: dict[str, list[str]],
+    body: bytes = b"",
+    headers: dict[str, str] | None = None,
+) -> bytes | None:
+    if not path.startswith("/api/kb/"):
+        return None
+    cfg = load_config(root)
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/status":
+        return _ok(method, knowledge_status(root, cfg))
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/entries":
+        scope = str(query.get("scope", [""])[0] or "").strip() or None
+        project = str(query.get("project", [""])[0] or "").strip() or None
+        kind = str(query.get("kind", [""])[0] or "").strip() or None
+        want_type = {"solutions": "solution", "wiki": "wiki"}.get(kind) if kind else None
+        entries = []
+        for entry in iter_all_entries(root, cfg):
+            meta = entry.get("meta", {})
+            if scope and meta.get("scope") != scope:
+                continue
+            if project and meta.get("project_key") != project:
+                continue
+            if want_type and meta.get("type") != want_type:
+                continue
+            entries.append(_entry_summary(entry))
+        return _ok(method, {"entries": entries, "count": len(entries)})
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/entry":
+        identifier = str(query.get("id", [""])[0] or query.get("slug", [""])[0] or "").strip()
+        if not identifier:
+            return json_response({"error": "id or slug required"}, "400 Bad Request")
+        entry = find_entry(root, cfg, identifier)
+        if entry is None:
+            return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        return _ok(method, entry)
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/pending":
+        return _ok(method, {"pending": list_pending(root, cfg), "count": len(list_pending(root, cfg))})
+
+    if method == "POST" and path == "/api/kb/approve":
+        payload = parse_json_body(body) if body.strip() else {}
+        cid = str(payload.get("candidate_id") or "").strip()
+        if not cid:
+            return json_response({"error": "candidate_id required"}, "400 Bad Request")
+        candidate = next((c for c in list_pending(root, cfg) if c.get("id") == cid), None)
+        if candidate is None:
+            return json_response({"error": f"no pending candidate: {cid}"}, "404 Not Found")
+        existing = entry_exists(
+            root, cfg,
+            candidate.get("scope", "project"),
+            candidate.get("kind", "solutions"),
+            candidate.get("project_key"),
+            slugify(candidate.get("title", "")),
+        )
+        entry_path = approve_candidate(root, cfg, cid)
+        git_result = auto_commit_after_change(
+            root, f"chore(knowledge): approve '{candidate.get('title', 'entry')}'", cfg
+        )
+        return json_response({
+            "ok": True,
+            "action": "updated" if existing else "created",
+            "path": str(entry_path),
+            "git": git_result,
+        })
+
+    if method == "POST" and path == "/api/kb/reject":
+        payload = parse_json_body(body) if body.strip() else {}
+        cid = str(payload.get("candidate_id") or "").strip()
+        if not cid:
+            return json_response({"error": "candidate_id required"}, "400 Bad Request")
+        if not remove_pending(root, cfg, cid):
+            return json_response({"error": f"no pending candidate: {cid}"}, "404 Not Found")
+        return json_response({"ok": True, "rejected": cid})
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/config":
+        return _ok(method, _knowledge_settings(cfg))
+
+    if method == "PATCH" and path == "/api/kb/config":
+        payload = parse_json_body(body) if body.strip() else {}
+        try:
+            settings = _apply_settings_patch(root, payload)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        return json_response({"ok": True, "knowledge": settings})
+
+    return None

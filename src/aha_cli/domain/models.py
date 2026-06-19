@@ -35,6 +35,30 @@ def default_retention_policy_config() -> dict:
     }
 
 
+def default_knowledge_config() -> dict:
+    return {
+        "enabled": False,
+        "path": None,
+        "git": {
+            "enabled": False,
+            "remote": None,
+            "branch": "main",
+            "auto_commit": True,
+            "auto_push": False,
+            "auto_pull": True,
+            "author_name": "AHA",
+            "author_email": "aha@local",
+        },
+        "curation": {
+            "gate": "manual",
+        },
+        "retrieval": {
+            "max_entries": 5,
+            "max_chars": 4000,
+        },
+    }
+
+
 def default_config() -> dict:
     return {
         "backend": "stub",
@@ -51,6 +75,7 @@ def default_config() -> dict:
         },
         "context_windows": {},
         "retention_policy": default_retention_policy_config(),
+        "knowledge": default_knowledge_config(),
         "codex": {
             "bin": "codex",
             "model": None,

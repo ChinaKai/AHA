@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aha_cli.constants import CONFIG_DIR, CONFIG_FILE, EVENTS_FILE, PLAN_FILE, RUNS_DIR, WORKSPACES_DIR
+from aha_cli.constants import CONFIG_DIR, CONFIG_FILE, EVENTS_FILE, KNOWLEDGE_DIR, PLAN_FILE, RUNS_DIR, WORKSPACES_DIR
 
 AHA_HOME_ENV = "AHA_HOME"
 _EXPLICIT_AHA_HOMES: set[str] = set()
@@ -68,6 +68,10 @@ def run_dir(root: Path, run_id: str) -> Path:
 
 def workspaces_dir(root: Path) -> Path:
     return aha_home_path(root) / WORKSPACES_DIR
+
+
+def default_knowledge_dir(root: Path) -> Path:
+    return aha_home_path(root) / KNOWLEDGE_DIR
 
 
 def plan_path(root: Path, run_id: str) -> Path:

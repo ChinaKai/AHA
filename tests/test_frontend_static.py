@@ -22,6 +22,27 @@ def app_entry_script(root: Path | None = None) -> str:
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_knowledge_console_supports_i18n_and_mobile_layout(self) -> None:
+        root = static_root()
+        html = (root / "knowledge.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn('<script src="/static/i18n.js"></script>', html)
+        self.assertIn('data-i18n="knowledge.title"', html)
+        self.assertIn('data-i18n="knowledge.tab_pending"', html)
+        self.assertIn('data-i18n-placeholder="knowledge.project_filter"', html)
+        self.assertIn("window.addEventListener(\"aha:languagechange\"", html)
+        self.assertIn("window.addEventListener(\"storage\"", html)
+        self.assertIn("@media (max-width: 640px)", html)
+        self.assertIn(".kb-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }", html)
+        self.assertIn(".kb-row { display: grid; grid-template-columns: 1fr; }", html)
+        self.assertIn("overflow-wrap: anywhere", html)
+        self.assertIn("max-width: calc(100vw - 24px)", html)
+        self.assertIn('"knowledge.title": "AHA Knowledge Base"', i18n)
+        self.assertIn('"knowledge.title": "AHA 知识库"', i18n)
+        self.assertIn('"knowledge.status_summary": "Entries {entries}', i18n)
+        self.assertIn('"knowledge.status_summary": "条目 {entries}', i18n)
+
     def test_frontend_prefers_websocket_with_cursor_and_polling_fallback(self) -> None:
         root = static_root()
         script = app_entry_script(root)

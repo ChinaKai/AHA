@@ -37,6 +37,7 @@ def write_task_result(
 ) -> Path:
     now = now_func()
     body = content.rstrip() + "\n"
+    distill_meta: dict | None = None
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
@@ -68,6 +69,12 @@ def write_task_result(
             write_json(task_lifecycle_round_path(root, run_id, task_id, round_id), round_record)
             task["last_final_round_id"] = round_id
             task["last_final_at"] = now
+            distill_meta = {
+                "task_title": task.get("title", ""),
+                "workspace_path": task.get("workspace_path"),
+                "goal": plan.get("goal"),
+                "round_id": round_id,
+            }
         write_json(path.with_suffix(".meta.json"), meta)
         plan["updated_at"] = now
         save_plan(root, plan)
@@ -80,4 +87,34 @@ def write_task_result(
     )
     if policy == "finalize" and render_overview_func:
         render_overview_func(root, run_id, task_id, policy=policy)
+    if policy == "finalize" and distill_meta is not None:
+        _distill_knowledge_safe(root, run_id, task_id, body, final_context, distill_meta)
     return path
+
+
+def _distill_knowledge_safe(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    body: str,
+    final_context: dict | None,
+    distill_meta: dict,
+) -> None:
+    """Best-effort knowledge distillation hook. Never breaks finalization."""
+    try:
+        # Lazy import avoids a store -> services import cycle at module load.
+        from aha_cli.services.knowledge_distill import distill_after_finalize
+
+        distill_after_finalize(
+            root,
+            run_id,
+            task_id,
+            body,
+            final_context,
+            task_title=distill_meta.get("task_title", ""),
+            workspace_path=distill_meta.get("workspace_path"),
+            goal=distill_meta.get("goal"),
+            round_id=distill_meta.get("round_id"),
+        )
+    except Exception:  # noqa: BLE001 - distillation is strictly best-effort
+        pass

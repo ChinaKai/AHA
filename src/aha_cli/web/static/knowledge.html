@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AHA Knowledge Base</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    /* Layered on top of the app stylesheet so the console matches the
+       Weixin console look: same tokens, surfaces, borders, status pills. */
+    * { box-sizing: border-box; }
+    body { background: var(--color-bg); color: var(--color-text); }
+    .kb-wrap { width: min(100%, 960px); margin: 0 auto; padding: 0 20px 56px; }
+    .kb-console-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 16px; padding: 16px 0 12px; border-bottom: 1px solid var(--color-border-subtle);
+    }
+    .kb-console-head > div { min-width: 0; }
+    .kb-console-head h1 { margin: 0; font-size: 18px; color: var(--color-text-strong); }
+    .kb-console-head p { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
+    .kb-tabs { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+    .kb-tabs button { min-width: 0; }
+    .kb-tab.active {
+      border-color: var(--color-primary); background: var(--color-primary-surface);
+      color: var(--color-primary-strong); font-weight: 650;
+    }
+    .kb-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+    .kb-row > * { min-width: 0; }
+    .kb-card {
+      display: grid; gap: 6px; min-width: 0; padding: 12px; margin: 10px 0;
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+      background: var(--color-surface); overflow-wrap: anywhere;
+    }
+    .kb-card h3 { margin: 0; font-size: 15px; color: var(--color-text-strong); }
+    .kb-muted { color: var(--color-text-subtle); font-size: 12px; overflow-wrap: anywhere; }
+    .kb-tag {
+      display: inline-block; font-size: 11px; background: var(--status-bg);
+      color: var(--status-text); border-radius: 999px; padding: 1px 8px; margin-right: 4px;
+    }
+    .kb-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+    .kb-card-actions button { min-height: var(--control-height-sm); padding: 0 var(--control-padding-x-sm); font-size: 12px; }
+    button.kb-approve { border-color: #bbf7d0; background: var(--color-success-surface); color: var(--color-success); font-weight: 650; }
+    button.kb-reject { border-color: #fecaca; background: var(--color-danger-surface); color: var(--color-danger); }
+    .kb-body {
+      white-space: pre-wrap; background: var(--color-surface-muted);
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm);
+      padding: 10px; max-width: 100%; overflow-x: auto; overflow-wrap: anywhere;
+      font-size: 13px; color: var(--color-text);
+    }
+    .kb-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-text-muted); }
+    .kb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
+    .kb-form-grid > div { min-width: 0; display: flex; flex-direction: column; }
+    .kb-form-grid input[type=text], .kb-form-grid select { width: 100%; box-sizing: border-box; }
+    .kb-form-grid label.kb-field { display: flex; align-items: center; gap: 6px; }
+    .kb-form-grid label.kb-field input[type=checkbox] { flex: none; margin: 0; }
+    .kb-settings-card { padding: 14px; }
+    .kb-toast {
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+      width: max-content; max-width: calc(100vw - 24px);
+      background: var(--color-text-strong); color: #fff; padding: 8px 16px;
+      border-radius: var(--radius-md); box-shadow: var(--shadow-popover); opacity: 0;
+      transition: opacity .2s; pointer-events: none; text-align: center;
+    }
+    .kb-toast.show { opacity: 1; }
+    @media (max-width: 640px) {
+      .kb-wrap { padding: 0 12px 44px; }
+      .kb-console-head { display: grid; gap: 10px; padding-top: 12px; }
+      .kb-console-head .status { width: fit-content; max-width: 100%; }
+      .kb-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+      .kb-tabs button {
+        width: 100%; min-height: 32px; padding: 0 6px;
+        justify-content: center; white-space: nowrap; font-size: 12px;
+      }
+      .kb-row { display: grid; grid-template-columns: 1fr; }
+      .kb-row > select, .kb-row > input, .kb-row > button { width: 100%; }
+      .kb-card { padding: 10px; }
+      .kb-card-actions { display: grid; grid-template-columns: 1fr; }
+      .kb-card-actions button { width: 100%; }
+      .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
+      .kb-settings-card { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+ <div class="kb-wrap">
+  <div class="kb-console-head">
+    <div>
+      <h1 data-i18n="knowledge.title">AHA Knowledge Base</h1>
+      <p data-i18n="knowledge.subtitle">Browse entries · Review pending candidates · Configure the knowledge base</p>
+    </div>
+    <span id="kb-summary" class="status idle" data-i18n="knowledge.loading">Loading...</span>
+  </div>
+
+  <nav class="kb-tabs">
+    <button data-tab="entries" class="button-ghost kb-tab active" type="button"><span data-i18n="knowledge.tab_entries">Entries</span></button>
+    <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
+    <button data-tab="settings" class="button-ghost kb-tab" type="button"><span data-i18n="common.settings">Settings</span></button>
+  </nav>
+
+  <section id="tab-entries">
+    <div class="kb-row">
+      <select id="f-scope" aria-label="Scope filter" data-i18n-aria-label="knowledge.scope_filter"><option value="" data-i18n="knowledge.scope_all">All scopes</option><option value="project" data-i18n="knowledge.scope_project">Project</option><option value="general" data-i18n="knowledge.scope_general">General</option></select>
+      <select id="f-kind" aria-label="Type filter" data-i18n-aria-label="knowledge.type_filter"><option value="" data-i18n="knowledge.type_all">All types</option><option value="solutions" data-i18n="knowledge.type_solutions">Solutions</option><option value="wiki" data-i18n="knowledge.type_wiki">Wiki</option></select>
+      <input id="f-project" type="text" placeholder="Filter by project key" data-i18n-placeholder="knowledge.project_filter" />
+      <button class="button-ghost" id="f-refresh" type="button" data-i18n="common.refresh">Refresh</button>
+    </div>
+    <div id="entries-list"></div>
+    <div id="entry-detail"></div>
+  </section>
+
+  <section id="tab-pending" hidden>
+    <div id="pending-list"></div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <form id="settings-form" class="kb-card kb-settings-card">
+      <div class="kb-form-grid">
+        <div>
+          <label class="kb-field"><input type="checkbox" id="s-enabled" /> <span data-i18n="knowledge.enable">Enable knowledge base</span></label>
+          <label class="kb-field" for="s-path" data-i18n="knowledge.storage_path">Storage path (blank = default ~/.aha/knowledge)</label>
+          <input type="text" id="s-path" />
+          <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
+          <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
+        </div>
+        <div>
+          <label class="kb-field"><input type="checkbox" id="s-git-enabled" /> <span data-i18n="knowledge.enable_git">Enable git sync</span></label>
+          <label class="kb-field" for="s-remote" data-i18n="knowledge.git_remote">Git remote</label>
+          <input type="text" id="s-remote" placeholder="git@github.com:user/aha-kb.git" />
+          <label class="kb-field" for="s-branch" data-i18n="knowledge.git_branch">Git branch</label>
+          <input type="text" id="s-branch" />
+          <label class="kb-field"><input type="checkbox" id="s-auto-pull" /> <span data-i18n="knowledge.auto_pull">Auto pull</span></label>
+          <label class="kb-field"><input type="checkbox" id="s-auto-commit" /> <span data-i18n="knowledge.auto_commit">Auto commit</span></label>
+          <label class="kb-field"><input type="checkbox" id="s-auto-push" /> <span data-i18n="knowledge.auto_push">Auto push</span></label>
+        </div>
+      </div>
+      <div class="kb-row"><button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button></div>
+    </form>
+  </section>
+
+  <div id="toast" class="kb-toast"></div>
+ </div>
+
+  <script src="/static/i18n.js"></script>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const t = (key, fallback) => window.AHAI18n?.t?.(key, fallback) || fallback || key;
+    const formatText = (key, values, fallback) => window.AHAI18n?.format?.(key, values, fallback) || fallback || key;
+    const toast = (msg) => { const el = $("#toast"); el.textContent = msg; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 1800); };
+    const api = async (path, opts) => {
+      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    };
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const state = { entries: [], pending: [], activeEntry: null, activeTab: "entries" };
+
+    function syncChromeText() {
+      document.title = t("knowledge.title", "AHA Knowledge Base");
+      window.AHAI18n?.apply?.(document);
+    }
+
+    function showTab(name) {
+      state.activeTab = name;
+      for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === name);
+      for (const id of ["entries", "pending", "settings"]) $("#tab-" + id).hidden = id !== name;
+      if (name === "pending") loadPending();
+      if (name === "settings") loadSettings();
+      if (name === "entries") loadEntries();
+    }
+
+    async function loadStatus() {
+      try {
+        const s = await api("/api/kb/status");
+        $("#kb-summary").textContent = formatText("knowledge.status_summary", {
+          entries: s.total_entries,
+          pending: s.pending,
+          stale: s.stale,
+          gate: s.curation_gate,
+          git: s.git.is_repo ? t("knowledge.git_repo", "repo") : t("knowledge.git_off", "off"),
+        }, `Entries ${s.total_entries} · Pending ${s.pending} · Stale ${s.stale} · gate ${s.curation_gate} · git ${s.git.is_repo ? "repo" : "off"}`);
+        $("#kb-summary").className = "status " + (s.enabled ? "completed" : "idle");
+        $("#pending-badge").textContent = s.pending ? `(${s.pending})` : "";
+      } catch (e) { $("#kb-summary").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message); }
+    }
+
+    function renderEntries() {
+      $("#entry-detail").innerHTML = state.activeEntry || "";
+      $("#entries-list").innerHTML = state.entries.length
+        ? state.entries.map((e) => `<div class="kb-card"><h3>${esc(e.title)}</h3>
+            <div class="kb-muted">${esc(e.scope)}/${esc(e.type)} · ${esc(e.project_key || "-")} · ${esc(e.id || e.slug)}</div>
+            <div>${(e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("")}</div>
+            <div class="kb-card-actions"><button class="button-ghost" type="button" onclick="viewEntry('${esc(e.id || e.slug)}')">${esc(t("knowledge.view", "View"))}</button></div></div>`).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
+    }
+
+    async function loadEntries() {
+      const q = new URLSearchParams();
+      if ($("#f-scope").value) q.set("scope", $("#f-scope").value);
+      if ($("#f-kind").value) q.set("kind", $("#f-kind").value);
+      if ($("#f-project").value.trim()) q.set("project", $("#f-project").value.trim());
+      const data = await api("/api/kb/entries?" + q.toString());
+      state.entries = data.entries;
+      state.activeEntry = "";
+      renderEntries();
+    }
+
+    window.viewEntry = async (id) => {
+      const e = await api("/api/kb/entry?id=" + encodeURIComponent(id));
+      state.activeEntry = `<div class="kb-card"><h3>${esc(e.meta.title)}</h3>
+        <div class="kb-muted">${esc(e.path)}</div><pre class="kb-body">${esc(e.body)}</pre></div>`;
+      $("#entry-detail").innerHTML = state.activeEntry;
+    };
+
+    function renderPending() {
+      $("#pending-list").innerHTML = state.pending.length
+        ? state.pending.map((c) => `<div class="kb-card"><h3>${esc(c.title)}</h3>
+            <div class="kb-muted">${esc(c.scope)}/${esc(c.kind)} · ${esc(c.project_key || "-")} · ${esc(c.id)} · ${esc(t("knowledge.confidence", "confidence"))} ${esc((c.meta || {}).confidence)}</div>
+            <pre class="kb-body">${esc(c.body)}</pre>
+            <div class="kb-card-actions">
+              <button class="kb-approve" type="button" onclick="decide('approve','${esc(c.id)}')">${esc(t("knowledge.approve", "Approve"))}</button>
+              <button class="kb-reject" type="button" onclick="decide('reject','${esc(c.id)}')">${esc(t("knowledge.reject", "Reject"))}</button>
+            </div></div>`).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.pending_empty", "No pending candidates"))}</p>`;
+    }
+
+    async function loadPending() {
+      const data = await api("/api/kb/pending");
+      state.pending = data.pending;
+      renderPending();
+    }
+
+    window.decide = async (kind, id) => {
+      try {
+        const r = await api("/api/kb/" + kind, { method: "POST", body: JSON.stringify({ candidate_id: id }) });
+        toast(kind === "approve"
+          ? (r.action === "updated" ? t("knowledge.entry_updated", "Entry updated") : t("knowledge.entry_created", "Entry created"))
+          : t("knowledge.rejected", "Rejected"));
+        await loadPending(); await loadStatus();
+      } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
+    };
+
+    async function loadSettings() {
+      const s = await api("/api/kb/config");
+      $("#s-enabled").checked = s.enabled;
+      $("#s-path").value = s.path || "";
+      $("#s-gate").value = s.curation.gate || "manual";
+      $("#s-git-enabled").checked = s.git.enabled;
+      $("#s-remote").value = s.git.remote || "";
+      $("#s-branch").value = s.git.branch || "main";
+      $("#s-auto-pull").checked = s.git.auto_pull;
+      $("#s-auto-commit").checked = s.git.auto_commit;
+      $("#s-auto-push").checked = s.git.auto_push;
+    }
+
+    $("#settings-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const payload = {
+        enabled: $("#s-enabled").checked,
+        path: $("#s-path").value.trim() || null,
+        curation: { gate: $("#s-gate").value },
+        git: {
+          enabled: $("#s-git-enabled").checked,
+          remote: $("#s-remote").value.trim() || null,
+          branch: $("#s-branch").value.trim() || "main",
+          auto_pull: $("#s-auto-pull").checked,
+          auto_commit: $("#s-auto-commit").checked,
+          auto_push: $("#s-auto-push").checked,
+        },
+      };
+      try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); toast(t("knowledge.saved", "Saved")); await loadStatus(); }
+      catch (e) { toast(formatText("knowledge.save_failed_with_error", { error: e.message }, "Save failed: " + e.message)); }
+    });
+
+    for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+    $("#f-refresh").addEventListener("click", loadEntries);
+    window.addEventListener("aha:languagechange", () => {
+      syncChromeText();
+      renderEntries();
+      renderPending();
+      if (state.activeTab === "settings") loadSettings();
+      loadStatus();
+    });
+    window.addEventListener("storage", (event) => {
+      if (event.key === window.AHAI18n?.languageStorageKey) window.AHAI18n.setLanguage(event.newValue);
+    });
+    syncChromeText();
+    loadStatus(); loadEntries();
+  </script>
+</body>
+</html>

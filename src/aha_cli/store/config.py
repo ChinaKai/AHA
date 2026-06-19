@@ -23,6 +23,16 @@ def _merge_backend_config(defaults: dict, loaded: dict, legacy_proxy: dict) -> d
     return cfg
 
 
+def _merge_knowledge_config(defaults: dict, loaded: dict) -> dict:
+    if not isinstance(loaded, dict):
+        return {key: (dict(value) if isinstance(value, dict) else value) for key, value in defaults.items()}
+    cfg = defaults | {key: value for key, value in loaded.items() if key not in {"git", "curation", "retrieval"}}
+    for nested in ("git", "curation", "retrieval"):
+        loaded_nested = loaded.get(nested, {})
+        cfg[nested] = defaults[nested] | (loaded_nested if isinstance(loaded_nested, dict) else {})
+    return cfg
+
+
 def load_config(root: Path) -> dict:
     defaults = default_config()
     path = config_path(root)
@@ -36,6 +46,7 @@ def load_config(root: Path) -> dict:
     cfg["claude"] = _merge_backend_config(defaults["claude"], loaded.get("claude", {}), cfg["proxy"])
     loaded_retention_policy = loaded.get("retention_policy", {})
     cfg["retention_policy"] = defaults["retention_policy"] | (loaded_retention_policy if isinstance(loaded_retention_policy, dict) else {})
+    cfg["knowledge"] = _merge_knowledge_config(defaults["knowledge"], loaded.get("knowledge", {}))
     if cfg.get("runner_command") and cfg.get("backend") == "stub":
         cfg["backend"] = "command"
     return cfg

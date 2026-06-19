@@ -1,6 +1,7 @@
 CONFIG_DIR = ".aha"
 RUNS_DIR = "runs"
 WORKSPACES_DIR = "workspaces"
+KNOWLEDGE_DIR = "knowledge"
 PLAN_FILE = "plan.json"
 CONFIG_FILE = "config.json"
 EVENTS_FILE = "events.jsonl"
