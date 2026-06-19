@@ -450,6 +450,7 @@
       if (elements.runExportLogsEl) elements.runExportLogsEl.disabled = actionInFlight || !hasRun;
       if (elements.runImportFileEl) elements.runImportFileEl.disabled = actionInFlight;
       if (elements.webRestartEl) elements.webRestartEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
+      if (elements.webUpgradeEl) elements.webUpgradeEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.playConsoleEl) elements.playConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.runMaintenanceRefreshEl) {
@@ -661,6 +662,9 @@
       elements.runExportEl?.addEventListener("click", deps.exportCurrentRun);
       elements.webRestartEl?.addEventListener("click", () => {
         void deps.dispatchAction?.("web-restart");
+      });
+      elements.webUpgradeEl?.addEventListener("click", () => {
+        void deps.dispatchAction?.("web-upgrade");
       });
       elements.authLogoutEl?.addEventListener("click", deps.logoutAuthSession);
       elements.weixinConsoleEl?.addEventListener("click", event => {

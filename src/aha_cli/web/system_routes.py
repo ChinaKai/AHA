@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ipaddress
+import os
+import subprocess
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
@@ -198,6 +200,56 @@ def request_web_restart(root: Path, run_id: str) -> dict:
         "exit_code": WEB_RESTART_EXIT_CODE,
     }
     append_event(root, run_id, "web_restart_requested", payload)
+    return payload
+
+
+def _is_aha_source_root(candidate: Path) -> bool:
+    return (
+        (candidate / "scripts" / "install_user_service.sh").is_file()
+        and (candidate / "pyproject.toml").is_file()
+        and (candidate / "src" / "aha_cli").is_dir()
+    )
+
+
+def _web_upgrade_repo_root() -> Path:
+    env_root = os.environ.get("AHA_SOURCE_ROOT", "").strip()
+    if env_root:
+        candidate = Path(env_root).expanduser().resolve()
+        if _is_aha_source_root(candidate):
+            return candidate
+        raise FileNotFoundError(
+            f"AHA_SOURCE_ROOT does not point to an AHA source checkout with scripts/install_user_service.sh: {candidate}"
+        )
+    for candidate in Path(__file__).resolve().parents:
+        if _is_aha_source_root(candidate):
+            return candidate
+    raise FileNotFoundError("AHA source checkout with scripts/install_user_service.sh not found from web package path")
+
+
+def request_web_upgrade(root: Path, run_id: str) -> dict:
+    repo_root = _web_upgrade_repo_root()
+    command = ["./scripts/install_user_service.sh", "--host", "0.0.0.0"]
+    log_dir = root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "web-upgrade.log"
+    with log_path.open("ab") as log_file:
+        log_file.write(f"\n--- AHA web upgrade requested for {run_id} ---\n".encode("utf-8"))
+        process = subprocess.Popen(  # noqa: S603 - fixed command, no shell.
+            command,
+            cwd=repo_root,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    payload = {
+        "run_id": run_id,
+        "upgrade": "install-user-service",
+        "command": command,
+        "cwd": str(repo_root),
+        "pid": process.pid,
+        "log_path": str(log_path),
+    }
+    append_event(root, run_id, "web_upgrade_requested", payload)
     return payload
 
 
@@ -413,6 +465,14 @@ def system_route_response(
         run_id = require_api_run_id(root, default_run_id, query, payload)
         restart = request_web_restart(root, run_id)
         return json_response({"ok": True, **restart})
+    if method == "POST" and path == "/api/web/upgrade":
+        payload = parse_json_body(body) if body.strip() else {}
+        run_id = require_api_run_id(root, default_run_id, query, payload)
+        try:
+            upgrade = request_web_upgrade(root, run_id)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
+        return json_response({"ok": True, **upgrade})
     if method in {"GET", "HEAD"} and path == "/api/weixin":
         run_id = require_api_run_id(root, default_run_id, query)
         payload = weixin_status_snapshot(root, run_id)

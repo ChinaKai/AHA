@@ -98,6 +98,7 @@
       if (action === "task-visibility") return updateTaskVisibility(payload.taskId, payload.action);
       if (action === "settings-save") return deps.saveBootstrapConfigForm?.(payload.form || payload);
       if (action === "web-restart") return deps.restartWebService?.();
+      if (action === "web-upgrade") return deps.upgradeWebService?.();
       if (action === "run-maintenance-refresh") return deps.loadRunMaintenance?.(true);
       if (action === "run-maintenance-action") return deps.runMaintenanceAction?.(payload.action, payload.detail || {});
       return undefined;

@@ -22,6 +22,17 @@ def app_entry_script(root: Path | None = None) -> str:
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_web_upgrade_button_sits_next_to_restart(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="web-upgrade"', html)
+        self.assertIn('data-i18n="run.upgrade_web"', html)
+        self.assertLess(html.index('id="web-restart"'), html.index('id="web-upgrade"'))
+        self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
+        self.assertIn('"run.upgrade_web": "升级"', i18n)
+
     def test_knowledge_console_supports_i18n_and_mobile_layout(self) -> None:
         root = static_root()
         html = (root / "knowledge.html").read_text(encoding="utf-8")
@@ -1549,7 +1560,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("bootstrap-proxy", styles)
         self.assertIn("collaboration-help", styles)
 
-    def test_web_restart_polling_starts_quickly(self) -> None:
+    def test_web_restart_and_upgrade_polling_start_quickly(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = app_entry_script(root / "src" / "aha_cli" / "web" / "static")
         app_bridge_script = (root / "src" / "aha_cli" / "web" / "static" / "app_bridge.js").read_text(encoding="utf-8")
@@ -1562,7 +1573,12 @@ class FrontendStaticTests(unittest.TestCase):
             run_actions_script.index("async function refreshAfterWebRestart") : run_actions_script.index("return Object.freeze")
         ]
 
-        self.assertIn('async function waitForWebRestartAndReload(restartVersion = "")', run_actions_script)
+        self.assertIn('async function waitForWebRestartAndReload(restartVersion = "", options = {})', run_actions_script)
+        self.assertIn("async function upgradeWebService()", run_actions_script)
+        self.assertIn('apiUrl("/api/web/upgrade")', run_actions_script)
+        self.assertIn('t("run.upgrade_scheduling", "Starting upgrade...")', run_actions_script)
+        self.assertIn('t("run.upgrade_waiting", "Upgrade started. Waiting for recovery...")', run_actions_script)
+        self.assertIn('t("run.upgrade_complete", "Upgrade complete.")', run_actions_script)
         self.assertIn("await sleep(500);", run_actions_script)
         self.assertNotIn("await sleep(2500);", script)
         self.assertIn("const restartVersion = deps.currentAppVersion?.();", run_actions_script)
@@ -1581,7 +1597,16 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("await deps.catchUpRealtimeEvents?.();", refresh_block)
         self.assertIn("await deps.syncRealtimeEvents?.();", restart_block)
         self.assertIn("void refreshAfterWebRestart();", restart_block)
-        self.assertIn('setWebRestartState?.(t("run.restart_complete", "Restart complete."));', run_actions_script)
+        self.assertIn(
+            'const completeMessage = options.completeMessage || t("run.restart_complete", "Restart complete.");',
+            run_actions_script,
+        )
+        self.assertIn(
+            'const manualMessage = options.manualMessage || t("run.restart_manual", "Restart requested. Start the service manually if the page does not recover.");',
+            run_actions_script,
+        )
+        self.assertIn("deps.setWebRestartState?.(completeMessage);", run_actions_script)
+        self.assertIn("deps.setWebRestartState?.(manualMessage);", run_actions_script)
 
     def test_frontend_has_aha_logo_and_favicon(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -2402,6 +2427,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('"run-maintenance-refresh"', app_actions_script)
         self.assertIn('"run-maintenance-action"', app_actions_script)
         self.assertIn('"web-restart"', app_actions_script)
+        self.assertIn('"web-upgrade"', app_actions_script)
+        self.assertIn("upgradeWebService: runActions.upgradeWebService", script)
         self.assertIn("function createTaskController", task_controller_script)
         self.assertIn("function renderTaskList", task_controller_script)
         self.assertIn("function renderSelectedHeader", task_controller_script)
@@ -2427,6 +2454,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('dispatchAction?.("run-maintenance-refresh"', run_controller_script)
         self.assertIn('dispatchAction?.("run-maintenance-action"', run_controller_script)
         self.assertIn('dispatchAction?.("web-restart"', run_controller_script)
+        self.assertIn('dispatchAction?.("web-upgrade"', run_controller_script)
         self.assertIn("function createMessageFlow", message_flow_script)
         self.assertIn("async function sendBackendMessage", message_flow_script)
         self.assertIn("async function handleComposerSubmit", message_flow_script)

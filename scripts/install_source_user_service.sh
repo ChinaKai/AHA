@@ -311,6 +311,7 @@ Type=simple
 WorkingDirectory=${REPO_ROOT}
 Environment="PYTHONPATH=${REPO_ROOT}/src"
 Environment="AHA_HOME=${AHA_HOME}"
+Environment="AHA_SOURCE_ROOT=${REPO_ROOT}"
 Environment=PYTHONUNBUFFERED=1
 ExecStart=${exec_start}
 Restart=on-failure

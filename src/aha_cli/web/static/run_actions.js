@@ -337,7 +337,37 @@
       }
     }
 
-    async function waitForWebRestartAndReload(restartVersion = "") {
+    async function upgradeWebService() {
+      if (deps.webRestartInFlight?.()) return;
+      if (!currentRunId()) {
+        alertUser(t("run.none", "No run selected"));
+        return;
+      }
+      const restartVersion = deps.currentAppVersion?.();
+      setWebRestartInFlight(true);
+      deps.setWebRestartState?.(t("run.upgrade_scheduling", "Starting upgrade..."));
+      deps.renderSessionMenu?.();
+      try {
+        await deps.fetchJson(deps.apiUrl("/api/web/upgrade"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        }, t("run.upgrade_failed", "Failed to upgrade Web"));
+        deps.setWebRestartState?.(t("run.upgrade_waiting", "Upgrade started. Waiting for recovery..."));
+        waitForWebRestartAndReload(restartVersion, {
+          completeMessage: t("run.upgrade_complete", "Upgrade complete."),
+          manualMessage: t("run.upgrade_manual", "Upgrade started. Check the upgrade log or start the service manually if the page does not recover.")
+        });
+      } catch (err) {
+        setWebRestartInFlight(false);
+        deps.setWebRestartState?.(err?.message || String(err || t("run.upgrade_failed", "Failed to upgrade Web")), true);
+        deps.renderSessionMenu?.();
+      }
+    }
+
+    async function waitForWebRestartAndReload(restartVersion = "", options = {}) {
+      const completeMessage = options.completeMessage || t("run.restart_complete", "Restart complete.");
+      const manualMessage = options.manualMessage || t("run.restart_manual", "Restart requested. Start the service manually if the page does not recover.");
       await sleep(500);
       const deadline = Date.now() + 15000;
       while (Date.now() < deadline) {
@@ -360,7 +390,7 @@
             }
             void refreshAfterWebRestart();
             setWebRestartInFlight(false);
-            deps.setWebRestartState?.(t("run.restart_complete", "Restart complete."));
+            deps.setWebRestartState?.(completeMessage);
             deps.renderSessionMenu?.();
             deps.renderPanelForRealtime?.();
             return;
@@ -371,7 +401,7 @@
         await sleep(1000);
       }
       setWebRestartInFlight(false);
-      deps.setWebRestartState?.(t("run.restart_manual", "Restart requested. Start the service manually if the page does not recover."));
+      deps.setWebRestartState?.(manualMessage);
       deps.renderSessionMenu?.();
     }
 
@@ -397,6 +427,7 @@
       renameCurrentRun,
       deleteRunFromMenu,
       restartWebService,
+      upgradeWebService,
       runMaintenanceAction,
       updateRunLifecycleFromMenu,
       waitForWebRestartAndReload,

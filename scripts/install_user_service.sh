@@ -306,6 +306,7 @@ Type=simple
 WorkingDirectory=%h
 Environment="PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="AHA_HOME=${AHA_HOME}"
+Environment="AHA_SOURCE_ROOT=${REPO_ROOT}"
 Environment=PYTHONUNBUFFERED=1
 ExecStart=${exec_start}
 Restart=on-failure

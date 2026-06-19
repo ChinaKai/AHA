@@ -42,6 +42,7 @@
     closeSettingsEl: "close-settings",
     settingsContentEl: "settings-content",
     webRestartEl: "web-restart",
+    webUpgradeEl: "web-upgrade",
     authLogoutEl: "auth-logout",
     accessControlStatusEl: "access-control-status",
     runMaintenancePopoverEl: "run-maintenance-popover",

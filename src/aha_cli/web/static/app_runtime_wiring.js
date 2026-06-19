@@ -11,7 +11,7 @@ const {
   selectedTaskMetaEl, selectedTitleEl, sessionControlEl, sessionDetailTextEl, sessionMenuEl, sessionRefreshEl,
   sessionTitleEl, sessionToggleEl, summaryEl, taskRunContextEl, taskSettingsActionsEl, taskSettingsCloseEl,
   taskSettingsPanelEl, taskSettingsSubtitleEl, tasksEl, taskVisibilityFilterEl,
-  webRestartEl, webRestartStateEl, weixinConsoleEl, weixinConsolePopoverEl
+  webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
 } = domRefs;
 const initialControllers = window.AHAAppControllerFactory.createInitialControllers(domRefs, {
   accessControlData: () => accessControlData,
@@ -612,6 +612,7 @@ const appActions = window.AHAAppActions.createAppActions({
   resetEventWebSocketReconnectState,
   resetTaskConfigEditing,
   restartWebService: runActions.restartWebService,
+  upgradeWebService: runActions.upgradeWebService,
   runMaintenanceAction: runActions.runMaintenanceAction,
   saveBootstrapConfigForm,
   selectedTaskId: () => selectedTaskId,
@@ -858,6 +859,7 @@ const runController = window.AHARunController.createRunController({
   taskRunContextEl,
   webRestartEl,
   webRestartStateEl,
+  webUpgradeEl,
   weixinConsoleEl,
   weixinConsolePopoverEl
 }, {
