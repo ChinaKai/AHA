@@ -9,7 +9,10 @@
     /* Layered on top of the app stylesheet so the console matches the
        Weixin console look: same tokens, surfaces, borders, status pills. */
     * { box-sizing: border-box; }
-    body { background: var(--color-bg); color: var(--color-text); }
+    body {
+      min-height: 100vh; overflow-x: hidden; overflow-y: auto;
+      background: var(--color-bg); color: var(--color-text);
+    }
     .kb-wrap { width: min(100%, 960px); margin: 0 auto; padding: 0 20px 56px; }
     .kb-console-head {
       display: flex; align-items: flex-start; justify-content: space-between;
@@ -39,6 +42,8 @@
     }
     .kb-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
     .kb-card-actions button { min-height: var(--control-height-sm); padding: 0 var(--control-padding-x-sm); font-size: 12px; }
+    .kb-entry-actions button { min-width: 0; }
+    .kb-pending-actions { margin: 0 0 2px; }
     button.kb-approve { border-color: #bbf7d0; background: var(--color-success-surface); color: var(--color-success); font-weight: 650; }
     button.kb-reject { border-color: #fecaca; background: var(--color-danger-surface); color: var(--color-danger); }
     .kb-body {
@@ -47,6 +52,12 @@
       padding: 10px; max-width: 100%; overflow-x: auto; overflow-wrap: anywhere;
       font-size: 13px; color: var(--color-text);
     }
+    .kb-edit-form { display: grid; gap: 8px; margin-top: 4px; }
+    .kb-edit-form textarea {
+      min-height: 220px; resize: vertical; width: 100%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .kb-pending-body { max-height: min(420px, 55vh); overflow: auto; }
     .kb-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-text-muted); }
     .kb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
     .kb-form-grid > div { min-width: 0; display: flex; flex-direction: column; }
@@ -76,6 +87,15 @@
       .kb-card { padding: 10px; }
       .kb-card-actions { display: grid; grid-template-columns: 1fr; }
       .kb-card-actions button { width: 100%; }
+      .kb-entry-actions {
+        display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 4px;
+      }
+      .kb-entry-actions button {
+        width: 100%; min-height: 30px; padding: 0 4px;
+        font-size: 11px; white-space: nowrap;
+      }
+      .kb-pending-body { max-height: 38vh; }
       .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
       .kb-settings-card { padding: 12px; }
     }
@@ -102,10 +122,10 @@
       <select id="f-scope" aria-label="Scope filter" data-i18n-aria-label="knowledge.scope_filter"><option value="" data-i18n="knowledge.scope_all">All scopes</option><option value="project" data-i18n="knowledge.scope_project">Project</option><option value="general" data-i18n="knowledge.scope_general">General</option></select>
       <select id="f-kind" aria-label="Type filter" data-i18n-aria-label="knowledge.type_filter"><option value="" data-i18n="knowledge.type_all">All types</option><option value="solutions" data-i18n="knowledge.type_solutions">Solutions</option><option value="wiki" data-i18n="knowledge.type_wiki">Wiki</option></select>
       <input id="f-project" type="text" placeholder="Filter by project key" data-i18n-placeholder="knowledge.project_filter" />
+      <input id="f-search" type="search" placeholder="Search title, tags, or body" data-i18n-placeholder="knowledge.search_filter" />
       <button class="button-ghost" id="f-refresh" type="button" data-i18n="common.refresh">Refresh</button>
     </div>
     <div id="entries-list"></div>
-    <div id="entry-detail"></div>
   </section>
 
   <section id="tab-pending" hidden>
@@ -152,8 +172,8 @@
       if (!res.ok) throw new Error(data.error || res.statusText);
       return data;
     };
-    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    const state = { entries: [], pending: [], activeEntry: null, activeTab: "entries" };
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const state = { entries: [], pending: [], activeEntry: null, editingEntry: null, activeTab: "entries" };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -185,13 +205,51 @@
     }
 
     function renderEntries() {
-      $("#entry-detail").innerHTML = state.activeEntry || "";
       $("#entries-list").innerHTML = state.entries.length
-        ? state.entries.map((e) => `<div class="kb-card"><h3>${esc(e.title)}</h3>
-            <div class="kb-muted">${esc(e.scope)}/${esc(e.type)} · ${esc(e.project_key || "-")} · ${esc(e.id || e.slug)}</div>
+        ? state.entries.map((e) => {
+            const entryId = e.id || e.slug;
+            const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
+            const isActive = activeId === entryId;
+            const isEditing = state.editingEntry === entryId && isActive;
+            const encodedId = encodeURIComponent(entryId);
+            const status = e.status || "active";
+            return `<div class="kb-card"><h3>${esc(e.title)}</h3>
+            <div class="kb-muted">${esc(e.scope)}/${esc(e.type)} · ${esc(e.project_key || "-")} · ${esc(entryId)} · ${esc(status)}</div>
             <div>${(e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("")}</div>
-            <div class="kb-card-actions"><button class="button-ghost" type="button" onclick="viewEntry('${esc(e.id || e.slug)}')">${esc(t("knowledge.view", "View"))}</button></div></div>`).join("")
+            <div class="kb-card-actions kb-entry-actions">
+              <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(isActive && !isEditing ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
+              <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
+              <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
+              <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
+              <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}')">${esc(t("knowledge.delete", "Delete"))}</button>
+            </div>
+            ${isActive && !isEditing ? `<div class="kb-muted">${esc(state.activeEntry.path)}</div><pre class="kb-body">${esc(state.activeEntry.body)}</pre>` : ""}
+            ${isEditing ? renderEditForm(state.activeEntry) : ""}
+          </div>`;
+          }).join("")
         : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
+    }
+
+    function renderEditForm(entry) {
+      const meta = entry?.meta || {};
+      return `<form class="kb-edit-form" onsubmit="saveEntry(event, '${encodeURIComponent(meta.id || meta.slug || "")}')">
+        <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
+        <input name="title" type="text" value="${esc(meta.title || "")}" />
+        <label class="kb-field">${esc(t("knowledge.edit_tags", "Tags"))}</label>
+        <input name="tags" type="text" value="${esc((meta.tags || []).join(", "))}" />
+        <label class="kb-field">${esc(t("knowledge.edit_related_files", "Related files"))}</label>
+        <input name="related_files" type="text" value="${esc((meta.related_files || []).join(", "))}" />
+        <label class="kb-field">${esc(t("knowledge.edit_invalid_when", "Invalid when"))}</label>
+        <input name="invalid_when" type="text" value="${esc(meta.invalid_when || "")}" />
+        <label class="kb-field">${esc(t("knowledge.edit_review_after", "Review after"))}</label>
+        <input name="review_after" type="text" value="${esc(meta.review_after || "")}" />
+        <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
+        <textarea name="body">${esc(entry?.body || "")}</textarea>
+        <div class="kb-card-actions">
+          <button class="primary" type="submit">${esc(t("knowledge.save_entry", "Save entry"))}</button>
+          <button class="button-ghost" type="button" onclick="cancelEdit()">${esc(t("common.cancel", "Cancel"))}</button>
+        </div>
+      </form>`;
     }
 
     async function loadEntries() {
@@ -199,28 +257,115 @@
       if ($("#f-scope").value) q.set("scope", $("#f-scope").value);
       if ($("#f-kind").value) q.set("kind", $("#f-kind").value);
       if ($("#f-project").value.trim()) q.set("project", $("#f-project").value.trim());
+      if ($("#f-search").value.trim()) q.set("q", $("#f-search").value.trim());
       const data = await api("/api/kb/entries?" + q.toString());
       state.entries = data.entries;
-      state.activeEntry = "";
+      state.activeEntry = null;
       renderEntries();
     }
 
-    window.viewEntry = async (id) => {
+    window.toggleEntry = async (encodedId) => {
+      const id = decodeURIComponent(encodedId);
+      const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
+      if (activeId === id) {
+        state.activeEntry = null;
+        state.editingEntry = null;
+        renderEntries();
+        return;
+      }
       const e = await api("/api/kb/entry?id=" + encodeURIComponent(id));
-      state.activeEntry = `<div class="kb-card"><h3>${esc(e.meta.title)}</h3>
-        <div class="kb-muted">${esc(e.path)}</div><pre class="kb-body">${esc(e.body)}</pre></div>`;
-      $("#entry-detail").innerHTML = state.activeEntry;
+      state.activeEntry = e;
+      state.editingEntry = null;
+      renderEntries();
+    };
+
+    window.editEntry = async (encodedId) => {
+      const id = decodeURIComponent(encodedId);
+      if (state.editingEntry === id) {
+        state.editingEntry = null;
+        renderEntries();
+        return;
+      }
+      state.activeEntry = await api("/api/kb/entry?id=" + encodeURIComponent(id));
+      state.editingEntry = id;
+      renderEntries();
+    };
+
+    window.cancelEdit = () => {
+      state.editingEntry = null;
+      renderEntries();
+    };
+
+    window.saveEntry = async (event, encodedId) => {
+      event.preventDefault();
+      const id = decodeURIComponent(encodedId);
+      const form = event.currentTarget;
+      const payload = {
+        id,
+        title: form.elements.title.value.trim(),
+        tags: form.elements.tags.value,
+        related_files: form.elements.related_files.value,
+        invalid_when: form.elements.invalid_when.value,
+        review_after: form.elements.review_after.value,
+        body: form.elements.body.value,
+      };
+      try {
+        const result = await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify(payload) });
+        state.activeEntry = result.entry;
+        state.editingEntry = null;
+        toast(t("knowledge.entry_updated", "Entry updated"));
+        await loadEntries(); await loadStatus();
+      } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
+    };
+
+    window.setEntryStatus = async (encodedId, status) => {
+      const id = decodeURIComponent(encodedId);
+      const payload = { id, status, review_after: status === "active" ? "" : undefined };
+      try {
+        await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify(payload) });
+        toast(status === "deprecated" ? t("knowledge.deprecated", "Deprecated") : t("knowledge.restored", "Restored"));
+        await loadEntries(); await loadStatus();
+      } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
+    };
+
+    window.markEntryStale = async (encodedId) => {
+      const id = decodeURIComponent(encodedId);
+      try {
+        await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "stale", mark_stale: true }) });
+        toast(t("knowledge.marked_stale", "Marked stale"));
+        await loadEntries(); await loadStatus();
+      } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
+    };
+
+    window.markEntryReviewed = async (encodedId) => {
+      const id = decodeURIComponent(encodedId);
+      try {
+        await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "active", review_after: "" }) });
+        toast(t("knowledge.reviewed", "Reviewed"));
+        await loadEntries(); await loadStatus();
+      } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
+    };
+
+    window.deleteEntry = async (encodedId) => {
+      const id = decodeURIComponent(encodedId);
+      if (!confirm(formatText("knowledge.delete_confirm", { id }, "Delete entry " + id + "?"))) return;
+      try {
+        await api("/api/kb/entry", { method: "DELETE", body: JSON.stringify({ id }) });
+        toast(t("knowledge.deleted", "Deleted"));
+        state.activeEntry = null; state.editingEntry = null;
+        await loadEntries(); await loadStatus();
+      } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
 
     function renderPending() {
       $("#pending-list").innerHTML = state.pending.length
         ? state.pending.map((c) => `<div class="kb-card"><h3>${esc(c.title)}</h3>
             <div class="kb-muted">${esc(c.scope)}/${esc(c.kind)} · ${esc(c.project_key || "-")} · ${esc(c.id)} · ${esc(t("knowledge.confidence", "confidence"))} ${esc((c.meta || {}).confidence)}</div>
-            <pre class="kb-body">${esc(c.body)}</pre>
-            <div class="kb-card-actions">
+            <div class="kb-card-actions kb-pending-actions">
               <button class="kb-approve" type="button" onclick="decide('approve','${esc(c.id)}')">${esc(t("knowledge.approve", "Approve"))}</button>
               <button class="kb-reject" type="button" onclick="decide('reject','${esc(c.id)}')">${esc(t("knowledge.reject", "Reject"))}</button>
-            </div></div>`).join("")
+            </div>
+            <pre class="kb-body kb-pending-body">${esc(c.body)}</pre></div>`).join("")
         : `<p class="kb-muted">${esc(t("knowledge.pending_empty", "No pending candidates"))}</p>`;
     }
 
@@ -274,6 +419,10 @@
 
     for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
     $("#f-refresh").addEventListener("click", loadEntries);
+    for (const id of ["#f-scope", "#f-kind"]) $(id).addEventListener("change", loadEntries);
+    for (const id of ["#f-project", "#f-search"]) $(id).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadEntries();
+    });
     window.addEventListener("aha:languagechange", () => {
       syncChromeText();
       renderEntries();

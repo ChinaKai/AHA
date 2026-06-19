@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 from pathlib import Path
@@ -10,7 +11,9 @@ from aha_cli.services.knowledge_distill import (
     build_distill_context,
     distill_and_enqueue,
     heuristic_solution_candidate,
+    normalize_sidecar_candidates,
 )
+from aha_cli.services.chat import write_memo_report_result
 from aha_cli.store.config import load_config
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import (
@@ -21,6 +24,9 @@ from aha_cli.store.knowledge import (
     list_pending,
 )
 from aha_cli.store.paths import config_path
+from aha_cli.store.runs import require_plan
+from aha_cli.store.task_memos import create_task_memo
+from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 
 
 def _cfg(gate: str = "manual", enabled: bool = True) -> dict:
@@ -84,8 +90,94 @@ def test_heuristic_keeps_final_excerpt_section_when_summary_present():
     )
     c = heuristic_solution_candidate(ctx)[0]
     assert "Delete stale lock on startup" in c["body"]
-    assert "## final 摘录" in c["body"]
+    assert "## 来源摘录" in c["body"]
     assert "debugging journey" in c["body"]
+
+
+def test_heuristic_keeps_useful_sections_without_truncating():
+    long_line = "keep-this-detail " * 80
+    ctx = build_distill_context(
+        final_body=f"# 任务 Final\n\n## 任务轮次\nnoise\n\n## 稳定结果\n{long_line}\n\n## 可复用经验\nUse the exact command.",
+        final_context={},
+        task_title="Long report",
+        project_key_value="repo-git-abc123",
+        source={"run_id": "r1", "task_id": "t1", "round_id": "1"},
+    )
+    body = heuristic_solution_candidate(ctx)[0]["body"]
+    assert "## 稳定结果" in body
+    assert "## 可复用经验" in body
+    assert "Use the exact command." in body
+    assert "keep-this-detail" in body
+    assert "…" not in body
+    assert "noise" not in body
+
+
+def test_heuristic_includes_prior_entries_for_review():
+    ctx = build_distill_context(
+        final_body="New result says the old cache workaround is obsolete.",
+        final_context=None,
+        task_title="Cache behavior changed",
+        project_key_value="repo-git-abc123",
+        source={"run_id": "r1", "task_id": "t1", "round_id": "1"},
+        prior_entries=[
+            {
+                "meta": {"id": "kb_old", "title": "Old cache workaround", "project_key": "repo-git-abc123"},
+                "body": "Previously clear the cache on every startup.",
+            }
+        ],
+    )
+    c = heuristic_solution_candidate(ctx)[0]
+    assert "## 既有知识复核" in c["body"]
+    assert "Old cache workaround" in c["body"]
+    assert "更新或废弃旧条目" in c["body"]
+
+
+def test_split_knowledge_sidecar_strips_visible_report():
+    visible, candidates, error = split_knowledge_sidecar(
+        '## Final\nDone.\n<aha_knowledge_candidates>[{"title":"Reuse","body":"Do x"}]</aha_knowledge_candidates>'
+    )
+    assert error is None
+    assert visible == "## Final\nDone."
+    assert candidates == [{"title": "Reuse", "body": "Do x"}]
+
+
+def test_sidecar_solution_body_uses_solution_template_when_generated():
+    cand = normalize_sidecar_candidates(
+        _context(),
+        [{
+            "kind": "solutions",
+            "title": "Fix startup",
+            "problem": "Service fails after stale lock.",
+            "solution": "Delete the stale lock and restart.",
+            "related_files": ["src/app.py"],
+            "verification": ["service starts"],
+            "invalid_when": "Locking is redesigned.",
+        }],
+    )[0]
+    assert cand["kind"] == "solutions"
+    assert "## 适用场景" in cand["body"]
+    assert "## 推荐做法" in cand["body"]
+    assert "## 验证方式" in cand["body"]
+    assert "Delete the stale lock" in cand["body"]
+
+
+def test_sidecar_wiki_body_uses_wiki_template_when_generated():
+    cand = normalize_sidecar_candidates(
+        _context(),
+        [{
+            "kind": "wiki",
+            "title": "AHA source root rule",
+            "conclusion": "Upgrade actions must run from the AHA source root.",
+            "rules": "Do not use the active workspace cwd as the source root.",
+            "related_files": ["src/aha_cli/web/system_routes.py"],
+            "update_when": "Installer layout changes.",
+        }],
+    )[0]
+    assert cand["kind"] == "wiki"
+    assert cand["meta"]["type"] == "wiki"
+    assert "## 结论" in cand["body"]
+    assert "## 规则 / 约定" in cand["body"]
+    assert "AHA source root" in cand["body"]
 
 
 def test_distill_initializes_skeleton_without_prior_init(tmp_path: Path):
@@ -211,6 +303,104 @@ def test_finalize_triggers_distill_when_enabled(tmp_path: Path):
     assert len(pending) == 1
     assert pending[0]["meta"]["distilled_by"] == "heuristic"
     assert pending[0]["title"].startswith("Bundle submodule")
+
+
+def test_memo_report_triggers_distill_when_enabled(tmp_path: Path):
+    home = tmp_path / ".aha"
+    rc = main(["--home", str(home), "init"])
+    assert rc == 0
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = main(["--home", str(home), "plan", "Memo workflow", "--agents", "1"])
+    assert rc == 0
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    memo = create_task_memo(home, run_id, {"title": "Memo closeout", "created_task_id": "task-001"})
+
+    updated = write_memo_report_result(
+        home,
+        run_id,
+        {"memo_report_context": {"memo_id": memo["id"], "task_id": "task-001"}},
+        "## 完成报告\nMemo report captured a reusable solution.",
+        0,
+    )
+
+    assert updated and updated["report_status"] == "ready"
+    pending = list_pending(home, load_config(home))
+    assert len(pending) == 1
+    assert pending[0]["source"]["source_type"] == "memo_report"
+    assert pending[0]["source"]["memo_id"] == memo["id"]
+
+
+def test_final_sidecar_is_stripped_and_enqueued(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "Sidecar flow", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+
+    from aha_cli.store.finals import write_task_result
+
+    write_task_result(
+        home,
+        run_id,
+        "task-001",
+        '## Final\nVisible only.\n<aha_knowledge_candidates>[{"title":"Use sidecar","body":"## When\\nUse this next time.","tags":["kb"]}]</aha_knowledge_candidates>',
+        policy="finalize",
+    )
+
+    plan = require_plan(home, run_id)
+    output = home / "runs" / run_id / plan["tasks"][0]["output_file"]
+    assert "<aha_knowledge_candidates>" not in output.read_text(encoding="utf-8")
+    pending = list_pending(home, load_config(home))
+    assert len(pending) == 1
+    assert pending[0]["title"] == "Use sidecar"
+    assert pending[0]["meta"]["distilled_by"] == "sidecar"
+    assert pending[0]["body"].startswith("## When")
+
+
+def test_linked_final_and_memo_sidecars_merge_pending_candidate(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "Merge sidecars", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    memo = create_task_memo(home, run_id, {"title": "Merge memo", "created_task_id": "task-001"})
+
+    from aha_cli.store.finals import write_task_result
+
+    write_task_result(
+        home,
+        run_id,
+        "task-001",
+        '## Final\nDone.\n<aha_knowledge_candidates>[{"title":"Same reusable rule","body":"Final version"}]</aha_knowledge_candidates>',
+        policy="finalize",
+    )
+    updated = write_memo_report_result(
+        home,
+        run_id,
+        {"memo_report_context": {"memo_id": memo["id"], "task_id": "task-001"}},
+        '## Report\nDone.\n<aha_knowledge_candidates>[{"title":"Same reusable rule","body":"Memo-enriched version"}]</aha_knowledge_candidates>',
+        0,
+    )
+
+    assert updated and "<aha_knowledge_candidates>" not in updated["completion_report"]
+    pending = list_pending(home, load_config(home))
+    assert len(pending) == 1
+    assert pending[0]["title"] == "Same reusable rule"
+    assert pending[0]["body"] == "Memo-enriched version\n"
+    assert pending[0]["source_group"].endswith("/task/task-001")
+    assert len(pending[0]["sources"]) == 2
 
 
 def test_finalize_distill_is_noop_when_disabled(tmp_path: Path):

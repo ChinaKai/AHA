@@ -12,12 +12,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aha_cli.domain.models import default_knowledge_config
+from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_git import auto_commit_after_change
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import (
     approve_candidate,
+    delete_entry,
     entry_exists,
     find_entry,
     iter_all_entries,
@@ -25,6 +26,7 @@ from aha_cli.store.knowledge import (
     list_pending,
     remove_pending,
     slugify,
+    update_entry,
 )
 from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
@@ -40,8 +42,29 @@ def _entry_summary(entry: dict) -> dict:
         "type": meta.get("type"),
         "project_key": meta.get("project_key"),
         "tags": meta.get("tags", []),
+        "status": meta.get("status", "active"),
+        "review_after": meta.get("review_after"),
         "updated_at": meta.get("updated_at"),
+        "path": entry.get("path"),
     }
+
+
+def _entry_matches_query(entry: dict, query: str) -> bool:
+    needle = (query or "").strip().lower()
+    if not needle:
+        return True
+    meta = entry.get("meta", {})
+    haystack = " ".join(
+        [
+            str(meta.get("title") or ""),
+            str(meta.get("id") or ""),
+            str(meta.get("slug") or ""),
+            str(meta.get("project_key") or ""),
+            " ".join(str(tag) for tag in (meta.get("tags") or [])),
+            str(entry.get("body") or ""),
+        ]
+    ).lower()
+    return needle in haystack
 
 
 def _ok(method: str, data: dict, status: str = "200 OK") -> bytes:
@@ -69,7 +92,16 @@ def _knowledge_settings(cfg: dict) -> dict:
     }
 
 
+def _as_string_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
 _ALLOWED_GATES = {"manual", "auto", "off"}
+_ALLOWED_ENTRY_STATUSES = {"active", "stale", "deprecated"}
 
 
 def _apply_settings_patch(root: Path, payload: dict) -> dict:
@@ -137,6 +169,7 @@ def knowledge_route_response(
     if method in {"GET", "HEAD"} and path == "/api/kb/entries":
         scope = str(query.get("scope", [""])[0] or "").strip() or None
         project = str(query.get("project", [""])[0] or "").strip() or None
+        search = str(query.get("q", [""])[0] or "").strip()
         kind = str(query.get("kind", [""])[0] or "").strip() or None
         want_type = {"solutions": "solution", "wiki": "wiki"}.get(kind) if kind else None
         entries = []
@@ -144,9 +177,11 @@ def knowledge_route_response(
             meta = entry.get("meta", {})
             if scope and meta.get("scope") != scope:
                 continue
-            if project and meta.get("project_key") != project:
+            if project and project.lower() not in str(meta.get("project_key") or "").lower():
                 continue
             if want_type and meta.get("type") != want_type:
+                continue
+            if search and not _entry_matches_query(entry, search):
                 continue
             entries.append(_entry_summary(entry))
         return _ok(method, {"entries": entries, "count": len(entries)})
@@ -159,6 +194,56 @@ def knowledge_route_response(
         if entry is None:
             return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
         return _ok(method, entry)
+
+    if method == "PATCH" and path == "/api/kb/entry":
+        payload = parse_json_body(body) if body.strip() else {}
+        identifier = str(payload.get("id") or payload.get("slug") or "").strip()
+        if not identifier:
+            return json_response({"error": "id or slug required"}, "400 Bad Request")
+        status = payload.get("status")
+        if status is not None:
+            status = str(status).strip().lower()
+            if status not in _ALLOWED_ENTRY_STATUSES:
+                return json_response({"error": f"status must be one of {sorted(_ALLOWED_ENTRY_STATUSES)}"}, "400 Bad Request")
+        review_after = None
+        if payload.get("mark_stale"):
+            review_after = utc_now()
+        elif "review_after" in payload:
+            review_after = str(payload.get("review_after") or "").strip()
+        invalid_when = None
+        if "invalid_when" in payload:
+            invalid_when = str(payload.get("invalid_when") or "").strip()
+        try:
+            entry = update_entry(
+                root,
+                cfg,
+                identifier,
+                title=str(payload["title"]).strip() if "title" in payload else None,
+                body=str(payload["body"]) if "body" in payload else None,
+                tags=_as_string_list(payload["tags"]) if "tags" in payload else None,
+                related_files=_as_string_list(payload["related_files"]) if "related_files" in payload else None,
+                status=status,
+                review_after=review_after,
+                invalid_when=invalid_when,
+            )
+        except FileNotFoundError:
+            return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        git_result = auto_commit_after_change(
+            root, f"chore(knowledge): update '{entry.get('meta', {}).get('title', 'entry')}'", cfg
+        )
+        return json_response({"ok": True, "entry": entry, "git": git_result})
+
+    if method == "DELETE" and path == "/api/kb/entry":
+        payload = parse_json_body(body) if body.strip() else {}
+        identifier = str(payload.get("id") or payload.get("slug") or query.get("id", [""])[0] or "").strip()
+        if not identifier:
+            return json_response({"error": "id or slug required"}, "400 Bad Request")
+        try:
+            deleted_path = delete_entry(root, cfg, identifier)
+        except FileNotFoundError:
+            return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        git_result = auto_commit_after_change(root, f"chore(knowledge): delete '{identifier}'", cfg)
+        return json_response({"ok": True, "deleted": identifier, "path": str(deleted_path), "git": git_result})
 
     if method in {"GET", "HEAD"} and path == "/api/kb/pending":
         return _ok(method, {"pending": list_pending(root, cfg), "count": len(list_pending(root, cfg))})

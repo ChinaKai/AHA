@@ -30,6 +30,14 @@ def _post(home: Path, path: str, payload: dict):
     return knowledge_route_response(home, "POST", path, {}, json.dumps(payload).encode(), {})
 
 
+def _patch(home: Path, path: str, payload: dict):
+    return knowledge_route_response(home, "PATCH", path, {}, json.dumps(payload).encode(), {})
+
+
+def _delete(home: Path, path: str, payload: dict):
+    return knowledge_route_response(home, "DELETE", path, {}, json.dumps(payload).encode(), {})
+
+
 def test_unknown_path_returns_none(tmp_path: Path):
     assert knowledge_route_response(tmp_path / ".aha", "GET", "/api/other", {}, b"", {}) is None
 
@@ -54,6 +62,27 @@ def test_status_and_entries(tmp_path: Path):
     assert by_kind["count"] == 1 and by_kind["entries"][0]["id"].startswith("kb_")
 
 
+def test_entries_support_fuzzy_project_filter_and_search(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(home, config=cfg, scope="project", kind="solutions",
+                project_key_value="aha-git-abc123", title="Fix build", body="restart the service", meta={"tags": ["deploy"]})
+    write_entry(home, config=cfg, scope="project", kind="solutions",
+                project_key_value="docs-git-def456", title="Write docs", body="update README", meta={"tags": ["docs"]})
+
+    by_project = _get(home, "/api/kb/entries", {"project": ["aha"]})
+    assert by_project["count"] == 1
+    assert by_project["entries"][0]["project_key"] == "aha-git-abc123"
+
+    by_body = _get(home, "/api/kb/entries", {"q": ["service"]})
+    assert by_body["count"] == 1
+    assert by_body["entries"][0]["title"] == "Fix build"
+
+    by_tag = _get(home, "/api/kb/entries", {"q": ["docs"]})
+    assert by_tag["count"] == 1
+    assert by_tag["entries"][0]["title"] == "Write docs"
+
+
 def test_entry_lookup_by_id(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)
@@ -65,6 +94,50 @@ def test_entry_lookup_by_id(tmp_path: Path):
 
     missing = knowledge_route_response(home, "GET", "/api/kb/entry", {"id": ["nope"]}, b"", {})
     assert b"404" in missing.split(b"\r\n", 1)[0]
+
+
+def test_entry_update_status_and_delete(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(home, config=cfg, scope="project", kind="solutions",
+                project_key_value="git-abc", title="Fix build", body="do x",
+                meta={"tags": ["ci"], "related_files": ["old.py"]})
+    entry_id = _get(home, "/api/kb/entries")["entries"][0]["id"]
+
+    updated = json_response_body(_patch(home, "/api/kb/entry", {
+        "id": entry_id,
+        "title": "Fix build safely",
+        "body": "do y",
+        "tags": "ci, build",
+        "related_files": "src/app.py",
+        "invalid_when": "build system changes",
+    }))
+    assert updated["ok"] is True
+    assert updated["entry"]["meta"]["title"] == "Fix build safely"
+    assert updated["entry"]["meta"]["slug"] == "fix-build"
+    assert updated["entry"]["body"] == "do y"
+    assert updated["entry"]["meta"]["tags"] == ["ci", "build"]
+    assert updated["entry"]["meta"]["related_files"] == ["src/app.py"]
+
+    stale = json_response_body(_patch(home, "/api/kb/entry", {
+        "id": entry_id,
+        "status": "stale",
+        "mark_stale": True,
+    }))
+    assert stale["entry"]["meta"]["status"] == "stale"
+    assert stale["entry"]["meta"]["review_after"]
+
+    restored = json_response_body(_patch(home, "/api/kb/entry", {
+        "id": entry_id,
+        "status": "active",
+        "review_after": "",
+    }))
+    assert restored["entry"]["meta"]["status"] == "active"
+    assert restored["entry"]["meta"]["review_after"] is None
+
+    deleted = json_response_body(_delete(home, "/api/kb/entry", {"id": entry_id}))
+    assert deleted["ok"] is True
+    assert _get(home, "/api/kb/entries")["count"] == 0
 
 
 def test_pending_approve_and_reject(tmp_path: Path):

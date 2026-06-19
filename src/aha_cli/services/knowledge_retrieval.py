@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Sequence
 
 from aha_cli.store.knowledge import (
     iter_all_entries,
     knowledge_config,
-    project_key as derive_project_key,
+    project_key_aliases,
 )
 
 _STOP = {
@@ -57,6 +58,7 @@ def retrieve_for_task(
     config: dict | None,
     *,
     project_key: str | None,
+    project_keys: Sequence[str] | None = None,
     terms: list[str],
     max_entries: int = 5,
 ) -> list[dict]:
@@ -66,11 +68,15 @@ def retrieve_for_task(
     terms, fall back to the project's most recently updated entries so a project
     that has knowledge always contributes something.
     """
+    keys = [key for key in [project_key, *(project_keys or [])] if key]
+    project_key_set = set(keys)
     project_entries: list[dict] = []
     general_entries: list[dict] = []
     for entry in iter_all_entries(root, config):
         meta = entry.get("meta", {})
-        if meta.get("scope") == "project" and project_key and meta.get("project_key") == project_key:
+        if meta.get("status") == "deprecated":
+            continue
+        if meta.get("scope") == "project" and meta.get("project_key") in project_key_set:
             project_entries.append(entry)
         elif meta.get("scope") == "general":
             general_entries.append(entry)
@@ -146,12 +152,13 @@ def knowledge_context_for_task(root: Path, run_id: str, task: dict) -> str:
         except (Exception, SystemExit):
             pass
         goal = _plan_goal(root, run_id)
-        key = derive_project_key(Path(workspace_path), goal=goal)
+        project_keys = project_key_aliases(Path(workspace_path), goal=goal)
+        key = project_keys[0]
         retrieval = cfg.get("retrieval", {}) if isinstance(cfg.get("retrieval"), dict) else {}
         max_entries = int(retrieval.get("max_entries", 5) or 5)
         max_chars = int(retrieval.get("max_chars", 4000) or 4000)
         terms = _terms(task.get("title", ""), task.get("description", ""))
-        entries = retrieve_for_task(root, config, project_key=key, terms=terms, max_entries=max_entries)
+        entries = retrieve_for_task(root, config, project_key=key, project_keys=project_keys, terms=terms, max_entries=max_entries)
         return format_injection(entries, max_chars=max_chars)
     except (Exception, SystemExit):  # injection must never break prompt assembly
         return ""

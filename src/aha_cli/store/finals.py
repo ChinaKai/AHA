@@ -6,6 +6,7 @@ from pathlib import Path
 from aha_cli.domain.models import utc_now
 from aha_cli.store.events import append_event as default_append_event
 from aha_cli.store.io import write_json
+from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 from aha_cli.store.paths import run_dir
 from aha_cli.store.rounds import (
     ensure_task_round_record,
@@ -36,7 +37,8 @@ def write_task_result(
     render_overview_func: Callable[..., object] | None = None,
 ) -> Path:
     now = now_func()
-    body = content.rstrip() + "\n"
+    visible_content, sidecar_candidates, sidecar_error = split_knowledge_sidecar(content)
+    body = visible_content.rstrip() + "\n"
     distill_meta: dict | None = None
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -49,6 +51,8 @@ def write_task_result(
         meta = {"task_id": task_id, "policy": policy, "updated_at": now}
         if final_context:
             meta["final_context"] = final_context
+        if sidecar_error:
+            meta["knowledge_sidecar_error"] = sidecar_error
         if policy == "finalize":
             round_record = ensure_task_round_record(root, run_id, task, now_func=now_func)
             round_id = str(round_record["round_id"])
@@ -83,12 +87,12 @@ def write_task_result(
         root,
         run_id,
         "task_result_written",
-        {"task_id": task_id, "path": str(path), "chars": len(content), "policy": policy, "round_id": meta.get("round_id")},
+        {"task_id": task_id, "path": str(path), "chars": len(body.strip()), "policy": policy, "round_id": meta.get("round_id")},
     )
     if policy == "finalize" and render_overview_func:
         render_overview_func(root, run_id, task_id, policy=policy)
     if policy == "finalize" and distill_meta is not None:
-        _distill_knowledge_safe(root, run_id, task_id, body, final_context, distill_meta)
+        _distill_knowledge_safe(root, run_id, task_id, body, final_context, distill_meta, sidecar_candidates)
     return path
 
 
@@ -99,6 +103,7 @@ def _distill_knowledge_safe(
     body: str,
     final_context: dict | None,
     distill_meta: dict,
+    sidecar_candidates: list[dict] | None,
 ) -> None:
     """Best-effort knowledge distillation hook. Never breaks finalization."""
     try:
@@ -115,6 +120,7 @@ def _distill_knowledge_safe(
             workspace_path=distill_meta.get("workspace_path"),
             goal=distill_meta.get("goal"),
             round_id=distill_meta.get("round_id"),
+            sidecar_candidates=sidecar_candidates,
         )
     except Exception:  # noqa: BLE001 - distillation is strictly best-effort
         pass

@@ -15,7 +15,7 @@ from aha_cli.services.knowledge_retrieval import (
 from aha_cli.services.orchestrator import dispatch_task_to_main, task_assignment_prompt
 from aha_cli.store.config import load_config
 from aha_cli.store.io import write_json
-from aha_cli.store.knowledge import init_knowledge_base, project_key as derive_project_key, write_entry
+from aha_cli.store.knowledge import init_knowledge_base, project_key as derive_project_key, project_key_aliases, write_entry
 from aha_cli.store.paths import config_path, inbox_path
 from aha_cli.store.runs import require_plan
 
@@ -24,6 +24,14 @@ def _cfg(enabled: bool = True) -> dict:
     kb = default_knowledge_config()
     kb["enabled"] = enabled
     return {"knowledge": kb}
+
+
+def _make_git_workspace(path: Path, remote: str) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    git_dir = path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text(f'[remote "origin"]\n\turl = {remote}\n', encoding="utf-8")
+    return path
 
 
 def test_terms_drop_stopwords_and_short():
@@ -62,6 +70,19 @@ def test_retrieve_ranks_by_overlap_then_recency_fallback(tmp_path: Path):
 
     # Wrong project -> nothing.
     assert retrieve_for_task(root, cfg, project_key="git-OTHER", terms=["flaky"], max_entries=5) == []
+
+
+def test_retrieve_skips_deprecated_entries(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg()
+    init_knowledge_base(root, cfg)
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="Old build fix", body="deprecated clean cache", meta={"status": "deprecated"})
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="Current build fix", body="use the supported build command", meta={})
+
+    hits = retrieve_for_task(root, cfg, project_key="git-abc", terms=["build", "fix"], max_entries=5)
+    assert [hit["meta"]["title"] for hit in hits] == ["Current build fix"]
 
 
 def test_format_injection_bounds_chars(tmp_path: Path):
@@ -110,6 +131,24 @@ def test_context_includes_matching_entry(tmp_path: Path):
     })
     assert "项目已知经验" in ctx
     assert "Avoid stale lock" in ctx
+
+
+def test_context_reads_legacy_git_project_key(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg(enabled=True)
+    write_json(config_path(root), cfg)
+    init_knowledge_base(root, cfg)
+    workspace = _make_git_workspace(tmp_path / "proj", "git@github.com:user/repo.git")
+    aliases = project_key_aliases(workspace, goal=None)
+    assert aliases[0].startswith("repo-git-")
+    assert aliases[1].startswith("git-")
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value=aliases[1],
+                title="Legacy project key", body="old git hash key still works", meta={})
+
+    ctx = knowledge_context_for_task(root, "norun", {
+        "workspace_path": str(workspace), "title": "legacy", "description": "git hash key",
+    })
+    assert "Legacy project key" in ctx
 
 
 def test_context_runs_auto_pull_and_tolerates_failure(tmp_path: Path, monkeypatch):

@@ -55,6 +55,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     write_task_result,
 )
+from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 from aha_cli.store.task_memos import update_task_memo
 from aha_cli.services.native_subagents import text_claims_subagent_created
 
@@ -425,25 +426,30 @@ def write_memo_report_result(root: Path, run_id: str, item: dict, reply: str, ex
         append_event(root, run_id, "task_memo_report_failed", {"task_id": task_id, "reason": "missing memo_id"})
         return None
     now = utc_now()
-    if exit_code == 0 and reply.strip():
+    visible_reply, sidecar_candidates, sidecar_error = split_knowledge_sidecar(reply)
+    report_body = visible_reply.strip()
+    if exit_code == 0 and report_body:
         memo = update_task_memo(
             root,
             run_id,
             memo_id,
             {
                 "report_status": "ready",
-                "completion_report": reply.strip(),
+                "completion_report": report_body,
                 "report_task_id": task_id,
                 "report_completed_at": now,
                 "report_error": "",
             },
         )
+        if sidecar_error:
+            append_event(root, run_id, "knowledge_memo_report_sidecar_invalid", {"memo_id": memo_id, "task_id": task_id, "error": sidecar_error})
         append_event(
             root,
             run_id,
             "task_memo_report_completed",
-            {"memo_id": memo_id, "task_id": task_id, "chars": len(reply.strip()), "completed_at": now},
+            {"memo_id": memo_id, "task_id": task_id, "chars": len(report_body), "completed_at": now},
         )
+        _distill_memo_report_safe(root, run_id, task_id, memo_id, memo, report_body, sidecar_candidates)
         return memo
     error = agent_error_notice("main", exit_code, reply)
     memo = update_task_memo(
@@ -459,6 +465,39 @@ def write_memo_report_result(root: Path, run_id: str, item: dict, reply: str, ex
     )
     append_event(root, run_id, "task_memo_report_failed", {"memo_id": memo_id, "task_id": task_id, "error": error})
     return memo
+
+
+def _distill_memo_report_safe(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    memo_id: str,
+    memo: dict,
+    report_body: str,
+    sidecar_candidates: list[dict] | None = None,
+) -> None:
+    """Best-effort memo report distillation hook. Never breaks report writeback."""
+    try:
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
+        if not task:
+            return
+        from aha_cli.services.knowledge_distill import distill_after_memo_report
+
+        result = distill_after_memo_report(
+            root,
+            run_id,
+            task_id,
+            memo_id,
+            report_body,
+            memo_title=str(memo.get("title") or task.get("title") or ""),
+            workspace_path=task.get("workspace_path"),
+            goal=plan.get("goal"),
+            sidecar_candidates=sidecar_candidates,
+        )
+        append_event(root, run_id, "knowledge_memo_report_distilled", {"memo_id": memo_id, "task_id": task_id, "result": result})
+    except Exception as exc:  # noqa: BLE001 - distillation must not affect memo reports
+        append_event(root, run_id, "knowledge_memo_report_distill_failed", {"memo_id": memo_id, "task_id": task_id, "error": str(exc)})
 
 
 def auto_reply(root: Path, run_id: str, args) -> int:
@@ -990,7 +1029,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 supervision_waiting_for_host = False
                 if exit_code == 0 and reply.strip():
                     executed = execute_actions(root, run_id, item_task_id, reply)
-                    display_reply = action_response_text(reply)
+                    display_source = split_knowledge_sidecar(reply)[0] if writes_task_final else reply
+                    display_reply = action_response_text(display_source)
                     append_message(
                         root,
                         run_id,

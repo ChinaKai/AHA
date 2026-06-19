@@ -123,22 +123,36 @@ def _git_remote_for(workspace: Path) -> str:
 def project_key(workspace: Path, goal: str | None = None) -> str:
     """Derive a stable, migratable project key.
 
-    Priority: git origin remote hash (stable across machines/paths), else a
-    slug built from the run goal and workspace directory name. The fallback
-    deliberately excludes the absolute path so the same project resolves to the
-    same key after being moved or cloned to a different location/machine.
+    Priority: repo-name + git origin remote hash (stable across machines/paths
+    and still human-readable), else a slug built from the run goal and
+    workspace directory name. The fallback deliberately excludes the absolute
+    path so the same project resolves to the same key after being moved or
+    cloned to a different location/machine.
+    """
+    return project_key_aliases(workspace, goal=goal)[0]
+
+
+def project_key_aliases(workspace: Path, goal: str | None = None) -> list[str]:
+    """Return the preferred project key followed by compatible legacy keys.
+
+    Older AHA versions used ``git-<hash>`` for git projects. Keep that alias so
+    existing project knowledge remains readable after the more descriptive key
+    format starts writing ``<repo-name>-git-<hash>``.
     """
     workspace = Path(workspace).expanduser()
     remote = normalize_git_remote(_git_remote_for(workspace))
     if remote:
         digest = hashlib.sha1(remote.encode("utf-8")).hexdigest()[:12]
-        return f"git-{digest}"
+        repo_name = remote.rsplit("/", 1)[-1] or "repo"
+        preferred = f"{slugify(repo_name, max_length=40)}-git-{digest}"
+        legacy = f"git-{digest}"
+        return [preferred, legacy] if preferred != legacy else [preferred]
     basis = "-".join(part for part in [(goal or "").strip(), workspace.name] if part)
     if not basis:
         basis = "workspace"
     # Digest over the migratable basis (goal + dir name), never the absolute path.
     digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:8]
-    return f"ws-{slugify(basis)}-{digest}"
+    return [f"ws-{slugify(basis)}-{digest}"]
 
 
 # --------------------------------------------------------------------------- #
@@ -390,6 +404,62 @@ def find_entry(root: Path, config: dict | None, identifier: str) -> dict | None:
     return None
 
 
+def update_entry(
+    root: Path,
+    config: dict | None,
+    identifier: str,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    tags: list[str] | None = None,
+    related_files: list[str] | None = None,
+    status: str | None = None,
+    review_after: str | None = None,
+    invalid_when: str | None = None,
+) -> dict:
+    """Update a tracked entry while preserving its stable slug/path/id."""
+    entry = find_entry(root, config, identifier)
+    if entry is None:
+        raise FileNotFoundError(f"entry not found: {identifier}")
+    meta = dict(entry.get("meta") or {})
+    new_title = (title if title is not None else meta.get("title") or "").strip()
+    new_body = body if body is not None else entry.get("body", "")
+    if tags is not None:
+        meta["tags"] = [str(item).strip() for item in tags if str(item).strip()]
+    if related_files is not None:
+        meta["related_files"] = [str(item).strip() for item in related_files if str(item).strip()]
+    if status is not None:
+        meta["status"] = str(status).strip() or "active"
+    if review_after is not None:
+        meta["review_after"] = str(review_after).strip() or None
+    if invalid_when is not None:
+        meta["invalid_when"] = str(invalid_when).strip() or None
+    scope = str(meta.get("scope") or "project")
+    kind = "wiki" if meta.get("type") == "wiki" else "solutions"
+    path = write_entry(
+        root,
+        config=config,
+        scope=scope,
+        kind=kind,
+        project_key_value=meta.get("project_key"),
+        title=new_title,
+        body=new_body,
+        meta=meta,
+        slug=meta.get("slug") or slugify(new_title),
+    )
+    return read_entry(path)
+
+
+def delete_entry(root: Path, config: dict | None, identifier: str) -> Path:
+    """Delete a tracked entry by id or slug."""
+    entry = find_entry(root, config, identifier)
+    if entry is None:
+        raise FileNotFoundError(f"entry not found: {identifier}")
+    path = Path(entry["path"])
+    path.unlink()
+    return path
+
+
 def search_entries(root: Path, config: dict | None, query: str) -> list[dict]:
     """Case-insensitive substring search over title, tags, and body."""
     needle = (query or "").strip().lower()
@@ -471,26 +541,112 @@ def pending_dir(root: Path, config: dict | None = None) -> Path:
     return knowledge_root(root, config) / PENDING_DIR
 
 
+def _source_group(source: dict | None) -> str:
+    source = source or {}
+    run_id = str(source.get("run_id") or "").strip()
+    task_id = str(source.get("task_id") or "").strip()
+    memo_id = str(source.get("memo_id") or "").strip()
+    if run_id and task_id:
+        return f"{run_id}/task/{task_id}"
+    if run_id and memo_id:
+        return f"{run_id}/memo/{memo_id}"
+    return json.dumps(source, ensure_ascii=False, sort_keys=True)
+
+
+def candidate_identity(candidate: dict) -> str:
+    """Stable review identity for final/report re-runs and source-order merge."""
+    source_group = str(candidate.get("source_group") or _source_group(candidate.get("source")))
+    basis = "/".join(
+        [
+            str(candidate.get("scope") or "project"),
+            str(candidate.get("kind") or "solutions"),
+            str(candidate.get("project_key") or ""),
+            slugify(str(candidate.get("title") or "")),
+            source_group,
+        ]
+    )
+    return "cand_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+
+
+def _candidate_fingerprint(record: dict) -> str:
+    meta = dict(record.get("meta") or {})
+    for volatile in ("source_tasks", "source_memos", "created_at", "updated_at"):
+        meta.pop(volatile, None)
+    basis = {
+        "scope": record.get("scope"),
+        "kind": record.get("kind"),
+        "project_key": record.get("project_key"),
+        "title": record.get("title"),
+        "body": record.get("body"),
+        "meta": meta,
+    }
+    return hashlib.sha1(json.dumps(basis, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def _merge_sources(existing: list[dict], source: dict | None) -> list[dict]:
+    merged = list(existing or [])
+    if not isinstance(source, dict) or not source:
+        return merged
+    source_key = json.dumps(source, ensure_ascii=False, sort_keys=True)
+    known = {json.dumps(item, ensure_ascii=False, sort_keys=True) for item in merged if isinstance(item, dict)}
+    if source_key not in known:
+        merged.append(source)
+    return merged
+
+
 def candidate_id(title: str, body: str, source: dict | None = None) -> str:
     basis = f"{title}\n{body}\n{json.dumps(source or {}, sort_keys=True)}"
     return "cand_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
 
 
 def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
-    """Persist a distilled candidate to the manual-review queue. Idempotent by id."""
+    """Persist a distilled candidate to the manual-review queue.
+
+    Candidates are idempotent by source group + normalized title, not by body.
+    That lets task final and linked memo report update one review item even when
+    they run in different orders or the same final/report is regenerated.
+    """
     target = pending_dir(root, config)
     target.mkdir(parents=True, exist_ok=True)
     record = dict(candidate)
     record.setdefault("kind", "solutions")
     record.setdefault("scope", "project")
     record.setdefault("meta", {})
-    cid = record.get("id") or candidate_id(
-        record.get("title", ""), record.get("body", ""), record.get("source")
-    )
+    record["source_group"] = str(record.get("source_group") or _source_group(record.get("source")))
+    cid = record.get("id") or candidate_identity(record)
     record["id"] = cid
+    record["identity"] = cid
+    record["fingerprint"] = _candidate_fingerprint(record)
     record["status"] = "pending"
-    record.setdefault("created_at", utc_now())
+    now = utc_now()
+    record.setdefault("created_at", now)
+    record["last_seen_at"] = now
+    record["sources"] = _merge_sources(record.get("sources") or [], record.get("source"))
+    entry_slug = slugify(str(record.get("title") or ""))
+    existing_entry = entry_path_for(
+        root,
+        config,
+        str(record.get("scope") or "project"),
+        str(record.get("kind") or "solutions"),
+        record.get("project_key"),
+        entry_slug,
+    )
+    if existing_entry:
+        try:
+            existing = read_entry(existing_entry)
+            record["action"] = "update"
+            record["updates_entry_id"] = existing.get("meta", {}).get("id")
+        except (OSError, ValueError):
+            pass
     path = target / f"{cid}.json"
+    if path.exists():
+        try:
+            previous = read_json(path)
+            record["created_at"] = previous.get("created_at", record["created_at"])
+            record["sources"] = _merge_sources(previous.get("sources") or [], record.get("source"))
+            record["updated_from_fingerprint"] = previous.get("fingerprint")
+        except (OSError, ValueError):
+            pass
     write_json(path, record)
     return path
 

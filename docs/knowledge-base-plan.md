@@ -64,11 +64,12 @@
 需要一个**稳定**且**可迁移**的项目标识，不能用绝对路径（换机器就失效）。
 
 策略（按优先级）：
-1. 若 workspace 是 git 仓库 → 用 `remote origin` URL 规范化后的 hash（最稳定，跨机器一致）。
+1. 若 workspace 是 git 仓库 → 用 repo 名 + `remote origin` URL 规范化后的 hash，例如 `aha-git-<hash>`（跨机器一致，同时可读）。
 2. 否则 → 用 run goal + workspace 目录名生成 slug。
 3. `project.json` 记录所有曾见过的 workspace 路径作为「别名」，便于人工核对与合并。
 
 > 边界：同一项目在不同机器/路径下应映射到同一 project-key。git remote 优先正是为此。
+> 兼容：旧版本写入的 `git-<hash>` 目录作为 legacy alias 继续参与检索，不强制迁移。
 
 ---
 
@@ -94,8 +95,19 @@ updated_at: <iso>
 review_after: <iso|null>     # 过期复核提示
 status: active | stale | deprecated
 ---
+```
 
 正文（结构化 Markdown）。Wiki 同主题应**持续更新同一篇**，而非新增。
+
+建议正文结构：
+
+```markdown
+## 结论
+## 适用范围
+## 规则 / 约定
+## 示例
+## 相关位置
+## 更新条件
 ```
 
 ### 3.2 解决方案条目（过程性：「遇到 Y 怎么办」，案例库/CBR）
@@ -126,6 +138,17 @@ status: active | stale | deprecated
 ```
 
 > 设计要点：`outcome` 与「无效方案」是解决方案库相对 wiki 的核心价值——避免后续 agent 重走死路。
+
+sidecar 产出的 `solutions` 正文建议使用更偏行动的固定段落：
+
+```markdown
+## 适用场景
+## 问题 / 触发信号
+## 推荐做法
+## 关键位置
+## 验证方式
+## 失效条件 / 适用边界
+```
 
 ---
 
@@ -170,9 +193,9 @@ task 开始
   ▼
 agent 执行任务  ……
   ▼
-task 收尾 / round finalize
-  │  (d) 读取本轮 final + memo report + changed_files/verification/risks
-  │  (e) distiller（独立 sub-agent 或专用 prompt）提炼出 0~N 条候选知识
+task 收尾 / round finalize 或 memo completion report 完成
+  │  (d) final/report agent 同次输出用户可见报告 + knowledge candidates sidecar
+  │  (e) AHA 剥离 sidecar 保存干净 final/report；无 sidecar 时用 heuristic 兜底提炼 0~N 条候选
   │  (f) curation gate：
   │        manual → 进入待确认队列，用户在 Web UI 审核
   │        auto   → 直接入库（带较低 confidence）
@@ -184,7 +207,11 @@ task 收尾 / round finalize
 
 挂载点（复用现有 hook，不另起炉灶）：
 - (a)(b)(c) 挂在 task 启动 / prompt 组装链路（`prompt_artifacts` / `chat_prompt_context`）。
-- (d)~(h) 挂在 `store/finals.py::write_task_result` 的 `finalize` 分支之后。
+- task final 的 (d)~(h) 挂在 `store/finals.py::write_task_result` 的 `finalize` 分支之后。
+- memo report 的 (d)~(h) 挂在 `services/chat.py::write_memo_report_result` 成功写回之后，source 标记为 `memo_report`。
+- final/report 属于同一 linked task 时共用同一 `source_group`，同标题候选更新同一条 `.pending`，避免执行顺序不同或重复执行产生重复知识。
+- sidecar 使用软数量约束：默认产出 0~3 条高质量候选；只有确实存在更多独立可复用经验时才超过 3 条。
+- sidecar 的 `body` 模板由 `kind` 决定：`solutions` 偏行动指南，`wiki` 偏稳定事实/项目约定。
 
 ---
 
@@ -194,7 +221,7 @@ task 收尾 / round finalize
 |---|---|
 | `store/knowledge.py` | KB 读写、索引、project-key、slug、文件 I/O |
 | `services/knowledge_git.py` | git init/commit/push/pull 封装（幂等、错误隔离） |
-| `services/knowledge_distill.py` | 从 final/report 提炼候选知识（调用 backend agent） |
+| `services/knowledge_distill.py` | 处理 final/report sidecar 候选；缺失时用 heuristic 兜底提炼 |
 | `services/knowledge_retrieval.py` | 检索 + 摘要 + prompt 注入 |
 | `services/knowledge_curation.py` | 待确认队列、批准/拒绝/合并 |
 | `websocket/server.py` 路由 + Web UI | KB 浏览、审核、配置 |
@@ -208,7 +235,7 @@ task 收尾 / round finalize
 
 | 风险 | 对策 |
 |---|---|
-| 提炼幻觉/过度具体污染后续任务 | curation gate + distiller 自我反驳 + confidence + source 可追溯 |
+| 提炼幻觉/过度具体污染后续任务 | curation gate + final/report sidecar 结构约束 + confidence + source 可追溯 |
 | 知识过期（项目演进） | `review_after` + `related_files` 关联，检索时标注「可能过时」，定期复核 |
 | 检索注入过多/跑题 | `max_entries`/`max_chars` 上限，先朴素检索（key+tag+标题）不上向量库 |
 | git 冲突 / push 失败 | 操作幂等、失败不阻断任务、冲突走 rebase 并在 UI 报警 |
@@ -246,9 +273,13 @@ task 收尾 / round finalize
 > 说明：auto 钩子已就绪但尚未接入真实 task 生命周期（接入点在 Phase 3 的 `write_task_result` 后置与 Phase 5 的 task 启动前）。目前可用 `aha kb sync` 手动驱动。
 
 ### Phase 3 — 沉淀（distill，第一刀：项目解决方案库）✅
-- [x] `services/knowledge_distill.py`：从 final + final_context(summary/changed_files/verification/risks) 生成项目解决方案候选；distiller 可插拔（默认零依赖确定性 heuristic，后续可换 backend sub-agent）
-- [x] heuristic **实际利用 final 正文**：summary 缺失时用 final 截断摘要作为「有效解法」；summary 存在时把 final 摘录单列为「## final 摘录」段落（不再只写「见任务 final」）
+- [x] `services/knowledge_distill.py`：优先接收 final/report sidecar 生成项目解决方案候选；无 sidecar 时从 final + final_context(summary/changed_files/verification/risks) 用零依赖确定性 heuristic 兜底。
+- [x] final/report agent 可同次输出 `<aha_knowledge_candidates>` sidecar；AHA 保存 final/report 前剥离 sidecar，候选进入同一套 `.pending` 审核流程。无 sidecar 或解析失败时才走 heuristic fallback。
+- [x] 同一 linked task 的 final/report 使用同一 `source_group`；候选身份为 `scope + kind + project_key + normalized_title + source_group`，重复执行或顺序不同会更新同一 pending。
+- [x] heuristic **实际利用 final/report 正文**：保留 Markdown 结构，优先抽取完成内容/稳定结果/关键结论/可复用经验等高价值章节作为「有效解法」；不再把受管正文硬截成 600 字前缀。
+- [x] distill 时附带本项目命中的既有知识摘要；若新结论与旧知识冲突，候选提示审核时更新或废弃旧条目，避免过期知识静默误导。
 - [x] 接入 `write_task_result` finalize 后置 hook（`_distill_knowledge_safe`，惰性导入避免 store→services 循环，**完全失败隔离，绝不打断 finalize**）
+- [x] 接入 `write_memo_report_result` memo report 成功写回后置 hook（source=`memo_report`，带 memo_id/task_id，可追溯）。
 - [x] **写入前确保 skeleton 已初始化**：`distill_and_enqueue` 在写候选/条目前调用 `init_knowledge_base`，即使首次由 finalize 触发也会生成 `aha-knowledge.json`/README/`.gitignore`，保证 `.pending/` 从一开始就被排除
 - [x] curation 待确认队列落盘：`.pending/` 队列（`.gitignore` 排除，未审候选永不被 commit/push）；manual→入队、auto→直写并 auto_commit、off→跳过
 - [x] `approve_candidate` 将候选提升为受管条目并出队（approve/reject 完整 CLI 在 Phase 4）
@@ -269,7 +300,7 @@ task 收尾 / round finalize
       `GET /api/kb/status|entries|entry|pending|config`、`POST /api/kb/approve|reject`、`PATCH /api/kb/config`
 - [x] `PATCH /api/kb/config` 允许列表合并 enabled/path/git{enabled,remote,branch,auto_pull,auto_commit,auto_push}/curation.gate，写回 config.json 且保留其余键；非法 gate 返回 400
 - [x] approve 经 API 复用同身份去重(created/updated) + git enabled 时 auto_commit
-- [x] **自包含前端控制台 `web/static/knowledge.html`**：条目浏览(scope/kind/project 过滤 + 查看正文)、待审 approve/reject、knowledge 设置表单；不侵入主 SPA(降低风险)，经 `/static/knowledge.html` 访问
+- [x] **自包含前端控制台 `web/static/knowledge.html`**：条目浏览(scope/kind/project 模糊过滤 + 标题/标签/正文搜索 + 查看正文)、正式条目 edit/deprecate/mark stale/restore/delete/copy id/path、待审 approve/reject、knowledge 设置表单；不侵入主 SPA(降低风险)，经 `/static/knowledge.html` 访问
 - [x] PATCH config 对手写坏配置加固：`knowledge.git`/`knowledge.curation` 非 dict 时按空 dict 合并（不再 500），加测试
 - [x] 单测：API 6 例 + **server 分发自动化测试**（`fetch_ui_response` 覆盖 `/api/kb/status`、`/static/knowledge.html`、`PATCH /api/kb/config`，保护 server.py 改动）+ 坏配置容错；全量 645 测试绿
 - [x] 设计决策已确认：自包含 `/static/knowledge.html` console，不嵌主 SPA
@@ -300,6 +331,10 @@ task 收尾 / round finalize
 | 2026-06-19 | Phase 0 | 用户拍板四项默认值，设计定稿 | manual / 项目解决方案库 / 第2、3节 / pull+commit开,push关 |
 | 2026-06-19 | Phase 1 | 配置块 + `store/knowledge.py` + `aha kb init/status` + 12 单测；frontmatter 改用 JSON（零依赖） | 改动：constants.py, domain/models.py, store/config.py, store/paths.py, store/knowledge.py(新), cli_parser.py, cli.py, tests/test_knowledge.py(新)。全测试绿。 |
 | 2026-06-19 | Phase 1 | 收口修复：project_key 无 git fallback 去除绝对路径 hash（改为对 goal+目录名 basis 取 hash，可迁移）；第 10 节改为「已确认决策 + 后续待定」消除与顶部/第 8 节冲突；新增可迁移性单测 | 13 单测全绿，已提交 Phase 1 checkpoint `5d0866b` |
+| 2026-06-19 | Follow-up | project_key git 格式改为 `<repo-name>-git-<hash>`，检索兼容旧 `git-<hash>`；知识库 entries 改为原卡片内 View/Close 展开，避免重复标题 | 用户体验/可读性修复 |
+| 2026-06-19 | Follow-up | memo completion report 成功生成后接入知识沉淀；distill 时附带本项目命中的既有知识摘要，候选中提示审核时更新/废弃冲突旧条目 | 完善生产入口与消费后的更新复核线 |
+| 2026-06-20 | Follow-up | Web entries 支持 project-key 模糊过滤与标题/标签/正文搜索；heuristic 改为保留 Markdown 结构、抽取高价值章节，不再硬截断存储正文 | 修复知识库可查性与候选内容质量 |
+| 2026-06-20 | Follow-up | final/report 提示词支持 knowledge sidecar；AHA 写入 final/report 前剥离 sidecar 并以 sidecar 优先生成候选；pending 按 source_group + normalized title 幂等合并 | 明确 final/report/KB 三层心智模型，解决执行顺序与重复执行问题 |
 | 2026-06-19 | Phase 2 | `services/knowledge_git.py`（ensure/commit/pull/push/sync + auto 钩子）+ `aha kb sync` CLI + 10 单测（本地裸仓）；修复 COMMANDS 漏 `kb` 的潜伏 bug | 改动：services/knowledge_git.py(新), cli.py, cli_parser.py, tests/test_knowledge_git.py(新)。全量 612 测试绿。 |
 | 2026-06-19 | Phase 2 | 边界收口：sync 改为 commit→pull→push（脏树先提交再 rebase，pull 失败不 push）；ls-remote 区分 remote 不可达(失败)/空远端(跳过)；+4 单测 | 全量 616 测试绿，已提交 Phase 2 checkpoint `5ca3e31` |
 | 2026-06-19 | Phase 3 | distill 服务（heuristic + 可插拔）+ finalize 后置 hook（失败隔离）+ `.pending` 待审队列（gitignore）+ approve_candidate + `aha kb pending`/status pending 计数 + 9 单测（含真实 finalize 集成） | 改动：services/knowledge_distill.py(新), store/knowledge.py, store/finals.py, cli.py, cli_parser.py, tests/test_knowledge_distill.py(新)。全量 625 测试绿。 |
@@ -325,7 +360,7 @@ task 收尾 / round finalize
 
 ### 10.2 后续待定（进入对应阶段前再定）
 - **Phase 2**：远端鉴权方式（SSH key / token）与 push 冲突时的处理策略（rebase 后人工介入 vs 自动放弃）。
-- **Phase 3**：distiller 用哪个 backend/model；每轮最多沉淀几条候选；敏感信息（密钥/绝对路径）过滤规则。
+- **Phase 3**：每轮最多沉淀几条候选；敏感信息（密钥/绝对路径）过滤规则；sidecar 缺失/解析失败时的 fallback 策略。
 - **Phase 5**：检索是否需要升级到向量/语义检索，还是朴素 key+tag 足够。
 - **Phase 6**：wiki 同主题更新的合并策略（自动 merge vs 生成新版本待审）。
 
@@ -357,8 +392,9 @@ task 收尾 / round finalize
 - `aha kb sync [--push] [--no-pull] [-m msg]`：手动与 git 远端同步（ensure→commit→pull→push）。
 
 ### 11.4 闭环怎么跑
-- **沉淀（do→distill）**：开启后,task finalize 会从 final 自动提炼项目解决方案候选 → `aha kb pending` 审核 → `approve` 入库。
+- **沉淀（do→distill）**：开启后，task finalize 和 memo completion report 都会自动提炼项目解决方案候选 → `aha kb pending` 审核 → `approve` 入库。
 - **学习（learn）**：同项目下一个 task 派发前,`dispatch_task_to_main` 会先 `auto_pull` 再检索,把「项目已知经验」注入 task-main 的 prompt。
+- **更新复核**：distill 会附带检索到的既有相关知识；若新结论冲突，候选会提示审核时更新/废弃旧条目，避免过期知识静默误导后续任务。
 
 ### 11.5 A/B 行为观察（运行期验证项）
 纯单测无法覆盖「注入知识后 agent 是否少踩坑」。建议人工 A/B：

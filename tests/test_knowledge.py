@@ -17,6 +17,7 @@ from aha_cli.store.knowledge import (
     normalize_git_remote,
     parse_entry,
     project_key,
+    project_key_aliases,
     read_entry,
     serialize_entry,
     slugify,
@@ -88,7 +89,10 @@ def test_project_key_stable_across_paths_for_same_remote(tmp_path: Path):
     key_a = project_key(ws_a)
     key_b = project_key(ws_b)
     assert key_a == key_b
-    assert key_a.startswith("git-")
+    assert key_a.startswith("repo-git-")
+    aliases = project_key_aliases(ws_a)
+    assert aliases[0] == key_a
+    assert aliases[1].startswith("git-")
 
 
 def test_project_key_falls_back_without_git(tmp_path: Path):
