@@ -84,6 +84,116 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     assert sol["count"] == 1 and sol["entries"][0]["title"] == "Fix build"
 
 
+def _capture_sidecar(candidates_json: str) -> str:
+    return f"done\n<aha_knowledge_candidates>{candidates_json}</aha_knowledge_candidates>"
+
+
+def test_capture_api_crud_and_distill(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+    from aha_cli.services.knowledge_capture_distill import run_distill_job
+
+    home = _setup(tmp_path)
+    created = json_response_body(_post(home, "/api/kb/capture", {"text": "raw retry idea", "scope_hint": "personal"}))
+    nid = created["note"]["id"]
+    assert created["note"]["status"] == "raw"
+
+    assert _get(home, "/api/kb/capture")["count"] == 1
+    assert _get(home, "/api/kb/capture", {"id": [nid]})["status"] == "raw"
+
+    edited = json_response_body(_patch(home, "/api/kb/capture", {"id": nid, "title": "retry note"}))
+    assert edited["note"]["title"] == "retry note"
+
+    # Distill runs synchronously through the seam with a stub agent.
+    reply = _capture_sidecar('[{"kind":"wiki","title":"退避","body":"## 结论\\n用指数退避"}]')
+
+    def sync_dispatch(root, cfg, note_id, backend, model):
+        run_distill_job(root, cfg, note_id, agent=lambda ctx: reply)
+
+    monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
+    resp = json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
+    assert resp["status"] == "distilling"
+
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert note["status"] == "distilled" and note["candidate_ids"]
+    assert _get(home, "/api/kb/pending")["count"] == 1
+    log = _get(home, "/api/kb/capture/distill-log", {"id": [nid]})["log"]
+    assert log["status"] == "distilled"
+    assert "raw retry idea" in log["prompt"]
+    assert "aha_knowledge_candidates" in log["reply"]
+    assert log["candidate_ids"] == note["candidate_ids"]
+
+    json_response_body(_delete(home, "/api/kb/capture", {"id": nid}))
+    assert _get(home, "/api/kb/capture")["count"] == 0
+
+
+def test_capture_image_upload_serve_and_delete(tmp_path: Path):
+    import base64
+
+    home = _setup(tmp_path)
+    created = json_response_body(_post(home, "/api/kb/capture", {"text": "with image"}))
+    nid = created["note"]["id"]
+    png = b"\x89PNG\r\n\x1a\n" + b"body"
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode()
+
+    up = json_response_body(_post(home, "/api/kb/capture/image", {"id": nid, "filename": "a.png", "data_url": data_url}))
+    assert up["image"]["mime"] == "image/png"
+    name = up["image"]["name"]
+
+    # The note now carries the image metadata (no base64 in the JSON).
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert len(note["images"]) == 1
+
+    # The image is served as raw bytes.
+    raw = knowledge_route_response(home, "GET", "/api/kb/capture/image", {"id": [nid], "name": [name]}, b"", {})
+    assert b"\r\n\r\n" in raw and raw.split(b"\r\n\r\n", 1)[1] == png
+
+    deleted = json_response_body(
+        knowledge_route_response(home, "DELETE", "/api/kb/capture/image", {}, json.dumps({"id": nid, "name": name}).encode(), {})
+    )
+    assert deleted["ok"] is True
+    assert _get(home, "/api/kb/capture", {"id": [nid]})["images"] == []
+
+
+def test_capture_image_rejects_non_image(tmp_path: Path):
+    import base64
+
+    home = _setup(tmp_path)
+    nid = json_response_body(_post(home, "/api/kb/capture", {"text": "x"}))["note"]["id"]
+    bad = "data:image/png;base64," + base64.b64encode(b"not an image").decode()
+    body = json_response_body(_post(home, "/api/kb/capture/image", {"id": nid, "data_url": bad}))
+    assert "unsupported image type" in body["error"]
+
+
+def test_capture_distill_forwards_backend_and_model(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+
+    home = _setup(tmp_path)
+    nid = json_response_body(_post(home, "/api/kb/capture", {"text": "raw"}))["note"]["id"]
+    seen = {}
+
+    def record_dispatch(root, cfg, note_id, backend, model):
+        seen.update({"note_id": note_id, "backend": backend, "model": model})
+
+    monkeypatch.setattr(kr, "dispatch_distill_job", record_dispatch)
+    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid, "backend": "claude", "model": "claude-opus-4-8"}))
+    assert seen == {"note_id": nid, "backend": "claude", "model": "claude-opus-4-8"}
+
+
+def test_capture_distill_missing_note_is_404(tmp_path: Path):
+    home = _setup(tmp_path)
+    resp = knowledge_route_response(
+        home, "POST", "/api/kb/capture/distill", {}, json.dumps({"id": "cap_nope"}).encode(), {}
+    )
+    body = json_response_body(resp)
+    assert "not found" in body["error"]
+
+
+def test_capture_create_requires_text(tmp_path: Path):
+    home = _setup(tmp_path)
+    body = json_response_body(_post(home, "/api/kb/capture", {"text": "   "}))
+    assert "required" in body["error"]
+
+
 def test_pending_lists_navigation_and_general_candidates(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)

@@ -403,11 +403,13 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
             meta["invalid_when"] = invalid_when
             if "失效条件" not in body and "invalid" not in body.lower():
                 body = body.rstrip() + f"\n\n## 失效条件 / 适用边界\n{invalid_when}\n"
-        scope = "general" if str(raw.get("scope") or "").strip().lower() == "general" else "project"
-        # General knowledge (cross-project tutorials/docs) must never inherit a
-        # project_key, or it would be filed under and retrieved as one project's
-        # private knowledge instead of the shared general scope.
-        project_key_value = None if scope == "general" else (raw.get("project_key") or context.get("project_key"))
+        raw_scope = str(raw.get("scope") or "").strip().lower()
+        scope = raw_scope if raw_scope in ("general", "personal", "project") else "project"
+        # Only project-scoped knowledge carries a project_key. General (shared)
+        # and personal (user scratch) knowledge must never inherit the current
+        # project's key, or they would be filed/retrieved as one project's
+        # private knowledge instead of their own scope.
+        project_key_value = (raw.get("project_key") or context.get("project_key")) if scope == "project" else None
         candidate = {
             "kind": kind,
             "scope": scope,

@@ -79,7 +79,11 @@
   }
 
   function createImageMarkdownNode(documentRef, markdown, alt, path, options = {}) {
-    const src = memoImageSrc(path, options.apiUrl);
+    // Pluggable resolver so non-memo callers (e.g. the knowledge capture inbox)
+    // can resolve their own image URLs. Defaults to the memo asset resolver, so
+    // existing memo rendering is unchanged.
+    const resolveSrc = typeof options.imageSrc === "function" ? options.imageSrc : memoImageSrc;
+    const src = resolveSrc(path, options.apiUrl);
     if (!src) return documentRef.createTextNode(markdown);
     const wrapper = documentRef.createElement("span");
     wrapper.className = "task-memo-inline-image";

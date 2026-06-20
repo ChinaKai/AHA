@@ -10,6 +10,8 @@ web/server.py. The matching UI lives in web/static/knowledge.html.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import Path
 
 from aha_cli.domain.models import default_knowledge_config, utc_now
@@ -29,8 +31,40 @@ from aha_cli.store.knowledge import (
     type_for_kind,
     update_entry,
 )
+from aha_cli.store import knowledge_capture as capture
 from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
+
+
+def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, model) -> None:
+    """Run a capture distill as a background daemon thread (non-blocking).
+
+    Seam: tests replace ``dispatch_distill_job`` to run synchronously with a
+    stub agent. The note's ``status`` (distilling/distilled/error) is the
+    pollable job record, so no separate job store is needed.
+    """
+    import threading
+
+    from aha_cli.services.knowledge_capture_distill import run_distill_job
+
+    threading.Thread(
+        target=run_distill_job,
+        args=(root, cfg, note_id),
+        kwargs={"backend": backend, "model": model},
+        daemon=True,
+    ).start()
+
+
+# Module-level seam so tests can substitute synchronous execution.
+dispatch_distill_job = _default_dispatch_distill_job
+
+
+def _note_view(note: dict | None) -> dict | None:
+    if note is None:
+        return None
+    view = dict(note)
+    view.pop("_path", None)
+    return view
 
 
 def _entry_summary(entry: dict) -> dict:
@@ -294,5 +328,107 @@ def knowledge_route_response(
         except ValueError as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
         return json_response({"ok": True, "knowledge": settings})
+
+    # --- Capture inbox (raw notes) ------------------------------------------ #
+    if method == "POST" and path == "/api/kb/capture/distill":
+        payload = parse_json_body(body) if body.strip() else {}
+        note_id = str(payload.get("id") or "").strip()
+        note = capture.read_note(root, cfg, note_id)
+        if note is None:
+            return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
+        # Mark distilling synchronously so an immediate poll observes the job,
+        # then run the slow model call off the request thread.
+        capture.update_note(root, cfg, note_id, status="distilling", last_error="")
+        dispatch_distill_job(root, cfg, note_id, payload.get("backend"), payload.get("model"))
+        return json_response({"ok": True, "id": note_id, "status": "distilling"})
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/capture/distill-log":
+        note_id = str(query.get("id", [""])[0] or "").strip()
+        log_id = str(query.get("log_id", [""])[0] or "").strip() or None
+        log = capture.read_distill_log(root, cfg, note_id, log_id)
+        if log is None:
+            return json_response({"error": "distill log not found"}, "404 Not Found")
+        view = dict(log)
+        view.pop("_path", None)
+        return _ok(method, {"log": view})
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/capture":
+        note_id = str(query.get("id", [""])[0] or "").strip()
+        if note_id:
+            note = _note_view(capture.read_note(root, cfg, note_id))
+            if note is None:
+                return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
+            return _ok(method, note)
+        notes = [_note_view(n) for n in capture.list_notes(root, cfg)]
+        return _ok(method, {"notes": notes, "count": len(notes)})
+
+    if method == "POST" and path == "/api/kb/capture":
+        payload = parse_json_body(body) if body.strip() else {}
+        text = str(payload.get("text") or "")
+        if not text.strip():
+            return json_response({"error": "text is required"}, "400 Bad Request")
+        note = capture.create_note(
+            root, cfg, text=text,
+            scope_hint=str(payload.get("scope_hint") or "personal"),
+            title=payload.get("title"),
+        )
+        return json_response({"ok": True, "note": _note_view(note)})
+
+    if method == "PATCH" and path == "/api/kb/capture":
+        payload = parse_json_body(body) if body.strip() else {}
+        note_id = str(payload.get("id") or "").strip()
+        try:
+            note = capture.update_note(
+                root, cfg, note_id,
+                text=payload.get("text"),
+                scope_hint=payload.get("scope_hint"),
+                title=payload.get("title"),
+            )
+        except FileNotFoundError:
+            return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
+        return json_response({"ok": True, "note": _note_view(note)})
+
+    if method == "DELETE" and path == "/api/kb/capture":
+        payload = parse_json_body(body) if body.strip() else {}
+        note_id = str(payload.get("id") or "").strip()
+        if not capture.delete_note(root, cfg, note_id):
+            return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
+        return json_response({"ok": True, "deleted": note_id})
+
+    # --- Capture note images (Phase 5a) ------------------------------------- #
+    if method in {"GET", "HEAD"} and path == "/api/kb/capture/image":
+        note_id = str(query.get("id", [""])[0] or "").strip()
+        name = str(query.get("name", [""])[0] or "").strip()
+        found = capture.read_note_image(root, cfg, note_id, name)
+        if found is None:
+            return json_response({"error": "image not found"}, "404 Not Found")
+        data, mime = found
+        return http_response("200 OK", data if method == "GET" else b"", content_type=mime)
+
+    if method == "POST" and path == "/api/kb/capture/image":
+        payload = parse_json_body(body) if body.strip() else {}
+        note_id = str(payload.get("id") or "").strip()
+        raw = str(payload.get("data") or payload.get("data_url") or "")
+        if "," in raw and raw.strip().lower().startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        try:
+            data = base64.b64decode(raw, validate=False)
+        except (ValueError, binascii.Error):
+            return json_response({"error": "invalid base64 image data"}, "400 Bad Request")
+        try:
+            image = capture.add_note_image(root, cfg, note_id, data=data, filename=str(payload.get("filename") or "image"))
+        except FileNotFoundError:
+            return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
+        except capture.ImageRejected as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        return json_response({"ok": True, "image": image})
+
+    if method == "DELETE" and path == "/api/kb/capture/image":
+        payload = parse_json_body(body) if body.strip() else {}
+        note_id = str(payload.get("id") or "").strip()
+        name = str(payload.get("name") or "").strip()
+        if not capture.remove_note_image(root, cfg, note_id, name):
+            return json_response({"error": "image not found"}, "404 Not Found")
+        return json_response({"ok": True, "deleted": name})
 
     return None

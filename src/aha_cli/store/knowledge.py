@@ -35,10 +35,13 @@ KNOWLEDGE_INDEX_FILE = "aha-knowledge.json"
 KNOWLEDGE_README_FILE = "README.md"
 KNOWLEDGE_GITIGNORE_FILE = ".gitignore"
 GENERAL_DIR = "general"
+PERSONAL_DIR = "personal"
 PROJECTS_DIR = "projects"
 PENDING_DIR = ".pending"
 ENTRY_KINDS = ("wiki", "solutions", "navigation")
-SCOPES = ("general", "project")
+# `personal` is a user scratch scope: stored and searchable like general, but
+# deliberately NOT auto-injected into task prompts (see knowledge_retrieval).
+SCOPES = ("general", "project", "personal")
 
 # Stable mapping between on-disk kind (directory) and frontmatter ``type``.
 _KIND_TO_TYPE = {"wiki": "wiki", "solutions": "solution", "navigation": "navigation"}
@@ -177,6 +180,8 @@ def project_key_aliases(workspace: Path, goal: str | None = None) -> list[str]:
 def scope_dir(kb_root: Path, scope: str, project_key_value: str | None) -> Path:
     if scope == "general":
         return kb_root / GENERAL_DIR
+    if scope == "personal":
+        return kb_root / PERSONAL_DIR
     if scope == "project":
         if not project_key_value:
             raise ValueError("project scope requires a project_key")
@@ -196,6 +201,7 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     created = not kb_root.exists()
     for kind in ENTRY_KINDS:
         (kb_root / GENERAL_DIR / kind).mkdir(parents=True, exist_ok=True)
+        (kb_root / PERSONAL_DIR / kind).mkdir(parents=True, exist_ok=True)
     (kb_root / PROJECTS_DIR).mkdir(parents=True, exist_ok=True)
 
     index_path = _index_path(kb_root)
@@ -400,6 +406,7 @@ def iter_all_entries(root: Path, config: dict | None = None) -> list[dict]:
     results: list[dict] = []
     for kind in ENTRY_KINDS:
         results.extend(list_entries(root, config=config, scope="general", kind=kind))
+        results.extend(list_entries(root, config=config, scope="personal", kind=kind))
     projects_root = kb_root / PROJECTS_DIR
     if projects_root.is_dir():
         for proj in sorted(p for p in projects_root.iterdir() if p.is_dir()):
@@ -519,6 +526,7 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
             schema_version = None
 
     general = {kind: _count_md(kb_root / GENERAL_DIR / kind) for kind in ENTRY_KINDS}
+    personal = {kind: _count_md(kb_root / PERSONAL_DIR / kind) for kind in ENTRY_KINDS}
     projects: list[dict] = []
     projects_root = kb_root / PROJECTS_DIR
     if projects_root.is_dir():
@@ -544,10 +552,12 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
         },
         "curation_gate": (cfg.get("curation") or {}).get("gate"),
         "general": general,
+        "personal": personal,
         "projects": projects,
         "pending": len(list_pending(root, config)),
         "stale": len(list_stale_entries(root, config)),
         "total_entries": sum(general.values())
+        + sum(personal.values())
         + sum(sum(p["counts"].values()) for p in projects),
     }
 
@@ -712,15 +722,39 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
     if not path.exists():
         raise FileNotFoundError(f"no pending candidate: {candidate_id_value}")
     record = read_json(path)
+    scope = record.get("scope", "project")
+    kind = record.get("kind", "solutions")
+    project_key_value = record.get("project_key")
+    body = record.get("body", "")
+    meta = dict(record.get("meta") or {})
+    slug = record.get("slug") or slugify(str(record.get("title") or ""))
+
+    # Phase 5b: if this candidate came from a capture note, copy that note's
+    # image assets into the entry's assets dir and leave a traceable reference.
+    # Copy-only here — committing/pushing stays with the existing sync mechanism.
+    try:
+        from aha_cli.store.knowledge_capture import promote_assets_for_entry
+
+        promo = promote_assets_for_entry(
+            root, config, record, scope=scope, kind=kind, project_key=project_key_value, slug=slug,
+        )
+    except Exception:  # noqa: BLE001 - asset promotion must never block approval
+        promo = None
+    if promo:
+        if promo["body_suffix"] not in body:
+            body = body.rstrip() + promo["body_suffix"]
+        meta["source_note_id"] = promo["source_note_id"]
+        meta["assets"] = promo["assets"]
+
     entry_path = write_entry(
         root,
         config=config,
-        scope=record.get("scope", "project"),
-        kind=record.get("kind", "solutions"),
-        project_key_value=record.get("project_key"),
+        scope=scope,
+        kind=kind,
+        project_key_value=project_key_value,
         title=record["title"],
-        body=record.get("body", ""),
-        meta=record.get("meta", {}),
+        body=body,
+        meta=meta,
         slug=record.get("slug"),
     )
     path.unlink()

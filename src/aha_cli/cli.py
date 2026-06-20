@@ -588,6 +588,8 @@ def cmd_kb(args: argparse.Namespace) -> int:
             where = "pending review queue" if gate == "manual" else "knowledge base (general)"
             print(f"general tutorial '{args.title}' -> {where}")
         return 0
+    if args.kb_cmd == "capture":
+        return _cmd_kb_capture(root, cfg, args)
     if args.kb_cmd == "status":
         status = knowledge_status(root, cfg)
         if getattr(args, "json", False):
@@ -769,6 +771,90 @@ def cmd_kb(args: argparse.Namespace) -> int:
                 print(f"  {meta.get('id') or meta.get('slug')}  {meta.get('title')}  (review_after={meta.get('review_after')})")
             print(f"stale: {len(stale)}")
         return 0
+    return 0
+
+
+def _capture_text_arg(args: argparse.Namespace) -> str | None:
+    """Resolve --text / --text-file ('-' = stdin) into note text, or None."""
+    if getattr(args, "text_file", None):
+        if args.text_file == "-":
+            return sys.stdin.read()
+        return Path(args.text_file).read_text(encoding="utf-8")
+    text = getattr(args, "text", None)
+    return text if text else None
+
+
+def _cmd_kb_capture(root: Path, cfg: dict, args: argparse.Namespace) -> int:
+    from aha_cli.store import knowledge_capture as cap
+
+    is_json = getattr(args, "json", False)
+    sub = args.kb_capture_cmd
+    if sub == "add":
+        text = _capture_text_arg(args)
+        if not text or not text.strip():
+            print("capture add requires --text or --text-file", file=sys.stderr)
+            return 2
+        note = cap.create_note(root, cfg, text=text, scope_hint=args.scope, title=args.title)
+        if is_json:
+            print(json.dumps(note, indent=2, ensure_ascii=False))
+        else:
+            print(f"captured note {note['id']} (scope_hint={note['scope_hint']}, status={note['status']})")
+        return 0
+    if sub == "list":
+        notes = cap.list_notes(root, cfg)
+        if is_json:
+            print(json.dumps(notes, indent=2, ensure_ascii=False))
+        else:
+            if not notes:
+                print("No capture notes")
+            for n in notes:
+                preview = " ".join((n.get("text") or "").split())[:60]
+                print(f"  {n['id']}  [{n.get('scope_hint')}/{n.get('status')}]  {n.get('title') or preview}")
+            print(f"capture notes: {len(notes)}")
+        return 0
+    if sub == "show":
+        note = cap.read_note(root, cfg, args.note_id)
+        if note is None:
+            print(f"capture note not found: {args.note_id}", file=sys.stderr)
+            return 1
+        if is_json:
+            print(json.dumps(note, indent=2, ensure_ascii=False))
+        else:
+            print(note.get("text") or "")
+        return 0
+    if sub == "edit":
+        text = _capture_text_arg(args)
+        try:
+            note = cap.update_note(
+                root, cfg, args.note_id,
+                text=text, scope_hint=args.scope, title=args.title,
+            )
+        except FileNotFoundError:
+            print(f"capture note not found: {args.note_id}", file=sys.stderr)
+            return 1
+        if is_json:
+            print(json.dumps(note, indent=2, ensure_ascii=False))
+        else:
+            print(f"updated note {note['id']}")
+        return 0
+    if sub == "rm":
+        removed = cap.delete_note(root, cfg, args.note_id)
+        if is_json:
+            print(json.dumps({"ok": removed, "id": args.note_id}, ensure_ascii=False))
+        else:
+            print(f"removed {args.note_id}" if removed else f"capture note not found: {args.note_id}")
+        return 0 if removed else 1
+    if sub == "distill":
+        from aha_cli.services.knowledge_capture_distill import distill_note
+
+        result = distill_note(root, cfg, args.note_id, backend=args.backend, model=args.model)
+        if is_json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif not result.get("ok"):
+            print(result.get("error", "distill failed"), file=sys.stderr)
+        else:
+            print(f"note {args.note_id} distilled -> {result['candidates']} candidate(s) in pending review queue")
+        return 0 if result.get("ok") else 1
     return 0
 
 
