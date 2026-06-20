@@ -2627,6 +2627,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("taskListItemClass", task_list_script)
         self.assertIn('let taskVisibilityFilter = "active";', script)
         self.assertIn("function renderTaskVisibilityFilter", task_controller_script)
+        self.assertIn("function effectiveTaskVisibilityFilter", task_controller_script)
+        self.assertIn('normalized === "active" && tasks.length && !visibleTasksForFilter(tasks, "active").length', task_controller_script)
         self.assertIn("taskVisibilityFilterHtml(allTasks(), normalized)", task_controller_script)
         self.assertIn("taskListItemHtml(task", task_controller_script)
         self.assertIn("taskListItemClass(task, deps.selectedTaskId?.())", task_controller_script)

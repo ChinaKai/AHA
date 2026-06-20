@@ -22,8 +22,17 @@
       return Array.isArray(deps.allTasks?.()) ? deps.allTasks() : [];
     }
 
+    function effectiveTaskVisibilityFilter(value = deps.taskVisibilityFilter?.()) {
+      const normalized = normalizeTaskVisibilityFilter(value);
+      const tasks = allTasks();
+      if (normalized === "active" && tasks.length && !visibleTasksForFilter(tasks, "active").length) {
+        return "all";
+      }
+      return normalized;
+    }
+
     function filter() {
-      return normalizeTaskVisibilityFilter(deps.taskVisibilityFilter?.());
+      return effectiveTaskVisibilityFilter();
     }
 
     function visibleTasks() {
