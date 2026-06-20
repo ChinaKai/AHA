@@ -27,7 +27,7 @@
 - [x] **Phase 2 — capture inbox 存储 + CLI**：`.capture/` raw note CRUD（id/text/images/scope_hint/created_at/status/candidate_ids）；`aha kb capture add|list|show|edit|rm`。`.capture/` 加入 `.gitignore`。focused tests：CRUD、不进 git。
 - [x] **Phase 3 — distill-on-demand（完成）**：`aha kb capture distill <id>` → one-shot agent distiller（可选 backend/model）→ 解析 sidecar → 入 pending；note 标 `distilled` 并记 `candidate_ids`，重跑替换上次候选。
   - 核对结论：AHA **无稳定 in-process「prompt→reply」API**——backends 是子进程 CLI（`run_claude_exec`/`run_codex_exec`，返回 `(exit_code, reply, session)`，仅 prompt/cwd/output_file 必填）。故按预案抽**窄 service seam**：`knowledge_capture_distill.CaptureAgent`（`ctx→reply_text`），默认实现 `default_capture_agent` 薄封装 run_claude_exec/run_codex_exec（无新依赖、best-effort、可替换），测试注入 deterministic stub。
-  - 复用：`split_knowledge_sidecar` 解析 + `normalize_sidecar_candidates`（已扩展支持 personal scope）+ `enqueue_candidate` 始终入 pending（raw 必经人工审核）。project 候选无 key 时降级 personal。
+  - 复用：`split_knowledge_sidecar` 解析 + `normalize_sidecar_candidates`（已扩展支持 personal scope 和 navigation 分类）+ `enqueue_candidate` 始终入 pending（raw 必经人工审核）。Wiki 仅用于非项目通用/个人文档；项目结构、模块职责、入口、约束进入 navigation；project 候选无 key 时降级 personal。
   - 新增 `tests/test_knowledge_capture.py` Phase 3 用例（5）：入队+标 distilled、重跑替换、project 降级 personal、空候选、note 不存在。
 - [x] **Phase 4 — Web Capture tab（完成）**：知识页第 4 个 tab，raw note 列表 + 查看/编辑/删除 + 新建 + 「整理为候选」（后台 job + 轮询，不阻塞）→ 跳 Pending 审批。
   - 核对结论：Web 无可复用的「一次性 job + 轮询」框架（`start_backend` 是 run/task 绑定的完整 agent 进程，太重）。故做**窄接口**：note 自身 `status`（raw→distilling→distilled|error）即 job 记录，distill 用 daemon thread 跑共享的 `run_distill_job`，前端轮询 note status；无新 job store、无新依赖。

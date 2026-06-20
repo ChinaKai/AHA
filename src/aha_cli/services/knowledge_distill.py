@@ -25,12 +25,18 @@ from collections.abc import Callable
 from pathlib import Path
 
 from aha_cli.store.knowledge import (
+    NAVIGATION_FLOWS_DIR,
+    NAVIGATION_MODULES_DIR,
     NAVIGATION_SLUG,
     auto_commit_message_for,
     enqueue_candidate,
+    entry_path_for,
     init_knowledge_base,
     knowledge_config,
+    normalize_entry_slug,
     project_key,
+    read_entry,
+    slugify,
     type_for_kind,
     write_entry,
 )
@@ -46,6 +52,7 @@ def build_distill_context(
     project_key_value: str,
     source: dict,
     prior_entries: list[dict] | None = None,
+    workspace_path: str | None = None,
 ) -> dict:
     ctx = final_context or {}
     return {
@@ -58,6 +65,7 @@ def build_distill_context(
         "risks": _as_list(ctx.get("risks")),
         "source": source,
         "prior_entries": _prior_entry_summaries(prior_entries or []),
+        "workspace_path": workspace_path,
     }
 
 
@@ -89,15 +97,21 @@ def _clean_markdown(text: str) -> str:
 
 
 _USEFUL_SECTION_KEYWORDS = (
-    "完成内容",
     "稳定结果",
     "关键结论",
-    "产出物",
     "可复用经验",
     "有效解法",
-    "处理结果",
-    "改了什么",
-    "验证情况",
+)
+
+_REUSABLE_SUMMARY_KEYWORDS = (
+    "可复用",
+    "通用",
+    "稳定规则",
+    "约定",
+    "惯例",
+    "模式",
+    "playbook",
+    "reusable",
 )
 
 
@@ -120,7 +134,7 @@ def _extract_useful_markdown(text: str) -> str:
             current.append(line)
         else:
             current = [line]
-            current_useful = True
+            current_useful = any(keyword in line for keyword in _USEFUL_SECTION_KEYWORDS)
     if current and current_useful:
         sections.append(current)
     useful = "\n\n".join("\n".join(section).strip() for section in sections if "\n".join(section).strip())
@@ -164,10 +178,12 @@ def heuristic_solution_candidate(context: dict) -> list[dict]:
     verification = context.get("verification") or []
     risks = context.get("risks") or []
 
-    # Value gate: skip when the task left nothing reusable. An explicit summary,
-    # changed files, verification steps, or a recognised useful report section
-    # all count as signal; their total absence means "produce nothing".
-    if not (summary or useful_body or changed or verification):
+    # Value gate: do not turn ordinary bug-fix/task-closeout facts into
+    # long-lived knowledge. Fallback distillation only salvages content that the
+    # final/report explicitly framed as reusable, or whose summary says it is a
+    # reusable rule/playbook. Rich sidecars remain the preferred path.
+    reusable_summary = any(keyword.lower() in summary.lower() for keyword in _REUSABLE_SUMMARY_KEYWORDS)
+    if not (useful_body or reusable_summary):
         return []
 
     title_basis = summary or context.get("task_title") or useful_body or "Untitled solution"
@@ -266,7 +282,313 @@ def _sidecar_kind(candidate: dict) -> str:
     return "solutions"
 
 
+def _navigation_slug(candidate: dict) -> str:
+    raw_slug = str(candidate.get("slug") or candidate.get("nav_path") or candidate.get("doc_path") or "").strip()
+    if raw_slug:
+        return raw_slug
+    module = str(candidate.get("module") or "").strip()
+    if module:
+        return f"{NAVIGATION_MODULES_DIR}/{slugify(module)}"
+    flow = str(candidate.get("flow") or candidate.get("workflow") or "").strip()
+    if flow:
+        return f"{NAVIGATION_FLOWS_DIR}/{slugify(flow)}"
+    return NAVIGATION_SLUG
+
+
+def _navigation_role_for_slug(slug: str) -> str:
+    if slug == NAVIGATION_SLUG:
+        return "index"
+    if slug.startswith(f"{NAVIGATION_MODULES_DIR}/"):
+        return "module"
+    if slug.startswith(f"{NAVIGATION_FLOWS_DIR}/"):
+        return "flow"
+    return "navigation"
+
+
+def _navigation_parent_slug(slug: str) -> str | None:
+    slug = normalize_entry_slug(str(slug or "").strip())
+    if not slug or slug == NAVIGATION_SLUG:
+        return None
+    parts = slug.split("/")
+    if len(parts) <= 2 and parts[0] in {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR}:
+        return NAVIGATION_SLUG
+    if len(parts) > 2 and parts[0] in {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR}:
+        return "/".join(parts[:-1])
+    return NAVIGATION_SLUG
+
+
+def _navigation_link_label(slug: str, fallback: str = "") -> str:
+    if fallback:
+        return fallback
+    tail = str(slug or "").strip("/").rsplit("/", 1)[-1]
+    return tail.replace("-", " ") or "navigation"
+
+
+def _navigation_child_href(child_slug: str) -> str:
+    return f"{normalize_entry_slug(child_slug)}.md"
+
+
+def _navigation_parent_title(parent_slug: str, project_key_value: str | None) -> str:
+    if parent_slug == NAVIGATION_SLUG:
+        return f"{project_key_value or '项目'} 导航入口"
+    label = _navigation_link_label(parent_slug)
+    role = _navigation_role_for_slug(parent_slug)
+    return f"{label} {'流程' if role == 'flow' else '模块'}导航"
+
+
+def _navigation_section_for(parent_slug: str, child_slug: str) -> str:
+    if parent_slug == NAVIGATION_SLUG:
+        return "## 入口 / 关键流程" if child_slug.startswith(f"{NAVIGATION_FLOWS_DIR}/") else "## 模块索引"
+    return "## 下级入口"
+
+
+def _append_navigation_link(body: str, *, section: str, label: str, href: str) -> str:
+    body = (body or "").rstrip()
+    if href in body:
+        return body + "\n"
+    line = f"- [{label}]({href})"
+    lines = body.splitlines() if body else []
+    try:
+        section_index = next(i for i, item in enumerate(lines) if item.strip() == section)
+    except StopIteration:
+        return (body + ("\n\n" if body else "") + f"{section}\n{line}\n").lstrip()
+
+    insert_at = len(lines)
+    for idx in range(section_index + 1, len(lines)):
+        if lines[idx].startswith("## "):
+            insert_at = idx
+            break
+    while insert_at > section_index + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines.insert(insert_at, line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: str) -> str:
+    href = _navigation_child_href(child_slug)
+    label = _navigation_link_label(child_slug, child_title)
+    if parent_slug == NAVIGATION_SLUG:
+        section = _navigation_section_for(parent_slug, child_slug)
+        module_lines = f"- [{label}]({href})" if section == "## 模块索引" else "-"
+        flow_lines = f"- [{label}]({href})" if section == "## 入口 / 关键流程" else "-"
+        return "\n".join([
+            "## 项目定位",
+            "-",
+            "",
+            "## 使用规则",
+            "- 本入口只列第一层模块/流程；更深层入口由对应父文档维护。",
+            "- 新增子文档时只补直接父入口，避免全量展开。",
+            "",
+            "## 架构概览",
+            "-",
+            "",
+            "## 模块索引",
+            module_lines,
+            "",
+            "## 入口 / 关键流程",
+            flow_lines,
+            "",
+            "## 盲区 / 待补充",
+            "-",
+        ]).strip() + "\n"
+    return "\n".join([
+        f"# {_navigation_link_label(parent_slug)}",
+        "",
+        "## 模块职责" if _navigation_role_for_slug(parent_slug) == "module" else "## 流程职责",
+        "-",
+        "",
+        "## 关键源文件",
+        "-",
+        "",
+        "## 下级入口",
+        f"- [{label}]({href})",
+        "",
+        "## 修改注意",
+        "- 本文只维护直接子入口；更深层入口由对应子文档维护。",
+        "",
+        "## 相关测试",
+        "-",
+        "",
+        "## 盲区 / 待补充",
+        "-",
+    ]).strip() + "\n"
+
+
+def _bootstrap_navigation_index_body(workspace_path: str | None, child_slug: str, child_title: str) -> str:
+    if workspace_path:
+        try:
+            from aha_cli.services.knowledge_navigation import render_navigation_body, scan_workspace
+
+            body = render_navigation_body(scan_workspace(workspace_path))
+            return _append_navigation_link(
+                body,
+                section=_navigation_section_for(NAVIGATION_SLUG, child_slug),
+                label=_navigation_link_label(child_slug, child_title),
+                href=_navigation_child_href(child_slug),
+            )
+        except Exception:  # noqa: BLE001 - missing/unreadable workspace falls back to a skeleton.
+            pass
+    return _new_navigation_parent_body(NAVIGATION_SLUG, child_slug, child_title)
+
+
+def _navigation_meta(role: str, source: dict | None, *, update_mode: str = "incremental") -> dict:
+    return {
+        "type": "navigation",
+        "outcome": "success",
+        "confidence": 0.55,
+        "tags": ["navigation", role],
+        "related_files": [],
+        "distilled_by": "parent-link",
+        "update_mode": update_mode,
+        "navigation_role": role,
+        **_sidecar_source_meta(source),
+    }
+
+
+def _navigation_parent_candidate(
+    root: Path,
+    config: dict | None,
+    *,
+    scope: str,
+    project_key_value: str | None,
+    parent_slug: str,
+    child_slug: str,
+    child_title: str,
+    source: dict | None,
+    workspace_path: str | None = None,
+) -> dict | None:
+    parent_path = entry_path_for(root, config, scope, "navigation", project_key_value, parent_slug)
+    href = _navigation_child_href(child_slug)
+    label = _navigation_link_label(child_slug, child_title)
+    section = _navigation_section_for(parent_slug, child_slug)
+    if parent_path:
+        try:
+            existing = read_entry(parent_path)
+        except (OSError, ValueError):
+            existing = None
+        if existing:
+            body = existing.get("body") or ""
+            if href in body:
+                return None
+            meta = dict(existing.get("meta") or {})
+            meta.update(_navigation_meta(_navigation_role_for_slug(parent_slug), source))
+            return {
+                "kind": "navigation",
+                "scope": scope,
+                "project_key": project_key_value,
+                "slug": parent_slug,
+                "title": str(meta.get("title") or _navigation_parent_title(parent_slug, project_key_value)),
+                "body": _append_navigation_link(body, section=section, label=label, href=href),
+                "meta": meta,
+                "source": source,
+            }
+    update_mode = "bootstrap" if parent_slug == NAVIGATION_SLUG else "incremental"
+    return {
+        "kind": "navigation",
+        "scope": scope,
+        "project_key": project_key_value,
+        "slug": parent_slug,
+        "title": _navigation_parent_title(parent_slug, project_key_value),
+        "body": (
+            _bootstrap_navigation_index_body(workspace_path, child_slug, child_title)
+            if parent_slug == NAVIGATION_SLUG
+            else _new_navigation_parent_body(parent_slug, child_slug, child_title)
+        ),
+        "meta": _navigation_meta(_navigation_role_for_slug(parent_slug), source, update_mode=update_mode),
+        "source": source,
+    }
+
+
+def _ensure_navigation_parent_entries(
+    root: Path,
+    config: dict | None,
+    candidates: list[dict],
+    context: dict | None = None,
+) -> list[dict]:
+    """Add minimal parent navigation candidates for unreachable child docs."""
+    by_slug: dict[tuple[str, str | None, str], dict] = {}
+    ordered = list(candidates)
+    for cand in ordered:
+        if cand.get("kind") == "navigation" and cand.get("scope", "project") == "project" and cand.get("slug"):
+            by_slug[(str(cand.get("scope") or "project"), cand.get("project_key"), normalize_entry_slug(cand["slug"]))] = cand
+
+    index = 0
+    workspace_path = str((context or {}).get("workspace_path") or "").strip() or None
+    while index < len(ordered):
+        cand = ordered[index]
+        index += 1
+        if cand.get("kind") != "navigation" or cand.get("scope", "project") != "project":
+            continue
+        child_slug = normalize_entry_slug(str(cand.get("slug") or ""))
+        parent_slug = _navigation_parent_slug(child_slug)
+        if not parent_slug:
+            continue
+        key = (str(cand.get("scope") or "project"), cand.get("project_key"), parent_slug)
+        child_title = str(cand.get("title") or _navigation_link_label(child_slug))
+        href = _navigation_child_href(child_slug)
+        parent = by_slug.get(key)
+        if parent:
+            parent["body"] = _append_navigation_link(
+                str(parent.get("body") or ""),
+                section=_navigation_section_for(parent_slug, child_slug),
+                label=_navigation_link_label(child_slug, child_title),
+                href=href,
+            )
+            continue
+        parent = _navigation_parent_candidate(
+            root,
+            config,
+            scope=key[0],
+            project_key_value=key[1],
+            parent_slug=parent_slug,
+            child_slug=child_slug,
+            child_title=child_title,
+            source=cand.get("source"),
+            workspace_path=workspace_path,
+        )
+        if parent is None:
+            continue
+        by_slug[key] = parent
+        ordered.append(parent)
+    return ordered
+
+
 def _sidecar_navigation_body(candidate: dict) -> str:
+    slug = _navigation_slug(candidate)
+    if slug.startswith(f"{NAVIGATION_MODULES_DIR}/"):
+        module = str(candidate.get("module") or candidate.get("title") or "").strip()
+        role = str(candidate.get("role") or candidate.get("responsibility") or candidate.get("summary") or "").strip()
+        files = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("related_files") or candidate.get("files")))
+        entry_points = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("entry_points") or candidate.get("entries")))
+        tests = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("tests") or candidate.get("verification")))
+        caveats = str(candidate.get("caveats") or candidate.get("notes") or candidate.get("invalid_when") or "").strip()
+        parts = [
+            f"# {module or '模块文档'}",
+            "",
+            "## 模块职责",
+            role or "-",
+            "",
+            "## 关键源文件",
+            files or "-",
+            "",
+            "## 入口 / 调用方",
+            entry_points or "-",
+            "",
+            "## 修改注意",
+            caveats or "- 修改职责、入口、关键文件或约束后同步更新本文。",
+            "",
+            "## 相关测试",
+            tests or "-",
+            "",
+            "## 盲区 / 待补充",
+            str(candidate.get("gaps") or candidate.get("todo") or "-").strip() or "-",
+            "",
+            "## 维护规则",
+            "- 只在本模块职责、入口、关键文件、约束或盲区变化时更新本文。",
+            "- 不要为无关任务全量重写模块文档；新增模块/流程时再补入口链接。",
+        ]
+        return "\n".join(parts).strip() + "\n"
+
     overview = str(candidate.get("overview") or candidate.get("summary") or "").strip()
     architecture = str(candidate.get("architecture") or "").strip()
     modules = candidate.get("modules")
@@ -277,7 +599,8 @@ def _sidecar_navigation_body(candidate: dict) -> str:
                 name = str(mod.get("name") or mod.get("module") or "").strip()
                 role = str(mod.get("role") or mod.get("desc") or "").strip()
                 files = ", ".join(_as_list(mod.get("files") or mod.get("entry")))
-                line = f"- **{name or '?'}**"
+                doc = f"{NAVIGATION_MODULES_DIR}/{slugify(name or '?')}.md"
+                line = f"- [{name or '?'}]({doc})"
                 if role:
                     line += f" — {role}"
                 if files:
@@ -302,6 +625,10 @@ def _sidecar_navigation_body(candidate: dict) -> str:
         "",
         "## 盲区 / 待补充",
         gaps or "-",
+        "",
+        "## 使用规则",
+        "- 开工先读本入口，再按任务命中的模块/流程链接读取少量文档；不要把整个 navigation 全量读入。",
+        "- 收尾只更新本次真实影响的 `modules/*`、`flows/*` 或入口链接；普通任务不要全量重写项目导航。",
     ]
     return "\n".join(parts).strip() + "\n"
 
@@ -384,6 +711,16 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
     for raw in raw_candidates:
         title = str(raw.get("title") or "").strip()
         kind = _sidecar_kind(raw)
+        raw_scope = str(raw.get("scope") or "").strip().lower()
+        if kind == "wiki":
+            if raw_scope == "project":
+                if context.get("project_key"):
+                    kind = "navigation"
+                    raw.setdefault("module", raw.get("module") or raw.get("title"))
+                else:
+                    raw_scope = "personal"
+            else:
+                raw_scope = raw_scope if raw_scope == "personal" else "general"
         body = _sidecar_body(raw, kind)
         if not title or not body.strip():
             continue
@@ -398,13 +735,22 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
             "distilled_by": "sidecar",
             **_sidecar_source_meta(source),
         }
+        if kind == "navigation":
+            nav_slug = _navigation_slug(raw)
+            meta["update_mode"] = str(raw.get("update_mode") or "incremental")
+            meta["navigation_role"] = _navigation_role_for_slug(nav_slug)
+            meta.setdefault("tags", [])
+            for tag in ("navigation", meta["navigation_role"]):
+                if tag not in meta["tags"]:
+                    meta["tags"].append(tag)
         invalid_when = str(raw.get("invalid_when") or "").strip()
         if invalid_when:
             meta["invalid_when"] = invalid_when
             if "失效条件" not in body and "invalid" not in body.lower():
                 body = body.rstrip() + f"\n\n## 失效条件 / 适用边界\n{invalid_when}\n"
-        raw_scope = str(raw.get("scope") or "").strip().lower()
         scope = raw_scope if raw_scope in ("general", "personal", "project") else "project"
+        if kind == "wiki" and scope == "project":
+            scope = "general"
         # Only project-scoped knowledge carries a project_key. General (shared)
         # and personal (user scratch) knowledge must never inherit the current
         # project's key, or they would be filed/retrieved as one project's
@@ -419,10 +765,8 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
             "meta": meta,
             "source": source,
         }
-        # A project keeps exactly one navigation map; pin the slug so repeated
-        # distillation updates the same "项目地图" rather than creating duplicates.
         if kind == "navigation":
-            candidate["slug"] = str(raw.get("slug") or NAVIGATION_SLUG)
+            candidate["slug"] = _navigation_slug(raw)
         normalized.append(candidate)
     return normalized
 
@@ -488,6 +832,7 @@ def distill_and_enqueue(
     # .pending/) exists before writing anything — including the first time this
     # is triggered by finalize without a prior `aha kb init`.
     init_knowledge_base(root, config)
+    candidates = _ensure_navigation_parent_entries(root, config, candidates, context)
 
     if gate == "auto":
         written = []
@@ -546,6 +891,7 @@ def distill_after_finalize(
             task_title=task_title,
             project_key_value=key,
             source={"run_id": run_id, "task_id": task_id, "round_id": round_id},
+            workspace_path=workspace_path,
             prior_entries=_prior_entries_for_distill(
                 root,
                 config,
@@ -591,6 +937,7 @@ def distill_after_memo_report(
             task_title=memo_title or "Memo completion report",
             project_key_value=key,
             source={"source_type": "memo_report", "run_id": run_id, "task_id": task_id, "memo_id": memo_id},
+            workspace_path=workspace_path,
             prior_entries=_prior_entries_for_distill(
                 root,
                 config,

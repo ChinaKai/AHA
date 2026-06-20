@@ -38,7 +38,7 @@ def _cfg(gate: str = "manual", enabled: bool = True) -> dict:
 
 def _context() -> dict:
     return build_distill_context(
-        final_body="We fixed the build.",
+        final_body="## 可复用经验\nWhen packaging zipapps, include imported submodules.",
         final_context={
             "summary": "Fix zipapp ModuleNotFound by bundling submodule",
             "changed_files": ["scripts/build_onebin.py"],
@@ -68,7 +68,7 @@ def test_heuristic_candidate_shape():
 
 def test_heuristic_uses_final_body_when_summary_missing():
     ctx = build_distill_context(
-        final_body="The root cause was a stale lock file; deleting .aha/lock fixed startup.",
+        final_body="## 可复用经验\nThe root cause was a stale lock file; deleting .aha/lock fixed startup.",
         final_context={"changed_files": ["src/x.py"]},  # no summary
         task_title="Startup hang",
         project_key_value="git-abc123",
@@ -82,14 +82,14 @@ def test_heuristic_uses_final_body_when_summary_missing():
 
 def test_heuristic_keeps_final_excerpt_section_when_summary_present():
     ctx = build_distill_context(
-        final_body="Detailed narrative about the fix and the debugging journey.",
-        final_context={"summary": "Delete stale lock on startup"},
+        final_body="## 可复用经验\nDetailed narrative about the fix and the debugging journey.",
+        final_context={"summary": "Reusable startup lock cleanup playbook"},
         task_title="Startup hang",
         project_key_value="git-abc123",
         source={"run_id": "r1", "task_id": "t1", "round_id": "1"},
     )
     c = heuristic_solution_candidate(ctx)[0]
-    assert "Delete stale lock on startup" in c["body"]
+    assert "Reusable startup lock cleanup playbook" in c["body"]
     assert "## 来源摘录" in c["body"]
     assert "debugging journey" in c["body"]
 
@@ -116,7 +116,7 @@ def test_heuristic_does_not_embed_prior_entries_in_body():
     # Prior knowledge must NOT be spliced into the candidate body: it bloats the
     # entry and (when a task is re-finalized) creates self-referential entries.
     ctx = build_distill_context(
-        final_body="New result says the old cache workaround is obsolete.",
+        final_body="## 可复用经验\nNew result says the old cache workaround is obsolete.",
         final_context={"changed_files": ["src/cache.py"]},
         task_title="Cache behavior changed",
         project_key_value="repo-git-abc123",
@@ -131,6 +131,21 @@ def test_heuristic_does_not_embed_prior_entries_in_body():
     c = heuristic_solution_candidate(ctx)[0]
     assert "## 既有知识复核" not in c["body"]
     assert "Old cache workaround" not in c["body"]
+
+
+def test_heuristic_skips_plain_bug_fix_even_with_files_and_verification():
+    ctx = build_distill_context(
+        final_body="Fixed the task list active filter fallback.",
+        final_context={
+            "summary": "Fix task list active filter fallback",
+            "changed_files": ["src/aha_cli/web/static/task_list.js"],
+            "verification": ["python3 -m pytest tests/test_frontend_static.py"],
+        },
+        task_title="Fix task list bug",
+        project_key_value="repo-git-abc123",
+        source={"run_id": "r1", "task_id": "t1", "round_id": "1"},
+    )
+    assert heuristic_solution_candidate(ctx) == []
 
 
 def test_heuristic_skips_task_with_no_reusable_signal():
@@ -285,7 +300,7 @@ def test_pluggable_distiller_overrides_heuristic(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 # Integration: a real finalize triggers distillation when enabled.
 # --------------------------------------------------------------------------- #
-def test_finalize_triggers_distill_when_enabled(tmp_path: Path):
+def test_finalize_triggers_distill_when_final_has_reusable_section(tmp_path: Path):
     home = tmp_path / ".aha"
     rc = main(["--home", str(home), "init"])
     assert rc == 0
@@ -308,7 +323,7 @@ def test_finalize_triggers_distill_when_enabled(tmp_path: Path):
         home,
         run_id,
         "task-001",
-        "Final report body.",
+        "## 可复用经验\nBundle submodule into the zipapp when imports are loaded dynamically.",
         policy="finalize",
         final_context={
             "summary": "Bundle submodule into the zipapp",
@@ -322,6 +337,35 @@ def test_finalize_triggers_distill_when_enabled(tmp_path: Path):
     assert len(pending) == 1
     assert pending[0]["meta"]["distilled_by"] == "heuristic"
     assert pending[0]["title"].startswith("Bundle submodule")
+
+
+def test_finalize_plain_bug_fix_does_not_create_heuristic_candidate(tmp_path: Path):
+    home = tmp_path / ".aha"
+    assert main(["--home", str(home), "init"]) == 0
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert main(["--home", str(home), "plan", "Bug fix", "--agents", "1"]) == 0
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+
+    from aha_cli.store.finals import write_task_result
+
+    write_task_result(
+        home,
+        run_id,
+        "task-001",
+        "Fixed the active filter fallback.",
+        policy="finalize",
+        final_context={
+            "summary": "Fix active filter fallback",
+            "changed_files": ["src/aha_cli/web/static/task_list.js"],
+            "verification": ["frontend static tests"],
+        },
+    )
+
+    assert list_pending(home, load_config(home)) == []
 
 
 def test_memo_report_triggers_distill_when_enabled(tmp_path: Path):
@@ -342,7 +386,7 @@ def test_memo_report_triggers_distill_when_enabled(tmp_path: Path):
         home,
         run_id,
         {"memo_report_context": {"memo_id": memo["id"], "task_id": "task-001"}},
-        "## 完成报告\n\n## 完成内容\nMemo report captured a reusable solution.",
+        "## 完成报告\n\n## 可复用经验\nMemo report captured a reusable solution.",
         0,
     )
 

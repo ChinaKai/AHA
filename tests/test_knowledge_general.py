@@ -93,6 +93,20 @@ def test_cli_tutorial_add_requires_body(tmp_path: Path):
     assert list_pending(home, _cfg()) == []
 
 
+def test_cli_rejects_project_wiki_entries(tmp_path: Path):
+    home = _home(tmp_path)
+    rc, _ = _run(
+        home,
+        "add",
+        "--scope", "project",
+        "--project", "proj-A",
+        "--kind", "wiki",
+        "--title", "Project fact",
+        "--body", "belongs in navigation",
+    )
+    assert rc == 2
+
+
 def test_project_and_general_knowledge_do_not_pollute_each_other(tmp_path: Path):
     home = tmp_path / ".aha"
     cfg = _cfg()

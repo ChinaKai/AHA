@@ -113,6 +113,7 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertIn("<aha_knowledge_candidates>", prompt)
         self.assertIn('For `kind="solutions"`', prompt)
         self.assertIn('For `kind="wiki"`', prompt)
+        self.assertIn("Navigation updates are incremental", prompt)
         self.assertIn("Prefer 0-3 high-quality candidates", prompt)
         self.assertIn("完成小修复", prompt)
         self.assertIn("1. (empty)", empty_journal)

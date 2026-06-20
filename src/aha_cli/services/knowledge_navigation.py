@@ -1,15 +1,16 @@
-"""Project navigation ("memory palace") map generation.
+"""Project navigation ("memory palace") generation.
 
-A navigation entry is a single per-project "项目地图": what the project is, its
-architecture at a glance, and a module → responsibility → key-files index. An
-agent reads it before working so it can jump straight to the relevant module
-instead of re-reading the whole codebase, then refines it after the work.
+Project navigation is a small entry point plus on-demand module docs. The entry
+point tells an agent what the project is and which module document to read; the
+module document tells it which source files, entry points, tests, and caveats
+matter for that module. This keeps prompts small while preserving a durable map
+for agents that need to modify a focused part of the codebase.
 
 This module provides a deterministic, dependency-free *scan* that turns a
-workspace into a skeleton map candidate. It deliberately does not invent
+workspace into skeleton navigation candidates. It deliberately does not invent
 content: it lists what exists (top-level packages, sub-packages, entry points)
 and pulls one-line module docstrings where present, leaving everything else as
-``(待补充)`` for a human or a richer sidecar map to fill in. The candidate flows
+``(待补充)`` for a human or a richer sidecar update to fill in. The candidates flow
 through the normal curation gate (``.pending`` by default).
 """
 
@@ -20,9 +21,11 @@ from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.store.knowledge import (
+    NAVIGATION_MODULES_DIR,
     NAVIGATION_SLUG,
     knowledge_config,
     project_key,
+    slugify,
 )
 
 # Directories that are never project modules worth mapping.
@@ -139,7 +142,7 @@ def _entry_points(workspace: Path) -> list[str]:
 
 
 def scan_workspace(workspace_path: str | Path) -> dict:
-    """Deterministically extract a project map skeleton from a workspace tree."""
+    """Deterministically extract a project navigation skeleton from a workspace tree."""
     workspace = Path(workspace_path).expanduser()
     modules: list[dict] = []
     for mod in _candidate_module_dirs(workspace):
@@ -157,15 +160,20 @@ def scan_workspace(workspace_path: str | Path) -> dict:
     }
 
 
+def _module_doc_slug(name: str) -> str:
+    return f"{NAVIGATION_MODULES_DIR}/{slugify(name)}"
+
+
 def render_navigation_body(scan: dict) -> str:
-    """Render a scan dict into the navigation entry body (markdown)."""
+    """Render a scan dict into the navigation index body (markdown)."""
     overview = (scan.get("overview") or "").strip()
     module_lines = []
     for mod in scan.get("modules") or []:
         name = str(mod.get("name") or "?")
         role = str(mod.get("role") or "").strip()
         files = str(mod.get("files") or "").strip()
-        line = f"- **{name}**"
+        doc = f"{_module_doc_slug(name)}.md"
+        line = f"- [{name}]({doc})"
         if role:
             line += f" — {role}"
         if files:
@@ -176,8 +184,13 @@ def render_navigation_body(scan: dict) -> str:
         "## 项目定位",
         overview or "(待补充：这个项目是干什么的)",
         "",
+        "## 使用规则",
+        "- 本入口只维护第一层模块/流程链接；更深层入口由对应父文档维护。",
+        "- 开工先读本入口，再按任务命中的模块/流程链接逐层读取少量文档；不要把整个 navigation 全量读入。",
+        "- 收尾只更新本次真实影响的子文档；如果子文档没有直接父入口，只补直接父入口链接。",
+        "",
         "## 架构概览",
-        "(待补充：分层 / 核心组件 / 数据流)",
+        "(待补充：分层 / 核心组件 / 数据流；必要时拆到 `flows/*.md`)",
         "",
         "## 模块索引",
         "\n".join(module_lines) if module_lines else "- (未发现可索引模块)",
@@ -191,15 +204,46 @@ def render_navigation_body(scan: dict) -> str:
     return "\n".join(parts).strip() + "\n"
 
 
+def render_module_navigation_body(project_name: str, module: dict) -> str:
+    """Render a module navigation doc skeleton."""
+    name = str(module.get("name") or "?")
+    role = str(module.get("role") or "").strip()
+    files = str(module.get("files") or "").strip()
+    parts = [
+        f"# {project_name} / {name} 模块",
+        "",
+        "## 模块职责",
+        role or "(待补充：该模块负责什么，边界是什么)",
+        "",
+        "## 关键源文件",
+        f"- `{files}`" if files else "- (待补充)",
+        "",
+        "## 入口 / 调用方",
+        "- (待补充：CLI/API/服务入口、上游调用方、关键数据流)",
+        "",
+        "## 修改注意",
+        "- 只在本模块职责、入口、关键文件、约束或盲区变化时更新本文。",
+        "- 本文只维护一层子入口；新增更深层子文档时只补本文的直接链接。",
+        "- 不要为无关 bug fix 全量重写模块文档；新增模块/流程时再补直接父入口链接。",
+        "",
+        "## 相关测试",
+        "- (待补充)",
+        "",
+        "## 盲区 / 待补充",
+        "- 由 scan 生成的骨架，需人工或后续任务补全。",
+    ]
+    return "\n".join(parts).strip() + "\n"
+
+
 def build_navigation_candidate(
     workspace_path: str | Path,
     project_key_value: str,
     *,
     source: dict | None = None,
 ) -> dict:
-    """Build a navigation map candidate (pending-queue shape) from a scan."""
+    """Build the navigation index candidate (pending-queue shape) from a scan."""
     scan = scan_workspace(workspace_path)
-    title = f"{scan.get('project_name') or '项目'} 项目地图"
+    title = f"{scan.get('project_name') or '项目'} 导航入口"
     related = [m["files"] for m in scan.get("modules") or [] if m.get("files")]
     return {
         "kind": "navigation",
@@ -212,12 +256,71 @@ def build_navigation_candidate(
             "type": "navigation",
             "outcome": "success",
             "confidence": 0.4,  # scan skeleton, unreviewed
-            "tags": ["navigation", "map"],
+            "tags": ["navigation", "index"],
             "related_files": related,
             "distilled_by": "scan",
+            "update_mode": "bootstrap",
+            "navigation_role": "index",
         },
         "source": source or {},
     }
+
+
+def build_navigation_candidates(
+    workspace_path: str | Path,
+    project_key_value: str,
+    *,
+    source: dict | None = None,
+) -> list[dict]:
+    """Build the navigation index and per-module doc candidates from a scan."""
+    scan = scan_workspace(workspace_path)
+    project_name = str(scan.get("project_name") or "项目")
+    candidates = [
+        {
+            "kind": "navigation",
+            "scope": "project",
+            "project_key": project_key_value,
+            "slug": NAVIGATION_SLUG,
+            "title": f"{project_name} 导航入口",
+            "body": render_navigation_body(scan),
+            "meta": {
+                "type": "navigation",
+                "outcome": "success",
+                "confidence": 0.4,
+                "tags": ["navigation", "index"],
+                "related_files": [m["files"] for m in scan.get("modules") or [] if m.get("files")],
+                "distilled_by": "scan",
+                "update_mode": "bootstrap",
+                "navigation_role": "index",
+            },
+            "source": source or {},
+        }
+    ]
+    for mod in scan.get("modules") or []:
+        name = str(mod.get("name") or "").strip()
+        if not name:
+            continue
+        files = [str(mod.get("files") or "").strip()] if str(mod.get("files") or "").strip() else []
+        candidates.append({
+            "kind": "navigation",
+            "scope": "project",
+            "project_key": project_key_value,
+            "slug": _module_doc_slug(name),
+            "title": f"{project_name} / {name} 模块文档",
+            "body": render_module_navigation_body(project_name, mod),
+            "meta": {
+                "type": "navigation",
+                "outcome": "success",
+                "confidence": 0.35,
+                "tags": ["navigation", "module", slugify(name)],
+                "related_files": files,
+                "distilled_by": "scan",
+                "update_mode": "bootstrap",
+                "navigation_role": "module",
+            },
+            "source": source or {},
+        })
+    return candidates
 
 
 def generate_navigation_candidate(
@@ -228,18 +331,17 @@ def generate_navigation_candidate(
     goal: str | None = None,
     project_key_value: str | None = None,
 ) -> dict:
-    """Build and route a project map candidate through the curation gate."""
+    """Build and route project navigation candidates through the curation gate."""
     cfg = knowledge_config(config)
     if not cfg.get("enabled"):
         return {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
     key = project_key_value or project_key(Path(workspace_path), goal=goal)
-    candidate = build_navigation_candidate(
-        workspace_path, key, source={"source_type": "navigation_scan", "generated_at": utc_now()}
-    )
+    source = {"source_type": "navigation_scan", "generated_at": utc_now()}
+    candidates = build_navigation_candidates(workspace_path, key, source=source)
     # Lazy import avoids a services import cycle (distill imports the store).
     from aha_cli.services.knowledge_distill import distill_and_enqueue
 
-    result = distill_and_enqueue(root, config, {"project_key": key}, candidates=[candidate])
-    result["title"] = candidate["title"]
+    result = distill_and_enqueue(root, config, {"project_key": key}, candidates=candidates)
+    result["title"] = candidates[0]["title"] if candidates else None
     result["project_key"] = key
     return result

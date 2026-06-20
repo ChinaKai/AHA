@@ -27,9 +27,10 @@
 | D2 | 知识库目录**本身是一个 git 仓库**，由 AHA 负责 init/commit/push/pull | ✅ 已确认 |
 | D3 | settings 中提供 **git remote 配置**，支持自动同步 | ✅ 已确认 |
 | D4 | 沉淀是**提炼**而非原样堆叠 final/report | ✅ 已确认 |
-| D5 | 两个正交维度：**项目知识 / 通用知识** × **Wiki / 解决方案** | ✅ 已确认 |
+| D5 | Wiki 定位为**非项目相关的通用教程/技术文档**；项目知识主要进入 navigation，少量可复用排障进入 solutions | ✅ 已确认 |
 | D6 | 入库需经过 **curation gate**（早期默认人工确认） | 🔲 待你拍板（建议默认开） |
 | D7 | 第一刀优先做**项目解决方案库**（ROI 最高，贴近现有 final） | 🔲 待你拍板 |
+| D8 | Project navigation 是随任务逐步完善的项目路线图：`index.md` 只做入口路由，模块/流程文档按需读、按需更 | ✅ 已确认 |
 
 ---
 
@@ -50,14 +51,23 @@
 └── projects/
     └── <project-key>/            # 项目分区
         ├── project.json          # 项目元信息（名称、workspace 指纹、别名）
-        ├── wiki/
-        │   └── <slug>.md
+        ├── navigation/
+        │   ├── index.md          # 小入口：项目介绍 + 模块/流程文档链接
+        │   ├── modules/
+        │   │   └── <module>.md   # 按任务命中阅读/更新的模块文档
+        │   └── flows/
+        │       └── <flow>.md     # 按任务命中阅读/更新的关键流程文档
         └── solutions/
             └── <slug>.md
 ```
 
 - **不混入 task/run 目录**，独立生命周期。
 - 删除某个 run 不影响知识库；知识库可整体拷贝/clone 到另一台机器。
+- `navigation/index.md` 只承担项目定位和路由索引职责；普通任务不得把全项目结构全量写回 index。
+- `navigation/modules/*.md` / `navigation/flows/*.md` 随真实任务逐步完善；一次任务只更新本次改动影响的少量文档。全量扫描/重建只用于初始化或用户显式维护。
+- 每个 navigation 文档只负责一层入口：`index.md` 只列第一层模块/流程；模块/流程文档只列自己的直接子文档。新增子文档如果缺父入口，AHA 只补直接父入口，不把孙子节点展开到顶层。
+- Root `navigation/index.md` 首次缺失时优先由 workspace scan 生成完整 bootstrap index；已有 index 后只做最小增量补链接。
+- Web Entries 主列表只展示项目导航入口；模块/流程文档作为入口的可点击引用在弹窗中查看/编辑，不铺平成一堆平级知识卡片，也不撑乱主列表。
 
 ### 2.1 project-key 推导
 
@@ -77,15 +87,15 @@
 
 每条知识是一个带 frontmatter 的 Markdown 文件。两类 schema：
 
-### 3.1 Wiki 条目（陈述性：「X 是什么 / 为什么」）
+### 3.1 Wiki 条目（通用教程/技术文档：「X 是什么 / 为什么」）
 
 ```markdown
 ---
 id: kb_<ulid>
 type: wiki
-scope: project | general
-project_key: <key|null>
-title: serial bridge 的会话生命周期
+scope: general | personal
+project_key: null
+title: Git rebase 教程
 tags: [hardware, serial, session]
 confidence: 0.0~1.0
 source_tasks: [run_id/task_id/round_id, ...]
@@ -97,7 +107,7 @@ status: active | stale | deprecated
 ---
 ```
 
-正文（结构化 Markdown）。Wiki 同主题应**持续更新同一篇**，而非新增。
+正文（结构化 Markdown）。Wiki 不承载项目结构知识；项目内模块职责、入口、约束应写入 `projects/<project-key>/navigation/`。Wiki 同主题应**持续更新同一篇**，而非新增。
 
 建议正文结构：
 
@@ -188,7 +198,7 @@ sidecar 产出的 `solutions` 正文建议使用更偏行动的固定段落：
 ```
 task 开始
   │  (a) git pull（若 auto_pull）
-  │  (b) 按 project-key + tags 检索 KB → 取 top-N 摘要
+  │  (b) 按 project-key + tags 检索 KB → navigation/index 置顶，模块/流程文档只在任务命中时读取
   │  (c) 注入到 task prompt 上下文（"项目已知经验"段落）
   ▼
 agent 执行任务  ……
@@ -211,7 +221,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 - memo report 的 (d)~(h) 挂在 `services/chat.py::write_memo_report_result` 成功写回之后，source 标记为 `memo_report`。
 - final/report 属于同一 linked task 时共用同一 `source_group`，同标题候选更新同一条 `.pending`，避免执行顺序不同或重复执行产生重复知识。
 - sidecar 使用软数量约束：默认产出 0~3 条高质量候选；只有确实存在更多独立可复用经验时才超过 3 条。
-- sidecar 的 `body` 模板由 `kind` 决定：`solutions` 偏行动指南，`wiki` 偏稳定事实/项目约定。
+- sidecar 的 `body` 模板由 `kind` 决定：`solutions` 偏可复用行动指南，`wiki` 仅用于通用教程/技术文档，`navigation` 用于项目入口、模块文档和流程文档。普通一次性 bug fix 默认不入库；若暴露了模块职责/入口/约束，应只更新受影响的 navigation 文档，不能把普通任务变成全量 nav 重建。
 
 ---
 
@@ -385,15 +395,17 @@ task 收尾 / round finalize 或 memo completion report 完成
 
 ### 11.3 常用命令
 - `aha kb status`：路径 / 条目数 / pending / stale / git 状态。
-- `aha kb add --kind wiki --title "标题" --body "…" [--scope general|project --project <key>] [--tag t] [--append] [--review-days N]`：手动沉淀/更新（同标题=同主题更新；`--append` 追加段落）。
+- `aha kb add --kind wiki --title "标题" --body "…" [--scope general|personal] [--tag t] [--append] [--review-days N]`：手动沉淀/更新通用/个人文档（同标题=同主题更新；`--append` 追加段落）。
+- `aha kb map build [--workspace PATH] [--project KEY]`：扫描生成项目 `navigation/index.md` 和 `navigation/modules/*.md` 候选。
 - `aha kb pending` / `aha kb approve <cand_id>` / `aha kb reject <cand_id>`：审核 distill 候选。
 - `aha kb list [--scope --kind --project]` / `aha kb show <id|slug>` / `aha kb search <query>`：浏览检索。
 - `aha kb stale`：列出 `review_after` 已过期、需复核的条目。
 - `aha kb sync [--push] [--no-pull] [-m msg]`：手动与 git 远端同步（ensure→commit→pull→push）。
 
 ### 11.4 闭环怎么跑
-- **沉淀（do→distill）**：开启后，task finalize 和 memo completion report 都会自动提炼项目解决方案候选 → `aha kb pending` 审核 → `approve` 入库。
+- **沉淀（do→distill）**：开启后，task finalize 和 memo completion report 优先使用 sidecar 提炼高价值候选；普通 bug fix 默认空候选，项目结构/模块认知进入 navigation，少量可复用排障进入 solutions → `aha kb pending` 审核 → `approve` 入库。
 - **学习（learn）**：同项目下一个 task 派发前,`dispatch_task_to_main` 会先 `auto_pull` 再检索,把「项目已知经验」注入 task-main 的 prompt。
+- **项目导航（nav）**：注入时 `navigation/index` 始终置顶作为路由；`modules/*` / `flows/*` 只在任务标题/描述命中时逐层进入 prompt，无命中时不按最近更新时间兜底注入，避免大项目里读取无关模块文档。新增子文档时若直接父入口缺链接，沉淀链路会补一个最小父入口候选。
 - **更新复核**：distill 会附带检索到的既有相关知识；若新结论冲突，候选会提示审核时更新/废弃旧条目，避免过期知识静默误导后续任务。
 
 ### 11.5 A/B 行为观察（运行期验证项）

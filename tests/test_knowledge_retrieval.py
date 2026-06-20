@@ -95,21 +95,49 @@ def test_format_injection_bounds_chars(tmp_path: Path):
     assert len(out) <= 600  # hard budget
 
 
-def test_injection_adds_navigation_contract_only_when_map_present():
-    # Plain knowledge: no map directive (existing injection behavior unchanged).
+def test_injection_adds_navigation_contract_only_when_navigation_present():
+    # Plain knowledge: no navigation directive (existing injection behavior unchanged).
     plain = format_injection([{"meta": {"title": "Fix", "type": "solution"}, "body": "do x"}])
     assert "项目已知经验" in plain
     assert "navigation" not in plain
-    assert "项目地图" not in plain
+    assert "项目导航" not in plain
 
-    # With a navigation map present, the read→locate→write-back contract appears.
+    # With a navigation entry present, the read→locate→write-back contract appears.
     withmap = format_injection([
-        {"meta": {"title": "项目地图", "type": "navigation"}, "body": "## 模块索引\n- **store**"},
+        {"meta": {"title": "项目导航", "type": "navigation", "slug": "index"}, "body": "## 模块索引\n- [store](modules/store.md)"},
         {"meta": {"title": "Fix", "type": "solution"}, "body": "do x"},
     ])
-    assert "项目地图" in withmap
+    assert "项目导航" in withmap
     assert 'kind:"navigation"' in withmap  # write-back instruction
-    assert "定位相关模块" in withmap  # read instruction
+    assert "按任务命中逐层读取" in withmap  # read instruction
+    assert "最小父入口链接" in withmap
+
+
+def test_retrieve_keeps_navigation_details_on_demand(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg()
+    init_knowledge_base(root, cfg)
+    write_entry(
+        root, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+        title="项目导航", body="## 模块索引\n- [store](modules/store.md)\n- [web](modules/web.md)",
+        slug="index", meta={"type": "navigation"},
+    )
+    write_entry(
+        root, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+        title="store 模块", body="filesystem persistence and JSONL state",
+        slug="modules/store", meta={"type": "navigation"},
+    )
+    write_entry(
+        root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+        title="Recent unrelated fix", body="ordinary project fallback",
+        meta={"type": "solution"},
+    )
+
+    fallback = retrieve_for_task(root, cfg, project_key="git-abc", terms=["nomatch"], max_entries=5)
+    assert [entry["meta"]["slug"] for entry in fallback] == ["index", "recent-unrelated-fix"]
+
+    matched = retrieve_for_task(root, cfg, project_key="git-abc", terms=["filesystem", "jsonl"], max_entries=5)
+    assert [entry["meta"]["slug"] for entry in matched][:2] == ["index", "modules/store"]
 
 
 def test_format_injection_hard_budget_clips_first_long_entry():

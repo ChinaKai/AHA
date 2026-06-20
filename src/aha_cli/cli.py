@@ -563,7 +563,10 @@ def cmd_kb(args: argparse.Namespace) -> int:
         else:
             gate = result.get("gate", "manual")
             where = "pending review queue" if gate == "manual" else "knowledge base"
-            print(f"project map candidate '{result.get('title')}' -> {where} ({result.get('project_key')})")
+            print(
+                f"project navigation candidates from '{result.get('title')}' -> "
+                f"{where} ({result.get('project_key')}, count={result.get('candidates', 0)})"
+            )
         return 0
     if args.kb_cmd == "tutorial":
         from aha_cli.services.knowledge_distill import distill_and_enqueue, general_tutorial_candidate
@@ -609,7 +612,8 @@ def cmd_kb(args: argparse.Namespace) -> int:
                 print(
                     f"  {cand.get('id')}  [{cand.get('scope')}/{cand.get('kind')}] "
                     f"{cand.get('title')}  (project={cand.get('project_key') or '-'}, "
-                    f"confidence={meta.get('confidence', '-')})"
+                    f"confidence={meta.get('confidence', '-')}, "
+                    f"created={cand.get('created_at') or '-'}, updated={cand.get('updated_at') or '-'})"
                 )
             print(f"total pending: {len(pending)}")
         return 0
@@ -686,7 +690,7 @@ def cmd_kb(args: argparse.Namespace) -> int:
         cand_scope = candidate.get("scope", "project")
         cand_kind = candidate.get("kind", "solutions")
         cand_project = candidate.get("project_key")
-        cand_slug = knowledge_slugify(candidate.get("title", ""))
+        cand_slug = candidate.get("slug") or knowledge_slugify(candidate.get("title", ""))
         existing = knowledge_entry_exists(root, cfg, cand_scope, cand_kind, cand_project, cand_slug)
         try:
             entry_path = knowledge_approve_candidate(root, cfg, args.candidate_id)
@@ -716,6 +720,9 @@ def cmd_kb(args: argparse.Namespace) -> int:
             print(f"rejected: {args.candidate_id}")
         return 0
     if args.kb_cmd == "add":
+        if args.scope == "project" and args.kind == "wiki":
+            print("project wiki entries are not supported; use project navigation docs or project solutions", file=sys.stderr)
+            return 2
         if args.scope == "project" and not args.project:
             print("--project is required for --scope project", file=sys.stderr)
             return 2
@@ -880,6 +887,8 @@ def _kb_entry_summary(entry: dict) -> dict:
         "project_key": meta.get("project_key"),
         "tags": meta.get("tags", []),
         "review_after": meta.get("review_after"),
+        "created_at": meta.get("created_at"),
+        "updated_at": meta.get("updated_at"),
         "path": entry.get("path"),
     }
 
@@ -896,14 +905,18 @@ def format_knowledge_status(status: dict) -> str:
     )
     lines.append(f"  curation gate: {status.get('curation_gate')}")
     general = status.get("general", {})
-    lines.append(f"  general: wiki={general.get('wiki', 0)} solutions={general.get('solutions', 0)}")
+    lines.append(
+        f"  general: wiki={general.get('wiki', 0)} "
+        f"solutions={general.get('solutions', 0)} navigation={general.get('navigation', 0)}"
+    )
     projects = status.get("projects", [])
     if projects:
         lines.append(f"  projects ({len(projects)}):")
         for proj in projects:
             counts = proj["counts"]
             lines.append(
-                f"    - {proj['project_key']}: wiki={counts.get('wiki', 0)} solutions={counts.get('solutions', 0)}"
+                f"    - {proj['project_key']}: wiki={counts.get('wiki', 0)} "
+                f"solutions={counts.get('solutions', 0)} navigation={counts.get('navigation', 0)}"
             )
     else:
         lines.append("  projects: none")

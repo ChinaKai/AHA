@@ -9,6 +9,7 @@ from aha_cli.services.knowledge_distill import (
 )
 from aha_cli.services.knowledge_navigation import (
     build_navigation_candidate,
+    build_navigation_candidates,
     generate_navigation_candidate,
     scan_workspace,
 )
@@ -73,13 +74,22 @@ def test_build_navigation_candidate_shape(tmp_path: Path):
     assert cand["kind"] == "navigation"
     assert cand["slug"] == NAVIGATION_SLUG
     assert cand["meta"]["type"] == "navigation"
-    assert cand["title"].endswith("项目地图")
+    assert cand["meta"]["update_mode"] == "bootstrap"
+    assert cand["meta"]["navigation_role"] == "index"
+    assert cand["title"].endswith("导航入口")
     for header in ("## 项目定位", "## 架构概览", "## 模块索引", "## 入口"):
         assert header in cand["body"]
-    assert "**core**" in cand["body"]
+    assert "[core](modules/core.md)" in cand["body"]
+    assert "不要把整个 navigation 全量读入" in cand["body"]
+
+    cands = build_navigation_candidates(ws, "demo-key")
+    assert [c["slug"] for c in cands] == ["index", "modules/core", "modules/web"]
+    assert "## 关键源文件" in cands[1]["body"]
+    assert cands[1]["meta"]["update_mode"] == "bootstrap"
+    assert cands[1]["meta"]["navigation_role"] == "module"
 
 
-def test_generate_enqueues_and_approve_lands_at_map_slug(tmp_path: Path):
+def test_generate_enqueues_and_approve_lands_at_navigation_folder(tmp_path: Path):
     home = tmp_path / ".aha"
     ws = _make_project(tmp_path)
     cfg = _cfg(gate="manual")
@@ -90,15 +100,19 @@ def test_generate_enqueues_and_approve_lands_at_map_slug(tmp_path: Path):
     )
     assert result["gate"] == "manual"
     pending = list_pending(home, cfg)
-    assert len(pending) == 1
-    assert pending[0]["kind"] == "navigation"
+    assert len(pending) == 3
+    assert {p["kind"] for p in pending} == {"navigation"}
+    assert {p["slug"] for p in pending} == {"index", "modules/core", "modules/web"}
 
-    approve_candidate(home, cfg, pending[0]["id"])
+    for candidate in pending:
+        approve_candidate(home, cfg, candidate["id"])
     entries = list_entries(home, config=cfg, scope="project", kind="navigation", project_key_value="demo-key")
-    assert len(entries) == 1
-    assert entries[0]["meta"]["slug"] == NAVIGATION_SLUG
-    assert entries[0]["meta"]["type"] == "navigation"
-    assert entries[0]["path"].endswith(f"navigation/{NAVIGATION_SLUG}.md")
+    assert len(entries) == 3
+    slugs = {entry["meta"]["slug"] for entry in entries}
+    paths = {entry["path"] for entry in entries}
+    assert slugs == {"index", "modules/core", "modules/web"}
+    assert any(path.endswith("navigation/index.md") for path in paths)
+    assert any(path.endswith("navigation/modules/core.md") for path in paths)
 
 
 def test_navigation_is_pinned_to_top_of_retrieval(tmp_path: Path):
@@ -113,7 +127,7 @@ def test_navigation_is_pinned_to_top_of_retrieval(tmp_path: Path):
     )
     write_entry(
         home, config=cfg, scope="project", kind="navigation", project_key_value="k",
-        title="项目地图", body="项目定位与模块索引", slug=NAVIGATION_SLUG,
+        title="项目导航", body="项目定位与模块索引", slug=NAVIGATION_SLUG,
         meta={"type": "navigation"},
     )
     out = retrieve_for_task(home, cfg, project_key="k", terms=["zipapp", "packaging"], max_entries=5)
@@ -124,10 +138,10 @@ def test_navigation_sidecar_writeback_updates_existing_map(tmp_path: Path):
     home = tmp_path / ".aha"
     cfg = _cfg(gate="manual")
     init_knowledge_base(home, cfg)
-    # Seed the project map (as if a prior `kb map build` was approved).
+    # Seed the project navigation index (as if a prior `kb map build` was approved).
     seed_path = write_entry(
         home, config=cfg, scope="project", kind="navigation", project_key_value="k",
-        title="demo 项目地图", body="## 模块索引\n- **old**", slug=NAVIGATION_SLUG,
+        title="demo 项目导航", body="## 模块索引\n- **old**", slug=NAVIGATION_SLUG,
         meta={"type": "navigation"},
     )
     seed_id = read_entry(seed_path)["meta"]["id"]
@@ -135,7 +149,7 @@ def test_navigation_sidecar_writeback_updates_existing_map(tmp_path: Path):
     # A finalize emits a navigation sidecar that refreshes the map.
     raw = [{
         "kind": "navigation",
-        "title": "demo 项目地图",
+        "title": "demo 项目导航",
         "overview": "updated overview",
         "modules": [{"name": "new", "role": "fresh role", "files": ["src/new"]}],
     }]
@@ -146,6 +160,8 @@ def test_navigation_sidecar_writeback_updates_existing_map(tmp_path: Path):
     pending = list_pending(home, cfg)
     assert len(pending) == 1
     assert pending[0]["kind"] == "navigation"
+    assert pending[0]["meta"]["update_mode"] == "incremental"
+    assert pending[0]["meta"]["navigation_role"] == "index"
     # The queue recognizes this as an update of the existing map, not a new entry.
     assert pending[0].get("action") == "update"
     assert pending[0].get("updates_entry_id") == seed_id
@@ -156,14 +172,14 @@ def test_navigation_sidecar_writeback_updates_existing_map(tmp_path: Path):
     updated = entries[0]
     assert updated["meta"]["id"] == seed_id  # stable id preserved across write-back
     assert updated["meta"]["slug"] == NAVIGATION_SLUG
-    assert "**new**" in updated["body"] and "updated overview" in updated["body"]
+    assert "[new](modules/new.md)" in updated["body"] and "updated overview" in updated["body"]
     assert "**old**" not in updated["body"]
 
 
 def test_sidecar_navigation_kind_is_normalized(tmp_path: Path):
     raw = [{
         "kind": "navigation",
-        "title": "项目地图",
+        "title": "项目导航",
         "overview": "what it is",
         "architecture": "layered",
         "modules": [{"name": "store", "role": "filesystem store", "files": ["src/store"]}],
@@ -174,5 +190,104 @@ def test_sidecar_navigation_kind_is_normalized(tmp_path: Path):
     assert out[0]["kind"] == "navigation"
     assert out[0]["slug"] == NAVIGATION_SLUG
     assert out[0]["meta"]["type"] == "navigation"
-    assert "**store**" in out[0]["body"]
+    assert "[store](modules/store.md)" in out[0]["body"]
     assert "## 模块索引" in out[0]["body"]
+
+
+def test_sidecar_project_wiki_is_navigation_module_doc():
+    raw = [{
+        "kind": "wiki",
+        "scope": "project",
+        "title": "store 模块约束",
+        "body": "项目内稳定事实",
+        "related_files": ["src/store.py"],
+    }]
+    out = normalize_sidecar_candidates({"project_key": "k"}, raw)
+    assert out[0]["kind"] == "navigation"
+    assert out[0]["scope"] == "project"
+    assert out[0]["slug"] == "modules/store"
+    assert out[0]["meta"]["update_mode"] == "incremental"
+    assert out[0]["meta"]["navigation_role"] == "module"
+
+
+def test_nested_navigation_candidate_backfills_parent_chain(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    raw = [{
+        "kind": "navigation",
+        "scope": "project",
+        "title": "web routes 子文档",
+        "slug": "modules/web/routes",
+        "body": "routes detail",
+    }]
+    cands = normalize_sidecar_candidates({"project_key": "k"}, raw)
+    result = distill_and_enqueue(home, cfg, {"project_key": "k"}, candidates=cands)
+    assert result["candidates"] == 3
+
+    pending = list_pending(home, cfg)
+    by_slug = {item["slug"]: item for item in pending}
+    assert set(by_slug) == {"modules/web/routes", "modules/web", "index"}
+    assert "modules/web/routes.md" in by_slug["modules/web"]["body"]
+    assert "modules/web.md" in by_slug["index"]["body"]
+    assert "modules/web/routes.md" not in by_slug["index"]["body"]
+
+
+def test_missing_index_uses_workspace_bootstrap_when_available(tmp_path: Path):
+    home = tmp_path / ".aha"
+    ws = _make_project(tmp_path)
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    raw = [{
+        "kind": "navigation",
+        "scope": "project",
+        "title": "web routes 子文档",
+        "slug": "modules/web/routes",
+        "body": "routes detail",
+    }]
+    cands = normalize_sidecar_candidates({"project_key": "k"}, raw)
+    result = distill_and_enqueue(
+        home, cfg, {"project_key": "k", "workspace_path": str(ws)}, candidates=cands
+    )
+    assert result["candidates"] == 3
+
+    index = next(item for item in list_pending(home, cfg) if item["slug"] == "index")
+    assert index["meta"]["update_mode"] == "bootstrap"
+    assert "Demo does a useful thing for tests." in index["body"]
+    assert "[core](modules/core.md)" in index["body"]
+    assert "[web](modules/web.md)" in index["body"]
+    assert "modules/web/routes.md" not in index["body"]
+
+
+def test_nested_navigation_backfills_only_direct_existing_parent(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    write_entry(
+        home, config=cfg, scope="project", kind="navigation", project_key_value="k",
+        title="项目导航", body="## 模块索引\n- [web](modules/web.md)\n",
+        slug=NAVIGATION_SLUG, meta={"type": "navigation"},
+    )
+    parent_path = write_entry(
+        home, config=cfg, scope="project", kind="navigation", project_key_value="k",
+        title="web 模块", body="## 下级入口\n-",
+        slug="modules/web", meta={"type": "navigation"},
+    )
+    parent_id = read_entry(parent_path)["meta"]["id"]
+    raw = [{
+        "kind": "navigation",
+        "scope": "project",
+        "title": "web static 子文档",
+        "slug": "modules/web/static",
+        "body": "static detail",
+    }]
+    cands = normalize_sidecar_candidates({"project_key": "k"}, raw)
+    result = distill_and_enqueue(home, cfg, {"project_key": "k"}, candidates=cands)
+    assert result["candidates"] == 2
+
+    pending = list_pending(home, cfg)
+    by_slug = {item["slug"]: item for item in pending}
+    assert set(by_slug) == {"modules/web/static", "modules/web"}
+    assert by_slug["modules/web"]["action"] == "update"
+    assert by_slug["modules/web"]["updates_entry_id"] == parent_id
+    assert "modules/web/static.md" in by_slug["modules/web"]["body"]

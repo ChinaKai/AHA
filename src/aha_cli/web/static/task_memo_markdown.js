@@ -67,13 +67,16 @@
     return /^(https?:|mailto:|\/|#|\.)/i.test(href) ? href : "";
   }
 
-  function createMarkdownLinkNode(documentRef, label, href) {
-    const safeHref = safeMarkdownLinkHref(href);
+  function createMarkdownLinkNode(documentRef, label, href, options = {}) {
+    const resolveHref = typeof options.linkHref === "function" ? options.linkHref : safeMarkdownLinkHref;
+    const safeHref = resolveHref(href);
     if (!safeHref) return null;
     const link = documentRef.createElement("a");
     link.href = safeHref;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
+    if (!String(safeHref).startsWith("#")) {
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
     link.textContent = label || safeHref;
     return link;
   }
@@ -112,7 +115,7 @@
       if (match[1] !== undefined) {
         parent.appendChild(createImageMarkdownNode(documentRef, match[0], match[1], match[2], options));
       } else if (match[3] !== undefined) {
-        const link = createMarkdownLinkNode(documentRef, match[3], match[4]);
+        const link = createMarkdownLinkNode(documentRef, match[3], match[4], options);
         if (link) {
           parent.appendChild(link);
         } else {
@@ -131,12 +134,12 @@
         deleted.textContent = match[8] || "";
         parent.appendChild(deleted);
       } else if (match[9] !== undefined) {
-        const link = createMarkdownLinkNode(documentRef, match[9], match[9]);
+        const link = createMarkdownLinkNode(documentRef, match[9], match[9], options);
         parent.appendChild(link || documentRef.createTextNode(match[0]));
       } else if (match[10] !== undefined) {
         const trailing = /[),.;:!?]+$/.exec(match[10])?.[0] || "";
         const href = trailing ? match[10].slice(0, -trailing.length) : match[10];
-        const link = createMarkdownLinkNode(documentRef, href, href);
+        const link = createMarkdownLinkNode(documentRef, href, href, options);
         parent.appendChild(link || documentRef.createTextNode(match[0]));
         if (trailing) parent.appendChild(documentRef.createTextNode(trailing));
       } else {

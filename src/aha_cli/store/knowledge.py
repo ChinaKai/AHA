@@ -47,9 +47,11 @@ SCOPES = ("general", "project", "personal")
 _KIND_TO_TYPE = {"wiki": "wiki", "solutions": "solution", "navigation": "navigation"}
 _TYPE_TO_KIND = {"wiki": "wiki", "solution": "solutions", "navigation": "navigation"}
 
-# A project keeps exactly one navigation map; its slug is fixed so increments
-# update the same "项目地图" entry instead of spawning duplicates.
-NAVIGATION_SLUG = "map"
+# A project's navigation entry point is intentionally small. Detailed project
+# orientation lives under nested navigation docs such as modules/<name>.md.
+NAVIGATION_SLUG = "index"
+NAVIGATION_MODULES_DIR = "modules"
+NAVIGATION_FLOWS_DIR = "flows"
 
 
 def kind_for_type(entry_type: str | None) -> str:
@@ -94,6 +96,18 @@ def slugify(text: str, *, max_length: int = 60) -> str:
         # Non-ASCII titles (e.g. Chinese) collapse to empty; fall back to a hash.
         normalized = "kb-" + hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:10]
     return normalized[:max_length].strip("-")
+
+
+def normalize_entry_slug(slug: str) -> str:
+    """Normalize a possibly nested entry slug without allowing path traversal."""
+    raw = str(slug or "").strip().replace("\\", "/")
+    parts: list[str] = []
+    for part in raw.split("/"):
+        clean = part.strip()
+        if not clean or clean in {".", ".."}:
+            continue
+        parts.append(slugify(clean))
+    return "/".join(parts) if parts else slugify(raw)
 
 
 def normalize_git_remote(remote: str) -> str:
@@ -236,10 +250,15 @@ def _render_readme() -> str:
         "# AHA Knowledge Base\n\n"
         "This directory is managed by AHA. It persists distilled knowledge "
         "independently of runs/tasks.\n\n"
-        "- `general/wiki`, `general/solutions` — cross-project knowledge\n"
-        "- `projects/<project-key>/wiki`, `.../solutions` — per-project knowledge\n"
-        "- `projects/<project-key>/navigation/map.md` — the project map "
-        "(what it is, architecture, module index) agents read before working\n\n"
+        "- `general/wiki` — cross-project tutorials and technical references\n"
+        "- `general/solutions` — cross-project reusable playbooks\n"
+        "- `projects/<project-key>/solutions` — rare reusable project playbooks\n"
+        "- `projects/<project-key>/navigation/index.md` — the project navigation entry point\n"
+        "- `projects/<project-key>/navigation/modules/*.md` — on-demand module docs\n"
+        "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n\n"
+        "Project navigation is incremental: read `navigation/index.md` first, then "
+        "only the module/flow docs relevant to the task; each nav doc owns one "
+        "link layer, and updates should touch only the docs affected by the task.\n\n"
         "Entries are Markdown files with a JSON frontmatter block. Do not edit "
         "`aha-knowledge.json` by hand.\n"
     )
@@ -289,8 +308,9 @@ def write_entry(
     kb_root = knowledge_root(root, config)
     target_dir = entry_dir(kb_root, scope, kind, project_key_value)
     target_dir.mkdir(parents=True, exist_ok=True)
-    entry_slug = slug or slugify(title)
+    entry_slug = normalize_entry_slug(slug) if slug else slugify(title)
     path = target_dir / f"{entry_slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     now = utc_now()
     full_meta = dict(meta or {})
@@ -346,7 +366,7 @@ def entry_path_for(
         target_dir = entry_dir(knowledge_root(root, config), scope, kind, project_key_value)
     except ValueError:
         return None
-    path = target_dir / f"{slug}.md"
+    path = target_dir / f"{normalize_entry_slug(slug)}.md"
     return path if path.exists() else None
 
 
@@ -392,7 +412,7 @@ def list_entries(
     if not target_dir.is_dir():
         return []
     entries: list[dict] = []
-    for path in sorted(target_dir.glob("*.md")):
+    for path in _iter_entry_markdown(target_dir):
         try:
             entries.append(read_entry(path))
         except (OSError, ValueError):
@@ -508,8 +528,23 @@ def search_entries(root: Path, config: dict | None, query: str) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # Status
 # --------------------------------------------------------------------------- #
+def _iter_entry_markdown(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    paths: list[Path] = []
+    for path in directory.rglob("*.md"):
+        try:
+            rel = path.relative_to(directory)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] == "assets":
+            continue
+        paths.append(path)
+    return sorted(paths)
+
+
 def _count_md(directory: Path) -> int:
-    return sum(1 for _ in directory.glob("*.md")) if directory.is_dir() else 0
+    return len(_iter_entry_markdown(directory))
 
 
 def knowledge_status(root: Path, config: dict | None = None) -> dict:
@@ -647,10 +682,7 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
     record["fingerprint"] = _candidate_fingerprint(record)
     record["status"] = "pending"
     now = utc_now()
-    record.setdefault("created_at", now)
-    record["last_seen_at"] = now
-    record["sources"] = _merge_sources(record.get("sources") or [], record.get("source"))
-    # Honor an explicit slug (e.g. the navigation map's fixed "map" slug) so an
+    # Honor an explicit slug (e.g. navigation/index or modules/<name>) so an
     # update is matched against the right on-disk entry, not a title-derived slug.
     entry_slug = str(record.get("slug") or "").strip() or slugify(str(record.get("title") or ""))
     existing_entry = entry_path_for(
@@ -669,14 +701,24 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
         except (OSError, ValueError):
             pass
     path = target / f"{cid}.json"
+    previous: dict | None = None
     if path.exists():
         try:
             previous = read_json(path)
-            record["created_at"] = previous.get("created_at", record["created_at"])
+            record["created_at"] = previous.get("created_at", record.get("created_at") or now)
             record["sources"] = _merge_sources(previous.get("sources") or [], record.get("source"))
             record["updated_from_fingerprint"] = previous.get("fingerprint")
         except (OSError, ValueError):
             pass
+    else:
+        record["created_at"] = record.get("created_at") or now
+        record["sources"] = _merge_sources(record.get("sources") or [], record.get("source"))
+    previous_fingerprint = previous.get("fingerprint") if previous else None
+    if previous and previous_fingerprint == record.get("fingerprint"):
+        record["updated_at"] = previous.get("updated_at") or previous.get("created_at") or now
+    else:
+        record["updated_at"] = now
+    record["last_seen_at"] = now
     write_json(path, record)
     return path
 
@@ -693,12 +735,17 @@ def list_pending(root: Path, config: dict | None = None) -> list[dict]:
             records.append(record)
         except (OSError, ValueError):
             continue
+    records.sort(
+        key=lambda item: str(item.get("updated_at") or item.get("last_seen_at") or item.get("created_at") or ""),
+        reverse=True,
+    )
     return records
 
 
 def auto_commit_message_for(candidates: list[dict]) -> str:
     if len(candidates) == 1:
-        return f"chore(knowledge): add solution '{candidates[0].get('title', 'entry')}'"
+        kind = candidates[0].get("kind") or "entry"
+        return f"chore(knowledge): add {kind} '{candidates[0].get('title', 'entry')}'"
     return f"chore(knowledge): add {len(candidates)} distilled entries"
 
 
@@ -727,7 +774,7 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
     project_key_value = record.get("project_key")
     body = record.get("body", "")
     meta = dict(record.get("meta") or {})
-    slug = record.get("slug") or slugify(str(record.get("title") or ""))
+    slug = normalize_entry_slug(record.get("slug")) if record.get("slug") else slugify(str(record.get("title") or ""))
 
     # Phase 5b: if this candidate came from a capture note, copy that note's
     # image assets into the entry's assets dir and leave a traceable reference.
@@ -755,7 +802,7 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
         title=record["title"],
         body=body,
         meta=meta,
-        slug=record.get("slug"),
+        slug=slug,
     )
     path.unlink()
     return entry_path

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Sequence
 
 from aha_cli.store.knowledge import (
+    NAVIGATION_SLUG,
     iter_all_entries,
     knowledge_config,
     project_key_aliases,
@@ -87,20 +88,28 @@ def retrieve_for_task(
         ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return ranked
 
-    # The project map (navigation) is always relevant: it tells the agent what
-    # the project is and where each module lives, so pin it to the top of the
-    # injection regardless of term overlap, then rank the rest as usual.
-    def is_nav(entry: dict) -> bool:
-        return entry.get("meta", {}).get("type") == "navigation"
+    # The navigation index is always relevant: it routes the agent to module
+    # docs. Detailed navigation docs (modules/flows) are ranked by relevance and
+    # are never included by the recency fallback, otherwise large projects would
+    # drift back toward reading unrelated module docs.
+    def is_nav_index(entry: dict) -> bool:
+        meta = entry.get("meta", {})
+        return meta.get("type") == "navigation" and meta.get("slug") == NAVIGATION_SLUG
 
-    nav_entries = [e for _, _, e in rank([e for e in project_entries if is_nav(e)])]
-    rest_project = [e for e in project_entries if not is_nav(e)]
+    def is_nav_detail(entry: dict) -> bool:
+        meta = entry.get("meta", {})
+        slug = str(meta.get("slug") or "")
+        return meta.get("type") == "navigation" and slug != NAVIGATION_SLUG
+
+    nav_entries = [e for _, _, e in rank([e for e in project_entries if is_nav_index(e)])]
+    rest_project = [e for e in project_entries if not is_nav_index(e)]
 
     ordered = [e for score, _, e in rank(rest_project) if score > 0]
     ordered += [e for score, _, e in rank(general_entries) if score > 0]
     if not ordered:
-        # Fallback: project knowledge by recency (general excluded to stay focused).
-        ordered = [e for _, _, e in rank(rest_project)]
+        # Fallback: non-navigation project knowledge by recency. Navigation
+        # details remain on-demand: read them only when the task matches them.
+        ordered = [e for _, _, e in rank([e for e in rest_project if not is_nav_detail(e)])]
     ordered = nav_entries + [e for e in ordered if e not in nav_entries]
     return ordered[: max(0, max_entries)]
 
@@ -117,14 +126,14 @@ def format_injection(entries: list[dict], *, max_chars: int = 4000) -> str:
         "项目已知经验 (knowledge base):",
         "开工前先参考以下从过往任务沉淀的知识；如与现状冲突以代码为准。",
     ]
-    # When a project map is present, give the agent the read→locate→write-back
-    # contract up front: use the map to jump to the right module instead of
-    # reading the whole repo, and refresh it on structural changes at finalize.
+    # When a project navigation index is present, give the agent the read→locate
+    # contract up front: use the index to jump to the right module docs instead
+    # of reading the whole repo, and refresh navigation docs on structural
+    # changes at finalize.
     if any(e.get("meta", {}).get("type") == "navigation" for e in entries):
         header.append(
-            "⚑ 本项目已有项目地图（navigation，置顶）：先据此定位相关模块、避免全局通读；"
-            "收尾时若改动影响模块职责/入口/架构/盲区，请在 final/report 的 knowledge sidecar "
-            "用 kind:\"navigation\" 回写更新地图。"
+            "⚑ 本项目已有项目导航（navigation/index 置顶）：先读入口，再按任务命中逐层读取少量 modules/* 或 flows/*，避免全局通读；"
+            "收尾时若改动影响模块职责/入口/架构/盲区，请只用 kind:\"navigation\" 回写受影响文档；新子文档缺直接父入口时补最小父入口链接。"
         )
     out = "\n".join(header + [""])
     for entry in entries:
@@ -136,8 +145,8 @@ def format_injection(entries: list[dict], *, max_chars: int = 4000) -> str:
             break  # no room for even this entry's title line
         block = head_line
         excerpt = " ".join((entry.get("body", "") or "").split())
-        # The project map carries the most actionable orientation, so let it keep
-        # a fuller excerpt than ordinary entries (still under the total budget).
+        # Project navigation carries the most actionable orientation, so let it
+        # keep a fuller excerpt than ordinary entries (still under the budget).
         per_entry_cap = 1200 if kind == "navigation" else 360
         if len(excerpt) > per_entry_cap:
             excerpt = excerpt[:per_entry_cap].rstrip() + " …"

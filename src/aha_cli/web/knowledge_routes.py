@@ -19,6 +19,7 @@ from aha_cli.services.knowledge_git import auto_commit_after_change
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import (
+    NAVIGATION_SLUG,
     approve_candidate,
     delete_entry,
     entry_exists,
@@ -79,9 +80,15 @@ def _entry_summary(entry: dict) -> dict:
         "tags": meta.get("tags", []),
         "status": meta.get("status", "active"),
         "review_after": meta.get("review_after"),
+        "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
         "path": entry.get("path"),
     }
+
+
+def _is_navigation_child(entry: dict) -> bool:
+    meta = entry.get("meta", {})
+    return meta.get("type") == "navigation" and meta.get("slug") != NAVIGATION_SLUG
 
 
 def _entry_matches_query(entry: dict, query: str) -> bool:
@@ -210,6 +217,8 @@ def knowledge_route_response(
         entries = []
         for entry in iter_all_entries(root, cfg):
             meta = entry.get("meta", {})
+            if _is_navigation_child(entry):
+                continue
             if scope and meta.get("scope") != scope:
                 continue
             if project and project.lower() not in str(meta.get("project_key") or "").lower():
@@ -296,7 +305,7 @@ def knowledge_route_response(
             candidate.get("scope", "project"),
             candidate.get("kind", "solutions"),
             candidate.get("project_key"),
-            slugify(candidate.get("title", "")),
+            candidate.get("slug") or slugify(candidate.get("title", "")),
         )
         entry_path = approve_candidate(root, cfg, cid)
         git_result = auto_commit_after_change(

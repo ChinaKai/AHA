@@ -207,8 +207,8 @@ def test_entry_has_stable_kb_id_preserved_on_rewrite(tmp_path: Path):
     p2 = write_entry(root, config=cfg, scope="general", kind="wiki", title="Topic", body="v2")
     assert read_entry(p2)["meta"]["id"] == first_id  # preserved across rewrite
     # Different identity (scope) -> different id.
-    p3 = write_entry(root, config=cfg, scope="project", kind="wiki",
-                     project_key_value="git-x", title="Topic", body="v1")
+    p3 = write_entry(root, config=cfg, scope="project", kind="navigation",
+                     project_key_value="git-x", title="Topic", body="v1", slug="index")
     assert read_entry(p3)["meta"]["id"] != first_id
 
 

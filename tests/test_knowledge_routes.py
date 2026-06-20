@@ -68,10 +68,10 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     write_entry(home, config=cfg, scope="project", kind="solutions",
                 project_key_value="git-abc", title="Fix build", body="do x")
     write_entry(home, config=cfg, scope="project", kind="navigation",
-                project_key_value="git-abc", title="demo 项目地图", body="## 模块索引\n- **store**", slug="map")
+                project_key_value="git-abc", title="demo 项目导航", body="## 模块索引\n- [store](modules/store.md)", slug="index")
     write_entry(home, config=cfg, scope="general", kind="wiki", title="Docker 教程", body="containers")
 
-    # The project map is browsable via the navigation kind filter.
+    # The project navigation is browsable via the navigation kind filter.
     nav = _get(home, "/api/kb/entries", {"kind": ["navigation"]})
     assert nav["count"] == 1 and nav["entries"][0]["type"] == "navigation"
 
@@ -199,7 +199,7 @@ def test_pending_lists_navigation_and_general_candidates(tmp_path: Path):
     cfg = load_config(home)
     enqueue_candidate(home, cfg, {
         "kind": "navigation", "scope": "project", "project_key": "git-abc",
-        "slug": "map", "title": "demo 项目地图", "body": "## 模块索引",
+        "slug": "index", "title": "demo 项目导航", "body": "## 模块索引",
         "meta": {"type": "navigation", "confidence": 0.4},
     })
     enqueue_candidate(home, cfg, {
@@ -235,6 +235,38 @@ def test_entries_support_fuzzy_project_filter_and_search(tmp_path: Path):
     by_tag = _get(home, "/api/kb/entries", {"q": ["docs"]})
     assert by_tag["count"] == 1
     assert by_tag["entries"][0]["title"] == "Write docs"
+
+
+def test_entries_hide_navigation_children_but_entry_can_read_them(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(
+        home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+        title="项目导航", body="- [store](modules/store.md)", slug="index",
+        meta={"type": "navigation"},
+    )
+    write_entry(
+        home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+        title="store 模块", body="store details", slug="modules/store",
+        meta={"type": "navigation"},
+    )
+
+    listed = _get(home, "/api/kb/entries", {"kind": ["navigation"]})
+    assert listed["count"] == 1
+    assert listed["entries"][0]["slug"] == "index"
+
+    child = _get(home, "/api/kb/entry", {"id": ["modules/store"]})
+    assert child["meta"]["slug"] == "modules/store"
+    assert child["body"] == "store details"
+
+    updated = json_response_body(_patch(home, "/api/kb/entry", {
+        "id": "modules/store",
+        "title": "store 模块导航",
+        "body": "updated store details",
+    }))
+    assert updated["entry"]["meta"]["slug"] == "modules/store"
+    assert updated["entry"]["meta"]["title"] == "store 模块导航"
+    assert updated["entry"]["body"] == "updated store details"
 
 
 def test_entry_lookup_by_id(tmp_path: Path):
