@@ -112,10 +112,12 @@ def test_heuristic_keeps_useful_sections_without_truncating():
     assert "noise" not in body
 
 
-def test_heuristic_includes_prior_entries_for_review():
+def test_heuristic_does_not_embed_prior_entries_in_body():
+    # Prior knowledge must NOT be spliced into the candidate body: it bloats the
+    # entry and (when a task is re-finalized) creates self-referential entries.
     ctx = build_distill_context(
         final_body="New result says the old cache workaround is obsolete.",
-        final_context=None,
+        final_context={"changed_files": ["src/cache.py"]},
         task_title="Cache behavior changed",
         project_key_value="repo-git-abc123",
         source={"run_id": "r1", "task_id": "t1", "round_id": "1"},
@@ -127,9 +129,26 @@ def test_heuristic_includes_prior_entries_for_review():
         ],
     )
     c = heuristic_solution_candidate(ctx)[0]
-    assert "## 既有知识复核" in c["body"]
-    assert "Old cache workaround" in c["body"]
-    assert "更新或废弃旧条目" in c["body"]
+    assert "## 既有知识复核" not in c["body"]
+    assert "Old cache workaround" not in c["body"]
+
+
+def test_heuristic_skips_task_with_no_reusable_signal():
+    # Pure Q&A / no-op task: no summary, no changed files, no verification, and a
+    # report that is only task narrative -> nothing reusable, produce nothing.
+    ctx = build_distill_context(
+        final_body=(
+            "# 任务 Final：科普一下云端工程师\n\n"
+            "## 任务轮次\n纯问答，main 直接作答。\n\n"
+            "## 变更文件与决策\n无文件变更（纯问答，未触碰仓库）。\n\n"
+            "## 验证\n无需代码验证。"
+        ),
+        final_context={},
+        task_title="科普一下云端工程师",
+        project_key_value="repo-git-abc123",
+        source={"run_id": "r1", "task_id": "t1", "round_id": "1"},
+    )
+    assert heuristic_solution_candidate(ctx) == []
 
 
 def test_split_knowledge_sidecar_strips_visible_report():
@@ -323,7 +342,7 @@ def test_memo_report_triggers_distill_when_enabled(tmp_path: Path):
         home,
         run_id,
         {"memo_report_context": {"memo_id": memo["id"], "task_id": "task-001"}},
-        "## 完成报告\nMemo report captured a reusable solution.",
+        "## 完成报告\n\n## 完成内容\nMemo report captured a reusable solution.",
         0,
     )
 

@@ -25,11 +25,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from aha_cli.store.knowledge import (
+    NAVIGATION_SLUG,
     auto_commit_message_for,
     enqueue_candidate,
     init_knowledge_base,
     knowledge_config,
     project_key,
+    type_for_kind,
     write_entry,
 )
 
@@ -122,7 +124,11 @@ def _extract_useful_markdown(text: str) -> str:
     if current and current_useful:
         sections.append(current)
     useful = "\n\n".join("\n".join(section).strip() for section in sections if "\n".join(section).strip())
-    return useful or cleaned
+    # When the report is structured but every section is pure task narrative
+    # (任务轮次/变更文件/验证/剩余风险 …) there is nothing reusable to keep, so we
+    # return "" rather than dumping the whole report. The value gate in
+    # ``heuristic_solution_candidate`` turns that empty result into "no candidate".
+    return useful
 
 
 def _prior_entry_summaries(entries: list[dict]) -> list[dict]:
@@ -139,28 +145,38 @@ def _prior_entry_summaries(entries: list[dict]) -> list[dict]:
 
 
 def heuristic_solution_candidate(context: dict) -> list[dict]:
-    """Deterministic fallback distiller: one solution candidate from the final.
+    """Deterministic fallback distiller: at most one solution candidate.
 
     It does not invent content; it reorganizes what the task already recorded
-    into the solution schema so a reviewer can confirm/trim it. The final report
-    body is always used: as the "effective solution" when no summary is given,
-    and otherwise kept as a dedicated excerpt section.
+    into the solution schema so a reviewer can confirm/trim it. Crucially it is
+    a *gate*, not an unconditional producer: when the task left no reusable
+    signal (no record_task_update summary, no changed files, no verification,
+    and no genuinely useful report section — e.g. a pure Q&A or trivial task)
+    it returns ``[]`` so the KB is not polluted with task narrative. The real
+    quality path is the agent-emitted sidecar; the heuristic only salvages a
+    candidate when there is concrete substance to salvage.
     """
     summary = (context.get("summary") or "").strip()
     source_body = _clean_markdown(context.get("final_body") or "")
     useful_body = _extract_useful_markdown(source_body)
 
-    title_basis = summary or context.get("task_title") or useful_body or "Untitled solution"
-    title = title_basis.strip().splitlines()[0][:120] if title_basis.strip() else "Untitled solution"
-
     changed = context.get("changed_files") or []
     verification = context.get("verification") or []
     risks = context.get("risks") or []
 
+    # Value gate: skip when the task left nothing reusable. An explicit summary,
+    # changed files, verification steps, or a recognised useful report section
+    # all count as signal; their total absence means "produce nothing".
+    if not (summary or useful_body or changed or verification):
+        return []
+
+    title_basis = summary or context.get("task_title") or useful_body or "Untitled solution"
+    title = title_basis.strip().splitlines()[0][:120] if title_basis.strip() else "Untitled solution"
+
     # Effective solution prefers the explicit summary, but falls back to useful
     # sections from the source report so stored knowledge keeps structure and is
     # not reduced to a short, lossy prefix.
-    solution = summary or useful_body or "(见任务 final/report)"
+    solution = summary or useful_body or "(见任务 final/report，待人工提炼)"
 
     body_parts = ["## 问题 / 触发条件", context.get("task_title") or "(见任务标题)"]
     body_parts += ["", "## 有效解法", solution]
@@ -172,18 +188,6 @@ def heuristic_solution_candidate(context: dict) -> list[dict]:
         body_parts += ["", "## 涉及文件"] + [f"- {f}" for f in changed]
     if verification:
         body_parts += ["", "## 验证方式"] + [f"- {v}" for v in verification]
-    prior_entries = context.get("prior_entries") or []
-    if prior_entries:
-        body_parts += [
-            "",
-            "## 既有知识复核",
-            "以下旧知识与本次任务相关；如本次结论与其冲突，审核时应更新或废弃旧条目。",
-        ]
-        for entry in prior_entries:
-            label = entry.get("title") or "(untitled)"
-            entry_id = entry.get("id") or "-"
-            excerpt = entry.get("excerpt") or ""
-            body_parts.append(f"- {label} ({entry_id}): {excerpt}")
     body_parts += [
         "",
         "## 失效条件 / 适用边界",
@@ -257,13 +261,57 @@ def _sidecar_kind(candidate: dict) -> str:
     raw = str(candidate.get("kind") or "solutions").strip().lower()
     if raw in {"wiki", "wikis"}:
         return "wiki"
+    if raw in {"navigation", "nav", "map"}:
+        return "navigation"
     return "solutions"
+
+
+def _sidecar_navigation_body(candidate: dict) -> str:
+    overview = str(candidate.get("overview") or candidate.get("summary") or "").strip()
+    architecture = str(candidate.get("architecture") or "").strip()
+    modules = candidate.get("modules")
+    module_lines: list[str] = []
+    if isinstance(modules, list):
+        for mod in modules:
+            if isinstance(mod, dict):
+                name = str(mod.get("name") or mod.get("module") or "").strip()
+                role = str(mod.get("role") or mod.get("desc") or "").strip()
+                files = ", ".join(_as_list(mod.get("files") or mod.get("entry")))
+                line = f"- **{name or '?'}**"
+                if role:
+                    line += f" — {role}"
+                if files:
+                    line += f" (`{files}`)"
+                module_lines.append(line)
+            elif str(mod).strip():
+                module_lines.append(f"- {str(mod).strip()}")
+    entry_points = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("entry_points") or candidate.get("entries")))
+    gaps = str(candidate.get("gaps") or candidate.get("todo") or "").strip()
+    parts = [
+        "## 项目定位",
+        overview or "-",
+        "",
+        "## 架构概览",
+        architecture or "-",
+        "",
+        "## 模块索引",
+        "\n".join(module_lines) if module_lines else "-",
+        "",
+        "## 入口 / 关键流程",
+        entry_points or "-",
+        "",
+        "## 盲区 / 待补充",
+        gaps or "-",
+    ]
+    return "\n".join(parts).strip() + "\n"
 
 
 def _sidecar_body(candidate: dict, kind: str) -> str:
     body = str(candidate.get("body") or "").strip()
     if body:
         return body.rstrip() + "\n"
+    if kind == "navigation":
+        return _sidecar_navigation_body(candidate)
     if kind == "wiki":
         conclusion = str(candidate.get("conclusion") or candidate.get("summary") or "").strip()
         scope = str(candidate.get("applicability") or candidate.get("scope_note") or "").strip()
@@ -342,7 +390,7 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
         tags = _as_list(raw.get("tags"))
         related_files = _as_list(raw.get("related_files") or raw.get("files"))
         meta = {
-            "type": "wiki" if kind == "wiki" else "solution",
+            "type": type_for_kind(kind),
             "outcome": str(raw.get("outcome") or "success"),
             "confidence": raw.get("confidence", 0.7),
             "tags": tags,
@@ -355,16 +403,60 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
             meta["invalid_when"] = invalid_when
             if "失效条件" not in body and "invalid" not in body.lower():
                 body = body.rstrip() + f"\n\n## 失效条件 / 适用边界\n{invalid_when}\n"
-        normalized.append({
+        scope = "general" if str(raw.get("scope") or "").strip().lower() == "general" else "project"
+        # General knowledge (cross-project tutorials/docs) must never inherit a
+        # project_key, or it would be filed under and retrieved as one project's
+        # private knowledge instead of the shared general scope.
+        project_key_value = None if scope == "general" else (raw.get("project_key") or context.get("project_key"))
+        candidate = {
             "kind": kind,
-            "scope": str(raw.get("scope") or "project"),
-            "project_key": raw.get("project_key") or context.get("project_key"),
+            "scope": scope,
+            "project_key": project_key_value,
             "title": title,
             "body": body,
             "meta": meta,
             "source": source,
-        })
+        }
+        # A project keeps exactly one navigation map; pin the slug so repeated
+        # distillation updates the same "项目地图" rather than creating duplicates.
+        if kind == "navigation":
+            candidate["slug"] = str(raw.get("slug") or NAVIGATION_SLUG)
+        normalized.append(candidate)
     return normalized
+
+
+def general_tutorial_candidate(
+    *,
+    title: str,
+    body: str,
+    kind: str = "wiki",
+    tags: list[str] | None = None,
+    related_files: list[str] | None = None,
+    source: dict | None = None,
+) -> dict:
+    """Build a cross-project (general scope) tutorial/doc candidate.
+
+    This is the manual-authoring counterpart to the distillers: it produces a
+    candidate that is *not* tied to any project_key, so it lands in the shared
+    ``general/`` scope and is only injected when relevant to a task.
+    """
+    kind = "solutions" if str(kind).strip().lower() == "solutions" else "wiki"
+    return {
+        "kind": kind,
+        "scope": "general",
+        "project_key": None,
+        "title": str(title or "").strip(),
+        "body": (str(body or "").strip() + "\n") if str(body or "").strip() else "",
+        "meta": {
+            "type": type_for_kind(kind),
+            "outcome": "success",
+            "confidence": 0.5,
+            "tags": [t for t in (tags or []) if str(t).strip()],
+            "related_files": [f for f in (related_files or []) if str(f).strip()],
+            "distilled_by": "manual",
+        },
+        "source": source or {"source_type": "manual_tutorial"},
+    }
 
 
 def distill_and_enqueue(
@@ -407,6 +499,7 @@ def distill_and_enqueue(
                 title=cand["title"],
                 body=cand.get("body", ""),
                 meta=cand.get("meta", {}),
+                slug=cand.get("slug"),
             )
             written.append(str(path))
         result = {"ok": True, "gate": "auto", "written": written, "candidates": len(written)}

@@ -37,8 +37,24 @@ KNOWLEDGE_GITIGNORE_FILE = ".gitignore"
 GENERAL_DIR = "general"
 PROJECTS_DIR = "projects"
 PENDING_DIR = ".pending"
-ENTRY_KINDS = ("wiki", "solutions")
+ENTRY_KINDS = ("wiki", "solutions", "navigation")
 SCOPES = ("general", "project")
+
+# Stable mapping between on-disk kind (directory) and frontmatter ``type``.
+_KIND_TO_TYPE = {"wiki": "wiki", "solutions": "solution", "navigation": "navigation"}
+_TYPE_TO_KIND = {"wiki": "wiki", "solution": "solutions", "navigation": "navigation"}
+
+# A project keeps exactly one navigation map; its slug is fixed so increments
+# update the same "项目地图" entry instead of spawning duplicates.
+NAVIGATION_SLUG = "map"
+
+
+def kind_for_type(entry_type: str | None) -> str:
+    return _TYPE_TO_KIND.get(str(entry_type or ""), "solutions")
+
+
+def type_for_kind(kind: str) -> str:
+    return _KIND_TO_TYPE.get(str(kind or ""), "solution")
 
 _FRONTMATTER_FENCE = "---"
 
@@ -215,7 +231,9 @@ def _render_readme() -> str:
         "This directory is managed by AHA. It persists distilled knowledge "
         "independently of runs/tasks.\n\n"
         "- `general/wiki`, `general/solutions` — cross-project knowledge\n"
-        "- `projects/<project-key>/wiki`, `.../solutions` — per-project knowledge\n\n"
+        "- `projects/<project-key>/wiki`, `.../solutions` — per-project knowledge\n"
+        "- `projects/<project-key>/navigation/map.md` — the project map "
+        "(what it is, architecture, module index) agents read before working\n\n"
         "Entries are Markdown files with a JSON frontmatter block. Do not edit "
         "`aha-knowledge.json` by hand.\n"
     )
@@ -270,7 +288,7 @@ def write_entry(
 
     now = utc_now()
     full_meta = dict(meta or {})
-    full_meta.setdefault("type", "wiki" if kind == "wiki" else "solution")
+    full_meta.setdefault("type", type_for_kind(kind))
     full_meta["scope"] = scope
     full_meta["project_key"] = project_key_value if scope == "project" else None
     full_meta["title"] = title
@@ -435,7 +453,7 @@ def update_entry(
     if invalid_when is not None:
         meta["invalid_when"] = str(invalid_when).strip() or None
     scope = str(meta.get("scope") or "project")
-    kind = "wiki" if meta.get("type") == "wiki" else "solutions"
+    kind = kind_for_type(meta.get("type"))
     path = write_entry(
         root,
         config=config,
@@ -622,7 +640,9 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
     record.setdefault("created_at", now)
     record["last_seen_at"] = now
     record["sources"] = _merge_sources(record.get("sources") or [], record.get("source"))
-    entry_slug = slugify(str(record.get("title") or ""))
+    # Honor an explicit slug (e.g. the navigation map's fixed "map" slug) so an
+    # update is matched against the right on-disk entry, not a title-derived slug.
+    entry_slug = str(record.get("slug") or "").strip() or slugify(str(record.get("title") or ""))
     existing_entry = entry_path_for(
         root,
         config,
@@ -701,6 +721,7 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
         title=record["title"],
         body=record.get("body", ""),
         meta=record.get("meta", {}),
+        slug=record.get("slug"),
     )
     path.unlink()
     return entry_path

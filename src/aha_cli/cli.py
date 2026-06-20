@@ -103,6 +103,7 @@ from aha_cli.store.knowledge import (
     remove_pending as knowledge_remove_pending,
     search_entries as knowledge_search_entries,
     slugify as knowledge_slugify,
+    type_for_kind as knowledge_type_for_kind,
     write_entry as knowledge_write_entry,
 )
 from aha_cli.services.knowledge_git import auto_commit_after_change as knowledge_auto_commit
@@ -545,6 +546,48 @@ def cmd_kb(args: argparse.Namespace) -> int:
             verb = "Created" if result["created"] else "Verified"
             print(f"{verb} knowledge base at {result['path']} (schema v{result['schema_version']})")
         return 0
+    if args.kb_cmd == "map":
+        from aha_cli.services.knowledge_navigation import generate_navigation_candidate
+
+        workspace = args.workspace or os.getcwd()
+        result = generate_navigation_candidate(
+            root, cfg,
+            workspace_path=workspace,
+            goal=getattr(args, "goal", None),
+            project_key_value=getattr(args, "project", None),
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif result.get("skipped"):
+            print(f"skipped: {result['skipped']}")
+        else:
+            gate = result.get("gate", "manual")
+            where = "pending review queue" if gate == "manual" else "knowledge base"
+            print(f"project map candidate '{result.get('title')}' -> {where} ({result.get('project_key')})")
+        return 0
+    if args.kb_cmd == "tutorial":
+        from aha_cli.services.knowledge_distill import distill_and_enqueue, general_tutorial_candidate
+
+        body = args.body
+        if getattr(args, "body_file", None):
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        if not (args.title.strip() and body.strip()):
+            print("tutorial requires a non-empty --title and body (--body/--body-file)", file=sys.stderr)
+            return 2
+        candidate = general_tutorial_candidate(
+            title=args.title, body=body, kind=args.kind, tags=args.tag or [],
+            source={"source_type": "manual_tutorial"},
+        )
+        result = distill_and_enqueue(root, cfg, {}, candidates=[candidate])
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif result.get("skipped"):
+            print(f"skipped: {result['skipped']}")
+        else:
+            gate = result.get("gate", "manual")
+            where = "pending review queue" if gate == "manual" else "knowledge base (general)"
+            print(f"general tutorial '{args.title}' -> {where}")
+        return 0
     if args.kb_cmd == "status":
         status = knowledge_status(root, cfg)
         if getattr(args, "json", False):
@@ -733,7 +776,7 @@ def _kb_entry_matches(entry: dict, args: argparse.Namespace) -> bool:
     meta = entry.get("meta", {})
     if getattr(args, "scope", None) and meta.get("scope") != args.scope:
         return False
-    if getattr(args, "kind", None) and meta.get("type") != ("solution" if args.kind == "solutions" else "wiki"):
+    if getattr(args, "kind", None) and meta.get("type") != knowledge_type_for_kind(args.kind):
         return False
     if getattr(args, "project", None) and meta.get("project_key") != args.project:
         return False

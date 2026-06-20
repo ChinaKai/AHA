@@ -95,6 +95,23 @@ def test_format_injection_bounds_chars(tmp_path: Path):
     assert len(out) <= 600  # hard budget
 
 
+def test_injection_adds_navigation_contract_only_when_map_present():
+    # Plain knowledge: no map directive (existing injection behavior unchanged).
+    plain = format_injection([{"meta": {"title": "Fix", "type": "solution"}, "body": "do x"}])
+    assert "项目已知经验" in plain
+    assert "navigation" not in plain
+    assert "项目地图" not in plain
+
+    # With a navigation map present, the read→locate→write-back contract appears.
+    withmap = format_injection([
+        {"meta": {"title": "项目地图", "type": "navigation"}, "body": "## 模块索引\n- **store**"},
+        {"meta": {"title": "Fix", "type": "solution"}, "body": "do x"},
+    ])
+    assert "项目地图" in withmap
+    assert 'kind:"navigation"' in withmap  # write-back instruction
+    assert "定位相关模块" in withmap  # read instruction
+
+
 def test_format_injection_hard_budget_clips_first_long_entry():
     # A single very long first entry must NOT blow the budget.
     entries = [{"meta": {"title": "Big", "type": "solution"}, "body": "y" * 5000}]

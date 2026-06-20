@@ -87,11 +87,21 @@ def retrieve_for_task(
         ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return ranked
 
-    ordered = [e for score, _, e in rank(project_entries) if score > 0]
+    # The project map (navigation) is always relevant: it tells the agent what
+    # the project is and where each module lives, so pin it to the top of the
+    # injection regardless of term overlap, then rank the rest as usual.
+    def is_nav(entry: dict) -> bool:
+        return entry.get("meta", {}).get("type") == "navigation"
+
+    nav_entries = [e for _, _, e in rank([e for e in project_entries if is_nav(e)])]
+    rest_project = [e for e in project_entries if not is_nav(e)]
+
+    ordered = [e for score, _, e in rank(rest_project) if score > 0]
     ordered += [e for score, _, e in rank(general_entries) if score > 0]
     if not ordered:
         # Fallback: project knowledge by recency (general excluded to stay focused).
-        ordered = [e for _, _, e in rank(project_entries)]
+        ordered = [e for _, _, e in rank(rest_project)]
+    ordered = nav_entries + [e for e in ordered if e not in nav_entries]
     return ordered[: max(0, max_entries)]
 
 
@@ -103,11 +113,20 @@ def format_injection(entries: list[dict], *, max_chars: int = 4000) -> str:
     """
     if not entries:
         return ""
-    out = "\n".join([
+    header = [
         "项目已知经验 (knowledge base):",
         "开工前先参考以下从过往任务沉淀的知识；如与现状冲突以代码为准。",
-        "",
-    ])
+    ]
+    # When a project map is present, give the agent the read→locate→write-back
+    # contract up front: use the map to jump to the right module instead of
+    # reading the whole repo, and refresh it on structural changes at finalize.
+    if any(e.get("meta", {}).get("type") == "navigation" for e in entries):
+        header.append(
+            "⚑ 本项目已有项目地图（navigation，置顶）：先据此定位相关模块、避免全局通读；"
+            "收尾时若改动影响模块职责/入口/架构/盲区，请在 final/report 的 knowledge sidecar "
+            "用 kind:\"navigation\" 回写更新地图。"
+        )
+    out = "\n".join(header + [""])
     for entry in entries:
         meta = entry.get("meta", {})
         kind = meta.get("type", "entry")
@@ -117,8 +136,11 @@ def format_injection(entries: list[dict], *, max_chars: int = 4000) -> str:
             break  # no room for even this entry's title line
         block = head_line
         excerpt = " ".join((entry.get("body", "") or "").split())
-        if len(excerpt) > 360:
-            excerpt = excerpt[:360].rstrip() + " …"
+        # The project map carries the most actionable orientation, so let it keep
+        # a fuller excerpt than ordinary entries (still under the total budget).
+        per_entry_cap = 1200 if kind == "navigation" else 360
+        if len(excerpt) > per_entry_cap:
+            excerpt = excerpt[:per_entry_cap].rstrip() + " …"
         if excerpt:
             room = max_chars - len(out) - len(block) - len("\n  ")
             if room > 8:
