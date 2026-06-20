@@ -62,6 +62,50 @@ def test_status_and_entries(tmp_path: Path):
     assert by_kind["count"] == 1 and by_kind["entries"][0]["id"].startswith("kb_")
 
 
+def test_entries_kind_filter_includes_navigation(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(home, config=cfg, scope="project", kind="solutions",
+                project_key_value="git-abc", title="Fix build", body="do x")
+    write_entry(home, config=cfg, scope="project", kind="navigation",
+                project_key_value="git-abc", title="demo 项目地图", body="## 模块索引\n- **store**", slug="map")
+    write_entry(home, config=cfg, scope="general", kind="wiki", title="Docker 教程", body="containers")
+
+    # The project map is browsable via the navigation kind filter.
+    nav = _get(home, "/api/kb/entries", {"kind": ["navigation"]})
+    assert nav["count"] == 1 and nav["entries"][0]["type"] == "navigation"
+
+    # The general tutorial is reachable via the general scope filter.
+    general = _get(home, "/api/kb/entries", {"scope": ["general"]})
+    assert general["count"] == 1 and general["entries"][0]["title"] == "Docker 教程"
+
+    # Existing kind filters are unaffected (navigation is not a solution).
+    sol = _get(home, "/api/kb/entries", {"kind": ["solutions"]})
+    assert sol["count"] == 1 and sol["entries"][0]["title"] == "Fix build"
+
+
+def test_pending_lists_navigation_and_general_candidates(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    enqueue_candidate(home, cfg, {
+        "kind": "navigation", "scope": "project", "project_key": "git-abc",
+        "slug": "map", "title": "demo 项目地图", "body": "## 模块索引",
+        "meta": {"type": "navigation", "confidence": 0.4},
+    })
+    enqueue_candidate(home, cfg, {
+        "kind": "wiki", "scope": "general", "project_key": None,
+        "title": "Git 教程", "body": "rebase",
+        "meta": {"type": "wiki", "confidence": 0.5},
+    })
+    listed = _get(home, "/api/kb/pending")
+    assert listed["count"] == 2
+    kinds = {c["kind"] for c in listed["pending"]}
+    assert kinds == {"navigation", "wiki"}
+    # The general candidate is unbound from any project.
+    general = next(c for c in listed["pending"] if c["kind"] == "wiki")
+    assert general["scope"] == "general" and general["project_key"] is None
+
+
 def test_entries_support_fuzzy_project_filter_and_search(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)

@@ -26,6 +26,7 @@ from aha_cli.store.knowledge import (
     list_pending,
     remove_pending,
     slugify,
+    type_for_kind,
     update_entry,
 )
 from aha_cli.store.paths import config_path
@@ -171,7 +172,7 @@ def knowledge_route_response(
         project = str(query.get("project", [""])[0] or "").strip() or None
         search = str(query.get("q", [""])[0] or "").strip()
         kind = str(query.get("kind", [""])[0] or "").strip() or None
-        want_type = {"solutions": "solution", "wiki": "wiki"}.get(kind) if kind else None
+        want_type = type_for_kind(kind) if kind in ("solutions", "wiki", "navigation") else None
         entries = []
         for entry in iter_all_entries(root, cfg):
             meta = entry.get("meta", {})
