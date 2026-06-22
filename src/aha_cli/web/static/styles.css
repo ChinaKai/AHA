@@ -3307,7 +3307,7 @@ pre {
   color: #f2f4f7;
   border-radius: 6px;
   padding: 12px;
-  min-height: 100%;
+  min-height: 0;
 }
 .composer {
   display: grid;

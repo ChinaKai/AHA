@@ -1426,6 +1426,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(".task-memo-markdown-editor", styles)
         self.assertIn(".task-memo-description-source", styles)
         self.assertIn(".task-memo-description-editor", styles)
+        pre_block = styles[styles.index("pre {\n  margin: 0;") : styles.index(".composer", styles.index("pre {\n  margin: 0;"))]
+        self.assertIn("min-height: 0;", pre_block)
+        self.assertNotIn("min-height: 100%;", pre_block)
         self.assertIn(".task-memo-attachments", styles)
         self.assertIn(".task-memo-attachments-title", styles)
         self.assertIn(".task-memo-attachment-link", styles)
