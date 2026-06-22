@@ -22,7 +22,7 @@ class TaskCommandFormatTests(unittest.TestCase):
             code = main(list(args))
         return code, out.getvalue()
 
-    def test_format_aha_help_status_and_agents(self) -> None:
+    def test_format_aha_supported_and_removed_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -31,26 +31,29 @@ class TaskCommandFormatTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
-                help_text = format_aha_command(root, run_id, "task-001", "/aha help")
+                help_text = format_aha_command(root, run_id, "task-001", "/aha")
                 status_text = format_aha_command(root, run_id, "task-001", "/aha status")
                 agents_text = format_aha_command(root, run_id, "task-001", "/aha agents")
+                checkpoint_text = format_aha_command(root, run_id, "task-001", "/aha checkpoint done")
+                phase_text = format_aha_command(root, run_id, "task-001", "/aha phase implement")
+                session_text = format_aha_command(root, run_id, "task-001", "/aha session compact-reset")
                 finalize_text = format_aha_command(root, run_id, "task-001", "/aha finalize")
                 complete_text = format_aha_command(root, run_id, "task-001", "/aha complete")
                 done_text = format_aha_command(root, run_id, "task-001", "/aha done")
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
-        self.assertIn("/aha checkpoint <summary>", help_text)
+        self.assertIn("/aha final", help_text)
+        self.assertIn("/aha reopen", help_text)
+        self.assertIn("/aha interrupt", help_text)
+        self.assertIn("/agent <command>", help_text)
+        self.assertNotIn("/aha checkpoint", help_text)
+        self.assertNotIn("/aha status", help_text)
+        self.assertNotIn("/aha agents", help_text)
         self.assertNotIn("/aha complete", help_text)
         self.assertNotIn("/aha done", help_text)
         self.assertNotIn("/aha finalize", help_text)
-        self.assertIn("/agent <command>", help_text)
-        self.assertIn("Task: task-001 Map the relevant files", status_text)
-        self.assertIn("Backend: stub", status_text)
-        self.assertIn("- main role=task-main backend=stub", agents_text)
-        self.assertIn("Unknown AHA command", finalize_text)
-        self.assertIn("Unknown AHA command", complete_text)
-        self.assertIn("Unknown AHA command", done_text)
-        self.assertIn("Unknown AHA command", unknown_text)
+        for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, complete_text, done_text, unknown_text):
+            self.assertIn("Unsupported AHA command", text)
 
     def test_format_aha_without_task_and_missing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

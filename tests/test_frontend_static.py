@@ -3209,11 +3209,19 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("box-shadow: 0 -12px 28px rgba(15, 23, 42, 0.14);", styles)
         self.assertIn("bottom: calc(var(--mobile-composer-offset) + var(--mobile-keyboard-inset));", styles)
 
-    def test_frontend_command_menu_only_lists_aha_final(self) -> None:
+    def test_frontend_command_menu_lists_only_supported_aha_slash_commands(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app_controller_factory.js").read_text(encoding="utf-8")
 
         self.assertIn('name: "/aha final"', script)
+        self.assertIn('name: "/aha reopen"', script)
+        self.assertIn('name: "/aha interrupt"', script)
+        self.assertNotIn('name: "/aha help"', script)
+        self.assertNotIn('name: "/aha status"', script)
+        self.assertNotIn('name: "/aha agents"', script)
+        self.assertNotIn('name: "/aha checkpoint"', script)
+        self.assertNotIn('name: "/aha phase"', script)
+        self.assertNotIn('name: "/aha session compact-reset"', script)
         self.assertNotIn('name: "/aha complete"', script)
         self.assertNotIn("Alias for /aha final", script)
 
@@ -3386,8 +3394,6 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("prompt_tokens", script)
         self.assertIn("prompt_chars", script)
         self.assertIn("pressure_source", script)
-        self.assertIn("/aha session compact-reset", frontend_scripts)
-        self.assertIn("/aha phase", frontend_scripts)
         self.assertIn("compactResetStates", script)
         self.assertIn("Compacting", script)
         self.assertIn("Restarting", script)

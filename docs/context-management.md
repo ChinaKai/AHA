@@ -127,7 +127,7 @@ store large logs and command output by path, not by prompt copy
 write durable round/task summaries before resetting a backend session
 start a fresh backend session after final/reopen when appropriate
 start a fresh backend session after context-window errors
-use `/aha phase <phase> [summary]` to checkpoint and freshen the selected agent at explicit phase boundaries
+use explicit session controls to checkpoint and freshen the selected agent at phase boundaries
 keep backend sessions as execution continuity, not as the source of truth
 ```
 

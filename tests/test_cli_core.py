@@ -1447,7 +1447,7 @@ class CliCoreTests(unittest.TestCase):
                 else:
                     proc.communicate(timeout=1)
 
-    def test_aha_status_command_formats_task_state(self) -> None:
+    def test_aha_slash_commands_are_limited_and_agent_command_forwards(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -1457,11 +1457,10 @@ class CliCoreTests(unittest.TestCase):
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
                 output = format_aha_command(root, run_id, "task-001", "/aha status")
-                self.assertIn("Task: task-001", output)
-                self.assertIn("Status: pending", output)
+                self.assertIn("Unsupported AHA command", output)
 
                 backend_output = format_aha_command(root, run_id, "task-001", "/aha backend status")
-                self.assertIn("Unknown AHA command", backend_output)
+                self.assertIn("Unsupported AHA command", backend_output)
 
                 handled, agent_message, payload = handle_slash_command(
                     root,
@@ -1477,7 +1476,7 @@ class CliCoreTests(unittest.TestCase):
                 page = conversation_events_page(root, run_id, "task-001", "main", limit=10)
                 messages = [event["data"] for event in page["events"] if event["type"] == "message"]
                 self.assertTrue(any(message.get("message") == "/aha status" and message.get("agent_id") == "main" for message in messages))
-                self.assertTrue(any(message.get("sender") == "AHA" and "Task: task-001" in message.get("message", "") for message in messages))
+                self.assertTrue(any(message.get("sender") == "AHA" and "Unsupported AHA command" in message.get("message", "") for message in messages))
 
                 handled, agent_message, payload = handle_slash_command(
                     root,
@@ -1488,7 +1487,11 @@ class CliCoreTests(unittest.TestCase):
                 )
                 self.assertTrue(handled)
                 self.assertIsNone(agent_message)
-                self.assertIn("AHA commands:", payload["message"]["message"])
+                self.assertIn("/aha final", payload["message"]["message"])
+                self.assertIn("/aha reopen", payload["message"]["message"])
+                self.assertIn("/aha interrupt", payload["message"]["message"])
+                self.assertIn("/agent <command>", payload["message"]["message"])
+                self.assertNotIn("/aha status", payload["message"]["message"])
 
                 handled, agent_message, payload = handle_slash_command(
                     root,

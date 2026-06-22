@@ -54,12 +54,8 @@ Backends that do not expose resumable sessions leave `backend_session_id` empty.
 Some events still expose the backend-native id as `thread_id` for compatibility with older logs and UI replay code. Treat that event field as a legacy transport name, not as a Codex-only concept.
 
 `phase` is an optional task-agent execution phase such as `research`, `plan`,
-`implement`, `verify`, or `finalize`. Users can explicitly transition the
-selected agent with:
-
-```text
-/aha phase <phase> [summary]
-```
+`implement`, `verify`, or `finalize`. Phase transitions are an internal/API-level
+session operation, not a chat slash command.
 
 When a phase transition has an active `backend_session_id`, AHA writes a compact
 checkpoint summary, archives the old backend session id, clears it, and stores

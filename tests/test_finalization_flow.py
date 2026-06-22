@@ -10,15 +10,18 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import chat_prompt_with_metrics
+from aha_cli.services.orchestrator import record_sub_agent_report
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
     complete_task,
     event_path,
+    inbox_path,
     iter_jsonl_from,
     list_task_lifecycle_rounds,
     list_task_rounds,
+    mark_task_coordination,
     run_dir,
     reopen_task,
     set_agent_status,
@@ -337,6 +340,62 @@ class FinalizationFlowTests(unittest.TestCase):
                 self.assertEqual(detail["task"]["status"], "awaiting_user")
                 self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")["status"], "completed")
 
+    def test_round_summary_reply_that_delegates_waits_for_new_sub_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Round delegates", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                set_task_status(root, run_id, "task-001", "running")
+                mark_task_coordination(root, run_id, "task-001", round_summary_requested_at="2026-06-22T10:19:52+00:00")
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    render_prompt_template("task_round_summary.md", task_id="task-001"),
+                    sender="aha",
+                    task_id="task-001",
+                    role="main",
+                    reply_target="browser",
+                    coordination="subagents_complete",
+                )
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "route_to_agent",
+                                "agent_id": sub["id"],
+                                "message": "继续处理新反馈",
+                            }
+                        ],
+                        "response": "已转给 sub-agent。",
+                    }
+                )
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
+                    mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}),
+                ):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+                self.assertEqual(code, 0)
+                detail = task_snapshot(root, run_id, "task-001")
+                main = next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")
+                self.assertEqual(detail["task"]["status"], "running")
+                self.assertEqual(main["status"], "waiting")
+                self.assertEqual(main["waiting_reason"], "subagents")
+                self.assertEqual(detail["task"]["coordination"].get("round_summary_completed_at"), "")
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}):
+                    report = record_sub_agent_report(root, run_id, "task-001", sub["id"], "sub done")
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(report["round_summary_requested"])
+        self.assertEqual(main_messages[-1]["coordination"], "subagents_complete")
+
     def test_task_scoped_main_backend_exits_after_waiting_for_subagents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -390,7 +449,7 @@ class FinalizationFlowTests(unittest.TestCase):
         self.assertIn("chronological ordered list", prompt)
         self.assertIn("Final source range:", prompt)
 
-    def test_aha_checkpoint_records_task_round(self) -> None:
+    def test_removed_aha_checkpoint_does_not_record_task_round(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -409,10 +468,9 @@ class FinalizationFlowTests(unittest.TestCase):
 
                 self.assertTrue(handled)
                 self.assertIsNone(forwarded)
-                self.assertIn("Checkpoint recorded", response["message"]["message"])
+                self.assertIn("Unsupported AHA command", response["message"]["message"])
                 rounds = list_task_rounds(root, run_id, "task-001")
-                self.assertEqual(rounds[0]["trigger"], "manual")
-                self.assertEqual(rounds[0]["summary"], "完成第一轮清理")
+                self.assertEqual(rounds, [])
 
     def test_finalization_prompt_omits_recent_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

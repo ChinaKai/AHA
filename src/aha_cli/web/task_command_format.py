@@ -6,65 +6,28 @@ from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import task_snapshot
 
 
+SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha final, /aha reopen, /aha interrupt, /agent <command>."
+
+
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
+    del target
     parts = command.split()
-    name = parts[1] if len(parts) > 1 else "help"
-    if name == "help":
-        return "\n".join(
-            [
-                "AHA commands:",
-                "- /aha help: show AHA commands",
-                "- /aha status: show selected task status",
-                "- /aha agents: list selected task agents",
-                "- /aha checkpoint <summary>: record a task journal checkpoint",
-                "- /aha phase <phase> [summary]: checkpoint and start a fresh backend session for the selected agent phase",
-                "- /aha final: ask task-main to generate the Final and complete the task",
-                "- /aha reopen: cancel completion and allow follow-up messages",
-                "- /aha interrupt: interrupt the selected agent's current turn",
-                "- /aha session compact-reset: compact and reset selected agent backend session",
-                "",
-                "Agent command:",
-                "- /agent <command>: route /<command> to the selected agent",
-            ]
-        )
+    name = parts[1] if len(parts) > 1 else ""
+    if not name:
+        return SUPPORTED_SLASH_COMMANDS
     if not task_id:
         return "No task is selected."
     try:
-        detail = task_snapshot(root, run_id, task_id)
+        task_snapshot(root, run_id, task_id)
     except KeyError:
         return f"Task not found: {task_id}"
-    task = detail["task"]
-    if name == "status":
-        return "\n".join(
-            [
-                f"Task: {task['id']} {task['title']}",
-                f"Status: {task.get('status')} exit={task.get('exit_code')}",
-                f"Backend: {task.get('preferred_backend')} model={task.get('preferred_model') or 'default'}",
-                f"Workspace: {task.get('workspace_path') or '-'}",
-            ]
-        )
-    if name == "agents":
-        lines = ["Agents:"]
-        for agent in task.get("agents", []):
-            lines.append(
-                f"- {agent.get('id')} role={agent.get('role')} backend={agent.get('backend')} "
-                f"sandbox={agent.get('sandbox') or task.get('preferred_sandbox') or '-'} "
-                f"approval={agent.get('approval') or task.get('preferred_approval') or '-'} "
-                f"proxy={'on' if agent.get('proxy_enabled') else 'off'} "
-                f"assignment={agent.get('assignment') or agent.get('created_reason') or '-'}"
-            )
-        return "\n".join(lines)
-    if name == "checkpoint":
-        return "Use `/aha checkpoint <summary>` from the selected task conversation to record a journal checkpoint."
-    if name == "phase":
-        return "Use `/aha phase <phase> [summary]` to checkpoint the selected agent and start the next phase in a fresh backend session."
     if name == "final":
         return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
-    if name in {"reopen", "resume"}:
+    if name == "reopen":
         return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
-    if name == "session" and len(parts) > 2 and parts[2] == "compact-reset":
-        return "Use `/aha session compact-reset` from the selected task conversation to archive the current backend session and start a fresh one."
-    return f"Unknown AHA command: /aha {name}. Try /aha help."
+    if name == "interrupt":
+        return "Use `/aha interrupt` from the selected task conversation to interrupt the selected agent's current turn."
+    return f"Unsupported AHA command: /aha {name}. {SUPPORTED_SLASH_COMMANDS}"
 
 
 def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id: str | None, command: str) -> tuple[bool, str | None, str | None]:

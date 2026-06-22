@@ -26,7 +26,7 @@
     }
 
     function isInterruptCommand(message) {
-      return /^\/aha\s+(interrupt|stop)(?:\s|$)/i.test(String(message || "").trim());
+      return /^\/aha\s+interrupt(?:\s|$)/i.test(String(message || "").trim());
     }
 
     function selectedTaskRealtimeActive() {

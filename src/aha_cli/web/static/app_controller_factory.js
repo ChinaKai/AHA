@@ -1,14 +1,8 @@
 (() => {
   const ahaSlashCommands = Object.freeze([
-    { scope: "aha", name: "/aha help", insert: "/aha help", desc: "Show AHA commands. Handled locally." },
-    { scope: "aha", name: "/aha status", insert: "/aha status", desc: "Show selected task status. Handled locally." },
-    { scope: "aha", name: "/aha agents", insert: "/aha agents", desc: "List selected task agents. Handled locally." },
-    { scope: "aha", name: "/aha checkpoint", insert: "/aha checkpoint ", desc: "Record a task journal checkpoint. Handled locally." },
-    { scope: "aha", name: "/aha phase", insert: "/aha phase implement ", desc: "Checkpoint and start a fresh backend session for a task phase." },
     { scope: "aha", name: "/aha final", insert: "/aha final", desc: "Ask task-main to generate the Final and complete the task." },
     { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
-    { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." },
-    { scope: "aha", name: "/aha session compact-reset", insert: "/aha session compact-reset", desc: "Compact and reset the selected backend session." }
+    { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." }
   ]);
 
   function createInitialControllers(elements = {}, deps = {}) {

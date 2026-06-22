@@ -21,18 +21,9 @@ class TaskCommandRouterTests(unittest.TestCase):
         handlers = SlashCommandHandlers(
             format_aha_command=lambda root, run_id, task_id, command, target: f"formatted {command} for {target}",
             format_agent_command=lambda root, run_id, task_id, agent_id, command: (False, "/status", None),
-            record_task_checkpoint=lambda root, run_id, task_id, command: "checkpoint recorded",
             request_task_finalization=lambda root, run_id, task_id, command: f"final requested by {command}",
             reopen_selected_task=lambda root, run_id, task_id: "reopened",
             interrupt_selected_agent=lambda root, run_id, task_id, target: ("interrupted", {"interrupted": True, "target": target}),
-            compact_reset_selected_agent=lambda root, run_id, task_id, target: (
-                "compact reset",
-                {"old_backend_session_id": "session-1", "target": target},
-            ),
-            transition_selected_agent_phase=lambda root, run_id, task_id, target, command: (
-                "phase changed",
-                {"phase": command.split()[2], "target": target},
-            ),
             prepare_task_main_autostart=lambda root, run_id, task_id: {"backend": "codex", "target": "main", "task_id": task_id},
             append_message=append_message,
             append_event=append_event,
@@ -63,7 +54,6 @@ class TaskCommandRouterTests(unittest.TestCase):
 
         self.assertEqual(handlers.format_aha_command.__module__, "aha_cli.web.task_command_format")
         self.assertEqual(handlers.format_agent_command.__module__, "aha_cli.web.task_command_format")
-        self.assertEqual(handlers.record_task_checkpoint.__module__, "aha_cli.web.task_command_actions")
         self.assertIs(handlers.request_task_finalization, task_command_actions.request_task_finalization)
 
     def test_aha_final_records_command_and_returns_backend_autostart(self) -> None:
@@ -121,7 +111,7 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertNotIn("backend_autostart", payload)
         self.assertEqual(payload["message"]["message"], "formatted /aha complete for main")
 
-    def test_interrupt_and_compact_reset_attach_action_payloads(self) -> None:
+    def test_interrupt_attaches_action_payload(self) -> None:
         handlers, _ = self.make_handlers()
 
         interrupt_handled, _, interrupt_payload = handle_slash_command(
@@ -132,35 +122,29 @@ class TaskCommandRouterTests(unittest.TestCase):
             "task-001",
             handlers=handlers,
         )
-        reset_handled, _, reset_payload = handle_slash_command(
-            Path("/tmp/root"),
-            "run-1",
-            {"sender": "browser", "target": "main"},
-            "/aha session compact-reset",
-            "task-001",
-            handlers=handlers,
-        )
 
         self.assertTrue(interrupt_handled)
         self.assertEqual(interrupt_payload["interrupt"]["target"], "sub-001")
-        self.assertTrue(reset_handled)
-        self.assertEqual(reset_payload["compact_reset"]["old_backend_session_id"], "session-1")
 
-    def test_phase_command_attaches_phase_transition_payload(self) -> None:
+    def test_removed_aha_commands_are_formatted_as_unsupported(self) -> None:
         handlers, _ = self.make_handlers()
 
-        handled, forwarded, payload = handle_slash_command(
-            Path("/tmp/root"),
-            "run-1",
-            {"sender": "browser", "target": "main"},
-            "/aha phase implement start coding",
-            "task-001",
-            handlers=handlers,
-        )
+        for command in ("/aha help", "/aha status", "/aha agents", "/aha checkpoint x", "/aha phase implement", "/aha session compact-reset"):
+            with self.subTest(command=command):
+                handled, forwarded, payload = handle_slash_command(
+                    Path("/tmp/root"),
+                    "run-1",
+                    {"sender": "browser", "target": "main"},
+                    command,
+                    "task-001",
+                    handlers=handlers,
+                )
 
-        self.assertTrue(handled)
-        self.assertIsNone(forwarded)
-        self.assertEqual(payload["phase_transition"], {"phase": "implement", "target": "main"})
+                self.assertTrue(handled)
+                self.assertIsNone(forwarded)
+                self.assertNotIn("backend_autostart", payload)
+                self.assertNotIn("interrupt", payload)
+                self.assertEqual(payload["message"]["message"], f"formatted {command} for main")
 
 
 if __name__ == "__main__":

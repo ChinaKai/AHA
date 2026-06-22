@@ -1150,7 +1150,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             exit_after_message = bool(worker_task_id)
                         else:
                             detail = task_snapshot(root, run_id, item_task_id)
-                            if item.get("coordination") == "subagents_complete":
+                            if delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
+                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", waiting_reason="subagents")
+                                set_task_status(root, run_id, item_task_id, "running")
+                            elif item.get("coordination") == "subagents_complete":
                                 sub_agents = [
                                     agent.get("id")
                                     for agent in detail["task"].get("agents", [])
@@ -1180,9 +1183,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 else:
                                     set_agent_status(root, run_id, item_task_id, agent_id, final_status, exit_code)
                                     set_task_status(root, run_id, item_task_id, "awaiting_user")
-                            elif delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
-                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", waiting_reason="subagents")
-                                set_task_status(root, run_id, item_task_id, "running")
                             elif supervision_routed_to_main:
                                 set_agent_status(root, run_id, item_task_id, agent_id, "pending")
                                 set_task_status(root, run_id, item_task_id, "running")
