@@ -307,22 +307,28 @@
     <form id="settings-form" class="kb-card kb-settings-card">
       <div class="kb-form-grid">
         <div>
-          <label class="kb-field"><input type="checkbox" id="s-enabled" /> <span data-i18n="knowledge.enable">Enable knowledge base</span></label>
+          <label class="kb-field" for="s-enabled" data-i18n="knowledge.enable">Enable knowledge base</label>
+          <select id="s-enabled"><option value="on">on</option><option value="off">off</option></select>
           <label class="kb-field" for="s-path" data-i18n="knowledge.storage_path">Storage path (blank = default ~/.aha/knowledge)</label>
           <input type="text" id="s-path" />
           <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
           <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
-          <label class="kb-field"><input type="checkbox" id="s-project-nav-enabled" /> <span data-i18n="knowledge.project_nav">Project navigation</span></label>
+          <label class="kb-field" for="s-project-nav-enabled" data-i18n="knowledge.project_nav">Project navigation</label>
+          <select id="s-project-nav-enabled"><option value="on">on</option><option value="off">off</option></select>
         </div>
         <div>
-          <label class="kb-field"><input type="checkbox" id="s-git-enabled" /> <span data-i18n="knowledge.enable_git">Enable git sync</span></label>
+          <label class="kb-field" for="s-git-enabled" data-i18n="knowledge.enable_git">Enable git sync</label>
+          <select id="s-git-enabled"><option value="on">on</option><option value="off">off</option></select>
           <label class="kb-field" for="s-remote" data-i18n="knowledge.git_remote">Git remote</label>
           <input type="text" id="s-remote" placeholder="git@github.com:user/aha-kb.git" />
           <label class="kb-field" for="s-branch" data-i18n="knowledge.git_branch">Git branch</label>
           <input type="text" id="s-branch" />
-          <label class="kb-field"><input type="checkbox" id="s-auto-pull" /> <span data-i18n="knowledge.auto_pull">Auto pull</span></label>
-          <label class="kb-field"><input type="checkbox" id="s-auto-commit" /> <span data-i18n="knowledge.auto_commit">Auto commit</span></label>
-          <label class="kb-field"><input type="checkbox" id="s-auto-push" /> <span data-i18n="knowledge.auto_push">Auto push</span></label>
+          <label class="kb-field" for="s-auto-pull" data-i18n="knowledge.auto_pull">Auto pull</label>
+          <select id="s-auto-pull"><option value="on">on</option><option value="off">off</option></select>
+          <label class="kb-field" for="s-auto-commit" data-i18n="knowledge.auto_commit">Auto commit</label>
+          <select id="s-auto-commit"><option value="on">on</option><option value="off">off</option></select>
+          <label class="kb-field" for="s-auto-push" data-i18n="knowledge.auto_push">Auto push</label>
+          <select id="s-auto-push"><option value="on">on</option><option value="off">off</option></select>
         </div>
       </div>
       <div class="kb-row"><button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button></div>
@@ -1235,6 +1241,12 @@
       const enabled = useLast && remembered ? state.navLastProxyEnabled : captureDefaultProxyEnabled($("#nav-backend").value);
       select.value = enabled ? "on" : "off";
     }
+    function boolMode(value) {
+      return value ? "on" : "off";
+    }
+    function modeBool(id) {
+      return $(id).value === "on";
+    }
 
     async function loadCaptureAgents() {
       try {
@@ -1445,32 +1457,32 @@
 
     async function loadSettings() {
       const s = await api("/api/kb/config");
-      $("#s-enabled").checked = s.enabled;
+      $("#s-enabled").value = boolMode(s.enabled);
       $("#s-path").value = s.path || "";
       $("#s-gate").value = s.curation.gate || "manual";
-      $("#s-project-nav-enabled").checked = s.project_nav?.enabled !== false;
-      $("#s-git-enabled").checked = s.git.enabled;
+      $("#s-project-nav-enabled").value = boolMode(s.project_nav?.enabled !== false);
+      $("#s-git-enabled").value = boolMode(s.git.enabled);
       $("#s-remote").value = s.git.remote || "";
       $("#s-branch").value = s.git.branch || "main";
-      $("#s-auto-pull").checked = s.git.auto_pull;
-      $("#s-auto-commit").checked = s.git.auto_commit;
-      $("#s-auto-push").checked = s.git.auto_push;
+      $("#s-auto-pull").value = boolMode(s.git.auto_pull);
+      $("#s-auto-commit").value = boolMode(s.git.auto_commit);
+      $("#s-auto-push").value = boolMode(s.git.auto_push);
     }
 
     $("#settings-form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const payload = {
-        enabled: $("#s-enabled").checked,
+        enabled: modeBool("#s-enabled"),
         path: $("#s-path").value.trim() || null,
         curation: { gate: $("#s-gate").value },
-        project_nav: { enabled: $("#s-project-nav-enabled").checked },
+        project_nav: { enabled: modeBool("#s-project-nav-enabled") },
         git: {
-          enabled: $("#s-git-enabled").checked,
+          enabled: modeBool("#s-git-enabled"),
           remote: $("#s-remote").value.trim() || null,
           branch: $("#s-branch").value.trim() || "main",
-          auto_pull: $("#s-auto-pull").checked,
-          auto_commit: $("#s-auto-commit").checked,
-          auto_push: $("#s-auto-push").checked,
+          auto_pull: modeBool("#s-auto-pull"),
+          auto_commit: modeBool("#s-auto-commit"),
+          auto_push: modeBool("#s-auto-push"),
         },
       };
       try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); toast(t("knowledge.saved", "Saved")); await loadStatus(); }

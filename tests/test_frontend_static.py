@@ -163,6 +163,24 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn('id="s-project-nav-project"', html)
         self.assertNotIn('id="s-project-nav-generate"', html)
         self.assertNotIn('$("#nav-reset").addEventListener', html)
+        for setting_id in [
+            "s-enabled",
+            "s-project-nav-enabled",
+            "s-git-enabled",
+            "s-auto-pull",
+            "s-auto-commit",
+            "s-auto-push",
+        ]:
+            self.assertIn(f'<select id="{setting_id}"><option value="on">on</option><option value="off">off</option></select>', html)
+            self.assertNotIn(f'<input type="checkbox" id="{setting_id}"', html)
+        self.assertIn("function boolMode", html)
+        self.assertIn("function modeBool", html)
+        self.assertIn('enabled: modeBool("#s-enabled")', html)
+        self.assertIn('project_nav: { enabled: modeBool("#s-project-nav-enabled") }', html)
+        self.assertIn('enabled: modeBool("#s-git-enabled")', html)
+        self.assertIn('auto_pull: modeBool("#s-auto-pull")', html)
+        self.assertIn('auto_commit: modeBool("#s-auto-commit")', html)
+        self.assertIn('auto_push: modeBool("#s-auto-push")', html)
         self.assertIn('data-i18n="knowledge.generate_project_nav"', html)
         self.assertIn('api("/api/kb/project-nav", { method: "POST"', html)
         self.assertIn('api("/api/kb/project-nav", { method: "DELETE"', html)
