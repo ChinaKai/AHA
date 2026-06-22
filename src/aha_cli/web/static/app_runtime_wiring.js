@@ -25,7 +25,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
       await renderScheduler.tick();
       if (initialTaskMemoHomeActive) {
         taskMemoController.openDialog?.();
-      } else {
+      } else if (!initialKnowledgeHomeActive && !initialSettingsHomeActive) {
         taskMemoController.closeDialog?.();
       }
     } else {
@@ -1147,7 +1147,7 @@ window.AHAAppRuntime = Object.freeze({
       openInitialTaskMemoHome: () => {
         if (initialTaskMemoHomeActive) {
           taskMemoController.openDialog?.();
-        } else {
+        } else if (!initialKnowledgeHomeActive && !initialSettingsHomeActive) {
           taskMemoController.closeDialog?.();
         }
       },

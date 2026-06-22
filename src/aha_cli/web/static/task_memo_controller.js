@@ -625,9 +625,29 @@
       schedulePageModeUrlSync(Boolean(active));
     }
 
+    function isKnowledgeMode() {
+      return Boolean(documentRef?.body?.classList?.contains("knowledge-home"));
+    }
+
+    function isSettingsMode() {
+      return Boolean(documentRef?.body?.classList?.contains("settings-home"));
+    }
+
     function updateViewToggle() {
-      if (!elements.openTaskMemosEl || !isPageMode()) return;
-      elements.openTaskMemosEl.setAttribute("aria-pressed", String(isOpen()));
+      if (!isPageMode()) return;
+      const memoOpen = isOpen();
+      const knowledgeOpen = isKnowledgeMode();
+      const settingsOpen = isSettingsMode();
+      elements.openTaskViewEl?.setAttribute("aria-pressed", String(!memoOpen && !knowledgeOpen && !settingsOpen));
+      elements.openTaskMemosEl?.setAttribute("aria-pressed", String(memoOpen));
+      elements.openKnowledgeBaseEl?.setAttribute("aria-pressed", String(knowledgeOpen));
+      documentRef?.getElementById?.("session-toggle")?.setAttribute("aria-pressed", String(settingsOpen));
+    }
+
+    function closeKnowledgeView() {
+      documentRef?.body?.classList?.remove("knowledge-home");
+      const knowledgeHome = documentRef?.getElementById?.("knowledge-home");
+      if (knowledgeHome) knowledgeHome.hidden = true;
     }
 
     function reportError(err) {
@@ -660,6 +680,7 @@
     function openDialog() {
       if (!deps.currentRunId?.()) {
         if (isPageMode()) {
+          closeKnowledgeView();
           elements.taskMemoDialogEl?.setAttribute("open", "");
           setPageMode(true);
           updateViewToggle();
@@ -671,6 +692,7 @@
         return;
       }
       if (isPageMode()) {
+        closeKnowledgeView();
         elements.taskMemoDialogEl?.setAttribute("open", "");
         setPageMode(true);
         updateViewToggle();
@@ -693,6 +715,10 @@
     function closeDialog() {
       if (isPageMode()) {
         elements.taskMemoDialogEl?.removeAttribute("open");
+        if (isKnowledgeMode() || isSettingsMode()) {
+          updateViewToggle();
+          return;
+        }
         setPageMode(false);
         updateViewToggle();
         return;
@@ -1584,9 +1610,13 @@
 
     function bind() {
       memoMarkdownTools?.bind?.();
+      elements.openTaskViewEl?.addEventListener("click", () => {
+        if (isPageMode()) closeDialog();
+      });
       elements.openTaskMemosEl?.addEventListener("click", () => {
-        if (isPageMode() && isOpen()) {
-          closeDialog();
+        if (isPageMode()) {
+          if (!isOpen()) openDialog();
+          else updateViewToggle();
           return;
         }
         openDialog();

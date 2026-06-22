@@ -54,7 +54,7 @@
     function initDesktopSidebars() {
       setSidebarCollapsed("overview", readSidebarCollapsed("overview"));
       setSidebarCollapsed("agents", readSidebarCollapsed("agents"));
-      setRunManagerCollapsed(true);
+      setRunManagerCollapsed(false);
       elements.collapseOverviewEl?.addEventListener("click", () => setSidebarCollapsed("overview", true));
       elements.overviewRailToggleEl?.addEventListener("click", () => setSidebarCollapsed("overview", false));
       elements.collapseAgentsEl?.addEventListener("click", () => setSidebarCollapsed("agents", true));

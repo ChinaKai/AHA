@@ -10,6 +10,8 @@
 
   function createRunController(elements = {}, deps = {}) {
     const windowRef = deps.windowRef || window;
+    const SETTINGS_TAB_STORAGE_KEY = "aha.settingsTab";
+    const settingsTabs = new Set(["run", "system", "integrations"]);
     let sessionMenuOpen = false;
     let runMaintenanceConsoleOpen = false;
     let runMaintenanceData = null;
@@ -24,6 +26,74 @@
     let runLifecycleError = false;
     let runLifecycleFilter = "active";
     let runSettingsOpenId = "";
+    let settingsTab = readStoredSettingsTab();
+
+    function normalizeSettingsTab(value) {
+      const tab = String(value || "").trim().toLowerCase();
+      return settingsTabs.has(tab) ? tab : "system";
+    }
+
+    function readStoredSettingsTab() {
+      try {
+        return normalizeSettingsTab(windowRef.localStorage?.getItem(SETTINGS_TAB_STORAGE_KEY));
+      } catch (_err) {
+        return "system";
+      }
+    }
+
+    function setHomeViewButtons(view) {
+      const active = String(view || "task").trim().toLowerCase();
+      elements.documentRef?.getElementById?.("open-task-view")?.setAttribute("aria-pressed", String(active === "task"));
+      elements.documentRef?.getElementById?.("open-task-memos")?.setAttribute("aria-pressed", String(active === "memo"));
+      elements.documentRef?.getElementById?.("open-knowledge-base")?.setAttribute("aria-pressed", String(active === "kb"));
+      elements.sessionToggleEl?.setAttribute("aria-pressed", String(active === "settings"));
+    }
+
+    function syncHomeViewButtons() {
+      const body = elements.documentRef?.body;
+      if (body?.classList?.contains("settings-home")) {
+        setHomeViewButtons("settings");
+      } else if (body?.classList?.contains("knowledge-home")) {
+        setHomeViewButtons("kb");
+      } else if (body?.classList?.contains("task-memo-home")) {
+        setHomeViewButtons("memo");
+      } else {
+        setHomeViewButtons("task");
+      }
+    }
+
+    function closeSystemSettingsPanel() {
+      const panel = elements.documentRef?.getElementById?.("settings-dialog");
+      const trigger = elements.documentRef?.getElementById?.("aha-settings");
+      if (!panel) return;
+      panel.hidden = true;
+      panel.removeAttribute("open");
+      trigger?.setAttribute("aria-expanded", "false");
+      elements.sessionMenuEl?.classList?.remove("settings-open");
+    }
+
+    function setSettingsTab(tab, options = {}) {
+      settingsTab = normalizeSettingsTab(tab);
+      elements.sessionMenuEl?.setAttribute("data-settings-tab", settingsTab);
+      const buttons = elements.sessionMenuEl?.querySelectorAll?.("button.settings-home-tab[data-settings-tab]") || [];
+      for (const button of buttons) {
+        const active = button.getAttribute("data-settings-tab") === settingsTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      }
+      if (!options.skipStorage) {
+        try {
+          windowRef.localStorage?.setItem(SETTINGS_TAB_STORAGE_KEY, settingsTab);
+        } catch (_err) {
+          // Tab persistence is best effort.
+        }
+      }
+      if (settingsTab !== "integrations") {
+        deps.setWeixinConsoleOpen?.(false);
+        deps.setPlayConsoleOpen?.(false);
+      }
+      if (settingsTab !== "system") closeSystemSettingsPanel();
+    }
 
     function currentRunId() {
       return String(deps.currentRunId?.() || "").trim();
@@ -50,7 +120,7 @@
     }
 
     function closeHeaderRunConsole() {
-      if (elements.headerRunConsoleEl) elements.headerRunConsoleEl.open = false;
+      if (elements.headerRunConsoleEl && "open" in elements.headerRunConsoleEl) elements.headerRunConsoleEl.open = false;
     }
 
     function renderHeaderRunTitle(run, title, runId) {
@@ -203,6 +273,10 @@
       const panel = elements.runSettingsPanelEl;
       if (!panel || !row) return;
       clearRunSettingsPosition();
+      if (elements.documentRef?.body?.classList?.contains("settings-home")) {
+        panel.classList.remove("run-settings-sheet", "run-settings-popover");
+        return;
+      }
       const useSheet = runSettingsUseSheet();
       panel.classList.toggle("run-settings-sheet", useSheet);
       panel.classList.toggle("run-settings-popover", !useSheet);
@@ -505,9 +579,30 @@
       sessionMenuOpen = Boolean(open);
       elements.sessionMenuEl?.classList.toggle("hidden", !sessionMenuOpen);
       elements.sessionToggleEl?.setAttribute("aria-expanded", String(sessionMenuOpen));
+      elements.documentRef?.body?.classList?.toggle("settings-home", sessionMenuOpen);
+      if (sessionMenuOpen) {
+        setHomeViewButtons("settings");
+        setSettingsTab(settingsTab, { skipStorage: true });
+        elements.documentRef?.body?.classList?.remove("task-memo-home", "knowledge-home");
+        elements.documentRef?.getElementById?.("task-memo-dialog")?.removeAttribute("open");
+        const knowledgeHome = elements.documentRef?.getElementById?.("knowledge-home");
+        if (knowledgeHome) knowledgeHome.hidden = true;
+        try {
+          windowRef.localStorage?.setItem("aha.taskMemoViewExplicit", "settings");
+          const url = new URL(windowRef.location.href);
+          url.searchParams.set("view", "settings");
+          url.searchParams.delete("selected_task_id");
+          url.searchParams.delete("task_id");
+          windowRef.history?.replaceState?.(windowRef.history.state, "", url);
+        } catch (_err) {
+          // URL/storage sync is best effort.
+        }
+      }
       if (!sessionMenuOpen) {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        closeSystemSettingsPanel();
+        syncHomeViewButtons();
       }
     }
 
@@ -530,15 +625,28 @@
     }
 
     function bind() {
+      if (elements.documentRef?.body?.classList?.contains("settings-home")) setSessionMenu(true);
       elements.sessionToggleEl?.addEventListener("click", async event => {
         event.stopPropagation();
-        setSessionMenu(!sessionMenuOpen);
+        setSessionMenu(true);
         if (sessionMenuOpen) {
           await deps.loadRuns?.();
           void deps.loadAccessControlStatus?.();
         }
       });
       elements.sessionMenuEl?.addEventListener("click", event => event.stopPropagation());
+      for (const id of ["open-task-view", "open-task-memos", "open-knowledge-base"]) {
+        elements.documentRef?.getElementById?.(id)?.addEventListener("click", () => setSessionMenu(false));
+      }
+      const settingsTabButtons = elements.sessionMenuEl?.querySelectorAll?.("button.settings-home-tab[data-settings-tab]") || [];
+      for (const button of settingsTabButtons) {
+        button.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSettingsTab(button.getAttribute("data-settings-tab"));
+        });
+      }
+      setSettingsTab(settingsTab, { skipStorage: true });
       elements.sessionRefreshEl?.addEventListener("click", async () => {
         await deps.loadRuns?.(true);
         if (runMaintenanceConsoleOpen) await loadRunMaintenance(true);
@@ -720,8 +828,8 @@
       });
       elements.documentRef?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
-        if (sessionMenuOpen && !elements.sessionControlEl?.contains(target)) setSessionMenu(false);
-        if (elements.headerRunConsoleEl?.open && !elements.headerRunConsoleEl.contains(target)) closeHeaderRunConsole();
+        if (sessionMenuOpen && !elements.documentRef?.body?.classList?.contains("settings-home") && !elements.sessionControlEl?.contains(target)) setSessionMenu(false);
+        if (elements.headerRunConsoleEl && "open" in elements.headerRunConsoleEl && elements.headerRunConsoleEl.open && !elements.headerRunConsoleEl.contains(target)) closeHeaderRunConsole();
         if (runSettingsOpenId && !elements.runManagerEl?.contains(target) && !elements.runSettingsPanelEl?.contains(target)) {
           closeRunSettings();
         }

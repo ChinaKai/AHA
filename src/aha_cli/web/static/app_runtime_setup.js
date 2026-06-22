@@ -43,7 +43,9 @@ function readStoredTaskMemoView() {
 }
 const initialTaskMemoStoredView = readStoredTaskMemoView();
 const initialTaskMemoHomeActive = initialTaskMemoQueryView === "memo" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "memo");
-let selectedTaskId = initialTaskMemoHomeActive ? null : (initialSelectedTaskId || null);
+const initialKnowledgeHomeActive = initialTaskMemoQueryView === "kb" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "kb");
+const initialSettingsHomeActive = initialTaskMemoQueryView === "settings" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "settings");
+let selectedTaskId = (initialTaskMemoHomeActive || initialKnowledgeHomeActive || initialSettingsHomeActive) ? null : (initialSelectedTaskId || null);
 
 function applyInitialTaskMemoHomeState() {
   if (!initialTaskMemoHomeActive) return;
@@ -51,10 +53,41 @@ function applyInitialTaskMemoHomeState() {
   if (!memoPage?.classList?.contains("task-memo-page")) return;
   document.body?.classList?.add("task-memo-home");
   memoPage.setAttribute("open", "");
+  document.getElementById("open-task-view")?.setAttribute("aria-pressed", "false");
   document.getElementById("open-task-memos")?.setAttribute("aria-pressed", "true");
 }
 
 applyInitialTaskMemoHomeState();
+
+function applyInitialKnowledgeHomeState() {
+  if (!initialKnowledgeHomeActive) return;
+  const knowledgeHome = document.getElementById("knowledge-home");
+  const knowledgeFrame = document.getElementById("knowledge-home-frame");
+  if (!knowledgeHome || !knowledgeFrame) return;
+  document.body?.classList?.add("knowledge-home");
+  knowledgeHome.hidden = false;
+  if (!knowledgeFrame.getAttribute("src")) knowledgeFrame.setAttribute("src", "/static/knowledge.html");
+  document.getElementById("open-task-view")?.setAttribute("aria-pressed", "false");
+  document.getElementById("open-task-memos")?.setAttribute("aria-pressed", "false");
+  document.getElementById("open-knowledge-base")?.setAttribute("aria-pressed", "true");
+}
+
+applyInitialKnowledgeHomeState();
+
+function applyInitialSettingsHomeState() {
+  if (!initialSettingsHomeActive) return;
+  const sessionMenu = document.getElementById("session-menu");
+  if (!sessionMenu) return;
+  document.body?.classList?.add("settings-home");
+  sessionMenu.classList.remove("hidden");
+  document.getElementById("open-task-view")?.setAttribute("aria-pressed", "false");
+  document.getElementById("open-task-memos")?.setAttribute("aria-pressed", "false");
+  document.getElementById("open-knowledge-base")?.setAttribute("aria-pressed", "false");
+  document.getElementById("session-toggle")?.setAttribute("aria-expanded", "true");
+  document.getElementById("session-toggle")?.setAttribute("aria-pressed", "true");
+}
+
+applyInitialSettingsHomeState();
 
 let activeTab = "conversation";
 let taskActionInFlight = false;

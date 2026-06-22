@@ -374,7 +374,7 @@
     const {
       agentRuntimeConfirmDialogEl, agentRuntimeConfirmMessageEl, agentTargetEl, agentsEl,
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
-      closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openTaskMemosEl, playConsoleEl,
+      closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
       playConsolePopoverEl, selectedAgentInfoEl, sendFormEl, sessionMenuEl, settingsContentEl,
       settingsDialogEl, taskApprovalEl, taskBackendEl, taskCreateConfirmDetailsEl,
       taskCreateConfirmDialogEl, taskCreateDialogEl, taskDraftStateEl, taskFormEl, taskMemoLinkClearEl,
@@ -434,7 +434,8 @@
       ahaSettingsEl,
       closeSettingsEl,
       settingsContentEl,
-      settingsDialogEl
+      settingsDialogEl,
+      sessionMenuEl
     }, {
       addBootstrapConfigRow: deps.addBootstrapConfigRow,
       bootstrapConfigFormHtml: deps.bootstrapConfigFormHtml,
@@ -554,6 +555,8 @@
 
     const taskMemoController = window.AHATaskMemoController.createTaskMemoController({
       closeTaskMemosEl,
+      openKnowledgeBaseEl,
+      openTaskViewEl,
       openTaskMemosEl,
       taskMemoCalendarCollapseEl,
       taskMemoCalendarEl,

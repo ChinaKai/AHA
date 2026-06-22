@@ -13,7 +13,7 @@
       min-height: 100vh; overflow-x: hidden; overflow-y: auto;
       background: var(--color-bg); color: var(--color-text);
     }
-    .kb-wrap { width: min(100%, 960px); margin: 0 auto; padding: 0 20px 56px; }
+    .kb-wrap { width: 100%; max-width: none; margin: 0; padding: 0 12px 56px; }
     .kb-console-head {
       display: flex; align-items: flex-start; justify-content: space-between;
       gap: 16px; padding: 16px 0 12px; border-bottom: 1px solid var(--color-border-subtle);
@@ -98,7 +98,7 @@
     }
     .kb-toast.show { opacity: 1; }
     @media (max-width: 640px) {
-      .kb-wrap { padding: 0 12px 44px; }
+      .kb-wrap { padding: 0 8px 44px; }
       .kb-console-head { display: grid; gap: 10px; padding-top: 12px; }
       .kb-console-head .status { width: fit-content; max-width: 100%; }
       .kb-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
@@ -305,7 +305,31 @@
       return /^(https?:|mailto:|\/|#|\.)/i.test(raw) ? raw : "";
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
-    const state = { entries: [], pending: [], capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, activeTab: "entries" };
+    const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
+    const KB_TABS = ["entries", "pending", "capture", "settings"];
+
+    function normalizedTabName(name) {
+      const tab = String(name || "").trim();
+      return KB_TABS.includes(tab) ? tab : "entries";
+    }
+
+    function readStoredActiveTab() {
+      try {
+        return normalizedTabName(window.localStorage?.getItem(KB_ACTIVE_TAB_KEY));
+      } catch (_err) {
+        return "entries";
+      }
+    }
+
+    function writeStoredActiveTab(name) {
+      try {
+        window.localStorage?.setItem(KB_ACTIVE_TAB_KEY, normalizedTabName(name));
+      } catch (_err) {
+        // Ignore storage failures; tab switching still works for this page view.
+      }
+    }
+
+    const state = { entries: [], pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -313,13 +337,15 @@
     }
 
     function showTab(name) {
-      state.activeTab = name;
-      for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === name);
-      for (const id of ["entries", "pending", "capture", "settings"]) $("#tab-" + id).hidden = id !== name;
-      if (name === "pending") loadPending();
-      if (name === "capture") loadCapture();
-      if (name === "settings") loadSettings();
-      if (name === "entries") loadEntries();
+      const tab = normalizedTabName(name);
+      state.activeTab = tab;
+      writeStoredActiveTab(tab);
+      for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === tab);
+      for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
+      if (tab === "pending") loadPending();
+      if (tab === "capture") loadCapture();
+      if (tab === "settings") loadSettings();
+      if (tab === "entries") loadEntries();
     }
 
     async function loadStatus() {
@@ -625,22 +651,45 @@
 
     function renderPending() {
       $("#pending-list").innerHTML = state.pending.length
-        ? state.pending.map((c) => `<div class="kb-card"><h3>${esc(c.title)}</h3>
+        ? state.pending.map((c) => {
+          const expanded = state.pendingExpanded.has(String(c.id || ""));
+          const encodedId = esc(encodeURIComponent(String(c.id || "")));
+          const bodyToggleLabel = expanded ? t("common.close", "Close") : t("knowledge.view", "View");
+          return `<div class="kb-card"><h3>${esc(c.title)}</h3>
             <div class="kb-muted">${esc(c.scope)}/${esc(c.kind)} · ${esc(c.project_key || "-")} · ${esc(c.id)} · ${esc(t("knowledge.confidence", "confidence"))} ${esc((c.meta || {}).confidence)}</div>
             <div class="kb-muted">${esc(timeLine(c, ["created_at", "updated_at", "last_seen_at"]))}</div>
             <div class="kb-card-actions kb-pending-actions">
+              <button class="button-ghost" type="button" aria-expanded="${expanded ? "true" : "false"}" onclick="togglePendingBody('${encodedId}')">${esc(bodyToggleLabel)}</button>
               <button class="kb-approve" type="button" onclick="decide('approve','${esc(c.id)}')">${esc(t("knowledge.approve", "Approve"))}</button>
               <button class="kb-reject" type="button" onclick="decide('reject','${esc(c.id)}')">${esc(t("knowledge.reject", "Reject"))}</button>
             </div>
-            <pre class="kb-body kb-pending-body">${esc(c.body)}</pre></div>`).join("")
+            ${expanded ? `<pre class="kb-body kb-pending-body">${esc(c.body)}</pre>` : ""}</div>`;
+        }).join("")
         : `<p class="kb-muted">${esc(t("knowledge.pending_empty", "No pending candidates"))}</p>`;
     }
 
     async function loadPending() {
       const data = await api("/api/kb/pending");
-      state.pending = data.pending;
+      state.pending = data.pending || [];
+      const pendingIds = new Set(state.pending.map(c => String(c.id || "")));
+      for (const id of Array.from(state.pendingExpanded)) {
+        if (!pendingIds.has(id)) state.pendingExpanded.delete(id);
+      }
       renderPending();
     }
+
+    window.togglePendingBody = (encodedId) => {
+      let id = "";
+      try {
+        id = decodeURIComponent(String(encodedId || ""));
+      } catch (_err) {
+        id = String(encodedId || "");
+      }
+      if (!id) return;
+      if (state.pendingExpanded.has(id)) state.pendingExpanded.delete(id);
+      else state.pendingExpanded.add(id);
+      renderPending();
+    };
 
     window.decide = async (kind, id) => {
       try {
@@ -1032,7 +1081,7 @@
       if (event.key === window.AHAI18n?.languageStorageKey) window.AHAI18n.setLanguage(event.newValue);
     });
     syncChromeText();
-    loadStatus(); loadEntries();
+    loadStatus(); showTab(state.activeTab);
   </script>
 </body>
 </html>

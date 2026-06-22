@@ -180,9 +180,11 @@
 
     async function switchRun(runId) {
       const nextRunId = String(runId || "").trim();
+      const keepSettingsHome = deps.documentRef?.body?.classList?.contains("settings-home");
       if (!nextRunId || nextRunId === currentRunId()) {
         renderSessionMenu();
-        setSessionMenu(false);
+        if (keepSettingsHome) setSessionMenu(true);
+        else setSessionMenu(false);
         return;
       }
       state.setRunActionInFlight?.(true);
@@ -192,7 +194,8 @@
         syncRunUrl();
         resetRunScopedState();
         renderSessionMenu();
-        setSessionMenu(false);
+        if (keepSettingsHome) setSessionMenu(true);
+        else setSessionMenu(false);
         await refreshRunScopedView();
       } catch (err) {
         const panelEl = deps.panelEl?.();

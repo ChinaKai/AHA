@@ -3,14 +3,47 @@
     const bootstrapConfigFormHtml = deps.bootstrapConfigFormHtml || (() => "");
     const dispatchAction = deps.dispatchAction || (() => {});
 
-    function close() {
-      const dialog = elements.settingsDialogEl;
-      if (!dialog) return;
-      if (typeof dialog.close === "function" && dialog.open) {
-        dialog.close();
+    function isDialogElement(panel) {
+      return typeof HTMLDialogElement !== "undefined" && panel instanceof HTMLDialogElement;
+    }
+
+    function setOpen(open) {
+      const panel = elements.settingsDialogEl;
+      if (!panel) return;
+      const isOpen = Boolean(open);
+      if (isDialogElement(panel)) {
+        if (isOpen) {
+          try {
+            if (typeof panel.showModal === "function" && !panel.open) {
+              panel.showModal();
+            } else {
+              panel.setAttribute("open", "");
+            }
+          } catch (_err) {
+            panel.setAttribute("open", "");
+          }
+        } else if (typeof panel.close === "function" && panel.open) {
+          panel.close();
+        } else {
+          panel.removeAttribute("open");
+        }
       } else {
-        dialog.removeAttribute("open");
+        panel.hidden = !isOpen;
+        panel.toggleAttribute("open", isOpen);
       }
+      elements.ahaSettingsEl?.setAttribute("aria-expanded", String(isOpen));
+      elements.sessionMenuEl?.classList?.toggle("settings-open", isOpen);
+    }
+
+    function isOpen() {
+      const panel = elements.settingsDialogEl;
+      if (!panel) return false;
+      if (isDialogElement(panel)) return Boolean(panel.open);
+      return !panel.hidden;
+    }
+
+    function close() {
+      setOpen(false);
     }
 
     function renderContent() {
@@ -19,32 +52,24 @@
     }
 
     async function open() {
-      const dialog = elements.settingsDialogEl;
-      if (!dialog) return;
+      const panel = elements.settingsDialogEl;
+      if (!panel) return;
       if (!deps.bootstrapData?.()) await deps.loadBootstrap?.();
       renderContent();
-      deps.setSessionMenu?.(false);
       deps.closeMobileSheets?.();
       deps.closeMobileActionPanel?.();
-      try {
-        if (typeof dialog.showModal === "function") {
-          if (!dialog.open) dialog.showModal();
-        } else {
-          dialog.setAttribute("open", "");
-        }
-      } catch (_err) {
-        dialog.setAttribute("open", "");
-      }
+      setOpen(true);
     }
 
     function bind() {
       elements.ahaSettingsEl?.addEventListener("click", event => {
         event.stopPropagation();
-        void open();
+        if (isOpen()) close();
+        else void open();
       });
       elements.closeSettingsEl?.addEventListener("click", close);
       elements.settingsDialogEl?.addEventListener("click", event => {
-        if (event.target === elements.settingsDialogEl) {
+        if (isDialogElement(elements.settingsDialogEl) && event.target === elements.settingsDialogEl) {
           close();
           return;
         }

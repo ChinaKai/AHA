@@ -11,20 +11,22 @@
   <header>
     <div>
       <div class="brand-main-row">
-        <h1 class="brand-title"><button id="open-task-memos" class="brand-logo-toggle" type="button" aria-label="Task Memo" title="Task Memo" aria-pressed="false" data-i18n-aria-label="memo.open" data-i18n-title="memo.open"><img class="brand-logo" src="/static/aha-logo.svg" alt="" aria-hidden="true"><span class="sr-only" data-i18n="memo.open">Task Memo</span></button><span class="brand-short">AHA</span></h1>
-        <details id="header-run-console" class="header-run-console">
-          <summary class="header-run-toggle">
-            <span id="header-run-title" class="header-run-title">Run</span>
-            <span id="header-workspace-dir" class="header-workspace-dir"></span>
-          </summary>
-          <div class="header-run-menu">
-            <section id="run-manager" class="run-manager run-manager-collapsed" aria-labelledby="run-manager-title">
+        <h1 class="brand-title sr-only">AHA</h1>
+        <div class="home-view-switch" role="navigation" aria-label="Views" data-i18n-aria-label="nav.views"><button id="open-task-view" class="home-view-button" type="button" aria-label="Tasks" title="Tasks" aria-pressed="true" data-i18n-aria-label="task.view_tasks" data-i18n-title="task.view_tasks"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"></path></svg><span class="sr-only" data-i18n="task.view_tasks">Tasks</span></button><button id="open-task-memos" class="home-view-button" type="button" aria-label="Task Memo" title="Task Memo" aria-pressed="false" data-i18n-aria-label="memo.open" data-i18n-title="memo.open"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"></path><path d="M14 4v5h5M8 13h8M8 17h5"></path></svg><span class="sr-only" data-i18n="memo.open">Task Memo</span></button><button id="open-knowledge-base" class="home-view-button" type="button" aria-label="Knowledge base" title="Knowledge base" aria-pressed="false" data-i18n-aria-label="run.tools_knowledge" data-i18n-title="run.tools_knowledge"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v18H6.5A2.5 2.5 0 0 0 4 23z"></path><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v18h4.5A2.5 2.5 0 0 1 20 23z"></path></svg><span class="sr-only" data-i18n="run.tools_knowledge">Knowledge base</span></button><div id="session-control" class="session-control home-settings-control"><button id="session-toggle" class="session-toggle home-view-button" type="button" aria-label="AHA console" title="AHA console" aria-controls="session-menu" aria-expanded="false" data-i18n-aria-label="aha.console" data-i18n-title="aha.console"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.08 1.65V21.3a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.08-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.08H2.9a2.1 2.1 0 0 1 0-4.2h.05A1.8 1.8 0 0 0 4.6 8.64a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36 1.8 1.8 0 0 0 1.08-1.65V2.1a2.1 2.1 0 0 1 4.2 0v.05a1.8 1.8 0 0 0 1.08 1.65 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.08h.05a2.1 2.1 0 0 1 0 4.2h-.05A1.8 1.8 0 0 0 19.4 15z"></path></svg><strong id="session-title" class="sr-only" data-i18n="run.select_loading">Loading...</strong></button>
+          <div id="session-menu" class="session-menu hidden" data-settings-tab="system">
+            <nav class="settings-home-tabs" role="tablist" aria-label="Settings sections" data-i18n-aria-label="settings.sections">
+              <button class="button-ghost settings-home-tab active" type="button" role="tab" aria-selected="true" data-settings-tab="system" data-i18n="run.section_system">System</button>
+              <button class="button-ghost settings-home-tab" type="button" role="tab" aria-selected="false" data-settings-tab="run" data-i18n="run.short_label">Run</button>
+              <button class="button-ghost settings-home-tab" type="button" role="tab" aria-selected="false" data-settings-tab="integrations" data-i18n="run.section_integrations">Integrations</button>
+            </nav>
+            <section id="run-manager" class="run-manager" aria-labelledby="run-manager-title">
+              <span class="run-actions-label" data-i18n="run.manager">Run manager</span>
               <div class="run-manager-head panel-title-row">
                 <h2 id="run-manager-title" class="sr-only" data-i18n="run.manager">Run manager</h2>
                 <select id="run-select" class="run-manager-select" aria-label="Run list" data-i18n-aria-label="run.section_runs"></select>
                 <div class="run-manager-title-actions">
                   <button id="open-run-create" class="task-create-trigger run-quick-create" type="button" data-i18n="run.new">New Run</button>
-                  <button id="run-manager-toggle" class="run-manager-toggle" type="button" aria-controls="run-manager-body" aria-expanded="false" aria-label="Expand run management" title="Expand run management" data-i18n-aria-label="run.manager_expand" data-i18n-title="run.manager_expand">▸</button>
+                  <button id="run-manager-toggle" class="run-manager-toggle" type="button" aria-controls="run-manager-body" aria-expanded="true" aria-label="Collapse run management" title="Collapse run management" data-i18n-aria-label="run.manager_collapse" data-i18n-title="run.manager_collapse">▾</button>
                 </div>
               </div>
               <div id="summary" class="run-manager-summary sr-only" data-i18n="run.summary_loading">Loading...</div>
@@ -53,6 +55,21 @@
                 </form>
                 <div id="run-settings-actions" class="run-lifecycle-buttons"></div>
                 <div id="run-settings-protection" class="run-lifecycle-protection"></div>
+                <div class="run-settings-archive">
+                  <span class="run-actions-label" data-i18n="run.section_data">Data</span>
+                  <div class="run-archive">
+                    <div class="run-archive-actions">
+                      <button id="run-export" type="button" data-i18n="run.archive_export">Export</button>
+                      <button id="run-import" type="button" data-i18n="run.archive_import">Import</button>
+                      <label class="run-archive-logs">
+                        <input id="run-export-logs" type="checkbox">
+                        <span data-i18n="run.archive_include_logs">Include logs</span>
+                      </label>
+                    </div>
+                    <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
+                    <div id="run-archive-state" class="meta"></div>
+                  </div>
+                </div>
                 <div id="run-maintenance-popover" class="run-maintenance-popover" hidden>
                   <div class="run-maintenance">
                     <div class="run-maintenance-actions">
@@ -65,71 +82,63 @@
                 </div>
               </div>
             </section>
-            <div class="run-actions-section run-data-section">
-              <span class="run-actions-label" data-i18n="run.section_data">Data</span>
-              <div class="run-archive">
-                <div class="run-archive-actions">
-                  <button id="run-export" type="button" data-i18n="run.archive_export">Export</button>
-                  <button id="run-import" type="button" data-i18n="run.archive_import">Import</button>
-                  <label class="run-archive-logs">
-                    <input id="run-export-logs" type="checkbox">
-                    <span data-i18n="run.archive_include_logs">Include logs</span>
-                  </label>
+            <div id="run-more-tools" class="run-more-tools-body">
+              <div class="run-actions-section run-system-section">
+                <span class="run-actions-label" data-i18n="run.section_system">System</span>
+                <label class="language-switch">
+                  <span data-i18n="language.label">Language</span>
+                  <select id="language-select" data-language-select aria-label="Language" data-i18n-aria-label="language.label">
+                    <option value="en-US" data-i18n="language.english">English</option>
+                    <option value="zh-CN" data-i18n="language.chinese">Chinese</option>
+                  </select>
+                </label>
+                <div class="session-menu-head">
+                  <span data-i18n="aha.console">AHA console</span>
+                  <span id="app-version" class="app-version"></span>
+                  <div id="access-control-status" class="access-control-status"></div>
+                  <button id="session-refresh" type="button" data-i18n="common.refresh">Refresh</button>
                 </div>
-                <input id="run-import-file" type="file" accept=".tar,.tar.gz,.tgz,.tar.bz2,.tar.xz,application/gzip,application/x-tar" hidden>
-                <div id="run-archive-state" class="meta"></div>
+                <section class="run-current-section">
+                  <span class="run-actions-label" data-i18n="run.section_current">Current run</span>
+                  <div id="session-detail" class="meta"><span id="session-detail-text" data-i18n="run.details">Run details</span><span id="run-lifecycle" class="run-lifecycle status run-lifecycle-active">active</span><code id="web-service-address" data-i18n="run.current_address">Current address</code><code id="run-id"></code></div>
+                </section>
+                <div class="run-admin-actions">
+                  <button id="aha-settings" type="button" aria-controls="settings-dialog" aria-expanded="false" data-i18n="common.settings">Settings</button>
+                  <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
+                  <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
+                  <button id="web-upgrade" class="button-ghost" type="button" data-i18n="run.upgrade_web">Upgrade</button>
+                </div>
+                <div id="web-restart-state" class="meta"></div>
+                <div id="settings-dialog" class="settings-popover" aria-labelledby="settings-title" hidden>
+                  <div class="settings-popover-head">
+                    <div>
+                      <h2 id="settings-title" data-i18n="settings.title">AHA Settings</h2>
+                      <p data-i18n="settings.description">Edit the global `.aha/config.json` defaults used by new runs and agents.</p>
+                    </div>
+                    <button id="close-settings" class="settings-popover-close" type="button" data-i18n="common.close">Close</button>
+                  </div>
+                  <div id="settings-content"></div>
+                </div>
+              </div>
+              <div class="run-actions-section run-actions-section-secondary run-integrations-section">
+                <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
+                <div class="web-service-actions">
+                  <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
+                  <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
+                </div>
+                <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
+                <div id="play-console-popover" class="play-console-popover" hidden></div>
               </div>
             </div>
           </div>
-        </details>
+        </div></div>
       </div>
       <div id="run-state" class="meta"></div>
     </div>
-    <div id="session-control" class="session-control">
-      <button id="session-toggle" class="session-toggle" type="button" aria-label="AHA console" title="AHA console" aria-controls="session-menu" aria-expanded="false" data-i18n-aria-label="aha.console" data-i18n-title="aha.console">
-        <span class="session-icon" aria-hidden="true">⋯</span>
-        <strong id="session-title" class="sr-only" data-i18n="run.select_loading">Loading...</strong>
-      </button>
-      <div id="session-menu" class="session-menu hidden">
-        <div class="session-menu-head">
-          <span data-i18n="aha.console">AHA console</span>
-          <span id="app-version" class="app-version"></span>
-          <button id="session-refresh" type="button" data-i18n="common.refresh">Refresh</button>
-        </div>
-        <label class="language-switch">
-          <span data-i18n="language.label">Language</span>
-          <select id="language-select" data-language-select aria-label="Language" data-i18n-aria-label="language.label">
-            <option value="en-US" data-i18n="language.english">English</option>
-            <option value="zh-CN" data-i18n="language.chinese">Chinese</option>
-          </select>
-        </label>
-        <section class="run-menu-section run-current-section">
-          <span class="run-actions-label" data-i18n="run.section_current">Current run</span>
-          <div id="session-detail" class="meta"><span id="session-detail-text" data-i18n="run.details">Run details</span><span id="run-lifecycle" class="run-lifecycle status run-lifecycle-active">active</span><code id="web-service-address" data-i18n="run.current_address">Current address</code><code id="run-id"></code></div>
-        </section>
-        <div id="run-more-tools" class="run-more-tools-body">
-          <div class="run-actions-section run-system-section">
-            <span class="run-actions-label" data-i18n="run.section_system">System</span>
-            <div class="run-admin-actions">
-              <button id="aha-settings" type="button" aria-controls="settings-dialog" data-i18n="common.settings">Settings</button>
-              <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
-              <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
-              <button id="web-upgrade" class="button-ghost" type="button" data-i18n="run.upgrade_web">Upgrade</button>
-            </div>
-            <div id="access-control-status" class="access-control-status"></div>
-            <div id="web-restart-state" class="meta"></div>
-          </div>
-          <div class="run-actions-section run-actions-section-secondary run-integrations-section">
-            <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
-            <div class="web-service-actions">
-              <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
-              <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
-              <button id="knowledge-console" class="button-ghost" type="button" data-i18n="run.tools_knowledge">Knowledge base</button>
-            </div>
-            <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
-            <div id="play-console-popover" class="play-console-popover" hidden></div>
-          </div>
-        </div>
+    <div id="header-run-console" class="header-run-console" aria-label="Current run" data-i18n-aria-label="run.section_current">
+      <div class="header-run-toggle header-run-display">
+        <span id="header-run-title" class="header-run-title">Run</span>
+        <span id="header-workspace-dir" class="header-workspace-dir"></span>
       </div>
     </div>
     <button id="mobile-task-summary" class="mobile-task-summary" type="button" aria-controls="overview-sidebar" aria-expanded="false">
@@ -152,6 +161,9 @@
     </form>
   </section>
   <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop" hidden></div>
+  <section id="knowledge-home" class="knowledge-home-page" aria-label="Knowledge base" data-i18n-aria-label="run.tools_knowledge" hidden>
+    <iframe id="knowledge-home-frame" class="knowledge-home-frame" title="Knowledge base" data-i18n-title="run.tools_knowledge"></iframe>
+  </section>
   <main>
     <aside id="overview-sidebar" class="sidebar">
       <button id="overview-rail-toggle" class="side-rail-toggle" type="button" aria-controls="overview-sidebar" aria-expanded="false">Overview</button>
@@ -863,18 +875,6 @@
         <button class="primary" type="submit" value="confirm" data-i18n="common.confirm">Confirm</button>
       </div>
     </form>
-  </dialog>
-  <dialog id="settings-dialog" class="task-dialog settings-dialog" aria-labelledby="settings-title">
-    <div class="task-dialog-panel">
-      <div class="task-dialog-head">
-        <div>
-          <h2 id="settings-title" data-i18n="settings.title">AHA Settings</h2>
-          <p data-i18n="settings.description">Edit the global `.aha/config.json` defaults used by new runs and agents.</p>
-        </div>
-        <button id="close-settings" class="task-dialog-close" type="button" aria-label="Close settings" data-i18n-aria-label="common.close">×</button>
-      </div>
-      <div id="settings-content"></div>
-    </div>
   </dialog>
   <script src="/static/time_format.js"></script>
   <script src="/static/i18n.js"></script>
