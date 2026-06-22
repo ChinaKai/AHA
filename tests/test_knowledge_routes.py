@@ -6,8 +6,10 @@ from pathlib import Path
 
 from aha_cli.domain.models import default_knowledge_config
 from aha_cli.store.config import load_config
+from aha_cli.store import knowledge_nav_drafts as nav_drafts
+from aha_cli.store.filesystem import create_plan
 from aha_cli.store.io import read_json, write_json
-from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, list_pending, write_entry
+from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, list_entries, list_pending, project_key, write_entry
 from aha_cli.store.paths import config_path
 from aha_cli.web.knowledge_routes import knowledge_route_response
 from tests.helpers import fetch_ui_response, json_response_body
@@ -36,6 +38,15 @@ def _patch(home: Path, path: str, payload: dict):
 
 def _delete(home: Path, path: str, payload: dict):
     return knowledge_route_response(home, "DELETE", path, {}, json.dumps(payload).encode(), {})
+
+
+def _sync_project_nav_jobs(monkeypatch) -> None:
+    import aha_cli.web.knowledge_routes as kr
+
+    def sync_dispatch(root, cfg, draft_id, **kwargs):
+        return kr.run_project_nav_draft_job(root, cfg, draft_id, **kwargs)
+
+    monkeypatch.setattr(kr, "dispatch_project_nav_job", sync_dispatch)
 
 
 def test_unknown_path_returns_none(tmp_path: Path):
@@ -71,9 +82,12 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
                 project_key_value="git-abc", title="demo 项目导航", body="## 模块索引\n- [store](modules/store.md)", slug="index")
     write_entry(home, config=cfg, scope="general", kind="wiki", title="Docker 教程", body="containers")
 
-    # The project navigation is browsable via the navigation kind filter.
+    # Project navigation is no longer mixed into ordinary entries.
     nav = _get(home, "/api/kb/entries", {"kind": ["navigation"]})
-    assert nav["count"] == 1 and nav["entries"][0]["type"] == "navigation"
+    assert nav["count"] == 0
+
+    project_nav = _get(home, "/api/kb/project-nav", {"project_key": ["git-abc"]})
+    assert project_nav["count"] == 1 and project_nav["entries"][0]["type"] == "navigation"
 
     # The general tutorial is reachable via the general scope filter.
     general = _get(home, "/api/kb/entries", {"scope": ["general"]})
@@ -237,7 +251,7 @@ def test_entries_support_fuzzy_project_filter_and_search(tmp_path: Path):
     assert by_tag["entries"][0]["title"] == "Write docs"
 
 
-def test_entries_hide_navigation_children_but_entry_can_read_them(tmp_path: Path):
+def test_entries_exclude_navigation_but_project_nav_api_lists_entry_points_and_can_read_children(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)
     write_entry(
@@ -252,8 +266,11 @@ def test_entries_hide_navigation_children_but_entry_can_read_them(tmp_path: Path
     )
 
     listed = _get(home, "/api/kb/entries", {"kind": ["navigation"]})
-    assert listed["count"] == 1
-    assert listed["entries"][0]["slug"] == "index"
+    assert listed["count"] == 0
+
+    nav = _get(home, "/api/kb/project-nav", {"project_key": ["git-abc"]})
+    assert nav["count"] == 1
+    assert [entry["slug"] for entry in nav["entries"]] == ["index"]
 
     child = _get(home, "/api/kb/entry", {"id": ["modules/store"]})
     assert child["meta"]["slug"] == "modules/store"
@@ -267,6 +284,460 @@ def test_entries_hide_navigation_children_but_entry_can_read_them(tmp_path: Path
     assert updated["entry"]["meta"]["slug"] == "modules/store"
     assert updated["entry"]["meta"]["title"] == "store 模块导航"
     assert updated["entry"]["body"] == "updated store details"
+
+
+def _write_project_nav_tree(home: Path, cfg: dict, project_key: str = "git-abc") -> list[str]:
+    paths = [
+        write_entry(
+            home, config=cfg, scope="project", kind="navigation", project_key_value=project_key,
+            title="项目导航", body="- [store](modules/store.md)\n- [task](flows/task.md)",
+            slug="index", meta={"type": "navigation"},
+        ),
+        write_entry(
+            home, config=cfg, scope="project", kind="navigation", project_key_value=project_key,
+            title="store 模块", body="store details", slug="modules/store",
+            meta={"type": "navigation"},
+        ),
+        write_entry(
+            home, config=cfg, scope="project", kind="navigation", project_key_value=project_key,
+            title="task 流程", body="task flow", slug="flows/task",
+            meta={"type": "navigation"},
+        ),
+    ]
+    return [str(path) for path in paths]
+
+
+def _make_nav_workspace(tmp_path: Path) -> Path:
+    ws = tmp_path / "nav-demo"
+    pkg = ws / "src" / "nav_demo"
+    (pkg / "core").mkdir(parents=True)
+    (pkg / "core" / "__init__.py").write_text('"""Core nav module."""\n', encoding="utf-8")
+    (ws / "README.md").write_text("# Nav Demo\n\nReusable nav demo.\n", encoding="utf-8")
+    return ws
+
+
+def _project_nav_agent_reply(project_key: str) -> str:
+    return json.dumps([
+        {
+            "kind": "navigation",
+            "scope": "project",
+            "project_key": project_key,
+            "slug": "index",
+            "title": "Agent nav",
+            "body": (
+                "## Project README\nNav Demo is a generated project briefing for agents.\n\n"
+                "## Project Map\n### 模块索引\n- [Core](modules/core.md)\n"
+            ),
+            "tags": ["navigation", "index"],
+            "related_files": ["src/nav_demo/core"],
+            "confidence": 0.8,
+        },
+        {
+            "kind": "navigation",
+            "scope": "project",
+            "project_key": project_key,
+            "slug": "modules/core",
+            "title": "Core",
+            "body": "## 模块职责\nagent generated core map\n",
+            "tags": ["navigation", "module"],
+            "related_files": ["src/nav_demo/core"],
+            "confidence": 0.7,
+        },
+    ])
+
+
+def _stub_project_nav_agent(monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+
+    def agent(context: dict) -> str:
+        return _project_nav_agent_reply(str(context.get("project_key") or "demo-key"))
+
+    monkeypatch.setattr(kr, "project_navigation_agent", agent)
+
+
+def test_project_nav_generate_creates_completed_draft_without_pending_candidates(tmp_path: Path, monkeypatch):
+    _sync_project_nav_jobs(monkeypatch)
+    _stub_project_nav_agent(monkeypatch)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+
+    result = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+        "model": "gpt-test",
+        "proxy_enabled": False,
+    }))
+
+    assert result["ok"] is True
+    assert result["status"] == "running"
+    assert result["draft_id"]
+    assert result["project_key"] == "demo-key"
+    drafts = _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"]
+    assert drafts[0]["id"] == result["draft_id"]
+    assert drafts[0]["status"] == "completed"
+    assert drafts[0]["backend"] == "codex"
+    assert drafts[0]["model"] == "gpt-test"
+    assert drafts[0]["proxy_enabled"] is False
+    assert "candidates" not in drafts[0]
+    assert drafts[0]["validation"]["ok"] is True
+    assert [item["stage"] for item in drafts[0]["agent_log"]] == ["queued", "running", "completed"]
+    assert drafts[0]["summary"] == "2 navigation entries ready for review"
+    detail = _get(home, "/api/kb/project-nav/draft", {"id": [result["draft_id"]]})["draft"]
+    assert {item["slug"] for item in detail["candidates"]} == {"index", "modules/core"}
+    index_candidate = next(item for item in detail["candidates"] if item["slug"] == "index")
+    assert "## Project README" in index_candidate["body"]
+    assert "## Project Map" in index_candidate["body"]
+    assert "COMPRESSED WORKSPACE SCAN JSON" in detail["agent"]["prompt_excerpt"]
+    assert "## Project README" in detail["agent"]["reply_excerpt"]
+    assert list_pending(home, load_config(home)) == []
+
+    accepted = json_response_body(_post(home, "/api/kb/project-nav/draft/accept", {"draft_id": result["draft_id"]}))
+    assert accepted["ok"] is True
+    assert accepted["draft_deleted"] is True
+    assert accepted["written_count"] == 2
+    assert _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"] == []
+    missing = knowledge_route_response(home, "GET", "/api/kb/project-nav/draft", {"id": [result["draft_id"]]}, b"", {})
+    assert b"404" in missing.split(b"\r\n", 1)[0]
+    pending = list_pending(home, load_config(home))
+    assert pending == []
+    entries = _get(home, "/api/kb/project-nav", {"project_key": ["demo-key"]})["entries"]
+    assert [item["slug"] for item in entries] == ["index"]
+
+
+def test_project_nav_generate_uses_agent_assisted_candidates(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+
+    _sync_project_nav_jobs(monkeypatch)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+
+    def agent(context: dict) -> str:
+        assert context["backend"] == "codex"
+        assert context["model"] == "gpt-test"
+        assert "COMPRESSED WORKSPACE SCAN JSON" in context["prompt"]
+        assert "`index` body MUST contain `## Project README`" in context["prompt"]
+        assert "`index` body MUST contain `## Project Map`" in context["prompt"]
+        return json.dumps([
+            {
+                "kind": "navigation",
+                "scope": "project",
+                "project_key": "demo-key",
+                "slug": "index",
+                "title": "Agent nav",
+                "body": (
+                    "## Project README\nAgent generated project briefing.\n\n"
+                    "## Project Map\n### 模块索引\n- [Agent Core](modules/agent-core.md)\n"
+                ),
+                "tags": ["navigation", "index"],
+                "related_files": ["src/nav_demo/core"],
+                "confidence": 0.8,
+            },
+            {
+                "kind": "navigation",
+                "scope": "project",
+                "project_key": "demo-key",
+                "slug": "modules/agent-core",
+                "title": "Agent Core",
+                "body": "## 模块职责\nagent generated\n",
+                "tags": ["navigation", "module"],
+                "related_files": ["src/nav_demo/core"],
+                "confidence": 0.7,
+            },
+        ])
+
+    monkeypatch.setattr(kr, "project_navigation_agent", agent)
+
+    result = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+        "model": "gpt-test",
+        "proxy_enabled": False,
+    }))
+
+    assert result["ok"] is True
+    drafts = _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"]
+    assert drafts[0]["status"] == "completed"
+    assert drafts[0]["agent"]["status"] == "used"
+    assert drafts[0]["validation"]["ok"] is True
+    assert list_pending(home, load_config(home)) == []
+    accepted = json_response_body(_post(home, "/api/kb/project-nav/draft/accept", {"draft_id": result["draft_id"]}))
+    assert accepted["written_count"] == 2
+    assert _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"] == []
+    entries = _get(home, "/api/kb/project-nav", {"project_key": ["demo-key"]})["entries"]
+    assert [item["slug"] for item in entries] == ["index"]
+
+
+def test_project_nav_generate_fails_when_agent_output_invalid(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+
+    _sync_project_nav_jobs(monkeypatch)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+    monkeypatch.setattr(kr, "project_navigation_agent", lambda _context: "not json")
+
+    result = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    }))
+
+    assert result["ok"] is True
+    drafts = _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"]
+    assert drafts[0]["status"] == "failed"
+    assert drafts[0]["agent"]["status"] == "invalid"
+    assert "COMPRESSED WORKSPACE SCAN JSON" in drafts[0]["agent"]["prompt_excerpt"]
+    assert drafts[0]["agent"]["reply_excerpt"] == "not json"
+    assert [item["stage"] for item in drafts[0]["agent_log"]] == ["queued", "running", "failed"]
+    assert "fallback" not in drafts[0]["agent"]
+    assert drafts[0]["error"]
+    assert list_pending(home, load_config(home)) == []
+    accept = _post(home, "/api/kb/project-nav/draft/accept", {"draft_id": result["draft_id"]})
+    assert b"400" in accept.split(b"\r\n", 1)[0]
+    entries = _get(home, "/api/kb/project-nav", {"project_key": ["demo-key"]})["entries"]
+    assert entries == []
+    rejected = json_response_body(_post(home, "/api/kb/project-nav/draft/reject", {"draft_id": result["draft_id"]}))
+    assert rejected["draft"]["status"] == "rejected"
+    assert _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"] == []
+
+
+def test_project_nav_draft_reject_discards_without_writing_entries(tmp_path: Path, monkeypatch):
+    _sync_project_nav_jobs(monkeypatch)
+    _stub_project_nav_agent(monkeypatch)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+
+    result = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    }))
+    rejected = json_response_body(_post(home, "/api/kb/project-nav/draft/reject", {"draft_id": result["draft_id"]}))
+
+    assert rejected["ok"] is True
+    assert rejected["draft"]["status"] == "rejected"
+    assert _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"] == []
+    retry = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    }))
+    assert retry["ok"] is True
+    assert retry["draft_id"] != result["draft_id"]
+    assert _get(home, "/api/kb/project-nav", {"project_key": ["demo-key"]})["entries"] == []
+    assert list_pending(home, load_config(home)) == []
+
+
+def test_project_nav_generate_conflicts_when_navigation_already_exists(tmp_path: Path, monkeypatch):
+    _sync_project_nav_jobs(monkeypatch)
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    ws = _make_nav_workspace(tmp_path)
+    write_entry(
+        home, config=cfg, scope="project", kind="navigation", project_key_value="demo-key",
+        title="已有导航", body="## 模块索引\n- existing", slug="index",
+        meta={"type": "navigation"},
+    )
+
+    resp = _post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+    })
+    assert b"409" in resp.split(b"\r\n", 1)[0]
+    result = json_response_body(resp)
+
+    assert result["ok"] is False
+    assert result["status"] == "already_exists"
+    assert result["already_exists"] is True
+    assert _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"] == []
+    assert list_pending(home, cfg) == []
+
+
+def test_project_nav_generate_conflicts_with_running_or_completed_draft(tmp_path: Path, monkeypatch):
+    _sync_project_nav_jobs(monkeypatch)
+    _stub_project_nav_agent(monkeypatch)
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    ws = _make_nav_workspace(tmp_path)
+    running = nav_drafts.create_draft(home, cfg, {
+        "status": "running",
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+    })
+
+    resp = _post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    })
+    assert b"409" in resp.split(b"\r\n", 1)[0]
+    conflict = json_response_body(resp)
+    assert conflict["status"] == "already_running"
+    assert conflict["draft_id"] == running["id"]
+
+    nav_drafts.update_draft(home, cfg, running["id"], status="rejected")
+    completed = nav_drafts.create_draft(home, cfg, {
+        "status": "completed",
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "candidates": [],
+    })
+
+    resp = _post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    })
+    assert b"409" in resp.split(b"\r\n", 1)[0]
+    conflict = json_response_body(resp)
+    assert conflict["status"] == "already_has_draft"
+    assert conflict["draft_id"] == completed["id"]
+
+
+def test_project_nav_generate_uses_run_workspace_when_provided(tmp_path: Path, monkeypatch):
+    _sync_project_nav_jobs(monkeypatch)
+    _stub_project_nav_agent(monkeypatch)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+    plan = create_plan(
+        home,
+        "nav goal",
+        1,
+        "research",
+        ["Map nav"],
+        [],
+        workspace_path=str(ws),
+    )
+
+    result = json_response_body(_post(home, "/api/kb/project-nav", {"run_id": plan["id"], "backend": "codex"}))
+
+    assert result["ok"] is True
+    assert result["run_id"] == plan["id"]
+    assert result["workspace_path"] == str(ws)
+    drafts = _get(home, "/api/kb/project-nav/drafts", {"run_id": [plan["id"]]})["drafts"]
+    assert drafts[0]["status"] == "completed"
+    assert drafts[0]["workspace_path"] == str(ws)
+    assert drafts[0]["validation"]["ok"] is True
+
+
+def test_project_nav_reset_deletes_entire_navigation_tree(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    _write_project_nav_tree(home, cfg, "git-abc")
+    _write_project_nav_tree(home, cfg, "git-other")
+    write_entry(
+        home, config=cfg, scope="project", kind="solutions",
+        project_key_value="git-abc", title="Fix build", body="do x",
+    )
+
+    result = json_response_body(_delete(home, "/api/kb/project-nav", {"project_key": "git-abc"}))
+
+    assert result["ok"] is True
+    assert result["reset_project_nav"] is True
+    assert result["project_key"] == "git-abc"
+    assert result["deleted_count"] == 3
+    assert list_entries(home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc") == []
+    assert len(list_entries(home, config=cfg, scope="project", kind="navigation", project_key_value="git-other")) == 3
+    assert len(list_entries(home, config=cfg, scope="project", kind="solutions", project_key_value="git-abc")) == 1
+
+
+def test_project_nav_reset_can_derive_project_from_workspace_path(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    ws = _make_nav_workspace(tmp_path)
+    key = project_key(ws)
+    _write_project_nav_tree(home, cfg, key)
+
+    result = json_response_body(_delete(home, "/api/kb/project-nav", {"workspace_path": str(ws)}))
+
+    assert result["ok"] is True
+    assert result["reset_project_nav"] is True
+    assert result["project_key"] == key
+    assert result["workspace_path"] == str(ws)
+    assert result["deleted_count"] == 3
+    assert list_entries(home, config=cfg, scope="project", kind="navigation", project_key_value=key) == []
+
+
+def test_project_nav_list_can_derive_project_from_workspace_path(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    ws = _make_nav_workspace(tmp_path)
+    key = project_key(ws)
+    _write_project_nav_tree(home, cfg, key)
+
+    result = _get(home, "/api/kb/project-nav", {"workspace_path": [str(ws)]})
+
+    assert result["project_key"] == key
+    assert result["workspace_path"] == str(ws)
+    assert result["count"] == 1
+    assert [entry["slug"] for entry in result["entries"]] == ["index"]
+
+
+def test_project_nav_list_defaults_to_all_navigation_entry_points(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    _write_project_nav_tree(home, cfg, "git-abc")
+    _write_project_nav_tree(home, cfg, "git-other")
+
+    result = _get(home, "/api/kb/project-nav")
+
+    assert result["project_key"] is None
+    assert result["count"] == 2
+    assert {entry["slug"] for entry in result["entries"]} == {"index"}
+    assert {entry["project_key"] for entry in result["entries"]} == {"git-abc", "git-other"}
+
+
+def test_project_nav_draft_list_defaults_to_all_drafts(tmp_path: Path, monkeypatch):
+    _sync_project_nav_jobs(monkeypatch)
+    _stub_project_nav_agent(monkeypatch)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+
+    _post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-a",
+        "backend": "codex",
+    })
+    _post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-b",
+        "backend": "codex",
+    })
+
+    result = _get(home, "/api/kb/project-nav/drafts")
+
+    assert result["project_key"] is None
+    assert result["count"] == 2
+    assert {draft["project_key"] for draft in result["drafts"]} == {"demo-a", "demo-b"}
+
+
+def test_project_nav_config_disable_does_not_delete_navigation(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    _write_project_nav_tree(home, cfg, "git-abc")
+
+    out = json_response_body(_patch(home, "/api/kb/config", {"project_nav": {"enabled": False}}))
+
+    assert out["knowledge"]["project_nav"]["enabled"] is False
+    assert len(list_entries(home, config=load_config(home), scope="project", kind="navigation", project_key_value="git-abc")) == 3
+
+
+def test_delete_navigation_index_entry_cascades_project_nav(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    _write_project_nav_tree(home, cfg, "git-abc")
+    index_entry = next(
+        entry for entry in list_entries(home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc")
+        if entry["meta"]["slug"] == "index"
+    )
+
+    result = json_response_body(_delete(home, "/api/kb/entry", {"id": index_entry["meta"]["id"]}))
+
+    assert result["ok"] is True
+    assert result["reset_project_nav"] is True
+    assert result["deleted_count"] == 3
+    assert list_entries(home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc") == []
 
 
 def test_entry_lookup_by_id(tmp_path: Path):
@@ -367,6 +838,7 @@ def test_config_get_and_patch(tmp_path: Path):
         home, "PATCH", "/api/kb/config", {},
         json.dumps({
             "git": {"enabled": True, "remote": "git@h:u/r.git", "auto_push": True},
+            "project_nav": {"enabled": False},
             "curation": {"gate": "auto"},
         }).encode(), {},
     )
@@ -374,10 +846,12 @@ def test_config_get_and_patch(tmp_path: Path):
     assert out["ok"]
     assert out["knowledge"]["git"]["remote"] == "git@h:u/r.git"
     assert out["knowledge"]["git"]["auto_push"] is True
+    assert out["knowledge"]["project_nav"]["enabled"] is False
     assert out["knowledge"]["curation"]["gate"] == "auto"
     # Persisted to disk and other defaults preserved (branch).
     saved = read_json(config_path(home))["knowledge"]
     assert saved["git"]["remote"] == "git@h:u/r.git"
+    assert saved["project_nav"]["enabled"] is False
     assert load_config(home)["knowledge"]["git"]["branch"] == "main"
 
 
@@ -393,15 +867,20 @@ def test_config_patch_rejects_bad_gate(tmp_path: Path):
 def test_config_patch_tolerates_non_dict_git_curation(tmp_path: Path):
     # Hand-written config where git/curation are not dicts must not 500.
     home = tmp_path / ".aha"
-    write_json(config_path(home), {"knowledge": {"enabled": True, "git": "oops", "curation": 5}})
+    write_json(config_path(home), {"knowledge": {"enabled": True, "git": "oops", "curation": 5, "project_nav": "oops"}})
     init_knowledge_base(home, load_config(home))
     resp = knowledge_route_response(
         home, "PATCH", "/api/kb/config", {},
-        json.dumps({"git": {"remote": "git@h:u/r.git"}, "curation": {"gate": "auto"}}).encode(), {},
+        json.dumps({
+            "git": {"remote": "git@h:u/r.git"},
+            "project_nav": {"enabled": False},
+            "curation": {"gate": "auto"},
+        }).encode(), {},
     )
     out = json_response_body(resp)
     assert out["ok"]
     assert out["knowledge"]["git"]["remote"] == "git@h:u/r.git"
+    assert out["knowledge"]["project_nav"]["enabled"] is False
     assert out["knowledge"]["curation"]["gate"] == "auto"
 
 

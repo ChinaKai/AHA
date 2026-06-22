@@ -42,6 +42,8 @@
     }
     .kb-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
     .kb-card-actions button { min-height: var(--control-height-sm); padding: 0 var(--control-padding-x-sm); font-size: 12px; }
+    .kb-inline-actions { display: flex; flex-wrap: nowrap; overflow-x: auto; }
+    .kb-inline-actions button { flex: 0 0 auto; white-space: nowrap; }
     .kb-entry-actions button { min-width: 0; }
     .kb-pending-actions { margin: 0 0 2px; }
     button.kb-approve { border-color: #bbf7d0; background: var(--color-success-surface); color: var(--color-success); font-weight: 650; }
@@ -55,6 +57,7 @@
     .kb-entry-body { white-space: normal; }
     .kb-entry-body pre { white-space: pre-wrap; }
     .kb-entry-ref-modal { width: min(92vw, 860px); max-height: 90vh; overflow: auto; }
+    .kb-nav-draft-modal { width: min(92vw, 940px); max-height: 90vh; overflow: auto; }
     .kb-edit-form { display: grid; gap: 8px; margin-top: 4px; }
     .kb-edit-form textarea {
       min-height: 220px; resize: vertical; width: 100%;
@@ -89,6 +92,16 @@
     .kb-form-grid label.kb-field { display: flex; align-items: center; gap: 6px; }
     .kb-form-grid label.kb-field input[type=checkbox] { flex: none; margin: 0; }
     .kb-settings-card { padding: 14px; }
+    .kb-project-nav-panel { gap: 8px; }
+    .kb-project-nav-panel .kb-row { margin-bottom: 0; }
+    .kb-project-nav-panel select { min-width: min(360px, 100%); }
+    .kb-project-nav-panel input[type=text] { min-width: min(420px, 100%); }
+    .kb-project-nav-controls { flex-wrap: nowrap; align-items: center; overflow-x: auto; }
+    .kb-project-nav-controls .kb-muted { flex: 0 0 auto; white-space: nowrap; }
+    .kb-project-nav-controls select { min-width: 150px; }
+    .kb-project-nav-controls #nav-workspace-select { min-width: 240px; }
+    .kb-project-nav-controls #nav-model { min-width: 180px; }
+    .kb-project-nav-controls button { flex: 0 0 auto; }
     .kb-toast {
       position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
       width: max-content; max-width: calc(100vw - 24px);
@@ -101,7 +114,7 @@
       .kb-wrap { padding: 0 8px 44px; }
       .kb-console-head { display: grid; gap: 10px; padding-top: 12px; }
       .kb-console-head .status { width: fit-content; max-width: 100%; }
-      .kb-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+      .kb-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
       .kb-tabs button {
         width: 100%; min-height: 32px; padding: 0 4px;
         justify-content: center; white-space: nowrap; font-size: 11px;
@@ -111,6 +124,8 @@
       .kb-card { padding: 10px; }
       .kb-card-actions { display: grid; grid-template-columns: 1fr; }
       .kb-card-actions button { width: 100%; }
+      .kb-inline-actions { display: flex; grid-template-columns: none; }
+      .kb-inline-actions button { width: auto; }
       .kb-entry-actions {
         display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 4px;
@@ -118,6 +133,12 @@
       .kb-entry-actions button {
         width: 100%; min-height: 30px; padding: 0 4px;
         font-size: 11px; white-space: nowrap;
+      }
+      .kb-entry-actions.kb-inline-actions {
+        display: flex; grid-template-columns: none;
+      }
+      .kb-entry-actions.kb-inline-actions button {
+        width: auto; flex: 0 0 auto;
       }
       .kb-cap-actions {
         display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px;
@@ -129,6 +150,7 @@
       .kb-pending-body { max-height: 38vh; }
       .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
       .kb-settings-card { padding: 12px; }
+      .kb-project-nav-controls { overflow-x: visible; }
     }
   </style>
 </head>
@@ -144,6 +166,7 @@
 
   <nav class="kb-tabs">
     <button data-tab="entries" class="button-ghost kb-tab active" type="button"><span data-i18n="knowledge.tab_entries">Entries</span></button>
+    <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Project navigation</span></button>
     <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
     <button data-tab="capture" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_capture">Capture</span></button>
     <button data-tab="settings" class="button-ghost kb-tab" type="button"><span data-i18n="common.settings">Settings</span></button>
@@ -152,12 +175,34 @@
   <section id="tab-entries">
     <div class="kb-row">
       <select id="f-scope" aria-label="Scope filter" data-i18n-aria-label="knowledge.scope_filter"><option value="" data-i18n="knowledge.scope_all">All scopes</option><option value="project" data-i18n="knowledge.scope_project">Project</option><option value="general" data-i18n="knowledge.scope_general">General</option><option value="personal" data-i18n="knowledge.scope_personal">Personal</option></select>
-      <select id="f-kind" aria-label="Type filter" data-i18n-aria-label="knowledge.type_filter"><option value="" data-i18n="knowledge.type_all">All types</option><option value="solutions" data-i18n="knowledge.type_solutions">Solutions</option><option value="wiki" data-i18n="knowledge.type_wiki">Wiki</option><option value="navigation" data-i18n="knowledge.type_navigation">Project navigation</option></select>
+      <select id="f-kind" aria-label="Type filter" data-i18n-aria-label="knowledge.type_filter"><option value="" data-i18n="knowledge.type_all">All types</option><option value="solutions" data-i18n="knowledge.type_solutions">Solutions</option><option value="wiki" data-i18n="knowledge.type_wiki">Wiki</option></select>
       <input id="f-project" type="text" placeholder="Filter by project key" data-i18n-placeholder="knowledge.project_filter" />
       <input id="f-search" type="search" placeholder="Search title, tags, or body" data-i18n-placeholder="knowledge.search_filter" />
       <button class="button-ghost" id="f-refresh" type="button" data-i18n="common.refresh">Refresh</button>
     </div>
     <div id="entries-list"></div>
+  </section>
+
+  <section id="tab-navigation" hidden>
+    <div id="project-nav-panel" class="kb-card kb-project-nav-panel">
+      <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
+      <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Generate project navigation for a workspace.</div>
+      <div class="kb-row kb-project-nav-controls">
+        <select id="nav-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
+        <input id="nav-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
+        <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
+        <select id="nav-backend" aria-label="Project navigation backend"></select>
+        <select id="nav-model" aria-label="Project navigation model"></select>
+        <select id="nav-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
+          <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
+          <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
+        </select>
+        <button class="button-ghost" id="nav-generate" type="button" data-i18n="knowledge.generate_project_nav">Generate project nav</button>
+      </div>
+      <div id="nav-result" class="kb-muted"></div>
+    </div>
+    <div id="nav-draft-list"></div>
+    <div id="navigation-list"></div>
   </section>
 
   <section id="tab-pending" hidden>
@@ -197,9 +242,10 @@
         <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
         <select id="cap-backend" aria-label="Distill backend"></select>
         <select id="cap-model" aria-label="Distill model"></select>
-      </div>
-      <div class="kb-row">
-        <label class="kb-field"><input type="checkbox" id="cap-proxy-enabled" /> <span data-i18n="knowledge.capture_proxy_enabled">Use proxy</span></label>
+        <select id="cap-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
+          <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
+          <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
+        </select>
       </div>
       <div class="kb-card-actions">
         <button class="kb-approve" type="button" id="cap-distill-go" data-i18n="knowledge.capture_distill">Distill</button>
@@ -234,6 +280,29 @@
     </div>
   </div>
 
+  <div id="nav-draft-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-nav-draft-modal">
+      <h3 id="nav-draft-title">Project navigation draft</h3>
+      <div id="nav-draft-meta" class="kb-muted"></div>
+      <div id="nav-draft-summary" class="kb-muted"></div>
+      <div class="kb-log-label" data-i18n="knowledge.project_nav_agent_progress">Agent progress</div>
+      <pre id="nav-draft-agent-log" class="kb-body kb-log-body"></pre>
+      <div class="kb-log-label" data-i18n="knowledge.capture_log_prompt">Prompt</div>
+      <pre id="nav-draft-prompt" class="kb-body kb-log-body"></pre>
+      <div class="kb-log-label" data-i18n="knowledge.capture_log_reply">Reply</div>
+      <pre id="nav-draft-reply" class="kb-body kb-log-body"></pre>
+      <div class="kb-log-label" data-i18n="knowledge.project_nav_entries_preview">Entries preview</div>
+      <div id="nav-draft-entries"></div>
+      <div class="kb-log-label" data-i18n="knowledge.project_nav_validation">Validation</div>
+      <pre id="nav-draft-validation" class="kb-body kb-log-body"></pre>
+      <div class="kb-card-actions">
+        <button class="kb-approve" type="button" id="nav-draft-accept" data-i18n="knowledge.approve">Approve</button>
+        <button class="kb-reject" type="button" id="nav-draft-reject" data-i18n="knowledge.reject">Reject</button>
+        <button class="button-ghost" type="button" id="nav-draft-close" data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
   <section id="tab-settings" hidden>
     <form id="settings-form" class="kb-card kb-settings-card">
       <div class="kb-form-grid">
@@ -243,6 +312,7 @@
           <input type="text" id="s-path" />
           <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
           <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
+          <label class="kb-field"><input type="checkbox" id="s-project-nav-enabled" /> <span data-i18n="knowledge.project_nav">Project navigation</span></label>
         </div>
         <div>
           <label class="kb-field"><input type="checkbox" id="s-git-enabled" /> <span data-i18n="knowledge.enable_git">Enable git sync</span></label>
@@ -268,11 +338,18 @@
     const $ = (s) => document.querySelector(s);
     const t = (key, fallback) => window.AHAI18n?.t?.(key, fallback) || fallback || key;
     const formatText = (key, values, fallback) => window.AHAI18n?.format?.(key, values, fallback) || fallback || key;
+    const pageParams = new URLSearchParams(window.location.search || "");
+    const pageRunId = String(pageParams.get("run_id") || pageParams.get("run") || "").trim();
     const toast = (msg) => { const el = $("#toast"); el.textContent = msg; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 1800); };
     const api = async (path, opts) => {
       const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (!res.ok) {
+        const error = new Error(data.error || res.statusText);
+        error.payload = data;
+        error.status = res.status;
+        throw error;
+      }
       return data;
     };
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -306,7 +383,7 @@
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
-    const KB_TABS = ["entries", "pending", "capture", "settings"];
+    const KB_TABS = ["entries", "navigation", "pending", "capture", "settings"];
 
     function normalizedTabName(name) {
       const tab = String(name || "").trim();
@@ -329,7 +406,7 @@
       }
     }
 
-    const state = { entries: [], pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, activeTab: readStoredActiveTab() };
+    const state = { entries: [], navigation: [], navDrafts: [], activeNavDraft: null, navDraftPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -342,6 +419,11 @@
       writeStoredActiveTab(tab);
       for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === tab);
       for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
+      if (tab === "navigation") {
+        if (!state.captureBackends) loadCaptureAgents();
+        loadProjectNavDrafts();
+        loadNavigation();
+      }
       if (tab === "pending") loadPending();
       if (tab === "capture") loadCapture();
       if (tab === "settings") loadSettings();
@@ -362,6 +444,282 @@
         $("#pending-badge").textContent = s.pending ? `(${s.pending})` : "";
       } catch (e) { $("#kb-summary").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message); }
     }
+
+    function syncProjectNavCustomWorkspace() {
+      const select = $("#nav-workspace-select");
+      const custom = $("#nav-workspace-custom");
+      if (!select || !custom) return;
+      custom.classList.toggle("hidden", select.value !== "__custom__");
+    }
+
+    function renderProjectNavWorkspaceSelect() {
+      const select = $("#nav-workspace-select");
+      const customInput = $("#nav-workspace-custom");
+      if (!select || !customInput) return;
+      const previous = select.value;
+      select.innerHTML = "";
+      for (const workspace of state.workspaces) {
+        if (!workspace?.path) continue;
+        const opt = document.createElement("option");
+        opt.value = workspace.path;
+        opt.dataset.workspaceId = workspace.id || "";
+        opt.textContent = workspace.label || workspace.name || workspace.path;
+        select.appendChild(opt);
+      }
+      const custom = document.createElement("option");
+      custom.value = "__custom__";
+      custom.textContent = t("task.workspace_custom", "Custom path...");
+      select.appendChild(custom);
+
+      const preferred =
+        state.workspaces.find(item => item.path === previous) ||
+        state.workspaces[0];
+      if (preferred?.path) {
+        select.value = preferred.path;
+      } else {
+        select.value = "__custom__";
+        if (!customInput.value && state.defaultWorkspacePath) customInput.value = state.defaultWorkspacePath;
+      }
+      syncProjectNavCustomWorkspace();
+    }
+
+    async function loadProjectNavWorkspaces() {
+      try {
+        const payload = await api("/api/workspaces");
+        state.defaultWorkspacePath = payload.default_workspace_path || "";
+        state.workspaces = Array.isArray(payload.workspaces) ? payload.workspaces : [];
+        renderProjectNavWorkspaceSelect();
+        if (state.activeTab === "navigation") { loadProjectNavDrafts(); loadNavigation(); }
+      } catch (e) {
+        $("#nav-result").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message);
+      }
+    }
+
+    function selectedProjectNavWorkspacePath() {
+      const select = $("#nav-workspace-select");
+      if (!select) return "";
+      if (select.value === "__custom__") return $("#nav-workspace-custom").value.trim();
+      return select.value.trim();
+    }
+
+    function projectNavActionPayload() {
+      const workspacePath = selectedProjectNavWorkspacePath();
+      const payload = { workspace_path: workspacePath || null };
+      if (pageRunId) payload.run_id = pageRunId;
+      const backend = $("#nav-backend")?.value || "";
+      const model = $("#nav-model")?.value || "";
+      if (backend) payload.backend = backend;
+      if (model) payload.model = model;
+      const proxyMode = $("#nav-proxy-mode")?.value || "off";
+      payload.proxy_enabled = proxyMode === "on";
+      return payload;
+    }
+
+    function projectNavGenerateErrorMessage(error) {
+      const payload = error?.payload || {};
+      if (payload.status === "already_running") {
+        return formatText(
+          "knowledge.project_nav_already_running",
+          { id: payload.draft_id || "-" },
+          "Project nav generation is already running: " + (payload.draft_id || "-")
+        );
+      }
+      if (payload.status === "already_has_draft") {
+        return formatText(
+          "knowledge.project_nav_already_has_draft",
+          { id: payload.draft_id || "-" },
+          "Project nav draft is waiting for review: " + (payload.draft_id || "-")
+        );
+      }
+      if (payload.status === "already_exists") {
+        return t("knowledge.project_nav_already_exists", "Project nav already exists. Reset it before generating again.");
+      }
+      return formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
+    }
+
+    function renderNavigationList() {
+      $("#navigation-list").innerHTML = state.navigation.length
+        ? state.navigation.map((e) => {
+            const entryId = e.id || e.slug;
+            const encodedId = encodeURIComponent(entryId);
+            const status = e.status || "active";
+            const deleteLabel = t("knowledge.reset_project_nav", "Reset project nav");
+            return `<div class="kb-card"><h3>${esc(e.title)}</h3>
+              <div class="kb-muted">${esc(e.project_key || "-")} · ${esc(e.slug || entryId)} · ${esc(status)}</div>
+              <div class="kb-muted">${esc(timeLine(e))}</div>
+              <div>${(e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("")}</div>
+              <div class="kb-card-actions kb-entry-actions kb-inline-actions">
+                <button class="button-ghost" type="button" onclick="openEntryReference('${encodedId}')">${esc(t("knowledge.view", "View"))}</button>
+                <button class="button-ghost" type="button" onclick="editEntryReference('${encodedId}')">${esc(t("knowledge.edit", "Edit"))}</button>
+                <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
+                <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
+                <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', true)">${esc(deleteLabel)}</button>
+              </div>
+            </div>`;
+          }).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.project_nav_empty", "No project navigation entries"))}</p>`;
+    }
+
+    async function loadNavigation() {
+      try {
+        const data = await api("/api/kb/project-nav");
+        state.navigation = data.entries || [];
+        renderNavigationList();
+      } catch (e) {
+        state.navigation = [];
+        $("#navigation-list").innerHTML = `<p class="kb-muted">${esc(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message))}</p>`;
+      }
+    }
+
+    function scheduleProjectNavDraftPoll() {
+      if (state.navDraftPoll) {
+        clearTimeout(state.navDraftPoll);
+        state.navDraftPoll = null;
+      }
+      if (state.activeTab !== "navigation") return;
+      if (!state.navDrafts.some((draft) => draft.status === "running")) return;
+      state.navDraftPoll = setTimeout(loadProjectNavDrafts, 1800);
+    }
+
+    function projectNavProxyLabel(value) {
+      if (value === true) return t("knowledge.proxy_on", "Proxy on");
+      return t("knowledge.proxy_off", "Proxy off");
+    }
+
+    function renderProjectNavDrafts() {
+      $("#nav-draft-list").innerHTML = state.navDrafts.length
+        ? state.navDrafts.map((draft) => {
+            const id = esc(draft.id || "");
+            const status = esc(draft.status || "-");
+            const meta = [
+              draft.project_key || "-",
+              draft.workspace_path || "",
+              draft.backend || "",
+              draft.model || "",
+              projectNavProxyLabel(draft.proxy_enabled),
+              timeLine(draft, ["created_at", "updated_at", "completed_at", "accepted_at", "rejected_at"]),
+            ].filter(Boolean).join(" · ");
+            const canAccept = draft.status === "completed";
+            const canReject = draft.status === "completed" || draft.status === "failed";
+            const summary = draft.error || draft.summary || draft.skipped || "";
+            return `<div class="kb-card"><h3>${esc(t("knowledge.project_nav_generation", "Navigation generation"))}</h3>
+              <div><span class="kb-tag">${status}</span></div>
+              <div class="kb-muted">${esc(meta)}</div>
+              ${summary ? `<div class="kb-muted">${esc(summary)}</div>` : ""}
+              <div class="kb-card-actions kb-inline-actions kb-nav-draft-actions">
+                <button class="button-ghost" type="button" onclick="viewProjectNavDraft('${id}')">${esc(t("knowledge.view", "View"))}</button>
+                <button class="button-ghost" type="button" onclick="viewProjectNavDraft('${id}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
+                ${canAccept ? `
+                <button class="kb-approve" type="button" onclick="acceptProjectNavDraft('${id}')">${esc(t("knowledge.approve", "Approve"))}</button>
+                ` : ""}
+                ${canReject ? `
+                <button class="kb-reject" type="button" onclick="rejectProjectNavDraft('${id}')">${esc(t("knowledge.reject", "Reject"))}</button>
+                ` : ""}
+              </div>
+            </div>`;
+          }).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.project_nav_drafts_empty", "No navigation generation drafts"))}</p>`;
+      scheduleProjectNavDraftPoll();
+    }
+
+    function projectNavDraftEntryPath(draft, candidate) {
+      const key = candidate?.project_key || draft?.project_key || "-";
+      const slug = String(candidate?.slug || "index").replace(/\.md$/i, "");
+      return `projects/${key}/navigation/${slug}.md`;
+    }
+
+    function closeProjectNavDraftModal() {
+      state.activeNavDraft = null;
+      $("#nav-draft-modal").hidden = true;
+    }
+
+    function renderProjectNavDraftModal() {
+      const draft = state.activeNavDraft;
+      if (!draft) {
+        $("#nav-draft-modal").hidden = true;
+        return;
+      }
+      const entries = Array.isArray(draft.candidates) ? draft.candidates : [];
+      const agent = draft.agent || {};
+      const agentLog = Array.isArray(draft.agent_log) ? draft.agent_log : [];
+      $("#nav-draft-title").textContent = `${t("knowledge.project_nav_generation", "Navigation generation")} · ${draft.status || "-"}`;
+      $("#nav-draft-meta").textContent = [
+        draft.project_key || "-",
+        draft.workspace_path || "",
+        draft.backend || "",
+        draft.model || "",
+        projectNavProxyLabel(draft.proxy_enabled),
+        timeLine(draft, ["created_at", "updated_at", "completed_at", "accepted_at", "rejected_at"]),
+      ].filter(Boolean).join(" · ");
+      $("#nav-draft-summary").textContent = draft.error || draft.summary || draft.skipped || "";
+      $("#nav-draft-agent-log").textContent = agentLog.length
+        ? agentLog.map((item) => [
+            item.at ? localTime(item.at) : "",
+            item.stage || "",
+            item.message || "",
+            item.backend || "",
+            item.model || "",
+          ].filter(Boolean).join(" · ")).join("\n")
+        : [agent.status, agent.error].filter(Boolean).join(" · ");
+      $("#nav-draft-prompt").textContent = agent.prompt_excerpt || "";
+      $("#nav-draft-reply").textContent = agent.reply_excerpt || (agent.error ? "ERROR:\n" + agent.error : "");
+      $("#nav-draft-entries").innerHTML = entries.length
+        ? entries.map((candidate) => `<div class="kb-card">
+            <h3>${esc(candidate.title || candidate.slug || "Navigation entry")}</h3>
+            <div class="kb-muted">${esc(candidate.slug || "-")} · ${esc(projectNavDraftEntryPath(draft, candidate))}</div>
+            <pre class="kb-body">${esc(candidate.body || "")}</pre>
+          </div>`).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.project_nav_empty", "No project navigation entries"))}</p>`;
+      $("#nav-draft-validation").textContent = JSON.stringify(draft.validation || {}, null, 2);
+      const canAccept = draft.status === "completed";
+      const canReject = draft.status === "completed" || draft.status === "failed";
+      $("#nav-draft-accept").hidden = !canAccept;
+      $("#nav-draft-reject").hidden = !canReject;
+      $("#nav-draft-modal").hidden = false;
+    }
+
+    window.viewProjectNavDraft = async (id) => {
+      try {
+        const data = await api("/api/kb/project-nav/draft?id=" + encodeURIComponent(id));
+        state.activeNavDraft = data.draft;
+        renderProjectNavDraftModal();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    };
+
+    async function loadProjectNavDrafts() {
+      try {
+        const data = await api("/api/kb/project-nav/drafts");
+        state.navDrafts = data.drafts || [];
+        renderProjectNavDrafts();
+      } catch (e) {
+        state.navDrafts = [];
+        $("#nav-draft-list").innerHTML = `<p class="kb-muted">${esc(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message))}</p>`;
+      }
+    }
+
+    window.acceptProjectNavDraft = async (id) => {
+      try {
+        const result = await api("/api/kb/project-nav/draft/accept", { method: "POST", body: JSON.stringify({ draft_id: id }) });
+        toast(formatText("knowledge.project_nav_accepted", { count: result.written_count || 0 }, "Project nav accepted: " + (result.written_count || 0) + " entries"));
+        if (state.activeNavDraft?.id === id) closeProjectNavDraftModal();
+        await loadProjectNavDrafts(); await loadNavigation(); await loadStatus();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    };
+
+    window.rejectProjectNavDraft = async (id) => {
+      try {
+        await api("/api/kb/project-nav/draft/reject", { method: "POST", body: JSON.stringify({ draft_id: id }) });
+        toast(t("knowledge.project_nav_rejected", "Project nav draft rejected"));
+        if (state.activeNavDraft?.id === id) closeProjectNavDraftModal();
+        await loadProjectNavDrafts();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    };
 
     function renderEntryMarkdown() {
       if (!window.AHATaskMemoMarkdown) return;
@@ -411,6 +769,8 @@
             const isEditing = state.editingEntry === entryId && isActive;
             const encodedId = encodeURIComponent(entryId);
             const status = e.status || "active";
+            const isProjectNavIndex = e.type === "navigation" && e.slug === "index" && e.project_key;
+            const deleteLabel = isProjectNavIndex ? t("knowledge.reset_project_nav", "Reset project nav") : t("knowledge.delete", "Delete");
             return `<div class="kb-card"><h3>${esc(e.title)}</h3>
             <div class="kb-muted">${esc(e.scope)}/${esc(e.type)} · ${esc(e.project_key || "-")} · ${esc(entryId)} · ${esc(status)}</div>
             <div class="kb-muted">${esc(timeLine(e))}</div>
@@ -420,7 +780,7 @@
               <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
               <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
               <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
-              <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}')">${esc(t("knowledge.delete", "Delete"))}</button>
+              <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>
             </div>
             ${isActive && !isEditing ? `<div class="kb-muted">${esc(state.activeEntry.path)}</div><div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
             ${isEditing ? renderEditForm(state.activeEntry) : ""}
@@ -521,6 +881,17 @@
       }
     }
 
+    window.editEntryReference = async (encodedSlug) => {
+      const slug = decodeURIComponent(encodedSlug);
+      try {
+        state.referenceEntry = await api("/api/kb/entry?id=" + encodeURIComponent(slug));
+        state.editingReference = true;
+        renderEntryReferenceModal();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    };
+
     window.editEntry = async (encodedId) => {
       const id = decodeURIComponent(encodedId);
       if (state.editingEntry === id) {
@@ -569,7 +940,7 @@
       try {
         await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify(payload) });
         toast(status === "deprecated" ? t("knowledge.deprecated", "Deprecated") : t("knowledge.restored", "Restored"));
-        await loadEntries(); await loadStatus();
+        await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
 
@@ -578,7 +949,7 @@
       try {
         await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "stale", mark_stale: true }) });
         toast(t("knowledge.marked_stale", "Marked stale"));
-        await loadEntries(); await loadStatus();
+        await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
 
@@ -587,19 +958,32 @@
       try {
         await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "active", review_after: "" }) });
         toast(t("knowledge.reviewed", "Reviewed"));
-        await loadEntries(); await loadStatus();
+        await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
 
-    window.deleteEntry = async (encodedId) => {
+    window.deleteEntry = async (encodedId, resetProjectNav = false) => {
       const id = decodeURIComponent(encodedId);
-      if (!confirm(formatText("knowledge.delete_confirm", { id }, "Delete entry " + id + "?"))) return;
+      const entry = state.entries.find((item) => (item.id || item.slug) === id)
+        || state.navigation.find((item) => (item.id || item.slug) === id);
+      const confirmMessage = resetProjectNav
+        ? formatText(
+            "knowledge.reset_project_nav_confirm",
+            { project: entry?.project_key || "-" },
+            "Reset project nav for " + (entry?.project_key || "-") + "? This deletes index, modules, and flows."
+          )
+        : formatText("knowledge.delete_confirm", { id }, "Delete entry " + id + "?");
+      if (!confirm(confirmMessage)) return;
       try {
-        await api("/api/kb/entry", { method: "DELETE", body: JSON.stringify({ id }) });
-        toast(t("knowledge.deleted", "Deleted"));
+        const result = resetProjectNav
+          ? await api("/api/kb/project-nav", { method: "DELETE", body: JSON.stringify({ project_key: entry?.project_key }) })
+          : await api("/api/kb/entry", { method: "DELETE", body: JSON.stringify({ id }) });
+        toast(resetProjectNav
+          ? formatText("knowledge.project_nav_reset_done", { count: result.deleted_count || 0 }, "Project nav reset: " + (result.deleted_count || 0) + " entries")
+          : t("knowledge.deleted", "Deleted"));
         state.activeEntry = null; state.referenceEntry = null; state.editingEntry = null; state.editingReference = false;
         renderEntryReferenceModal();
-        await loadEntries(); await loadStatus();
+        await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
 
@@ -625,7 +1009,7 @@
         state.editingReference = false;
         toast(t("knowledge.entry_updated", "Entry updated"));
         renderEntryReferenceModal();
-        await loadStatus();
+        await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
 
@@ -658,7 +1042,7 @@
           return `<div class="kb-card"><h3>${esc(c.title)}</h3>
             <div class="kb-muted">${esc(c.scope)}/${esc(c.kind)} · ${esc(c.project_key || "-")} · ${esc(c.id)} · ${esc(t("knowledge.confidence", "confidence"))} ${esc((c.meta || {}).confidence)}</div>
             <div class="kb-muted">${esc(timeLine(c, ["created_at", "updated_at", "last_seen_at"]))}</div>
-            <div class="kb-card-actions kb-pending-actions">
+            <div class="kb-card-actions kb-pending-actions kb-inline-actions">
               <button class="button-ghost" type="button" aria-expanded="${expanded ? "true" : "false"}" onclick="togglePendingBody('${encodedId}')">${esc(bodyToggleLabel)}</button>
               <button class="kb-approve" type="button" onclick="decide('approve','${esc(c.id)}')">${esc(t("knowledge.approve", "Approve"))}</button>
               <button class="kb-reject" type="button" onclick="decide('reject','${esc(c.id)}')">${esc(t("knowledge.reject", "Reject"))}</button>
@@ -809,11 +1193,12 @@
       const backendProxy = state.captureConfig?.[backendName]?.proxy || {};
       return Boolean(backendProxy.enabled);
     }
-    function syncCaptureProxyCheckbox(useLast = true) {
-      const checkbox = $("#cap-proxy-enabled");
-      if (!checkbox) return;
+    function syncCaptureProxyMode(useLast = true) {
+      const select = $("#cap-proxy-mode");
+      if (!select) return;
       const remembered = typeof state.lastProxyEnabled === "boolean";
-      checkbox.checked = useLast && remembered ? state.lastProxyEnabled : captureDefaultProxyEnabled($("#cap-backend").value);
+      const enabled = useLast && remembered ? state.lastProxyEnabled : captureDefaultProxyEnabled($("#cap-backend").value);
+      select.value = enabled ? "on" : "off";
     }
     function renderCaptureModels(selectedModel) {
       const backendName = $("#cap-backend").value;
@@ -823,6 +1208,32 @@
       const requested = configString(selectedModel ?? state.lastModel ?? "");
       const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
       if (values.includes(fallback)) $("#cap-model").value = fallback;
+    }
+    function renderNavigationAgents() {
+      const backendEl = $("#nav-backend");
+      if (!backendEl) return;
+      backendEl.innerHTML = (state.captureBackends || []).map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
+      const backends = [...backendEl.options].map((opt) => opt.value);
+      const selectedBackend = state.navLastBackend || configString(state.captureConfig?.backend, "codex");
+      if (backends.includes(selectedBackend)) backendEl.value = selectedBackend;
+      renderNavigationModels();
+      syncNavigationProxyMode(false);
+    }
+    function renderNavigationModels(selectedModel) {
+      const backendName = $("#nav-backend").value;
+      const models = captureModelOptions(backendName);
+      $("#nav-model").innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
+      const values = [...$("#nav-model").options].map((opt) => opt.value);
+      const requested = configString(selectedModel ?? state.navLastModel ?? "");
+      const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
+      if (values.includes(fallback)) $("#nav-model").value = fallback;
+    }
+    function syncNavigationProxyMode(useLast = true) {
+      const select = $("#nav-proxy-mode");
+      if (!select) return;
+      const remembered = typeof state.navLastProxyEnabled === "boolean";
+      const enabled = useLast && remembered ? state.navLastProxyEnabled : captureDefaultProxyEnabled($("#nav-backend").value);
+      select.value = enabled ? "on" : "off";
     }
 
     async function loadCaptureAgents() {
@@ -835,7 +1246,8 @@
         const selectedBackend = state.lastBackend || configString(state.captureConfig?.backend, "codex");
         if (backends.includes(selectedBackend)) $("#cap-backend").value = selectedBackend;
         renderCaptureModels();
-        syncCaptureProxyCheckbox(false);
+        syncCaptureProxyMode(false);
+        renderNavigationAgents();
       } catch (e) { /* selectors stay empty -> distill falls back to server default */ }
     }
 
@@ -912,7 +1324,7 @@
       if (!state.captureBackends) await loadCaptureAgents();
       if (state.lastBackend) { $("#cap-backend").value = state.lastBackend; renderCaptureModels(); }
       if (state.lastModel) $("#cap-model").value = state.lastModel;
-      syncCaptureProxyCheckbox(true);
+      syncCaptureProxyMode(true);
       $("#cap-distill-modal").hidden = false;
     };
     function closeDistillModal() { $("#cap-distill-modal").hidden = true; state.distillTarget = null; }
@@ -922,7 +1334,7 @@
       const id = state.distillTarget;
       state.lastBackend = $("#cap-backend").value;
       state.lastModel = $("#cap-model").value;
-      state.lastProxyEnabled = $("#cap-proxy-enabled").checked;
+      state.lastProxyEnabled = $("#cap-proxy-mode").value === "on";
       closeDistillModal();
       if (id) runDistill(id, state.lastBackend || null, state.lastModel || null, state.lastProxyEnabled);
     });
@@ -1029,13 +1441,14 @@
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
       }
     });
-    $("#cap-backend").addEventListener("change", () => { renderCaptureModels(); syncCaptureProxyCheckbox(false); });
+    $("#cap-backend").addEventListener("change", () => { renderCaptureModels(); syncCaptureProxyMode(false); });
 
     async function loadSettings() {
       const s = await api("/api/kb/config");
       $("#s-enabled").checked = s.enabled;
       $("#s-path").value = s.path || "";
       $("#s-gate").value = s.curation.gate || "manual";
+      $("#s-project-nav-enabled").checked = s.project_nav?.enabled !== false;
       $("#s-git-enabled").checked = s.git.enabled;
       $("#s-remote").value = s.git.remote || "";
       $("#s-branch").value = s.git.branch || "main";
@@ -1050,6 +1463,7 @@
         enabled: $("#s-enabled").checked,
         path: $("#s-path").value.trim() || null,
         curation: { gate: $("#s-gate").value },
+        project_nav: { enabled: $("#s-project-nav-enabled").checked },
         git: {
           enabled: $("#s-git-enabled").checked,
           remote: $("#s-remote").value.trim() || null,
@@ -1063,6 +1477,42 @@
       catch (e) { toast(formatText("knowledge.save_failed_with_error", { error: e.message }, "Save failed: " + e.message)); }
     });
 
+    $("#nav-workspace-select").addEventListener("change", () => { syncProjectNavCustomWorkspace(); loadProjectNavDrafts(); loadNavigation(); });
+    $("#nav-workspace-custom").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { loadProjectNavDrafts(); loadNavigation(); }
+    });
+    $("#nav-backend").addEventListener("change", () => { state.navLastBackend = $("#nav-backend").value; renderNavigationModels(); syncNavigationProxyMode(false); });
+    $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; });
+    $("#nav-proxy-mode").addEventListener("change", () => {
+      const mode = $("#nav-proxy-mode").value;
+      state.navLastProxyEnabled = mode === "on";
+    });
+    $("#nav-draft-close").addEventListener("click", closeProjectNavDraftModal);
+    $("#nav-draft-modal").addEventListener("click", (ev) => { if (ev.target.id === "nav-draft-modal") closeProjectNavDraftModal(); });
+    $("#nav-draft-accept").addEventListener("click", () => { if (state.activeNavDraft?.id) acceptProjectNavDraft(state.activeNavDraft.id); });
+    $("#nav-draft-reject").addEventListener("click", () => { if (state.activeNavDraft?.id) rejectProjectNavDraft(state.activeNavDraft.id); });
+    $("#nav-generate").addEventListener("click", async () => {
+      const payload = projectNavActionPayload();
+      if (!payload.workspace_path) {
+        toast(t("knowledge.project_nav_workspace_required", "Select a workspace first"));
+        return;
+      }
+      state.navLastBackend = payload.backend || "";
+      state.navLastModel = payload.model || "";
+      state.navLastProxyEnabled = Boolean(payload.proxy_enabled);
+      try {
+        const result = await api("/api/kb/project-nav", { method: "POST", body: JSON.stringify(payload) });
+        const message = formatText("knowledge.project_nav_generation_started", { id: result.draft_id || "-" }, "Project nav generation started: " + (result.draft_id || "-"));
+        $("#nav-result").textContent = result.project_key ? `${message} · ${result.project_key}` : message;
+        toast(message);
+        await loadProjectNavDrafts(); await loadStatus();
+      } catch (e) {
+        const message = projectNavGenerateErrorMessage(e);
+        $("#nav-result").textContent = message;
+        toast(message);
+        await loadProjectNavDrafts(); await loadNavigation();
+      }
+    });
     for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
     $("#f-refresh").addEventListener("click", loadEntries);
     for (const id of ["#f-scope", "#f-kind"]) $(id).addEventListener("change", loadEntries);
@@ -1074,6 +1524,11 @@
       renderEntries();
       renderPending();
       renderCapture();
+      renderNavigationList();
+      renderProjectNavDrafts();
+      renderProjectNavDraftModal();
+      renderProjectNavWorkspaceSelect();
+      renderNavigationAgents();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();
     });
@@ -1081,7 +1536,7 @@
       if (event.key === window.AHAI18n?.languageStorageKey) window.AHAI18n.setLanguage(event.newValue);
     });
     syncChromeText();
-    loadStatus(); showTab(state.activeTab);
+    loadProjectNavWorkspaces(); loadStatus(); showTab(state.activeTab);
   </script>
 </body>
 </html>

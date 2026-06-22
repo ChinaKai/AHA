@@ -59,6 +59,10 @@ function applyInitialTaskMemoHomeState() {
 
 applyInitialTaskMemoHomeState();
 
+function knowledgeHomeUrl() {
+  return currentRunId ? `/static/knowledge.html?run_id=${encodeURIComponent(currentRunId)}` : "/static/knowledge.html";
+}
+
 function applyInitialKnowledgeHomeState() {
   if (!initialKnowledgeHomeActive) return;
   const knowledgeHome = document.getElementById("knowledge-home");
@@ -66,7 +70,7 @@ function applyInitialKnowledgeHomeState() {
   if (!knowledgeHome || !knowledgeFrame) return;
   document.body?.classList?.add("knowledge-home");
   knowledgeHome.hidden = false;
-  if (!knowledgeFrame.getAttribute("src")) knowledgeFrame.setAttribute("src", "/static/knowledge.html");
+  if (!knowledgeFrame.getAttribute("src")) knowledgeFrame.setAttribute("src", knowledgeHomeUrl());
   document.getElementById("open-task-view")?.setAttribute("aria-pressed", "false");
   document.getElementById("open-task-memos")?.setAttribute("aria-pressed", "false");
   document.getElementById("open-knowledge-base")?.setAttribute("aria-pressed", "true");

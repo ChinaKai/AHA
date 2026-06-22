@@ -20,6 +20,7 @@ from aha_cli.store.knowledge import (
     NAVIGATION_SLUG,
     iter_all_entries,
     knowledge_config,
+    knowledge_root,
     project_key_aliases,
 )
 
@@ -54,6 +55,27 @@ def _score(entry: dict, terms: list[str]) -> int:
     return sum(1 for term in terms if term in haystack)
 
 
+def _is_navigation_entry(entry: dict) -> bool:
+    return entry.get("meta", {}).get("type") == "navigation"
+
+
+def _is_navigation_index(entry: dict) -> bool:
+    meta = entry.get("meta", {})
+    return meta.get("type") == "navigation" and meta.get("slug") == NAVIGATION_SLUG
+
+
+def _is_navigation_detail(entry: dict) -> bool:
+    meta = entry.get("meta", {})
+    slug = str(meta.get("slug") or "")
+    return meta.get("type") == "navigation" and slug != NAVIGATION_SLUG
+
+
+def _project_nav_enabled(config: dict | None) -> bool:
+    cfg = knowledge_config(config)
+    project_nav = cfg.get("project_nav") if isinstance(cfg.get("project_nav"), dict) else {}
+    return bool(project_nav.get("enabled", True))
+
+
 def retrieve_for_task(
     root: Path,
     config: dict | None,
@@ -62,6 +84,7 @@ def retrieve_for_task(
     project_keys: Sequence[str] | None = None,
     terms: list[str],
     max_entries: int = 5,
+    include_navigation_details: bool = True,
 ) -> list[dict]:
     """Return the most relevant entries for a project, ranked by term overlap.
 
@@ -71,11 +94,14 @@ def retrieve_for_task(
     """
     keys = [key for key in [project_key, *(project_keys or [])] if key]
     project_key_set = set(keys)
+    include_project_nav = _project_nav_enabled(config)
     project_entries: list[dict] = []
     general_entries: list[dict] = []
     for entry in iter_all_entries(root, config):
         meta = entry.get("meta", {})
         if meta.get("status") == "deprecated":
+            continue
+        if meta.get("type") == "navigation" and not include_project_nav:
             continue
         if meta.get("scope") == "project" and meta.get("project_key") in project_key_set:
             project_entries.append(entry)
@@ -89,64 +115,157 @@ def retrieve_for_task(
         return ranked
 
     # The navigation index is always relevant: it routes the agent to module
-    # docs. Detailed navigation docs (modules/flows) are ranked by relevance and
-    # are never included by the recency fallback, otherwise large projects would
-    # drift back toward reading unrelated module docs.
-    def is_nav_index(entry: dict) -> bool:
-        meta = entry.get("meta", {})
-        return meta.get("type") == "navigation" and meta.get("slug") == NAVIGATION_SLUG
+    # docs. In reference mode, navigation detail docs stay on disk and are found
+    # by reading the index, so they should not consume prompt ref slots.
+    nav_entries = [e for _, _, e in rank([e for e in project_entries if _is_navigation_index(e)])]
+    rest_project = [e for e in project_entries if not _is_navigation_index(e)]
+    rankable_project = [
+        e for e in rest_project
+        if include_navigation_details or not _is_navigation_detail(e)
+    ]
+    rankable_general = [
+        e for e in general_entries
+        if include_navigation_details or not _is_navigation_entry(e)
+    ]
 
-    def is_nav_detail(entry: dict) -> bool:
-        meta = entry.get("meta", {})
-        slug = str(meta.get("slug") or "")
-        return meta.get("type") == "navigation" and slug != NAVIGATION_SLUG
-
-    nav_entries = [e for _, _, e in rank([e for e in project_entries if is_nav_index(e)])]
-    rest_project = [e for e in project_entries if not is_nav_index(e)]
-
-    ordered = [e for score, _, e in rank(rest_project) if score > 0]
-    ordered += [e for score, _, e in rank(general_entries) if score > 0]
+    ordered = [e for score, _, e in rank(rankable_project) if score > 0]
+    ordered += [e for score, _, e in rank(rankable_general) if score > 0]
     if not ordered:
         # Fallback: non-navigation project knowledge by recency. Navigation
         # details remain on-demand: read them only when the task matches them.
-        ordered = [e for _, _, e in rank([e for e in rest_project if not is_nav_detail(e)])]
+        ordered = [e for _, _, e in rank([e for e in rankable_project if not _is_navigation_detail(e)])]
     ordered = nav_entries + [e for e in ordered if e not in nav_entries]
     return ordered[: max(0, max_entries)]
 
 
-def format_injection(entries: list[dict], *, max_chars: int = 4000) -> str:
-    """Render the injection block under a HARD total character budget.
-
-    The budget is enforced even for the first entry: its excerpt is clipped to
-    the remaining room rather than allowed to overflow.
-    """
-    if not entries:
+def _clip_to_budget(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
         return ""
+    if len(text) <= max_chars:
+        return text.strip()
+    if max_chars <= 2:
+        return text[:max_chars].strip()
+    return (text[: max_chars - 2].rstrip() + " …").strip()
+
+
+def _entry_kind(meta: dict) -> str:
+    return str(meta.get("type") or "entry")
+
+
+def _entry_path(entry: dict, kb_root: Path | None) -> str:
+    raw = str(entry.get("path") or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    if kb_root is not None:
+        try:
+            return path.relative_to(kb_root).as_posix()
+        except ValueError:
+            pass
+    return raw
+
+
+def _entry_tags(meta: dict) -> str:
+    tags = meta.get("tags") or []
+    if not isinstance(tags, list):
+        return ""
+    return ", ".join(str(tag).strip() for tag in tags if str(tag).strip())
+
+
+def _entry_summary(entry: dict, *, summary_chars: int, include_navigation_body: bool = False) -> str:
+    meta = entry.get("meta", {})
+    kind = _entry_kind(meta)
+    if kind == "navigation" and not include_navigation_body:
+        return ""
+    summary = str(meta.get("summary") or meta.get("description") or "").strip()
+    if not summary:
+        summary = " ".join((entry.get("body", "") or "").split())
+    return _clip_to_budget(summary, max(0, summary_chars))
+
+
+def _navigation_header(entries: list[dict]) -> list[str]:
+    if not any(_is_navigation_entry(e) for e in entries):
+        return []
+    return [
+        "⚑ 本项目已有项目导航（navigation/index 置顶）：先读入口，再按任务命中逐层读取少量 modules/* 或 flows/*，避免全局通读；"
+        "收尾时若改动影响模块职责/入口/架构/盲区，请只用 kind:\"navigation\" 回写受影响文档；新子文档缺直接父入口时补最小父入口链接。"
+    ]
+
+
+def _navigation_reference_lines(entries: list[dict], kb_root: Path | None) -> list[str]:
+    nav_index = next((entry for entry in entries if _is_navigation_index(entry)), None)
+    if nav_index is None:
+        return []
+    path = _entry_path(nav_index, kb_root)
+    lines = [
+        "Project nav rule: 先读 navigation/index 入口，再按入口链接定位相关 module/flow；默认不展开 navigation detail。",
+    ]
+    if path:
+        lines.append(f"Project nav path: {path}")
+    return lines
+
+
+def _format_reference_injection(
+    entries: list[dict],
+    *,
+    max_chars: int,
+    kb_root: Path | None = None,
+    project_key: str | None = None,
+    summary_chars: int = 120,
+) -> str:
     header = [
         "项目已知经验 (knowledge base):",
         "开工前先参考以下从过往任务沉淀的知识；如与现状冲突以代码为准。",
+        "默认只注入引用和极短摘要；需要完整正文时按 path 主动读取对应知识文件。",
     ]
-    # When a project navigation index is present, give the agent the read→locate
-    # contract up front: use the index to jump to the right module docs instead
-    # of reading the whole repo, and refresh navigation docs on structural
-    # changes at finalize.
-    if any(e.get("meta", {}).get("type") == "navigation" for e in entries):
-        header.append(
-            "⚑ 本项目已有项目导航（navigation/index 置顶）：先读入口，再按任务命中逐层读取少量 modules/* 或 flows/*，避免全局通读；"
-            "收尾时若改动影响模块职责/入口/架构/盲区，请只用 kind:\"navigation\" 回写受影响文档；新子文档缺直接父入口时补最小父入口链接。"
-        )
+    if kb_root is not None:
+        header.append(f"KB root: {kb_root}")
+    if project_key:
+        header.append(f"Project key: {project_key}")
+    header.extend(_navigation_reference_lines(entries, kb_root))
+    lines = header + [""]
+    for entry in entries:
+        if _is_navigation_entry(entry):
+            continue
+        meta = entry.get("meta", {})
+        kind = _entry_kind(meta)
+        title = str(meta.get("title") or "(untitled)")
+        lines.append(f"- [{kind}] {title}")
+        path = _entry_path(entry, kb_root)
+        if path:
+            lines.append(f"  path: {path}")
+        slug = str(meta.get("slug") or "").strip()
+        if slug:
+            lines.append(f"  slug: {slug}")
+        tags = _entry_tags(meta)
+        if tags:
+            lines.append(f"  tags: {tags}")
+        updated_at = str(meta.get("updated_at") or "").strip()
+        if updated_at:
+            lines.append(f"  updated_at: {updated_at}")
+        summary = _entry_summary(entry, summary_chars=summary_chars)
+        if summary:
+            lines.append(f"  summary: {summary}")
+    return _clip_to_budget("\n".join(lines), max_chars)
+
+
+def _format_excerpt_injection(entries: list[dict], *, max_chars: int) -> str:
+    """Legacy formatter: include bounded body excerpts in the prompt."""
+    header = [
+        "项目已知经验 (knowledge base):",
+        "开工前先参考以下从过往任务沉淀的知识；如与现状冲突以代码为准。",
+        *_navigation_header(entries),
+    ]
     out = "\n".join(header + [""])
     for entry in entries:
         meta = entry.get("meta", {})
-        kind = meta.get("type", "entry")
+        kind = _entry_kind(meta)
         title = meta.get("title", "(untitled)")
         head_line = f"\n- [{kind}] {title}"
         if len(head_line) > max_chars - len(out):
             break  # no room for even this entry's title line
         block = head_line
         excerpt = " ".join((entry.get("body", "") or "").split())
-        # Project navigation carries the most actionable orientation, so let it
-        # keep a fuller excerpt than ordinary entries (still under the budget).
         per_entry_cap = 1200 if kind == "navigation" else 360
         if len(excerpt) > per_entry_cap:
             excerpt = excerpt[:per_entry_cap].rstrip() + " …"
@@ -157,7 +276,40 @@ def format_injection(entries: list[dict], *, max_chars: int = 4000) -> str:
                     excerpt = excerpt[: room - 2].rstrip() + " …"
                 block += "\n  " + excerpt
         out += block
-    return out.strip()
+    return _clip_to_budget(out, max_chars)
+
+
+def format_injection(
+    entries: list[dict],
+    *,
+    max_chars: int = 4000,
+    mode: str = "references",
+    kb_root: Path | None = None,
+    project_key: str | None = None,
+    summary_chars: int = 120,
+) -> str:
+    """Render the injection block under a HARD total character budget.
+
+    The default mode is reference-first: paths, metadata, and tiny summaries are
+    injected, while complete bodies remain on disk for the agent to read on
+    demand. ``mode="excerpts"`` preserves the previous bounded body-excerpt
+    behavior for compatibility.
+    """
+    if not entries:
+        return ""
+    if _is_excerpt_mode(mode):
+        return _format_excerpt_injection(entries, max_chars=max_chars)
+    return _format_reference_injection(
+        entries,
+        max_chars=max_chars,
+        kb_root=kb_root,
+        project_key=project_key,
+        summary_chars=summary_chars,
+    )
+
+
+def _is_excerpt_mode(mode: str) -> bool:
+    return (mode or "references").strip().lower() in {"excerpt", "excerpts", "body"}
 
 
 def knowledge_context_for_task(root: Path, run_id: str, task: dict) -> str:
@@ -188,9 +340,26 @@ def knowledge_context_for_task(root: Path, run_id: str, task: dict) -> str:
         retrieval = cfg.get("retrieval", {}) if isinstance(cfg.get("retrieval"), dict) else {}
         max_entries = int(retrieval.get("max_entries", 5) or 5)
         max_chars = int(retrieval.get("max_chars", 4000) or 4000)
+        inject_mode = str(retrieval.get("inject_mode") or retrieval.get("mode") or "references")
+        summary_chars = int(retrieval.get("summary_chars", 120) or 120)
         terms = _terms(task.get("title", ""), task.get("description", ""))
-        entries = retrieve_for_task(root, config, project_key=key, project_keys=project_keys, terms=terms, max_entries=max_entries)
-        return format_injection(entries, max_chars=max_chars)
+        entries = retrieve_for_task(
+            root,
+            config,
+            project_key=key,
+            project_keys=project_keys,
+            terms=terms,
+            max_entries=max_entries,
+            include_navigation_details=_is_excerpt_mode(inject_mode),
+        )
+        return format_injection(
+            entries,
+            max_chars=max_chars,
+            mode=inject_mode,
+            kb_root=knowledge_root(root, config),
+            project_key=key,
+            summary_chars=summary_chars,
+        )
     except (Exception, SystemExit):  # injection must never break prompt assembly
         return ""
 

@@ -25,7 +25,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.knowledge_distill import normalize_sidecar_candidates
+from aha_cli.services.knowledge_distill import (
+    filter_project_nav_candidates,
+    normalize_sidecar_candidates,
+    navigation_distill_summary,
+    ensure_navigation_parent_entries,
+)
 from aha_cli.services.proxy import backend_proxy_config, normalize_proxy_value
 from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, remove_pending
 from aha_cli.store.knowledge_capture import create_distill_log, read_note, update_distill_log, update_note
@@ -76,8 +81,10 @@ def build_capture_prompt(note: dict) -> str:
         "clearly cross-project (`general`) or tied to a specific project "
         "(`project`, only with a project_key). Personal/general items carry no "
         "project_key. Use `wiki` only for non-project tutorials/reference docs; "
-        "project-specific structure, module responsibilities, entry points, or "
-        "constraints belong in `navigation`.\n\n"
+        "project-specific structure, module responsibilities, entry points, key "
+        "source files, reusable diagnostic paths, stale/missing nav links, or "
+        "constraints belong in `navigation`. Read-only diagnostics count when "
+        "they reveal where future agents should start.\n\n"
         "Reply with a short human summary, then exactly one machine-readable block:\n"
         "`<aha_knowledge_candidates>[...]</aha_knowledge_candidates>`.\n"
         "Each candidate: "
@@ -90,6 +97,8 @@ def build_capture_prompt(note: dict) -> str:
         "`modules/<module-slug>` / `modules/<module>/<child-slug>` for module docs, "
         "or `flows/<flow-slug>` / `flows/<flow>/<child-slug>` for flow docs. Each nav doc owns one link layer only; "
         "AHA bootstraps a missing root index from the workspace when possible, and otherwise adds a minimal direct-parent link candidate when a child doc has no reachable parent entry.\n"
+        "Prefer fields such as `responsibility`, `related_files`, `entry_points`, "
+        "`diagnostic_paths`, and `navigation_reason` for project navigation deltas.\n"
         "If nothing is reusable, use `<aha_knowledge_candidates>[]</aha_knowledge_candidates>`.\n\n"
         "--- RAW NOTE ---\n"
         f"{text}\n"
@@ -264,6 +273,8 @@ def distill_note(
         # (a reverse lookup via note.candidate_ids remains as a compat path).
         c["source_note_id"] = note_id
         normalized.append(c)
+    normalized, skipped_navigation = filter_project_nav_candidates(root, config, normalized, {"source_type": "capture_note"})
+    normalized = ensure_navigation_parent_entries(root, config, normalized, {"source": source})
 
     init_knowledge_base(root, config)
     # Re-run replacement: drop candidates this note enqueued previously.
@@ -271,9 +282,17 @@ def distill_note(
         remove_pending(root, config, old_id)
 
     enqueued_ids: list[str] = []
+    enqueued_paths: list[str] = []
     for cand in normalized:
         path = enqueue_candidate(root, config, cand)
+        enqueued_paths.append(str(path))
         enqueued_ids.append(Path(path).stem)
+    navigation = navigation_distill_summary(
+        normalized,
+        gate="manual",
+        enqueued=enqueued_paths,
+        skipped=skipped_navigation,
+    )
 
     update_note(root, config, note_id, status="distilled", candidate_ids=enqueued_ids, last_error="")
     update_distill_log(
@@ -282,6 +301,7 @@ def distill_note(
         reply=reply or "",
         raw_candidates=raw_candidates,
         candidate_ids=enqueued_ids,
+        navigation=navigation,
         finished_at=utc_now(),
     )
     return {
@@ -290,6 +310,7 @@ def distill_note(
         "candidates": len(enqueued_ids),
         "candidate_ids": enqueued_ids,
         "log_id": log_id,
+        "navigation": navigation,
     }
 
 

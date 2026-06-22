@@ -317,6 +317,154 @@ def _navigation_parent_slug(slug: str) -> str | None:
     return NAVIGATION_SLUG
 
 
+def _project_nav_config(config: dict | None) -> dict:
+    cfg = knowledge_config(config)
+    nav = cfg.get("project_nav") if isinstance(cfg.get("project_nav"), dict) else {}
+    return {
+        "enabled": bool(nav.get("enabled", True)),
+        "maintain_during_task": bool(nav.get("maintain_during_task", True)),
+    }
+
+
+def project_nav_enabled(config: dict | None) -> bool:
+    """Whether project navigation candidates should be produced/reviewed."""
+    nav = _project_nav_config(config)
+    return bool(nav.get("enabled", True))
+
+
+def _is_navigation_candidate(candidate: dict) -> bool:
+    return str(candidate.get("kind") or "").strip().lower() == "navigation"
+
+
+def _navigation_candidate_brief(candidate: dict) -> dict:
+    meta = candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+    item = {
+        "title": candidate.get("title"),
+        "slug": candidate.get("slug"),
+        "scope": candidate.get("scope", "project"),
+        "project_key": candidate.get("project_key"),
+        "navigation_role": meta.get("navigation_role"),
+        "update_mode": meta.get("update_mode"),
+        "action": candidate.get("action"),
+        "updates_entry_id": candidate.get("updates_entry_id"),
+    }
+    related_files = meta.get("related_files") or candidate.get("related_files")
+    if related_files:
+        item["related_files"] = related_files
+    reason = meta.get("navigation_reason")
+    if reason:
+        item["navigation_reason"] = reason
+    return {key: value for key, value in item.items() if value not in (None, "", [])}
+
+
+def navigation_distill_summary(
+    candidates: list[dict],
+    *,
+    gate: str | None = None,
+    enqueued: list[str] | None = None,
+    written: list[str] | None = None,
+    skipped: dict | None = None,
+) -> dict:
+    """Compact, event/log-friendly summary for navigation deltas."""
+    items: list[dict] = []
+    enqueued = enqueued or []
+    written = written or []
+    for index, candidate in enumerate(candidates or []):
+        if not _is_navigation_candidate(candidate):
+            continue
+        item = _navigation_candidate_brief(candidate)
+        if index < len(enqueued):
+            path = Path(enqueued[index])
+            item["candidate_id"] = path.stem
+            item["pending_path"] = str(path)
+        if index < len(written):
+            item["path"] = written[index]
+        items.append(item)
+    summary = {
+        "candidates": len(items),
+        "slugs": [str(item.get("slug")) for item in items if item.get("slug")],
+        "items": items,
+    }
+    if gate:
+        summary["gate"] = gate
+    if skipped:
+        summary["skipped"] = skipped
+    return summary
+
+
+def filter_project_nav_candidates(
+    root: Path | None,
+    config: dict | None,
+    candidates: list[dict],
+    context: dict | None = None,
+    *,
+    allow_bootstrap: bool = False,
+) -> tuple[list[dict], dict | None]:
+    if project_nav_enabled(config):
+        if allow_bootstrap:
+            return candidates, None
+        skipped_missing_index: list[dict] = []
+        kept: list[dict] = []
+        for candidate in candidates:
+            if not _is_navigation_candidate(candidate):
+                kept.append(candidate)
+                continue
+            project_key_value = candidate.get("project_key") or (context or {}).get("project_key")
+            has_index = bool(
+                root is not None
+                and project_key_value
+                and entry_path_for(root, config, "project", "navigation", str(project_key_value), NAVIGATION_SLUG)
+            )
+            if has_index:
+                kept.append(candidate)
+            else:
+                skipped_missing_index.append(candidate)
+        if not skipped_missing_index:
+            return candidates, None
+        return kept, {
+            "reason": "project navigation index missing",
+            "candidates": len(skipped_missing_index),
+            "slugs": [str(candidate.get("slug") or "") for candidate in skipped_missing_index if candidate.get("slug")],
+        }
+
+    skipped = [candidate for candidate in candidates if _is_navigation_candidate(candidate)]
+    if not skipped:
+        return candidates, None
+    kept = [candidate for candidate in candidates if not _is_navigation_candidate(candidate)]
+    return kept, {
+        "reason": "project navigation disabled",
+        "candidates": len(skipped),
+        "slugs": [str(candidate.get("slug") or "") for candidate in skipped if candidate.get("slug")],
+    }
+
+
+def navigation_delta_event_payload(
+    result: dict | None,
+    *,
+    source_type: str,
+    task_id: str | None = None,
+    memo_id: str | None = None,
+    note_id: str | None = None,
+) -> dict | None:
+    if not isinstance(result, dict):
+        return None
+    navigation = result.get("navigation") if isinstance(result.get("navigation"), dict) else {}
+    if not navigation or (not navigation.get("candidates") and not navigation.get("skipped")):
+        return None
+    payload = {
+        "source_type": source_type,
+        "navigation": navigation,
+        "gate": result.get("gate"),
+    }
+    if task_id:
+        payload["task_id"] = task_id
+    if memo_id:
+        payload["memo_id"] = memo_id
+    if note_id:
+        payload["note_id"] = note_id
+    return payload
+
+
 def _navigation_link_label(slug: str, fallback: str = "") -> str:
     if fallback:
         return fallback
@@ -338,7 +486,7 @@ def _navigation_parent_title(parent_slug: str, project_key_value: str | None) ->
 
 def _navigation_section_for(parent_slug: str, child_slug: str) -> str:
     if parent_slug == NAVIGATION_SLUG:
-        return "## 入口 / 关键流程" if child_slug.startswith(f"{NAVIGATION_FLOWS_DIR}/") else "## 模块索引"
+        return "### 入口 / 关键流程" if child_slug.startswith(f"{NAVIGATION_FLOWS_DIR}/") else "### 模块索引"
     return "## 下级入口"
 
 
@@ -355,7 +503,7 @@ def _append_navigation_link(body: str, *, section: str, label: str, href: str) -
 
     insert_at = len(lines)
     for idx in range(section_index + 1, len(lines)):
-        if lines[idx].startswith("## "):
+        if lines[idx].lstrip().startswith("#"):
             insert_at = idx
             break
     while insert_at > section_index + 1 and not lines[insert_at - 1].strip():
@@ -369,27 +517,23 @@ def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: 
     label = _navigation_link_label(child_slug, child_title)
     if parent_slug == NAVIGATION_SLUG:
         section = _navigation_section_for(parent_slug, child_slug)
-        module_lines = f"- [{label}]({href})" if section == "## 模块索引" else "-"
-        flow_lines = f"- [{label}]({href})" if section == "## 入口 / 关键流程" else "-"
+        module_lines = f"- [{label}]({href})" if section == "### 模块索引" else "-"
+        flow_lines = f"- [{label}]({href})" if section == "### 入口 / 关键流程" else "-"
         return "\n".join([
-            "## 项目定位",
-            "-",
+            "## Project README",
+            "- 待补充：项目目标、技术栈、运行/测试方式、代码组织约定和 agent 开工前注意事项。",
             "",
             "## 使用规则",
             "- 本入口只列第一层模块/流程；更深层入口由对应父文档维护。",
             "- 新增子文档时只补直接父入口，避免全量展开。",
             "",
-            "## 架构概览",
-            "-",
+            "## Project Map",
             "",
-            "## 模块索引",
+            "### 模块索引",
             module_lines,
             "",
-            "## 入口 / 关键流程",
+            "### 入口 / 关键流程",
             flow_lines,
-            "",
-            "## 盲区 / 待补充",
-            "-",
         ]).strip() + "\n"
     return "\n".join([
         f"# {_navigation_link_label(parent_slug)}",
@@ -405,29 +549,13 @@ def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: 
         "",
         "## 修改注意",
         "- 本文只维护直接子入口；更深层入口由对应子文档维护。",
-        "",
-        "## 相关测试",
-        "-",
-        "",
-        "## 盲区 / 待补充",
-        "-",
     ]).strip() + "\n"
 
 
 def _bootstrap_navigation_index_body(workspace_path: str | None, child_slug: str, child_title: str) -> str:
-    if workspace_path:
-        try:
-            from aha_cli.services.knowledge_navigation import render_navigation_body, scan_workspace
-
-            body = render_navigation_body(scan_workspace(workspace_path))
-            return _append_navigation_link(
-                body,
-                section=_navigation_section_for(NAVIGATION_SLUG, child_slug),
-                label=_navigation_link_label(child_slug, child_title),
-                href=_navigation_child_href(child_slug),
-            )
-        except Exception:  # noqa: BLE001 - missing/unreadable workspace falls back to a skeleton.
-            pass
+    # Parent backfill is not the same as full project bootstrap: only link the
+    # direct child in the current candidate batch, otherwise scanned-but-not-
+    # queued modules become dead links in navigation/index.md.
     return _new_navigation_parent_body(NAVIGATION_SLUG, child_slug, child_title)
 
 
@@ -553,8 +681,27 @@ def _ensure_navigation_parent_entries(
     return ordered
 
 
+def ensure_navigation_parent_entries(
+    root: Path,
+    config: dict | None,
+    candidates: list[dict],
+    context: dict | None = None,
+) -> list[dict]:
+    """Public wrapper used by non-final distill paths such as capture notes."""
+    return _ensure_navigation_parent_entries(root, config, candidates, context)
+
+
 def _sidecar_navigation_body(candidate: dict) -> str:
     slug = _navigation_slug(candidate)
+    diagnostic_paths = "\n".join(
+        f"- {item}"
+        for item in _as_list(
+            candidate.get("diagnostic_paths")
+            or candidate.get("troubleshooting")
+            or candidate.get("debug_paths")
+            or candidate.get("diagnostics")
+        )
+    )
     if slug.startswith(f"{NAVIGATION_MODULES_DIR}/"):
         module = str(candidate.get("module") or candidate.get("title") or "").strip()
         role = str(candidate.get("role") or candidate.get("responsibility") or candidate.get("summary") or "").strip()
@@ -574,6 +721,9 @@ def _sidecar_navigation_body(candidate: dict) -> str:
             "## 入口 / 调用方",
             entry_points or "-",
             "",
+            "## 常用排查路径",
+            diagnostic_paths or "-",
+            "",
             "## 修改注意",
             caveats or "- 修改职责、入口、关键文件或约束后同步更新本文。",
             "",
@@ -589,7 +739,13 @@ def _sidecar_navigation_body(candidate: dict) -> str:
         ]
         return "\n".join(parts).strip() + "\n"
 
-    overview = str(candidate.get("overview") or candidate.get("summary") or "").strip()
+    project_readme = str(
+        candidate.get("project_readme")
+        or candidate.get("readme")
+        or candidate.get("overview")
+        or candidate.get("summary")
+        or ""
+    ).strip()
     architecture = str(candidate.get("architecture") or "").strip()
     modules = candidate.get("modules")
     module_lines: list[str] = []
@@ -599,8 +755,7 @@ def _sidecar_navigation_body(candidate: dict) -> str:
                 name = str(mod.get("name") or mod.get("module") or "").strip()
                 role = str(mod.get("role") or mod.get("desc") or "").strip()
                 files = ", ".join(_as_list(mod.get("files") or mod.get("entry")))
-                doc = f"{NAVIGATION_MODULES_DIR}/{slugify(name or '?')}.md"
-                line = f"- [{name or '?'}]({doc})"
+                line = f"- {name or '?'}"
                 if role:
                     line += f" — {role}"
                 if files:
@@ -610,18 +765,23 @@ def _sidecar_navigation_body(candidate: dict) -> str:
                 module_lines.append(f"- {str(mod).strip()}")
     entry_points = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("entry_points") or candidate.get("entries")))
     gaps = str(candidate.get("gaps") or candidate.get("todo") or "").strip()
+    readme_lines = [project_readme or "-"]
+    if architecture:
+        readme_lines.extend(["", "### 架构 / 组织", architecture])
     parts = [
-        "## 项目定位",
-        overview or "-",
+        "## Project README",
+        "\n".join(readme_lines),
         "",
-        "## 架构概览",
-        architecture or "-",
+        "## Project Map",
         "",
-        "## 模块索引",
+        "### 模块索引",
         "\n".join(module_lines) if module_lines else "-",
         "",
-        "## 入口 / 关键流程",
+        "### 入口 / 关键流程",
         entry_points or "-",
+        "",
+        "## 常用排查路径",
+        diagnostic_paths or "-",
         "",
         "## 盲区 / 待补充",
         gaps or "-",
@@ -743,6 +903,17 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
             for tag in ("navigation", meta["navigation_role"]):
                 if tag not in meta["tags"]:
                     meta["tags"].append(tag)
+            navigation_reason = str(raw.get("navigation_reason") or raw.get("reason") or "").strip()
+            if navigation_reason:
+                meta["navigation_reason"] = navigation_reason
+            diagnostic_meta = _as_list(
+                raw.get("diagnostic_paths")
+                or raw.get("troubleshooting")
+                or raw.get("debug_paths")
+                or raw.get("diagnostics")
+            )
+            if diagnostic_meta:
+                meta["diagnostic_paths"] = diagnostic_meta
         invalid_when = str(raw.get("invalid_when") or "").strip()
         if invalid_when:
             meta["invalid_when"] = invalid_when
@@ -825,14 +996,39 @@ def distill_and_enqueue(
     produce = distiller or heuristic_solution_candidate
     produced = candidates if candidates is not None else produce(context)
     candidates = [c for c in (produced or []) if c.get("title")]
+    candidates, skipped_navigation = filter_project_nav_candidates(
+        root,
+        config,
+        candidates,
+        context,
+        allow_bootstrap=bool((context or {}).get("allow_navigation_bootstrap")),
+    )
     if not candidates:
-        return {"ok": True, "candidates": 0, "gate": gate}
+        result = {"ok": True, "candidates": 0, "gate": gate}
+        if skipped_navigation:
+            result["navigation"] = navigation_distill_summary([], gate=gate, skipped=skipped_navigation)
+        return result
 
     # Ensure the KB skeleton (index, README, and the .gitignore that excludes
     # .pending/) exists before writing anything — including the first time this
     # is triggered by finalize without a prior `aha kb init`.
     init_knowledge_base(root, config)
     candidates = _ensure_navigation_parent_entries(root, config, candidates, context)
+    has_navigation_candidates = any(_is_navigation_candidate(candidate) for candidate in candidates)
+    from aha_cli.services.knowledge_navigation import validate_navigation_candidates
+
+    navigation_validation = validate_navigation_candidates(root, config, candidates)
+    if not navigation_validation["ok"]:
+        navigation = navigation_distill_summary(candidates, gate=gate, skipped=skipped_navigation)
+        navigation["validation"] = navigation_validation
+        return {
+            "ok": False,
+            "error": "navigation validation failed",
+            "gate": gate,
+            "candidates": 0,
+            "navigation": navigation,
+            "validation": navigation_validation,
+        }
 
     if gate == "auto":
         written = []
@@ -849,7 +1045,18 @@ def distill_and_enqueue(
                 slug=cand.get("slug"),
             )
             written.append(str(path))
-        result = {"ok": True, "gate": "auto", "written": written, "candidates": len(written)}
+        result = {
+            "ok": True,
+            "gate": "auto",
+            "written": written,
+            "candidates": len(written),
+        }
+        if has_navigation_candidates or skipped_navigation:
+            result["navigation"] = navigation_distill_summary(
+                candidates, gate="auto", written=written, skipped=skipped_navigation
+            )
+            result["navigation"]["validation"] = navigation_validation
+            result["validation"] = navigation_validation
         # Auto-commit (and optionally push) the freshly written entries.
         from aha_cli.services.knowledge_git import auto_commit_after_change
 
@@ -860,7 +1067,19 @@ def distill_and_enqueue(
 
     # Default: manual gate -> queue for review, never touches the tracked tree.
     enqueued = [str(enqueue_candidate(root, config, cand)) for cand in candidates]
-    return {"ok": True, "gate": "manual", "enqueued": enqueued, "candidates": len(enqueued)}
+    result = {
+        "ok": True,
+        "gate": "manual",
+        "enqueued": enqueued,
+        "candidates": len(enqueued),
+    }
+    if has_navigation_candidates or skipped_navigation:
+        result["navigation"] = navigation_distill_summary(
+            candidates, gate="manual", enqueued=enqueued, skipped=skipped_navigation
+        )
+        result["navigation"]["validation"] = navigation_validation
+        result["validation"] = navigation_validation
+    return result
 
 
 def distill_after_finalize(

@@ -85,6 +85,24 @@ def test_retrieve_skips_deprecated_entries(tmp_path: Path):
     assert [hit["meta"]["title"] for hit in hits] == ["Current build fix"]
 
 
+def test_retrieve_respects_project_nav_enabled(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg()
+    init_knowledge_base(root, cfg)
+    write_entry(root, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+                title="项目导航", body="## 模块索引\n- [web](modules/web.md)", meta={}, slug="index")
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="Web fix", body="HTTP route fix", meta={})
+
+    hits = retrieve_for_task(root, cfg, project_key="git-abc", terms=["web"], max_entries=5)
+    assert any(hit["meta"]["type"] == "navigation" for hit in hits)
+
+    cfg["knowledge"]["project_nav"]["enabled"] = False
+    hits = retrieve_for_task(root, cfg, project_key="git-abc", terms=["web"], max_entries=5)
+    assert all(hit["meta"]["type"] != "navigation" for hit in hits)
+    assert [hit["meta"]["title"] for hit in hits] == ["Web fix"]
+
+
 def test_format_injection_bounds_chars(tmp_path: Path):
     entries = [
         {"meta": {"title": f"T{i}", "type": "solution"}, "body": "x" * 500}
@@ -95,6 +113,94 @@ def test_format_injection_bounds_chars(tmp_path: Path):
     assert len(out) <= 600  # hard budget
 
 
+def test_format_injection_defaults_to_reference_mode(tmp_path: Path):
+    kb_root = tmp_path / "knowledge"
+    entries = [
+        {
+            "meta": {
+                "title": "项目导航",
+                "type": "navigation",
+                "slug": "index",
+                "tags": ["navigation"],
+                "updated_at": "2026-06-01T00:00:00+00:00",
+            },
+            "body": "NAV_BODY_SHOULD_NOT_APPEAR modules and flows",
+            "path": str(kb_root / "projects" / "git-abc" / "navigation" / "index.md"),
+        },
+        {
+            "meta": {"title": "Avoid stale lock", "type": "solution", "slug": "avoid-stale-lock", "tags": ["startup"]},
+            "body": "short summary start. FULL_BODY_SHOULD_NOT_APPEAR " * 20,
+            "path": str(kb_root / "projects" / "git-abc" / "solutions" / "avoid-stale-lock.md"),
+        },
+    ]
+
+    out = format_injection(entries, kb_root=kb_root, project_key="git-abc", summary_chars=24)
+
+    assert "KB root:" in out
+    assert "Project key: git-abc" in out
+    assert "Project nav path: projects/git-abc/navigation/index.md" in out
+    assert "path: projects/git-abc/solutions/avoid-stale-lock.md" in out
+    assert "tags: startup" in out
+    assert "summary: short summary start." in out
+    assert "[navigation]" not in out
+    assert "slug: index" not in out
+    assert "tags: navigation" not in out
+    assert "2026-06-01" not in out
+    assert "NAV_BODY_SHOULD_NOT_APPEAR" not in out
+    assert "FULL_BODY_SHOULD_NOT_APPEAR" not in out
+
+
+def test_reference_mode_only_injects_navigation_index_path_for_large_nav(tmp_path: Path):
+    kb_root = tmp_path / "knowledge"
+    entries = [
+        {
+            "meta": {"title": "项目导航", "type": "navigation", "slug": "index", "tags": ["navigation"]},
+            "body": "## 模块索引\n- [store](modules/store.md)",
+            "path": str(kb_root / "projects" / "git-abc" / "navigation" / "index.md"),
+        }
+    ]
+    entries.extend(
+        {
+            "meta": {"title": f"module {idx}", "type": "navigation", "slug": f"modules/module-{idx}", "tags": ["module"]},
+            "body": f"NAV_DETAIL_BODY_{idx} " * 80,
+            "path": str(kb_root / "projects" / "git-abc" / "navigation" / "modules" / f"module-{idx}.md"),
+        }
+        for idx in range(20)
+    )
+    entries.append(
+        {
+            "meta": {"title": "Useful fix", "type": "solution", "slug": "useful-fix", "tags": ["build"]},
+            "body": "check build cache before retrying",
+            "path": str(kb_root / "projects" / "git-abc" / "solutions" / "useful-fix.md"),
+        }
+    )
+
+    out = format_injection(entries, kb_root=kb_root, project_key="git-abc", max_chars=1200)
+
+    assert "Project nav path: projects/git-abc/navigation/index.md" in out
+    assert "Project nav rule:" in out
+    assert "Useful fix" in out
+    assert "path: projects/git-abc/solutions/useful-fix.md" in out
+    assert "module 0" not in out
+    assert "modules/module-0.md" not in out
+    assert "NAV_DETAIL_BODY_0" not in out
+    assert "## 模块索引" not in out
+    assert len(out) < 1200
+
+
+def test_format_injection_excerpts_mode_preserves_legacy_body_snippets():
+    entries = [
+        {"meta": {"title": "项目导航", "type": "navigation", "slug": "index"}, "body": "## 模块索引\n- [store](modules/store.md)"},
+        {"meta": {"title": "Fix", "type": "solution"}, "body": "do x"},
+    ]
+
+    out = format_injection(entries, mode="excerpts")
+
+    assert "## 模块索引" in out
+    assert "do x" in out
+    assert 'kind:"navigation"' in out
+
+
 def test_injection_adds_navigation_contract_only_when_navigation_present():
     # Plain knowledge: no navigation directive (existing injection behavior unchanged).
     plain = format_injection([{"meta": {"title": "Fix", "type": "solution"}, "body": "do x"}])
@@ -102,15 +208,16 @@ def test_injection_adds_navigation_contract_only_when_navigation_present():
     assert "navigation" not in plain
     assert "项目导航" not in plain
 
-    # With a navigation entry present, the read→locate→write-back contract appears.
+    # With a navigation entry present, default references only name the entry point.
     withmap = format_injection([
         {"meta": {"title": "项目导航", "type": "navigation", "slug": "index"}, "body": "## 模块索引\n- [store](modules/store.md)"},
         {"meta": {"title": "Fix", "type": "solution"}, "body": "do x"},
     ])
-    assert "项目导航" in withmap
-    assert 'kind:"navigation"' in withmap  # write-back instruction
-    assert "按任务命中逐层读取" in withmap  # read instruction
-    assert "最小父入口链接" in withmap
+    assert "Project nav rule:" in withmap
+    assert "navigation/index" in withmap
+    assert "默认不展开 navigation detail" in withmap
+    assert 'kind:"navigation"' not in withmap
+    assert "## 模块索引" not in withmap  # default reference mode keeps nav body out of the prompt
 
 
 def test_retrieve_keeps_navigation_details_on_demand(tmp_path: Path):
@@ -138,6 +245,38 @@ def test_retrieve_keeps_navigation_details_on_demand(tmp_path: Path):
 
     matched = retrieve_for_task(root, cfg, project_key="git-abc", terms=["filesystem", "jsonl"], max_entries=5)
     assert [entry["meta"]["slug"] for entry in matched][:2] == ["index", "modules/store"]
+
+
+def test_retrieve_can_skip_navigation_details_for_reference_prompt(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg()
+    init_knowledge_base(root, cfg)
+    write_entry(
+        root, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+        title="项目导航", body="## 模块索引\n- [store](modules/store.md)",
+        slug="index", meta={"type": "navigation"},
+    )
+    for idx in range(8):
+        write_entry(
+            root, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+            title=f"store detail {idx}", body="filesystem jsonl routing",
+            slug=f"modules/store-{idx}", meta={"type": "navigation"},
+        )
+    write_entry(
+        root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+        title="Store fix", body="filesystem jsonl repair", meta={"type": "solution"},
+    )
+
+    hits = retrieve_for_task(
+        root,
+        cfg,
+        project_key="git-abc",
+        terms=["filesystem", "jsonl"],
+        max_entries=3,
+        include_navigation_details=False,
+    )
+
+    assert [entry["meta"]["slug"] for entry in hits] == ["index", "store-fix"]
 
 
 def test_format_injection_hard_budget_clips_first_long_entry():
@@ -176,6 +315,62 @@ def test_context_includes_matching_entry(tmp_path: Path):
     })
     assert "项目已知经验" in ctx
     assert "Avoid stale lock" in ctx
+    assert "path: projects/" in ctx
+
+
+def test_context_excerpts_mode_compatibility(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg(enabled=True)
+    cfg["knowledge"]["retrieval"]["inject_mode"] = "excerpts"
+    write_json(config_path(root), cfg)
+    init_knowledge_base(root, cfg)
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    key = derive_project_key(workspace, goal=None)
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value=key,
+                title="Avoid stale lock", body="delete .aha/lock on startup", meta={"tags": ["startup"]})
+
+    ctx = knowledge_context_for_task(root, "norun", {
+        "workspace_path": str(workspace), "title": "startup hang", "description": "lock issue",
+    })
+
+    assert "delete .aha/lock on startup" in ctx
+    assert "path: projects/" not in ctx
+
+
+def test_context_reference_mode_omits_navigation_details_and_keeps_solution_refs(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg(enabled=True)
+    cfg["knowledge"]["retrieval"]["max_entries"] = 3
+    write_json(config_path(root), cfg)
+    init_knowledge_base(root, cfg)
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    key = derive_project_key(workspace, goal=None)
+    write_entry(
+        root, config=cfg, scope="project", kind="navigation", project_key_value=key,
+        title="项目导航", body="## 模块索引\n- [store](modules/store.md)",
+        slug="index", meta={"type": "navigation"},
+    )
+    for idx in range(6):
+        write_entry(
+            root, config=cfg, scope="project", kind="navigation", project_key_value=key,
+            title=f"store module {idx}", body="startup lock filesystem details",
+            slug=f"modules/store-{idx}", meta={"type": "navigation"},
+        )
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value=key,
+                title="Avoid stale lock", body="delete .aha/lock on startup", meta={"tags": ["startup"]})
+
+    ctx = knowledge_context_for_task(root, "norun", {
+        "workspace_path": str(workspace), "title": "startup hang", "description": "lock filesystem",
+    })
+
+    assert "Project nav path: projects/" in ctx
+    assert "navigation/index.md" in ctx
+    assert "Avoid stale lock" in ctx
+    assert "store module 0" not in ctx
+    assert "modules/store-0.md" not in ctx
+    assert "startup lock filesystem details" not in ctx
 
 
 def test_context_reads_legacy_git_project_key(tmp_path: Path):

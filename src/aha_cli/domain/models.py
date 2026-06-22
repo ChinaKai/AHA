@@ -52,9 +52,15 @@ def default_knowledge_config() -> dict:
         "curation": {
             "gate": "manual",
         },
+        "project_nav": {
+            "enabled": True,
+            "maintain_during_task": True,
+        },
         "retrieval": {
             "max_entries": 5,
             "max_chars": 4000,
+            "inject_mode": "references",
+            "summary_chars": 120,
         },
     }
 

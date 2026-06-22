@@ -1,29 +1,33 @@
 """Project navigation ("memory palace") generation.
 
 Project navigation is a small entry point plus on-demand module docs. The entry
-point tells an agent what the project is and which module document to read; the
-module document tells it which source files, entry points, tests, and caveats
-matter for that module. This keeps prompts small while preserving a durable map
-for agents that need to modify a focused part of the codebase.
+point is a generated project briefing, similar to an agent `/init` document,
+followed by a first-level project map. The module document tells an agent which
+source files, entry points, tests, and caveats matter for that module. This
+keeps prompts small while preserving a durable map for agents that need to
+modify a focused part of the codebase.
 
-This module provides a deterministic, dependency-free *scan* that turns a
-workspace into skeleton navigation candidates. It deliberately does not invent
-content: it lists what exists (top-level packages, sub-packages, entry points)
-and pulls one-line module docstrings where present, leaving everything else as
-``(待补充)`` for a human or a richer sidecar update to fill in. The candidates flow
-through the normal curation gate (``.pending`` by default).
+This module provides a deterministic, dependency-free *scan* that compresses a
+workspace into evidence for an agent. AHA validates and stores the agent's
+navigation draft, but does not invent the final navigation content from fixed
+rules.
 """
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.store.knowledge import (
     NAVIGATION_MODULES_DIR,
+    NAVIGATION_FLOWS_DIR,
     NAVIGATION_SLUG,
+    entry_path_for,
     knowledge_config,
+    normalize_entry_slug,
     project_key,
     slugify,
 )
@@ -35,6 +39,14 @@ _IGNORE_DIRS = {
     ".vscode", "dist", "build", ".eggs", "htmlcov", ".tox", "site-packages",
 }
 _DOCSTRING_RE = re.compile(r'^\s*(?:[rRbBuU]{0,2})("""|\'\'\')(.*?)\1', re.DOTALL)
+_NAVIGATION_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]*)\)")
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+_NAVIGATION_ROOT_DIRS = {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR}
+NavigationAgent = Callable[[dict], str]
+
+
+class NavigationAgentError(RuntimeError):
+    """Raised when the project navigation agent cannot produce usable output."""
 
 
 def _is_module_dir(path: Path) -> bool:
@@ -164,7 +176,7 @@ def _module_doc_slug(name: str) -> str:
     return f"{NAVIGATION_MODULES_DIR}/{slugify(name)}"
 
 
-def render_navigation_body(scan: dict) -> str:
+def render_navigation_body(scan: dict, *, link_modules: bool = True) -> str:
     """Render a scan dict into the navigation index body (markdown)."""
     overview = (scan.get("overview") or "").strip()
     module_lines = []
@@ -173,7 +185,7 @@ def render_navigation_body(scan: dict) -> str:
         role = str(mod.get("role") or "").strip()
         files = str(mod.get("files") or "").strip()
         doc = f"{_module_doc_slug(name)}.md"
-        line = f"- [{name}]({doc})"
+        line = f"- [{name}]({doc})" if link_modules else f"- {name}"
         if role:
             line += f" — {role}"
         if files:
@@ -181,25 +193,21 @@ def render_navigation_body(scan: dict) -> str:
         module_lines.append(line)
     entry_lines = [f"- `{item}`" for item in (scan.get("entry_points") or [])]
     parts = [
-        "## 项目定位",
-        overview or "(待补充：这个项目是干什么的)",
+        "## Project README",
+        overview or "(待补充：项目目标、技术栈、运行/测试方式、代码组织约定和 agent 开工前注意事项)",
         "",
         "## 使用规则",
         "- 本入口只维护第一层模块/流程链接；更深层入口由对应父文档维护。",
         "- 开工先读本入口，再按任务命中的模块/流程链接逐层读取少量文档；不要把整个 navigation 全量读入。",
         "- 收尾只更新本次真实影响的子文档；如果子文档没有直接父入口，只补直接父入口链接。",
         "",
-        "## 架构概览",
-        "(待补充：分层 / 核心组件 / 数据流；必要时拆到 `flows/*.md`)",
+        "## Project Map",
         "",
-        "## 模块索引",
+        "### 模块索引",
         "\n".join(module_lines) if module_lines else "- (未发现可索引模块)",
         "",
-        "## 入口 / 关键流程",
-        "\n".join(entry_lines) if entry_lines else "- (待补充)",
-        "",
-        "## 盲区 / 待补充",
-        "- 由 scan 生成的骨架，职责/架构/流程需人工或后续任务补全。",
+        "### 入口 / 关键流程",
+        "\n".join(entry_lines) if entry_lines else "- (暂无)",
     ]
     return "\n".join(parts).strip() + "\n"
 
@@ -218,19 +226,10 @@ def render_module_navigation_body(project_name: str, module: dict) -> str:
         "## 关键源文件",
         f"- `{files}`" if files else "- (待补充)",
         "",
-        "## 入口 / 调用方",
-        "- (待补充：CLI/API/服务入口、上游调用方、关键数据流)",
-        "",
         "## 修改注意",
         "- 只在本模块职责、入口、关键文件、约束或盲区变化时更新本文。",
         "- 本文只维护一层子入口；新增更深层子文档时只补本文的直接链接。",
         "- 不要为无关 bug fix 全量重写模块文档；新增模块/流程时再补直接父入口链接。",
-        "",
-        "## 相关测试",
-        "- (待补充)",
-        "",
-        "## 盲区 / 待补充",
-        "- 由 scan 生成的骨架，需人工或后续任务补全。",
     ]
     return "\n".join(parts).strip() + "\n"
 
@@ -251,7 +250,7 @@ def build_navigation_candidate(
         "project_key": project_key_value,
         "slug": NAVIGATION_SLUG,
         "title": title,
-        "body": render_navigation_body(scan),
+        "body": render_navigation_body(scan, link_modules=False),
         "meta": {
             "type": "navigation",
             "outcome": "success",
@@ -282,7 +281,7 @@ def build_navigation_candidates(
             "project_key": project_key_value,
             "slug": NAVIGATION_SLUG,
             "title": f"{project_name} 导航入口",
-            "body": render_navigation_body(scan),
+            "body": render_navigation_body(scan, link_modules=True),
             "meta": {
                 "type": "navigation",
                 "outcome": "success",
@@ -323,6 +322,533 @@ def build_navigation_candidates(
     return candidates
 
 
+def _project_nav_enabled(config: dict | None) -> bool:
+    cfg = knowledge_config(config)
+    nav = cfg.get("project_nav") if isinstance(cfg.get("project_nav"), dict) else {}
+    return bool(nav.get("enabled", True))
+
+
+def _navigation_parent_slug(slug: str) -> str | None:
+    slug = normalize_entry_slug(str(slug or "").strip())
+    if not slug or slug == NAVIGATION_SLUG:
+        return None
+    parts = slug.split("/")
+    if len(parts) <= 2 and parts[0] in _NAVIGATION_ROOT_DIRS:
+        return NAVIGATION_SLUG
+    if len(parts) > 2 and parts[0] in _NAVIGATION_ROOT_DIRS:
+        return "/".join(parts[:-1])
+    return NAVIGATION_SLUG
+
+
+def _navigation_role_for_slug(slug: str) -> str:
+    if slug == NAVIGATION_SLUG:
+        return "index"
+    if slug.startswith(f"{NAVIGATION_MODULES_DIR}/"):
+        return "module"
+    if slug.startswith(f"{NAVIGATION_FLOWS_DIR}/"):
+        return "flow"
+    return "navigation"
+
+
+def _navigation_error(code: str, message: str, **extra) -> dict:
+    item = {"code": code, "message": message}
+    item.update({key: value for key, value in extra.items() if value not in (None, "", [])})
+    return item
+
+
+def _is_valid_navigation_slug(raw_slug: str) -> tuple[bool, str, str | None]:
+    slug = str(raw_slug or "").strip().strip("/")
+    normalized = normalize_entry_slug(slug)
+    if not slug:
+        return False, normalized, "navigation candidate is missing slug"
+    if slug != normalized:
+        return False, normalized, f"navigation slug must already be normalized: {normalized}"
+    if slug == NAVIGATION_SLUG:
+        return True, normalized, None
+    parts = slug.split("/")
+    if parts[0] not in _NAVIGATION_ROOT_DIRS or len(parts) < 2:
+        return False, normalized, "navigation slug must be index, modules/<name>, or flows/<name>"
+    return True, normalized, None
+
+
+def _markdown_navigation_targets(body: str) -> list[tuple[str, str]]:
+    targets: list[tuple[str, str]] = []
+    for match in _NAVIGATION_LINK_RE.finditer(body or ""):
+        raw = match.group(1).strip()
+        if not raw:
+            continue
+        href = raw.split()[0].strip("<>")
+        lowered = href.lower()
+        if (
+            lowered.startswith(("http://", "https://", "mailto:", "tel:"))
+            or href.startswith("#")
+            or not href.endswith(".md")
+        ):
+            continue
+        href = href.split("#", 1)[0].split("?", 1)[0]
+        target = href[:-3].strip("/")
+        targets.append((href, target))
+    return targets
+
+
+def validate_navigation_candidates(
+    root: Path,
+    config: dict | None,
+    candidates: list[dict],
+) -> dict:
+    """Validate project navigation candidates before they enter the KB.
+
+    The result is deliberately event/log friendly: callers can store it as-is
+    when a bootstrap or delta is rejected.
+    """
+    navigation = [
+        candidate for candidate in (candidates or [])
+        if str(candidate.get("kind") or "").strip().lower() == "navigation"
+    ]
+    errors: list[dict] = []
+    if not navigation:
+        return {"ok": True, "errors": [], "warnings": [], "checked": 0}
+
+    by_key: dict[tuple[str, str | None, str], dict] = {}
+    for candidate in navigation:
+        raw_slug = str(candidate.get("slug") or "").strip()
+        ok, slug, reason = _is_valid_navigation_slug(raw_slug)
+        scope = str(candidate.get("scope") or "project")
+        project_key_value = candidate.get("project_key")
+        if not ok:
+            errors.append(_navigation_error(
+                "invalid_slug",
+                reason or "invalid navigation slug",
+                slug=raw_slug,
+                normalized_slug=slug,
+            ))
+            continue
+        key = (scope, project_key_value, slug)
+        if key in by_key:
+            errors.append(_navigation_error(
+                "duplicate_slug",
+                "duplicate navigation candidate slug in one batch",
+                slug=slug,
+                project_key=project_key_value,
+            ))
+            continue
+        by_key[key] = candidate
+
+        if scope != "project":
+            errors.append(_navigation_error(
+                "invalid_scope",
+                "project navigation candidates must use project scope",
+                slug=slug,
+                scope=scope,
+            ))
+        if slug != NAVIGATION_SLUG and not project_key_value:
+            errors.append(_navigation_error(
+                "missing_project_key",
+                "project navigation child candidate requires project_key",
+                slug=slug,
+            ))
+
+    def exists(scope: str, project_key_value: str | None, slug: str) -> bool:
+        return (
+            (scope, project_key_value, slug) in by_key
+            or entry_path_for(root, config, scope, "navigation", project_key_value, slug) is not None
+        )
+
+    for (scope, project_key_value, slug), candidate in by_key.items():
+        parent_slug = _navigation_parent_slug(slug)
+        if parent_slug and not exists(scope, project_key_value, parent_slug):
+            errors.append(_navigation_error(
+                "missing_parent",
+                "navigation child is missing its direct parent entry",
+                slug=slug,
+                expected_parent=parent_slug,
+                project_key=project_key_value,
+            ))
+
+        for href, target in _markdown_navigation_targets(str(candidate.get("body") or "")):
+            if "/" in target and any(part in {"", ".", ".."} for part in target.split("/")):
+                errors.append(_navigation_error(
+                    "invalid_link_target",
+                    "navigation link target must not use path traversal",
+                    slug=slug,
+                    href=href,
+                ))
+                continue
+            normalized_target = normalize_entry_slug(target)
+            if target != normalized_target or not target:
+                errors.append(_navigation_error(
+                    "invalid_link_target",
+                    "navigation link target must already be a normalized navigation slug",
+                    slug=slug,
+                    href=href,
+                    normalized_slug=normalized_target,
+                ))
+                continue
+            if _navigation_parent_slug(normalized_target) != slug:
+                errors.append(_navigation_error(
+                    "indirect_link",
+                    "navigation links must point only to direct child docs",
+                    slug=slug,
+                    href=href,
+                    target_slug=normalized_target,
+                    expected_parent=slug,
+                    actual_parent=_navigation_parent_slug(normalized_target),
+                ))
+                continue
+            if not exists(scope, project_key_value, normalized_target):
+                errors.append(_navigation_error(
+                    "broken_link",
+                    "navigation link target is not in this batch and does not exist in the KB",
+                    slug=slug,
+                    href=href,
+                    target_slug=normalized_target,
+                    project_key=project_key_value,
+                ))
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": [],
+        "checked": len(navigation),
+        "slugs": sorted(slug for _, _, slug in by_key),
+    }
+
+
+def _bootstrap_event_payload(
+    *,
+    status: str,
+    project_key_value: str | None,
+    candidates: list[dict] | None = None,
+    validation: dict | None = None,
+    reason: str | None = None,
+) -> dict:
+    data = {
+        "status": status,
+        "project_key": project_key_value,
+        "candidates": len(candidates or []),
+        "slugs": [str(candidate.get("slug")) for candidate in (candidates or []) if candidate.get("slug")],
+    }
+    if validation is not None:
+        data["validation"] = validation
+    if reason:
+        data["reason"] = reason
+    return {"type": "knowledge_navigation_bootstrap", "data": data}
+
+
+def build_navigation_bootstrap_prompt(scan: dict, *, workspace_path: str, project_key_value: str) -> str:
+    """Prompt for agent-assisted first navigation generation."""
+    scan_json = json.dumps(scan, ensure_ascii=False, indent=2)
+    return (
+        "You are generating the initial AHA project navigation for a code workspace.\n"
+        "Project navigation is an agent `/init` style project briefing plus a compact map: "
+        "one small `index`, then lightweight modules/* or flows/* docs that tell agents where to look. "
+        "The index is the project manual future agents read on demand; it must be useful, concise, "
+        "and grounded in the supplied workspace evidence.\n\n"
+        "Return ONLY valid JSON. The top-level value must be an array of candidates. "
+        "Each candidate must use this shape:\n"
+        '{"kind":"navigation","scope":"project","project_key":"...",'
+        '"slug":"index|modules/<slug>|flows/<slug>","title":"...",'
+        '"body":"markdown","tags":["navigation"],"related_files":[],"confidence":0.6}\n\n'
+        "Rules:\n"
+        "- Include exactly one `index` candidate unless the scan is unusable.\n"
+        "- The `index` body MUST contain `## Project README` followed by the generated project briefing.\n"
+        "- The `index` body MUST contain `## Project Map`; put first-level module/flow links under it.\n"
+        "- Project README should cover purpose, tech stack, run/test commands, code organization, conventions, and agent caveats when supported by evidence.\n"
+        "- `index` links only directly to first-level `modules/*.md` or `flows/*.md` candidates that are also in this JSON batch.\n"
+        "- Module/flow docs stay lightweight: responsibility, key files, entry points, and caveats only.\n"
+        "- Slugs must already be normalized: `index`, `modules/<name>`, or `flows/<name>`.\n"
+        "- Use the provided project_key exactly.\n"
+        "- If there is not enough evidence for a module/flow doc, omit it instead of creating empty template noise.\n\n"
+        f"workspace_path: {workspace_path}\n"
+        f"project_key: {project_key_value}\n\n"
+        "--- COMPRESSED WORKSPACE SCAN JSON ---\n"
+        f"{scan_json}\n"
+        "--- END SCAN ---\n"
+    )
+
+
+def default_navigation_agent(context: dict) -> str:
+    """Run the bootstrap prompt through the same backend exec seam as capture notes."""
+    try:
+        from aha_cli.services.knowledge_capture_distill import CaptureAgentError, default_capture_agent
+
+        return default_capture_agent(context)
+    except CaptureAgentError as exc:
+        raise NavigationAgentError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - normalize backend wiring failures
+        raise NavigationAgentError(str(exc)) from exc
+
+
+def _reply_excerpt(reply: str, *, limit: int = 1200) -> str:
+    text = (reply or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + " ..."
+
+
+def _prompt_excerpt(prompt: str) -> str:
+    return _reply_excerpt(prompt, limit=4000)
+
+
+def _json_text_variants(text: str) -> list[str]:
+    variants = [text]
+    variants.extend(match.group(1).strip() for match in _JSON_FENCE_RE.finditer(text) if match.group(1).strip())
+    return variants
+
+
+def _json_candidates_from_agent_reply(reply: str) -> tuple[list[dict] | None, str | None]:
+    text = (reply or "").strip()
+    if not text:
+        return None, "empty agent reply"
+    parsed = None
+    json_error: str | None = None
+    for variant in _json_text_variants(text):
+        try:
+            parsed = json.loads(variant)
+            break
+        except json.JSONDecodeError as exc:
+            json_error = str(exc)
+            continue
+    if parsed is None:
+        try:
+            from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
+
+            _, parsed, error = split_knowledge_sidecar(text)
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
+        if parsed is None:
+            return None, error or json_error or "agent reply is not JSON"
+    if isinstance(parsed, dict) and isinstance(parsed.get("candidates"), list):
+        parsed = parsed["candidates"]
+    if not isinstance(parsed, list):
+        return None, "agent reply must be a JSON array"
+    candidates = [item for item in parsed if isinstance(item, dict)]
+    return candidates, None
+
+
+def _agent_navigation_candidates(
+    root: Path,
+    config: dict | None,
+    *,
+    workspace_path: str,
+    project_key_value: str,
+    scan: dict,
+    backend: str | None = None,
+    model: str | None = None,
+    proxy_enabled: bool | None = None,
+    agent: NavigationAgent | None = None,
+) -> tuple[list[dict] | None, dict]:
+    if not (agent or backend or model):
+        return None, {"status": "failed", "error": "backend not selected"}
+    prompt = build_navigation_bootstrap_prompt(scan, workspace_path=workspace_path, project_key_value=project_key_value)
+    prompt_excerpt = _prompt_excerpt(prompt)
+    agent_fn = agent or default_navigation_agent
+    try:
+        reply = agent_fn({
+            "prompt": prompt,
+            "backend": backend,
+            "model": model,
+            "proxy_enabled": proxy_enabled,
+            "config": config,
+            "cwd": workspace_path,
+            "workspace_path": workspace_path,
+            "project_key": project_key_value,
+            "scan": scan,
+        })
+    except NavigationAgentError as exc:
+        return None, {"status": "failed", "error": str(exc), "prompt_excerpt": prompt_excerpt}
+    except Exception as exc:  # noqa: BLE001 - record agent failure in the draft
+        return None, {"status": "failed", "error": str(exc), "prompt_excerpt": prompt_excerpt}
+    raw_candidates, parse_error = _json_candidates_from_agent_reply(reply or "")
+    if raw_candidates is None:
+        return None, {
+            "status": "invalid",
+            "error": parse_error or "invalid agent reply",
+            "prompt_excerpt": prompt_excerpt,
+            "reply_excerpt": _reply_excerpt(reply or ""),
+        }
+
+    source = {"source_type": "navigation_agent", "generated_at": utc_now()}
+    from aha_cli.services.knowledge_distill import ensure_navigation_parent_entries, normalize_sidecar_candidates
+
+    normalized = normalize_sidecar_candidates({"project_key": project_key_value, "source": source}, raw_candidates)
+    candidates = [
+        candidate for candidate in normalized
+        if str(candidate.get("kind") or "").strip().lower() == "navigation"
+    ]
+    for candidate in candidates:
+        candidate["scope"] = "project"
+        candidate["project_key"] = project_key_value
+        meta = candidate.setdefault("meta", {})
+        meta["type"] = "navigation"
+        meta.setdefault("distilled_by", "agent")
+        meta.setdefault("update_mode", "bootstrap")
+    candidates = ensure_navigation_parent_entries(root, config, candidates, {"source": source, "workspace_path": workspace_path})
+    if not candidates:
+        return None, {
+            "status": "invalid",
+            "error": "agent produced no navigation candidates",
+            "prompt_excerpt": prompt_excerpt,
+            "reply_excerpt": _reply_excerpt(reply or ""),
+        }
+    return candidates, {
+        "status": "used",
+        "candidates": len(candidates),
+        "prompt_excerpt": prompt_excerpt,
+        "reply_excerpt": _reply_excerpt(reply or ""),
+    }
+
+
+def prepare_project_navigation(
+    root: Path,
+    config: dict | None,
+    *,
+    workspace_path: str,
+    goal: str | None = None,
+    project_key_value: str | None = None,
+    backend: str | None = None,
+    model: str | None = None,
+    proxy_enabled: bool | None = None,
+    agent: NavigationAgent | None = None,
+) -> dict:
+    """Generate and validate the first project navigation batch without writing it."""
+    cfg = knowledge_config(config)
+    if not cfg.get("enabled"):
+        result = {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
+        result["event"] = _bootstrap_event_payload(status="skipped", project_key_value=None, reason=result["skipped"])
+        return result
+    if not _project_nav_enabled(config):
+        result = {
+            "ok": True,
+            "skipped": "project navigation disabled",
+            "candidates": 0,
+            "navigation": {"skipped": {"reason": "project navigation disabled", "candidates": 0}},
+        }
+        result["event"] = _bootstrap_event_payload(status="skipped", project_key_value=None, reason=result["skipped"])
+        return result
+
+    key = project_key_value or project_key(Path(workspace_path), goal=goal)
+    existing_index = entry_path_for(root, config, "project", "navigation", key, NAVIGATION_SLUG)
+    if existing_index:
+        result = {
+            "ok": True,
+            "skipped": "navigation exists",
+            "candidates": 0,
+            "project_key": key,
+            "index_path": str(existing_index),
+        }
+        result["event"] = _bootstrap_event_payload(status="skipped", project_key_value=key, reason=result["skipped"])
+        return result
+
+    scan = scan_workspace(workspace_path)
+    agent_info: dict = {"status": "not_run"}
+    candidates, agent_info = _agent_navigation_candidates(
+        root,
+        config,
+        workspace_path=workspace_path,
+        project_key_value=key,
+        scan=scan,
+        backend=backend,
+        model=model,
+        proxy_enabled=proxy_enabled,
+        agent=agent,
+    )
+    if candidates is None:
+        error = agent_info.get("error") or agent_info.get("reason") or "navigation agent did not produce candidates"
+        return {
+            "ok": False,
+            "error": error,
+            "candidates": 0,
+            "project_key": key,
+            "agent": agent_info,
+            "event": _bootstrap_event_payload(status="invalid", project_key_value=key, reason=error),
+        }
+    validation = validate_navigation_candidates(root, config, candidates)
+    if not validation["ok"]:
+        agent_info = {**agent_info, "status": "invalid", "validation": validation}
+        return {
+            "ok": False,
+            "error": "navigation bootstrap validation failed",
+            "candidates": 0,
+            "project_key": key,
+            "agent": agent_info,
+            "validation": validation,
+            "event": _bootstrap_event_payload(
+                status="invalid",
+                project_key_value=key,
+                candidates=candidates,
+                validation=validation,
+            ),
+        }
+    return {
+        "ok": True,
+        "candidates": len(candidates),
+        "candidate_items": candidates,
+        "title": candidates[0]["title"] if candidates else None,
+        "project_key": key,
+        "validation": validation,
+        "agent": agent_info,
+        "event": _bootstrap_event_payload(
+            status="prepared",
+            project_key_value=key,
+            candidates=candidates,
+            validation=validation,
+        ),
+    }
+
+
+def bootstrap_project_navigation(
+    root: Path,
+    config: dict | None,
+    *,
+    workspace_path: str,
+    goal: str | None = None,
+    project_key_value: str | None = None,
+    backend: str | None = None,
+    model: str | None = None,
+    proxy_enabled: bool | None = None,
+    agent: NavigationAgent | None = None,
+) -> dict:
+    """Create the first project navigation batch if the project has no index."""
+    prepared = prepare_project_navigation(
+        root,
+        config,
+        workspace_path=workspace_path,
+        goal=goal,
+        project_key_value=project_key_value,
+        backend=backend,
+        model=model,
+        proxy_enabled=proxy_enabled,
+        agent=agent,
+    )
+    if prepared.get("skipped") or not prepared.get("ok"):
+        return prepared
+    candidates = prepared.get("candidate_items") or []
+    key = str(prepared.get("project_key") or "")
+
+    # Lazy import avoids a services import cycle (distill imports this module for
+    # validation).
+    from aha_cli.services.knowledge_distill import distill_and_enqueue
+
+    result = distill_and_enqueue(
+        root,
+        config,
+        {"project_key": key, "allow_navigation_bootstrap": True},
+        candidates=candidates,
+    )
+    result["title"] = candidates[0]["title"] if candidates else None
+    result["project_key"] = key
+    result["validation"] = prepared.get("validation")
+    result["agent"] = prepared.get("agent")
+    result["event"] = _bootstrap_event_payload(
+        status="queued" if result.get("gate") == "manual" else "written",
+        project_key_value=key,
+        candidates=candidates,
+        validation=prepared.get("validation"),
+    )
+    return result
+
+
 def generate_navigation_candidate(
     root: Path,
     config: dict | None,
@@ -330,18 +856,20 @@ def generate_navigation_candidate(
     workspace_path: str,
     goal: str | None = None,
     project_key_value: str | None = None,
+    backend: str | None = None,
+    model: str | None = None,
+    proxy_enabled: bool | None = None,
+    agent: NavigationAgent | None = None,
 ) -> dict:
     """Build and route project navigation candidates through the curation gate."""
-    cfg = knowledge_config(config)
-    if not cfg.get("enabled"):
-        return {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
-    key = project_key_value or project_key(Path(workspace_path), goal=goal)
-    source = {"source_type": "navigation_scan", "generated_at": utc_now()}
-    candidates = build_navigation_candidates(workspace_path, key, source=source)
-    # Lazy import avoids a services import cycle (distill imports the store).
-    from aha_cli.services.knowledge_distill import distill_and_enqueue
-
-    result = distill_and_enqueue(root, config, {"project_key": key}, candidates=candidates)
-    result["title"] = candidates[0]["title"] if candidates else None
-    result["project_key"] = key
-    return result
+    return bootstrap_project_navigation(
+        root,
+        config,
+        workspace_path=workspace_path,
+        goal=goal,
+        project_key_value=project_key_value,
+        backend=backend,
+        model=model,
+        proxy_enabled=proxy_enabled,
+        agent=agent,
+    )

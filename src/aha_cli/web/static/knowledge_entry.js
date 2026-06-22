@@ -3,6 +3,12 @@
   const VIEW_STORAGE_KEY = "aha.taskMemoViewExplicit";
   const KNOWLEDGE_URL = "/static/knowledge.html";
 
+  function knowledgeUrl() {
+    const params = new URLSearchParams(window.location.search || "");
+    const runId = String(params.get("run_id") || params.get("run") || "").trim();
+    return runId ? `${KNOWLEDGE_URL}?run_id=${encodeURIComponent(runId)}` : KNOWLEDGE_URL;
+  }
+
   function setStoredView(view) {
     try {
       window.localStorage?.setItem(VIEW_STORAGE_KEY, view);
@@ -40,7 +46,7 @@
     document.body?.classList?.add("knowledge-home");
     document.getElementById("task-memo-dialog")?.removeAttribute("open");
     home.hidden = false;
-    if (!frame.getAttribute("src")) frame.setAttribute("src", KNOWLEDGE_URL);
+    if (!frame.getAttribute("src")) frame.setAttribute("src", knowledgeUrl());
     setStoredView("kb");
     syncViewUrl("kb");
     setViewButtons("kb");

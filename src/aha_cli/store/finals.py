@@ -89,10 +89,12 @@ def write_task_result(
         "task_result_written",
         {"task_id": task_id, "path": str(path), "chars": len(body.strip()), "policy": policy, "round_id": meta.get("round_id")},
     )
+    if sidecar_error:
+        append_event_func(root, run_id, "knowledge_task_final_sidecar_invalid", {"task_id": task_id, "error": sidecar_error})
     if policy == "finalize" and render_overview_func:
         render_overview_func(root, run_id, task_id, policy=policy)
     if policy == "finalize" and distill_meta is not None:
-        _distill_knowledge_safe(root, run_id, task_id, body, final_context, distill_meta, sidecar_candidates)
+        _distill_knowledge_safe(root, run_id, task_id, body, final_context, distill_meta, sidecar_candidates, append_event_func)
     return path
 
 
@@ -104,13 +106,14 @@ def _distill_knowledge_safe(
     final_context: dict | None,
     distill_meta: dict,
     sidecar_candidates: list[dict] | None,
+    append_event_func: Callable[[Path, str, str, dict], dict] = default_append_event,
 ) -> None:
     """Best-effort knowledge distillation hook. Never breaks finalization."""
     try:
         # Lazy import avoids a store -> services import cycle at module load.
-        from aha_cli.services.knowledge_distill import distill_after_finalize
+        from aha_cli.services.knowledge_distill import distill_after_finalize, navigation_delta_event_payload
 
-        distill_after_finalize(
+        result = distill_after_finalize(
             root,
             run_id,
             task_id,
@@ -122,5 +125,9 @@ def _distill_knowledge_safe(
             round_id=distill_meta.get("round_id"),
             sidecar_candidates=sidecar_candidates,
         )
-    except Exception:  # noqa: BLE001 - distillation is strictly best-effort
-        pass
+        append_event_func(root, run_id, "knowledge_task_final_distilled", {"task_id": task_id, "result": result})
+        navigation_event = navigation_delta_event_payload(result, source_type="task_final", task_id=task_id)
+        if navigation_event:
+            append_event_func(root, run_id, "knowledge_navigation_delta", navigation_event)
+    except Exception as exc:  # noqa: BLE001 - distillation is strictly best-effort
+        append_event_func(root, run_id, "knowledge_task_final_distill_failed", {"task_id": task_id, "error": str(exc)})

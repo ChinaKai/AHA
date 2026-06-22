@@ -2,7 +2,8 @@
 
 Root-scoped JSON endpoints under /api/kb for browsing entries, reviewing the
 pending curation queue (approve/reject), and reading/updating the knowledge
-settings (enabled / path / git remote+branch+auto flags / curation gate).
+settings (enabled / path / git remote+branch+auto flags / project navigation /
+curation gate).
 
 These mirror the conventions in web/system_routes.py and are served from
 web/server.py. The matching UI lives in web/static/knowledge.html.
@@ -16,21 +17,31 @@ from pathlib import Path
 
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_git import auto_commit_after_change
+from aha_cli.services.knowledge_navigation import (
+    prepare_project_navigation,
+    validate_navigation_candidates,
+)
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
+from aha_cli.store import knowledge_nav_drafts as nav_drafts
+from aha_cli.store.runs import require_plan
 from aha_cli.store.knowledge import (
     NAVIGATION_SLUG,
     approve_candidate,
     delete_entry,
+    delete_project_navigation,
     entry_exists,
     find_entry,
+    init_knowledge_base,
     iter_all_entries,
     knowledge_status,
     list_pending,
+    project_key as derive_project_key,
     remove_pending,
     slugify,
     type_for_kind,
     update_entry,
+    write_entry,
 )
 from aha_cli.store import knowledge_capture as capture
 from aha_cli.store.paths import config_path
@@ -56,8 +67,129 @@ def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, 
     ).start()
 
 
+def _nav_agent_log_event(stage: str, message: str, **extra) -> dict:
+    event = {"at": utc_now(), "stage": stage, "message": message}
+    event.update({key: value for key, value in extra.items() if value not in (None, "", [])})
+    return event
+
+
+def _append_nav_agent_log(root: Path, cfg: dict, draft_id: str, stage: str, message: str, **extra) -> None:
+    draft = nav_drafts.read_draft(root, cfg, draft_id)
+    if draft is None:
+        return
+    log = draft.get("agent_log") if isinstance(draft.get("agent_log"), list) else []
+    nav_drafts.update_draft(
+        root,
+        cfg,
+        draft_id,
+        agent_log=[*log, _nav_agent_log_event(stage, message, **extra)],
+    )
+
+
+def run_project_nav_draft_job(
+    root: Path,
+    cfg: dict,
+    draft_id: str,
+    *,
+    workspace_path: str,
+    goal: str | None = None,
+    project_key_value: str | None = None,
+    backend: str | None = None,
+    model: str | None = None,
+    proxy_enabled: bool | None = None,
+    agent=None,
+) -> dict:
+    _append_nav_agent_log(
+        root,
+        cfg,
+        draft_id,
+        "running",
+        "Preparing workspace context and calling project navigation agent",
+        backend=backend,
+        model=model,
+        proxy_enabled=proxy_enabled,
+    )
+    try:
+        result = prepare_project_navigation(
+            root,
+            cfg,
+            workspace_path=workspace_path,
+            goal=goal,
+            project_key_value=project_key_value,
+            backend=backend,
+            model=model,
+            proxy_enabled=proxy_enabled,
+            agent=agent,
+        )
+    except Exception as exc:  # noqa: BLE001 - background job must be recorded, not crash the server
+        result = {"ok": False, "error": str(exc), "candidates": 0}
+
+    current = nav_drafts.read_draft(root, cfg, draft_id)
+    if current is None or current.get("status") == "rejected":
+        return {"ok": False, "skipped": "draft rejected or missing"}
+    if result.get("ok"):
+        status = "completed"
+        summary = result.get("skipped") or (
+            f"{result.get('candidates', 0)} navigation entries ready for review"
+        )
+        _append_nav_agent_log(
+            root,
+            cfg,
+            draft_id,
+            status,
+            summary,
+            candidates=result.get("candidates"),
+        )
+        return nav_drafts.update_draft(
+            root,
+            cfg,
+            draft_id,
+            status=status,
+            completed_at=utc_now(),
+            summary=summary,
+            skipped=result.get("skipped"),
+            project_key=result.get("project_key") or project_key_value,
+            candidates=result.get("candidate_items", []),
+            validation=result.get("validation"),
+            agent=result.get("agent"),
+            error="",
+        )
+    _append_nav_agent_log(
+        root,
+        cfg,
+        draft_id,
+        "failed",
+        result.get("error") or "project nav generation failed",
+    )
+    return nav_drafts.update_draft(
+        root,
+        cfg,
+        draft_id,
+        status="failed",
+        completed_at=utc_now(),
+        summary="Project nav generation failed",
+        error=result.get("error") or "project nav generation failed",
+        candidates=[],
+        validation=result.get("validation"),
+        agent=result.get("agent"),
+    )
+
+
+def _default_dispatch_project_nav_job(root: Path, cfg: dict, draft_id: str, **kwargs) -> None:
+    import threading
+
+    threading.Thread(
+        target=run_project_nav_draft_job,
+        args=(root, cfg, draft_id),
+        kwargs=kwargs,
+        daemon=True,
+    ).start()
+
+
 # Module-level seam so tests can substitute synchronous execution.
 dispatch_distill_job = _default_dispatch_distill_job
+project_navigation_agent = None
+dispatch_project_nav_job = _default_dispatch_project_nav_job
 
 
 def _note_view(note: dict | None) -> dict | None:
@@ -86,9 +218,69 @@ def _entry_summary(entry: dict) -> dict:
     }
 
 
+def _navigation_summaries(root: Path, cfg: dict, project_key_value: str | None = None) -> list[dict]:
+    entries: list[dict] = []
+    for entry in iter_all_entries(root, cfg):
+        meta = entry.get("meta", {})
+        if meta.get("type") != "navigation":
+            continue
+        if meta.get("slug") != NAVIGATION_SLUG:
+            continue
+        if project_key_value and meta.get("project_key") != project_key_value:
+            continue
+        entries.append(_entry_summary(entry))
+    return sorted(
+        entries,
+        key=lambda item: (
+            str(item.get("project_key") or ""),
+            0 if item.get("slug") == NAVIGATION_SLUG else 1,
+            str(item.get("slug") or ""),
+        ),
+    )
+
+
+def _public_nav_draft(draft: dict) -> dict:
+    item = dict(draft)
+    item.pop("candidates", None)
+    item.pop("_path", None)
+    return item
+
+
+def _visible_nav_draft(draft: dict) -> bool:
+    return draft.get("status") not in {"accepted", "rejected"}
+
+
+def _blocking_project_nav_draft(
+    root: Path,
+    cfg: dict,
+    *,
+    project_key_value: str,
+    workspace_path: str,
+) -> dict | None:
+    for draft in nav_drafts.list_drafts(root, cfg, project_key_value):
+        if draft.get("status") not in {"running", "completed"}:
+            continue
+        if draft.get("workspace_path") != workspace_path:
+            continue
+        return draft
+    return None
+
+
 def _is_navigation_child(entry: dict) -> bool:
     meta = entry.get("meta", {})
     return meta.get("type") == "navigation" and meta.get("slug") != NAVIGATION_SLUG
+
+
+def _is_project_navigation_index(entry: dict | None) -> bool:
+    if not entry:
+        return False
+    meta = entry.get("meta", {})
+    return (
+        meta.get("type") == "navigation"
+        and meta.get("scope") == "project"
+        and meta.get("slug") == NAVIGATION_SLUG
+        and bool(meta.get("project_key"))
+    )
 
 
 def _entry_matches_query(entry: dict, query: str) -> bool:
@@ -119,6 +311,7 @@ def _knowledge_settings(cfg: dict) -> dict:
     kb = cfg.get("knowledge") if isinstance(cfg.get("knowledge"), dict) else default_knowledge_config()
     git = kb.get("git", {}) if isinstance(kb.get("git"), dict) else {}
     curation = kb.get("curation", {}) if isinstance(kb.get("curation"), dict) else {}
+    project_nav = kb.get("project_nav", {}) if isinstance(kb.get("project_nav"), dict) else {}
     return {
         "enabled": bool(kb.get("enabled")),
         "path": kb.get("path"),
@@ -129,6 +322,10 @@ def _knowledge_settings(cfg: dict) -> dict:
             "auto_pull": bool(git.get("auto_pull")),
             "auto_commit": bool(git.get("auto_commit")),
             "auto_push": bool(git.get("auto_push")),
+        },
+        "project_nav": {
+            "enabled": bool(project_nav.get("enabled", True)),
+            "maintain_during_task": bool(project_nav.get("maintain_during_task", True)),
         },
         "curation": {"gate": curation.get("gate")},
     }
@@ -167,11 +364,13 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
     kb = raw.get("knowledge")
     if not isinstance(kb, dict):
         kb = default_knowledge_config()
-    # Hand-written config may have non-dict git/curation; coerce instead of 500.
+    # Hand-written config may have non-dict nested blocks; coerce instead of 500.
     if not isinstance(kb.get("git"), dict):
         kb["git"] = {}
     if not isinstance(kb.get("curation"), dict):
         kb["curation"] = {}
+    if not isinstance(kb.get("project_nav"), dict):
+        kb["project_nav"] = {}
 
     if "enabled" in payload:
         kb["enabled"] = bool(payload["enabled"])
@@ -201,9 +400,63 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
             raise ValueError(f"curation gate must be one of {sorted(_ALLOWED_GATES)}")
         kb["curation"]["gate"] = gate
 
+    project_nav_patch = payload.get("project_nav")
+    if isinstance(project_nav_patch, dict):
+        for flag in ("enabled", "maintain_during_task"):
+            if flag in project_nav_patch:
+                value = _optional_bool(project_nav_patch.get(flag), f"project_nav.{flag}")
+                kb["project_nav"][flag] = True if value is None else value
+
     raw["knowledge"] = kb
     write_json(path, raw)
     return _knowledge_settings(load_config(root))
+
+
+def _payload_value(payload: dict, query: dict[str, list[str]], *names: str) -> str:
+    for name in names:
+        if name in payload and payload.get(name) is not None:
+            value = str(payload.get(name) or "").strip()
+            if value:
+                return value
+        if name in query and query.get(name):
+            value = str(query.get(name, [""])[0] or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _project_nav_bootstrap_context(root: Path, payload: dict, query: dict[str, list[str]]) -> dict:
+    workspace_path = _payload_value(payload, query, "workspace_path", "workspace")
+    project_key_value = _payload_value(payload, query, "project_key", "project") or None
+    goal = _payload_value(payload, query, "goal") or None
+    run_id = _payload_value(payload, query, "run_id", "run")
+    task_id = _payload_value(payload, query, "task_id", "task")
+
+    if run_id and (not workspace_path or not goal):
+        try:
+            plan = require_plan(root, run_id)
+        except SystemExit as exc:
+            raise FileNotFoundError(f"run not found: {run_id}") from exc
+        goal = goal or str(plan.get("goal") or "")
+        tasks = [task for task in plan.get("tasks", []) if not task.get("deleted_at")]
+        task = next((item for item in tasks if item.get("id") == task_id), None) if task_id else None
+        task = task or next((item for item in tasks if item.get("workspace_path")), None)
+        workspace_path = workspace_path or str((task or {}).get("workspace_path") or "")
+        if not workspace_path:
+            workspace_path = str((plan.get("main_agent") or {}).get("workspace_path") or "")
+
+    if not workspace_path:
+        raise ValueError("workspace_path or run_id required")
+    workspace = Path(workspace_path).expanduser()
+    if not workspace.is_dir():
+        raise ValueError(f"workspace_path is not a directory: {workspace_path}")
+    return {
+        "workspace_path": str(workspace),
+        "project_key": project_key_value,
+        "goal": goal,
+        "run_id": run_id or None,
+        "task_id": task_id or None,
+    }
 
 
 def knowledge_route_response(
@@ -230,7 +483,7 @@ def knowledge_route_response(
         entries = []
         for entry in iter_all_entries(root, cfg):
             meta = entry.get("meta", {})
-            if _is_navigation_child(entry):
+            if meta.get("type") == "navigation":
                 continue
             if scope and meta.get("scope") != scope:
                 continue
@@ -295,12 +548,293 @@ def knowledge_route_response(
         identifier = str(payload.get("id") or payload.get("slug") or query.get("id", [""])[0] or "").strip()
         if not identifier:
             return json_response({"error": "id or slug required"}, "400 Bad Request")
+        entry = find_entry(root, cfg, identifier)
+        if entry is None:
+            return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        if _is_project_navigation_index(entry):
+            project_key_value = str(entry.get("meta", {}).get("project_key") or "")
+            deleted_paths = delete_project_navigation(root, cfg, project_key_value)
+            git_result = auto_commit_after_change(
+                root, f"chore(knowledge): reset project nav '{project_key_value}'", cfg
+            )
+            return json_response({
+                "ok": True,
+                "deleted": identifier,
+                "reset_project_nav": True,
+                "project_key": project_key_value,
+                "deleted_count": len(deleted_paths),
+                "paths": [str(path) for path in deleted_paths],
+                "git": git_result,
+            })
         try:
             deleted_path = delete_entry(root, cfg, identifier)
         except FileNotFoundError:
             return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
         git_result = auto_commit_after_change(root, f"chore(knowledge): delete '{identifier}'", cfg)
         return json_response({"ok": True, "deleted": identifier, "path": str(deleted_path), "git": git_result})
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/project-nav":
+        context: dict = {}
+        project_key_value = _payload_value({}, query, "project_key", "project") or None
+        wants_context = any(name in query for name in ("workspace_path", "workspace", "run_id", "run", "task_id", "task"))
+        if not project_key_value and wants_context:
+            try:
+                context = _project_nav_bootstrap_context(root, {}, query)
+            except FileNotFoundError as exc:
+                return json_response({"error": str(exc)}, "404 Not Found")
+            except ValueError as exc:
+                return json_response({"error": str(exc)}, "400 Bad Request")
+            project_key_value = str(
+                context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+            )
+        entries = _navigation_summaries(root, cfg, project_key_value)
+        return _ok(method, {
+            "entries": entries,
+            "count": len(entries),
+            "project_key": project_key_value,
+            "workspace_path": context.get("workspace_path"),
+            "run_id": context.get("run_id"),
+            "task_id": context.get("task_id"),
+        })
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/project-nav/drafts":
+        context: dict = {}
+        project_key_value = _payload_value({}, query, "project_key", "project") or None
+        wants_context = any(name in query for name in ("workspace_path", "workspace", "run_id", "run", "task_id", "task"))
+        if not project_key_value and wants_context:
+            try:
+                context = _project_nav_bootstrap_context(root, {}, query)
+            except FileNotFoundError as exc:
+                return json_response({"error": str(exc)}, "404 Not Found")
+            except ValueError as exc:
+                return json_response({"error": str(exc)}, "400 Bad Request")
+            project_key_value = str(
+                context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+            )
+        drafts = [
+            _public_nav_draft(draft)
+            for draft in nav_drafts.list_drafts(root, cfg, project_key_value)
+            if _visible_nav_draft(draft)
+        ]
+        return _ok(method, {
+            "drafts": drafts,
+            "count": len(drafts),
+            "project_key": project_key_value,
+            "workspace_path": context.get("workspace_path"),
+        })
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/project-nav/draft":
+        draft_id = str(query.get("id", [""])[0] or query.get("draft_id", [""])[0] or "").strip()
+        if not draft_id:
+            return json_response({"error": "draft_id required"}, "400 Bad Request")
+        draft = nav_drafts.read_draft(root, cfg, draft_id)
+        if draft is None:
+            return json_response({"error": f"navigation draft not found: {draft_id}"}, "404 Not Found")
+        draft.pop("_path", None)
+        return _ok(method, {"draft": draft})
+
+    if method == "POST" and path == "/api/kb/project-nav":
+        payload = parse_json_body(body) if body.strip() else {}
+        try:
+            context = _project_nav_bootstrap_context(root, payload, query)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        try:
+            proxy_enabled = _optional_bool(payload.get("proxy_enabled"), "proxy_enabled")
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        backend = _payload_value(payload, query, "backend") or None
+        model = _payload_value(payload, query, "model") or None
+        project_key_value = context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+        if entry_exists(root, cfg, "project", "navigation", project_key_value, NAVIGATION_SLUG):
+            return json_response({
+                "ok": False,
+                "status": "already_exists",
+                "already_exists": True,
+                "error": "project navigation already exists; reset it before generating again",
+                "project_key": project_key_value,
+                "workspace_path": context["workspace_path"],
+            }, "409 Conflict")
+        blocking_draft = _blocking_project_nav_draft(
+            root,
+            cfg,
+            project_key_value=project_key_value,
+            workspace_path=context["workspace_path"],
+        )
+        if blocking_draft is not None:
+            status = str(blocking_draft.get("status") or "")
+            code = "already_running" if status == "running" else "already_has_draft"
+            return json_response({
+                "ok": False,
+                "status": code,
+                code: True,
+                "error": (
+                    "project navigation generation is already running"
+                    if code == "already_running"
+                    else "project navigation draft already exists; view, accept, or reject it first"
+                ),
+                "draft_id": blocking_draft.get("id"),
+                "draft": _public_nav_draft(blocking_draft),
+                "project_key": project_key_value,
+                "workspace_path": context["workspace_path"],
+            }, "409 Conflict")
+        draft = nav_drafts.create_draft(root, cfg, {
+            "status": "running",
+            "workspace_path": context["workspace_path"],
+            "project_key": project_key_value,
+            "run_id": context.get("run_id"),
+            "task_id": context.get("task_id"),
+            "backend": backend,
+            "model": model,
+            "proxy_enabled": proxy_enabled,
+            "summary": "Project nav generation running",
+            "agent_log": [
+                _nav_agent_log_event(
+                    "queued",
+                    "Project nav generation queued",
+                    backend=backend,
+                    model=model,
+                    proxy_enabled=proxy_enabled,
+                )
+            ],
+        })
+        dispatch_project_nav_job(
+            root,
+            cfg,
+            draft["id"],
+            workspace_path=context["workspace_path"],
+            goal=context.get("goal"),
+            project_key_value=project_key_value,
+            backend=backend,
+            model=model,
+            proxy_enabled=proxy_enabled,
+            agent=project_navigation_agent,
+        )
+        draft.pop("_path", None)
+        return json_response({
+            "ok": True,
+            "status": "running",
+            "draft_id": draft["id"],
+            "draft": draft,
+            "workspace_path": context["workspace_path"],
+            "project_key": project_key_value,
+            "run_id": context.get("run_id"),
+            "task_id": context.get("task_id"),
+        }, "202 Accepted")
+
+    if method == "POST" and path == "/api/kb/project-nav/draft/accept":
+        payload = parse_json_body(body) if body.strip() else {}
+        draft_id = str(payload.get("draft_id") or payload.get("id") or "").strip()
+        if not draft_id:
+            return json_response({"error": "draft_id required"}, "400 Bad Request")
+        draft = nav_drafts.read_draft(root, cfg, draft_id)
+        if draft is None:
+            return json_response({"error": f"navigation draft not found: {draft_id}"}, "404 Not Found")
+        if draft.get("status") != "completed":
+            return json_response({"error": "only completed navigation drafts can be accepted"}, "400 Bad Request")
+        candidates = draft.get("candidates") if isinstance(draft.get("candidates"), list) else []
+        validation = validate_navigation_candidates(root, cfg, candidates)
+        if not validation["ok"]:
+            return json_response({"error": "navigation draft validation failed", "validation": validation}, "400 Bad Request")
+        init_knowledge_base(root, cfg)
+        written: list[str] = []
+        for candidate in candidates:
+            path_written = write_entry(
+                root,
+                config=cfg,
+                scope=str(candidate.get("scope") or "project"),
+                kind="navigation",
+                project_key_value=candidate.get("project_key") or draft.get("project_key"),
+                title=str(candidate.get("title") or candidate.get("slug") or "Project navigation"),
+                body=str(candidate.get("body") or ""),
+                slug=str(candidate.get("slug") or ""),
+                meta=candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {"type": "navigation"},
+            )
+            written.append(str(path_written))
+        accepted_at = utc_now()
+        accepted_draft = {
+            "id": draft_id,
+            "status": "accepted",
+            "accepted_at": accepted_at,
+            "project_key": draft.get("project_key"),
+            "workspace_path": draft.get("workspace_path"),
+            "summary": f"Accepted {len(written)} navigation entries",
+            "written_paths": written,
+        }
+        nav_drafts.delete_draft(root, cfg, draft_id)
+        git_result = auto_commit_after_change(
+            root, f"chore(knowledge): accept project nav '{draft.get('project_key') or draft_id}'", cfg
+        )
+        return json_response({
+            "ok": True,
+            "draft": accepted_draft,
+            "draft_deleted": True,
+            "written_count": len(written),
+            "paths": written,
+            "git": git_result,
+        })
+
+    if method == "POST" and path == "/api/kb/project-nav/draft/reject":
+        payload = parse_json_body(body) if body.strip() else {}
+        draft_id = str(payload.get("draft_id") or payload.get("id") or "").strip()
+        if not draft_id:
+            return json_response({"error": "draft_id required"}, "400 Bad Request")
+        draft = nav_drafts.read_draft(root, cfg, draft_id)
+        if draft is None:
+            return json_response({"error": f"navigation draft not found: {draft_id}"}, "404 Not Found")
+        updated = nav_drafts.update_draft(
+            root,
+            cfg,
+            draft_id,
+            status="rejected",
+            rejected_at=utc_now(),
+            summary="Rejected project nav draft",
+            candidates=[],
+        )
+        updated.pop("_path", None)
+        updated.pop("candidates", None)
+        return json_response({"ok": True, "draft": updated})
+
+    if method == "DELETE" and path == "/api/kb/project-nav":
+        payload = parse_json_body(body) if body.strip() else {}
+        context: dict = {}
+        project_key_value = str(
+            payload.get("project_key")
+            or payload.get("project")
+            or query.get("project_key", [""])[0]
+            or query.get("project", [""])[0]
+            or ""
+        ).strip()
+        if not project_key_value:
+            try:
+                context = _project_nav_bootstrap_context(root, payload, query)
+            except FileNotFoundError as exc:
+                return json_response({"error": str(exc)}, "404 Not Found")
+            except ValueError as exc:
+                return json_response({"error": str(exc)}, "400 Bad Request")
+            project_key_value = str(
+                context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+            )
+        try:
+            deleted_paths = delete_project_navigation(root, cfg, project_key_value)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        git_result = auto_commit_after_change(
+            root, f"chore(knowledge): reset project nav '{project_key_value}'", cfg
+        )
+        return json_response({
+            "ok": True,
+            "reset_project_nav": True,
+            "project_key": project_key_value,
+            "workspace_path": context.get("workspace_path"),
+            "run_id": context.get("run_id"),
+            "task_id": context.get("task_id"),
+            "deleted_count": len(deleted_paths),
+            "paths": [str(path) for path in deleted_paths],
+            "git": git_result,
+        })
 
     if method in {"GET", "HEAD"} and path == "/api/kb/pending":
         return _ok(method, {"pending": list_pending(root, cfg), "count": len(list_pending(root, cfg))})
@@ -328,6 +862,14 @@ def knowledge_route_response(
             "ok": True,
             "action": "updated" if existing else "created",
             "path": str(entry_path),
+            "candidate": {
+                "id": cid,
+                "kind": candidate.get("kind", "solutions"),
+                "scope": candidate.get("scope", "project"),
+                "project_key": candidate.get("project_key"),
+                "slug": candidate.get("slug") or slugify(candidate.get("title", "")),
+                "title": candidate.get("title"),
+            },
             "git": git_result,
         })
 

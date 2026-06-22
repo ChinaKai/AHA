@@ -24,6 +24,7 @@ import datetime as _dt
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 
 from aha_cli.domain.models import default_knowledge_config, utc_now
@@ -38,6 +39,7 @@ GENERAL_DIR = "general"
 PERSONAL_DIR = "personal"
 PROJECTS_DIR = "projects"
 PENDING_DIR = ".pending"
+NAV_DRAFTS_DIR = ".nav_drafts"
 ENTRY_KINDS = ("wiki", "solutions", "navigation")
 # `personal` is a user scratch scope: stored and searchable like general, but
 # deliberately NOT auto-injected into task prompts (see knowledge_retrieval).
@@ -233,10 +235,16 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     if not readme.exists():
         readme.write_text(_render_readme(), encoding="utf-8")
 
-    # Unreviewed candidates live in .pending/ and must never be committed/pushed.
+    # Unreviewed candidates and navigation drafts are review/runtime state and
+    # must never be committed/pushed as durable knowledge entries.
     gitignore = kb_root / KNOWLEDGE_GITIGNORE_FILE
-    if not gitignore.exists():
-        gitignore.write_text(f"{PENDING_DIR}/\n", encoding="utf-8")
+    required_ignores = [f"{PENDING_DIR}/", ".capture/", f"{NAV_DRAFTS_DIR}/"]
+    existing = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    normalized_existing = {line.strip() for line in existing}
+    missing = [line for line in required_ignores if line not in normalized_existing]
+    if missing:
+        content = "\n".join(existing + missing).strip() + "\n"
+        gitignore.write_text(content, encoding="utf-8")
 
     return {
         "path": str(kb_root),
@@ -505,6 +513,22 @@ def delete_entry(root: Path, config: dict | None, identifier: str) -> Path:
     return path
 
 
+def delete_project_navigation(root: Path, config: dict | None, project_key_value: str) -> list[Path]:
+    """Delete an entire project's navigation subtree."""
+    project_key_value = str(project_key_value or "").strip()
+    if not project_key_value:
+        raise ValueError("project_key is required")
+    nav_dir = entry_dir(knowledge_root(root, config), "project", "navigation", project_key_value)
+    if not nav_dir.exists():
+        return []
+    if not nav_dir.is_dir():
+        nav_dir.unlink()
+        return [nav_dir]
+    deleted = _iter_entry_markdown(nav_dir)
+    shutil.rmtree(nav_dir)
+    return deleted
+
+
 def search_entries(root: Path, config: dict | None, query: str) -> list[dict]:
     """Case-insensitive substring search over title, tags, and body."""
     needle = (query or "").strip().lower()
@@ -551,6 +575,7 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
     kb_root = knowledge_root(root, config)
     cfg = knowledge_config(config)
     git_cfg = cfg.get("git", {}) if isinstance(cfg.get("git"), dict) else {}
+    project_nav_cfg = cfg.get("project_nav", {}) if isinstance(cfg.get("project_nav"), dict) else {}
     exists = kb_root.exists()
     index_path = _index_path(kb_root)
     schema_version = None
@@ -586,6 +611,10 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
             "is_repo": (kb_root / ".git").is_dir(),
         },
         "curation_gate": (cfg.get("curation") or {}).get("gate"),
+        "project_nav": {
+            "enabled": bool(project_nav_cfg.get("enabled", True)),
+            "maintain_during_task": bool(project_nav_cfg.get("maintain_during_task", True)),
+        },
         "general": general,
         "personal": personal,
         "projects": projects,

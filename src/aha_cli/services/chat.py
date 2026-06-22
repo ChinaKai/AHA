@@ -482,7 +482,7 @@ def _distill_memo_report_safe(
         task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
         if not task:
             return
-        from aha_cli.services.knowledge_distill import distill_after_memo_report
+        from aha_cli.services.knowledge_distill import distill_after_memo_report, navigation_delta_event_payload
 
         result = distill_after_memo_report(
             root,
@@ -496,6 +496,9 @@ def _distill_memo_report_safe(
             sidecar_candidates=sidecar_candidates,
         )
         append_event(root, run_id, "knowledge_memo_report_distilled", {"memo_id": memo_id, "task_id": task_id, "result": result})
+        navigation_event = navigation_delta_event_payload(result, source_type="memo_report", task_id=task_id, memo_id=memo_id)
+        if navigation_event:
+            append_event(root, run_id, "knowledge_navigation_delta", navigation_event)
     except Exception as exc:  # noqa: BLE001 - distillation must not affect memo reports
         append_event(root, run_id, "knowledge_memo_report_distill_failed", {"memo_id": memo_id, "task_id": task_id, "error": str(exc)})
 

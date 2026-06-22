@@ -15,6 +15,7 @@ from aha_cli.services.knowledge_distill import (
 )
 from aha_cli.services.chat import write_memo_report_result
 from aha_cli.store.config import load_config
+from aha_cli.store.filesystem import event_path, iter_jsonl_from
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import (
     approve_candidate,
@@ -22,6 +23,8 @@ from aha_cli.store.knowledge import (
     knowledge_root,
     list_entries,
     list_pending,
+    project_key,
+    write_entry,
 )
 from aha_cli.store.paths import config_path
 from aha_cli.store.runs import require_plan
@@ -426,6 +429,65 @@ def test_final_sidecar_is_stripped_and_enqueued(tmp_path: Path):
     assert pending[0]["title"] == "Use sidecar"
     assert pending[0]["meta"]["distilled_by"] == "sidecar"
     assert pending[0]["body"].startswith("## When")
+
+
+def test_final_navigation_sidecar_emits_nav_delta_event(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "Weixin readonly diagnostic", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    plan = require_plan(home, run_id)
+    workspace_path = str((plan.get("tasks") or [{}])[0].get("workspace_path") or (plan.get("main_agent") or {}).get("workspace_path"))
+    key = project_key(Path(workspace_path), goal=str(plan.get("goal") or ""))
+    write_entry(
+        home,
+        config=load_config(home),
+        scope="project",
+        kind="navigation",
+        project_key_value=key,
+        title="项目导航",
+        body="## 模块索引\n",
+        slug="index",
+        meta={"type": "navigation"},
+    )
+
+    from aha_cli.store.finals import write_task_result
+
+    write_task_result(
+        home,
+        run_id,
+        "task-001",
+        (
+            "## Final\nRead-only diagnosis.\n"
+            '<aha_knowledge_candidates>[{"kind":"navigation",'
+            '"title":"AHA 微信通知模块导航",'
+            '"slug":"modules/weixin-notifications",'
+            '"responsibility":"负责微信配对状态、通知开关和主动推送前的会话上下文检查。",'
+            '"related_files":["src/aha_cli/services/weixin.py","src/aha_cli/services/weixin_notifications.py","src/aha_cli/web/system_routes.py"],'
+            '"entry_points":["/api/weixin","/api/weixin/notifications"],'
+            '"diagnostic_paths":["已配对但收不到消息时先看 notification_status.ready 和 send_context.state。"],'
+            '"navigation_reason":"read-only diagnostic discovered the reusable Weixin notification path"}]</aha_knowledge_candidates>'
+        ),
+        policy="finalize",
+    )
+
+    pending = list_pending(home, load_config(home))
+    by_slug = {item["slug"]: item for item in pending}
+    assert set(by_slug) == {"modules/weixin-notifications", "index"}
+    assert "## 常用排查路径" in by_slug["modules/weixin-notifications"]["body"]
+    assert "modules/weixin-notifications.md" in by_slug["index"]["body"]
+
+    events, _ = iter_jsonl_from(event_path(home, run_id), 0)
+    distilled = next(event for event in events if event["type"] == "knowledge_task_final_distilled")
+    assert distilled["data"]["result"]["navigation"]["candidates"] == 2
+    delta = next(event for event in events if event["type"] == "knowledge_navigation_delta")
+    assert delta["data"]["source_type"] == "task_final"
+    assert "modules/weixin-notifications" in delta["data"]["navigation"]["slugs"]
 
 
 def test_linked_final_and_memo_sidecars_merge_pending_candidate(tmp_path: Path):

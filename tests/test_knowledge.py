@@ -36,6 +36,10 @@ def test_default_config_has_knowledge_block():
     assert cfg["knowledge"]["git"]["auto_commit"] is True
     assert cfg["knowledge"]["git"]["auto_push"] is False
     assert cfg["knowledge"]["curation"]["gate"] == "manual"
+    assert cfg["knowledge"]["project_nav"]["enabled"] is True
+    assert cfg["knowledge"]["project_nav"]["maintain_during_task"] is True
+    assert cfg["knowledge"]["retrieval"]["inject_mode"] == "references"
+    assert cfg["knowledge"]["retrieval"]["summary_chars"] == 120
 
 
 def test_load_config_deep_merges_partial_knowledge(tmp_path: Path):
@@ -53,6 +57,8 @@ def test_load_config_deep_merges_partial_knowledge(tmp_path: Path):
     assert kb["git"]["branch"] == "main"
     assert kb["git"]["auto_push"] is False
     assert kb["curation"]["gate"] == "manual"
+    assert kb["project_nav"]["enabled"] is True
+    assert kb["retrieval"]["inject_mode"] == "references"
     assert kb["retrieval"]["max_entries"] == 5
 
 
@@ -143,12 +149,31 @@ def test_init_is_idempotent_and_builds_layout(tmp_path: Path):
     assert (kb_root / "projects").is_dir()
     assert (kb_root / "aha-knowledge.json").is_file()
     assert (kb_root / "README.md").is_file()
+    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8")
+    assert ".pending/" in gitignore
+    assert ".capture/" in gitignore
+    assert ".nav_drafts/" in gitignore
 
     index_before = json.loads((kb_root / "aha-knowledge.json").read_text())
     second = init_knowledge_base(root, cfg)
     assert second["created"] is False
     # Idempotent: index untouched on re-init.
     assert json.loads((kb_root / "aha-knowledge.json").read_text()) == index_before
+
+
+def test_init_updates_existing_knowledge_gitignore(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = load_config(root)
+    kb_root = knowledge_root(root, cfg)
+    kb_root.mkdir(parents=True)
+    (kb_root / ".gitignore").write_text(".pending/\n", encoding="utf-8")
+
+    init_knowledge_base(root, cfg)
+
+    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8")
+    assert ".pending/" in gitignore
+    assert ".capture/" in gitignore
+    assert ".nav_drafts/" in gitignore
 
 
 def test_write_read_list_entry(tmp_path: Path):
@@ -250,3 +275,4 @@ def test_cli_kb_init_and_status(tmp_path: Path):
     assert status["initialized"] is True
     assert status["total_entries"] == 0
     assert status["curation_gate"] == "manual"
+    assert status["project_nav"]["enabled"] is True

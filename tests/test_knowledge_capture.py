@@ -18,6 +18,7 @@ from aha_cli.store.knowledge import (
     knowledge_root,
     list_pending,
     read_entry,
+    write_entry,
 )
 from aha_cli.store.knowledge_capture import promote_assets_for_entry
 from aha_cli.store import knowledge_capture as cap_store
@@ -209,6 +210,41 @@ def test_distill_note_writes_agent_log_success_and_error(tmp_path: Path):
 
     assert delete_note(home, cfg, bad_note["id"]) is True
     assert list_distill_logs(home, cfg, bad_note["id"]) == []
+
+
+def test_capture_navigation_distill_log_includes_nav_summary_and_parent(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="git-abc",
+        title="项目导航",
+        body="## 模块索引\n",
+        slug="index",
+        meta={"type": "navigation"},
+    )
+    note = create_note(home, cfg, text="微信通知排查链路", scope_hint="project")
+    reply = _sidecar_reply(
+        '[{"kind":"navigation","scope":"project","project_key":"git-abc",'
+        '"title":"AHA 微信通知模块导航","slug":"modules/weixin-notifications",'
+        '"responsibility":"负责微信通知状态和主动推送上下文。",'
+        '"diagnostic_paths":["先看 notification_status.ready，再看 send_context.state。"]}]'
+    )
+
+    result = distill_note(home, cfg, note["id"], agent=_stub(reply))
+
+    assert result["ok"]
+    assert result["navigation"]["candidates"] == 2
+    pending = list_pending(home, cfg)
+    by_slug = {item["slug"]: item for item in pending}
+    assert set(by_slug) == {"modules/weixin-notifications", "index"}
+    assert "notification_status.ready" in by_slug["modules/weixin-notifications"]["body"]
+    log = read_distill_log(home, cfg, note["id"])
+    assert log["navigation"]["candidates"] == 2
+    assert "modules/weixin-notifications" in log["navigation"]["slugs"]
 
 
 def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monkeypatch):
@@ -431,6 +467,16 @@ def test_distill_prompt_lists_images_without_pretending_to_see_them(tmp_path: Pa
     assert "a.png" in prompt
     assert "NOT visually analyzed" in prompt
     assert "Do NOT invent image contents" in prompt
+
+
+def test_distill_prompt_allows_readonly_diagnostics_to_update_navigation(tmp_path: Path):
+    from aha_cli.services.knowledge_capture_distill import build_capture_prompt
+
+    prompt = build_capture_prompt({"text": "只读排查发现微信通知入口", "scope_hint": "project"})
+
+    assert "Read-only diagnostics count" in prompt
+    assert "diagnostic_paths" in prompt
+    assert "navigation_reason" in prompt
 
 
 def test_approve_promotes_capture_note_assets_to_entry(tmp_path: Path):
