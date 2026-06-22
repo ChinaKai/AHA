@@ -11,6 +11,7 @@ import sys
 
 from aha_cli.backends.registry import normalize_model_selector, resolve_model
 from aha_cli.domain.models import utc_now
+from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
@@ -317,12 +318,17 @@ def run_codex_exec(
             cmd.insert(insert_at, part)
             insert_at += 1
 
+    env = os.environ.copy()
+    add_user_backend_paths(env)
+    apply_codex_environment(env, codex_config)
+    apply_proxy_environment(env, proxy_env)
+
     print(f"Running Codex backend: {' '.join(shlex.quote(part) for part in cmd[:-1])} -", flush=True)
     try:
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
-            env=apply_proxy_environment(apply_codex_environment(os.environ.copy(), codex_config), proxy_env),
+            env=env,
             text=True,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

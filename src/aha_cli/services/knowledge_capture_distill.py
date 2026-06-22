@@ -26,6 +26,7 @@ from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.knowledge_distill import normalize_sidecar_candidates
+from aha_cli.services.proxy import backend_proxy_config, normalize_proxy_value
 from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, remove_pending
 from aha_cli.store.knowledge_capture import create_distill_log, read_note, update_distill_log, update_note
 from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
@@ -97,21 +98,45 @@ def build_capture_prompt(note: dict) -> str:
     )
 
 
+def _effective_proxy_enabled(config: dict | None, backend: str, proxy_enabled: bool | None) -> bool:
+    if proxy_enabled is not None:
+        return bool(proxy_enabled)
+    return bool(backend_proxy_config(config, backend).get("enabled"))
+
+
+def _backend_proxy_env(config: dict | None, backend: str, proxy_enabled: bool | None = None) -> dict[str, str]:
+    proxy = backend_proxy_config(config, backend)
+    if not _effective_proxy_enabled(config, backend, proxy_enabled):
+        return {}
+    values = {
+        "HTTP_PROXY": normalize_proxy_value(proxy.get("http_proxy")),
+        "HTTPS_PROXY": normalize_proxy_value(proxy.get("https_proxy")),
+        "NO_PROXY": normalize_proxy_value(proxy.get("no_proxy")),
+    }
+    env: dict[str, str] = {}
+    for key, value in values.items():
+        if value:
+            env[key] = value
+            env[key.lower()] = value
+    return env
+
+
 def default_capture_agent(context: dict) -> str:
     """Real seam: run the note through the existing backend exec chain.
 
     Best-effort and dependency-free (reuses run_claude_exec / run_codex_exec).
     Kept replaceable: callers may pass their own ``agent`` to skip this.
     """
-    backend = str(context.get("backend") or "claude").strip().lower()
     model = context.get("model")
     config = context.get("config") if isinstance(context.get("config"), dict) else {}
+    backend = _effective_backend(config, context.get("backend"))
     if backend == "codex" and not model:
         model = ((config.get("codex") or {}) if isinstance(config, dict) else {}).get("model")
     if backend == "claude" and not model:
         model = ((config.get("claude") or {}) if isinstance(config, dict) else {}).get("model")
     prompt = str(context.get("prompt") or "")
     cwd = Path(context.get("cwd") or Path.cwd())
+    proxy_env = _backend_proxy_env(config, backend, context.get("proxy_enabled"))
     try:
         with tempfile.TemporaryDirectory() as tmp:
             output_file = Path(tmp) / "capture_reply.txt"
@@ -119,20 +144,23 @@ def default_capture_agent(context: dict) -> str:
                 from aha_cli.backends.codex import run_codex_exec
 
                 codex_config = (config.get("codex") or {}) if isinstance(config, dict) else {}
+                codex_bin = str(codex_config.get("bin") or "codex")
                 _, reply, _ = run_codex_exec(
                     prompt, cwd=cwd, output_file=output_file,
-                    codex_bin="codex", model=model, sandbox="read-only",
-                    approval="never", codex_config=codex_config,
+                    codex_bin=codex_bin, model=model, sandbox="read-only",
+                    approval="never", codex_config=codex_config, proxy_env=proxy_env,
                 )
             else:
                 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, run_claude_exec
 
-                claude_config = claude_config_for_model((config.get("claude") or {}) if isinstance(config, dict) else {}, model)
+                raw_claude_config = (config.get("claude") or {}) if isinstance(config, dict) else {}
+                claude_bin = str(raw_claude_config.get("bin") or "claude")
+                claude_config = claude_config_for_model(raw_claude_config, model)
                 command_model = claude_cli_model(model, claude_config)
                 _, reply, _ = run_claude_exec(
                     prompt, cwd=cwd, output_file=output_file,
-                    claude_bin="claude", model=command_model, permission_mode="plan",
-                    claude_config=claude_config,
+                    claude_bin=claude_bin, model=command_model, permission_mode="plan",
+                    claude_config=claude_config, proxy_env=proxy_env,
                 )
             return reply or ""
     except Exception as exc:  # noqa: BLE001 - surface as a typed error to the caller
@@ -148,9 +176,16 @@ def _downgrade_unbound_project(candidate: dict) -> dict:
     return candidate
 
 
-def _effective_backend(backend: str | None) -> str:
-    clean = str(backend or "claude").strip().lower()
-    return clean or "claude"
+def _effective_backend(config: dict | None, backend: str | None) -> str:
+    allowed = {"codex", "claude"}
+    clean = str(backend or "").strip().lower()
+    if clean in allowed:
+        return clean
+    if isinstance(config, dict):
+        configured = str(config.get("backend") or "").strip().lower()
+        if configured in allowed:
+            return configured
+    return "claude"
 
 
 def _effective_model(config: dict | None, backend: str, model: str | None) -> str | None:
@@ -170,6 +205,7 @@ def distill_note(
     *,
     backend: str | None = None,
     model: str | None = None,
+    proxy_enabled: bool | None = None,
     agent: CaptureAgent | None = None,
 ) -> dict:
     """Distill one raw note into pending candidates; mark the note distilled.
@@ -183,11 +219,13 @@ def distill_note(
         return {"ok": False, "error": f"capture note not found: {note_id}"}
 
     prompt = build_capture_prompt(note)
-    effective_backend = _effective_backend(backend)
+    effective_backend = _effective_backend(config, backend)
     effective_model = _effective_model(config, effective_backend, model)
+    effective_proxy_enabled = _effective_proxy_enabled(config, effective_backend, proxy_enabled)
     log = create_distill_log(root, config, note_id, {
         "backend": effective_backend,
         "model": effective_model,
+        "proxy_enabled": effective_proxy_enabled,
         "status": "running",
         "prompt": prompt,
         "started_at": utc_now(),
@@ -195,7 +233,15 @@ def distill_note(
     log_id = log["id"]
     agent_fn = agent or default_capture_agent
     try:
-        reply = agent_fn({"prompt": prompt, "note": note, "backend": backend, "model": model, "config": config, "cwd": root})
+        reply = agent_fn({
+            "prompt": prompt,
+            "note": note,
+            "backend": effective_backend,
+            "model": effective_model,
+            "proxy_enabled": effective_proxy_enabled,
+            "config": config,
+            "cwd": root,
+        })
     except CaptureAgentError as exc:
         error = f"capture agent failed: {exc}"
         update_distill_log(root, config, note_id, log_id, status="error", error=error, finished_at=utc_now())
@@ -254,6 +300,7 @@ def run_distill_job(
     *,
     backend: str | None = None,
     model: str | None = None,
+    proxy_enabled: bool | None = None,
     agent: CaptureAgent | None = None,
 ) -> dict:
     """Run distillation as a job that drives the note's status state machine.
@@ -266,7 +313,7 @@ def run_distill_job(
         update_note(root, config, note_id, status="distilling", last_error="")
     except FileNotFoundError:
         return {"ok": False, "error": f"capture note not found: {note_id}"}
-    result = distill_note(root, config, note_id, backend=backend, model=model, agent=agent)
+    result = distill_note(root, config, note_id, backend=backend, model=model, proxy_enabled=proxy_enabled, agent=agent)
     if not result.get("ok"):
         try:
             update_note(root, config, note_id, status="error", last_error=result.get("error", "distill failed"))

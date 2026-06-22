@@ -14,6 +14,7 @@ from aha_cli.backends.claude import apply_claude_environment, claude_cli_model, 
 from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
 from aha_cli.backends.registry import normalize_model_selector, resolve_model
 from aha_cli.domain.models import utc_now
+from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.context_pressure import context_pressure
 from aha_cli.services.prompt_templates import render_prompt_template
@@ -563,25 +564,7 @@ def _backend_process_env(
 
 
 def _add_user_backend_paths(env: dict[str, str]) -> None:
-    home = Path.home()
-    candidates = [
-        home / ".local" / "bin",
-        home / ".npm-global" / "bin",
-    ]
-    nvm_root = home / ".nvm" / "versions" / "node"
-    if nvm_root.is_dir():
-        candidates.extend(sorted(nvm_root.glob("*/bin"), reverse=True))
-
-    existing = [item for item in env.get("PATH", "").split(os.pathsep) if item]
-    merged: list[str] = []
-    seen: set[str] = set()
-    for path in [str(candidate) for candidate in candidates if candidate.is_dir()] + existing:
-        if path in seen:
-            continue
-        seen.add(path)
-        merged.append(path)
-    if merged:
-        env["PATH"] = os.pathsep.join(merged)
+    add_user_backend_paths(env, home=Path.home())
 
 
 def start_backend(

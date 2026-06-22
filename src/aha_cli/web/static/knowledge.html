@@ -198,6 +198,9 @@
         <select id="cap-backend" aria-label="Distill backend"></select>
         <select id="cap-model" aria-label="Distill model"></select>
       </div>
+      <div class="kb-row">
+        <label class="kb-field"><input type="checkbox" id="cap-proxy-enabled" /> <span data-i18n="knowledge.capture_proxy_enabled">Use proxy</span></label>
+      </div>
       <div class="kb-card-actions">
         <button class="kb-approve" type="button" id="cap-distill-go" data-i18n="knowledge.capture_distill">Distill</button>
         <button class="button-ghost" type="button" id="cap-distill-cancel" data-i18n="common.cancel">Cancel</button>
@@ -302,7 +305,7 @@
       return /^(https?:|mailto:|\/|#|\.)/i.test(raw) ? raw : "";
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
-    const state = { entries: [], pending: [], capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, activeTab: "entries" };
+    const state = { entries: [], pending: [], capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, activeTab: "entries" };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -753,6 +756,16 @@
       const cfg = state.captureConfig?.[backendName] || {};
       return configString(cfg.model) || captureEnvModelValue(cfg.env_active);
     }
+    function captureDefaultProxyEnabled(backendName) {
+      const backendProxy = state.captureConfig?.[backendName]?.proxy || {};
+      return Boolean(backendProxy.enabled);
+    }
+    function syncCaptureProxyCheckbox(useLast = true) {
+      const checkbox = $("#cap-proxy-enabled");
+      if (!checkbox) return;
+      const remembered = typeof state.lastProxyEnabled === "boolean";
+      checkbox.checked = useLast && remembered ? state.lastProxyEnabled : captureDefaultProxyEnabled($("#cap-backend").value);
+    }
     function renderCaptureModels(selectedModel) {
       const backendName = $("#cap-backend").value;
       const models = captureModelOptions(backendName);
@@ -773,6 +786,7 @@
         const selectedBackend = state.lastBackend || configString(state.captureConfig?.backend, "codex");
         if (backends.includes(selectedBackend)) $("#cap-backend").value = selectedBackend;
         renderCaptureModels();
+        syncCaptureProxyCheckbox(false);
       } catch (e) { /* selectors stay empty -> distill falls back to server default */ }
     }
 
@@ -849,6 +863,7 @@
       if (!state.captureBackends) await loadCaptureAgents();
       if (state.lastBackend) { $("#cap-backend").value = state.lastBackend; renderCaptureModels(); }
       if (state.lastModel) $("#cap-model").value = state.lastModel;
+      syncCaptureProxyCheckbox(true);
       $("#cap-distill-modal").hidden = false;
     };
     function closeDistillModal() { $("#cap-distill-modal").hidden = true; state.distillTarget = null; }
@@ -858,13 +873,14 @@
       const id = state.distillTarget;
       state.lastBackend = $("#cap-backend").value;
       state.lastModel = $("#cap-model").value;
+      state.lastProxyEnabled = $("#cap-proxy-enabled").checked;
       closeDistillModal();
-      if (id) runDistill(id, state.lastBackend || null, state.lastModel || null);
+      if (id) runDistill(id, state.lastBackend || null, state.lastModel || null, state.lastProxyEnabled);
     });
 
-    async function runDistill(id, backend, model) {
+    async function runDistill(id, backend, model, proxyEnabled) {
       try {
-        await api("/api/kb/capture/distill", { method: "POST", body: JSON.stringify({ id, backend, model }) });
+        await api("/api/kb/capture/distill", { method: "POST", body: JSON.stringify({ id, backend, model, proxy_enabled: Boolean(proxyEnabled) }) });
         toast(t("knowledge.capture_distilling", "Distilling…"));
         await loadCapture();
         for (let i = 0; i < 60; i++) {
@@ -964,7 +980,7 @@
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
       }
     });
-    $("#cap-backend").addEventListener("change", renderCaptureModels);
+    $("#cap-backend").addEventListener("change", () => { renderCaptureModels(); syncCaptureProxyCheckbox(false); });
 
     async function loadSettings() {
       const s = await api("/api/kb/config");

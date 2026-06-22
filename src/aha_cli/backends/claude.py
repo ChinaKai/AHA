@@ -11,6 +11,7 @@ import sys
 from aha_cli.backends.codex import OUTPUT_TAIL_LIMIT, is_context_overflow_message, tail_text
 from aha_cli.backends.registry import normalize_model_selector
 from aha_cli.domain.models import utc_now
+from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.native_subagents import (
     CLAUDE_NATIVE_SUBAGENT_TOOLS,
     text_claims_subagent_created,
@@ -338,6 +339,7 @@ def run_claude_exec(
 
     config_env = claude_config_env(claude_config)
     env = os.environ.copy()
+    add_user_backend_paths(env)
     env.update(config_env)
     apply_proxy_environment(env, proxy_env)
     if config_env and not claude_auth_configured(env):

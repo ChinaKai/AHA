@@ -216,7 +216,14 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
 
     cfg = {
         "claude": {
+            "bin": "/opt/claude/bin/claude",
             "model": "env:work",
+            "proxy": {
+                "enabled": True,
+                "http_proxy": "http://claude.proxy:7890",
+                "https_proxy": "http://claude.proxy:7890",
+                "no_proxy": "localhost,127.0.0.1",
+            },
             "env": [
                 {
                     "name": "work",
@@ -237,9 +244,16 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
     reply = default_capture_agent({"prompt": "organize", "backend": "claude", "model": "env:work", "config": cfg, "cwd": tmp_path})
 
     assert "aha_knowledge_candidates" in reply
+    assert seen["claude_bin"] == "/opt/claude/bin/claude"
     assert seen["model"] is None
     assert seen["claude_config"]["env_active"] == "work"
     assert seen["claude_config"]["env"][0]["ANTHROPIC_API_KEY"] == "work-key"
+    assert seen["proxy_env"]["HTTPS_PROXY"] == "http://claude.proxy:7890"
+    assert seen["proxy_env"]["https_proxy"] == "http://claude.proxy:7890"
+    assert seen["proxy_env"]["NO_PROXY"] == "localhost,127.0.0.1"
+    seen.clear()
+    default_capture_agent({"prompt": "organize", "backend": "claude", "model": "env:work", "proxy_enabled": False, "config": cfg, "cwd": tmp_path})
+    assert seen["proxy_env"] == {}
 
 
 def test_default_capture_agent_passes_codex_env_group_config(tmp_path: Path, monkeypatch):
@@ -247,7 +261,14 @@ def test_default_capture_agent_passes_codex_env_group_config(tmp_path: Path, mon
 
     cfg = {
         "codex": {
+            "bin": "/opt/codex/bin/codex",
             "model": "env:openai",
+            "proxy": {
+                "enabled": True,
+                "http_proxy": "http://codex.proxy:7890",
+                "https_proxy": "http://codex.proxy:7890",
+                "no_proxy": "localhost,127.0.0.1",
+            },
             "env": [
                 {
                     "name": "openai",
@@ -268,8 +289,39 @@ def test_default_capture_agent_passes_codex_env_group_config(tmp_path: Path, mon
     reply = default_capture_agent({"prompt": "organize", "backend": "codex", "model": "env:openai", "config": cfg, "cwd": tmp_path})
 
     assert "aha_knowledge_candidates" in reply
+    assert seen["codex_bin"] == "/opt/codex/bin/codex"
     assert seen["model"] == "env:openai"
     assert seen["codex_config"]["env"][0]["OPENAI_API_KEY"] == "openai-key"
+    assert seen["proxy_env"]["HTTP_PROXY"] == "http://codex.proxy:7890"
+    assert seen["proxy_env"]["http_proxy"] == "http://codex.proxy:7890"
+    assert seen["proxy_env"]["NO_PROXY"] == "localhost,127.0.0.1"
+    seen.clear()
+    default_capture_agent({"prompt": "organize", "backend": "codex", "model": "env:openai", "proxy_enabled": False, "config": cfg, "cwd": tmp_path})
+    assert seen["proxy_env"] == {}
+
+
+def test_distill_note_passes_effective_backend_and_model_to_agent(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    cfg["backend"] = "codex"
+    cfg["codex"] = {"model": "env:openai", "proxy": {"enabled": True, "http_proxy": "http://codex.proxy:7890"}}
+    note = create_note(home, cfg, text="raw", scope_hint="personal")
+    seen = {}
+
+    def agent(ctx):
+        seen.update(ctx)
+        return _sidecar_reply(_ONE_CANDIDATE)
+
+    result = distill_note(home, cfg, note["id"], proxy_enabled=False, agent=agent)
+
+    assert result["ok"]
+    assert seen["backend"] == "codex"
+    assert seen["model"] == "env:openai"
+    assert seen["proxy_enabled"] is False
+    log = read_distill_log(home, cfg, note["id"])
+    assert log["backend"] == "codex"
+    assert log["model"] == "env:openai"
+    assert log["proxy_enabled"] is False
 
 
 def test_distill_rerun_replaces_previous_candidates(tmp_path: Path):

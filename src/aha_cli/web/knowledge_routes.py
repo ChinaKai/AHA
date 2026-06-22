@@ -37,7 +37,7 @@ from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 
 
-def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, model) -> None:
+def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, model, proxy_enabled=None) -> None:
     """Run a capture distill as a background daemon thread (non-blocking).
 
     Seam: tests replace ``dispatch_distill_job`` to run synchronously with a
@@ -51,7 +51,7 @@ def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, 
     threading.Thread(
         target=run_distill_job,
         args=(root, cfg, note_id),
-        kwargs={"backend": backend, "model": model},
+        kwargs={"backend": backend, "model": model, "proxy_enabled": proxy_enabled},
         daemon=True,
     ).start()
 
@@ -144,6 +144,19 @@ def _as_string_list(value) -> list[str]:
 
 _ALLOWED_GATES = {"manual", "auto", "off"}
 _ALLOWED_ENTRY_STATUSES = {"active", "stale", "deprecated"}
+
+
+def _optional_bool(value, field: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    clean = str(value).strip().lower()
+    if clean in {"1", "true", "yes", "on"}:
+        return True
+    if clean in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{field} must be a boolean")
 
 
 def _apply_settings_patch(root: Path, payload: dict) -> dict:
@@ -345,10 +358,14 @@ def knowledge_route_response(
         note = capture.read_note(root, cfg, note_id)
         if note is None:
             return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
+        try:
+            proxy_enabled = _optional_bool(payload.get("proxy_enabled"), "proxy_enabled")
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
         # Mark distilling synchronously so an immediate poll observes the job,
         # then run the slow model call off the request thread.
         capture.update_note(root, cfg, note_id, status="distilling", last_error="")
-        dispatch_distill_job(root, cfg, note_id, payload.get("backend"), payload.get("model"))
+        dispatch_distill_job(root, cfg, note_id, payload.get("backend"), payload.get("model"), proxy_enabled)
         return json_response({"ok": True, "id": note_id, "status": "distilling"})
 
     if method in {"GET", "HEAD"} and path == "/api/kb/capture/distill-log":

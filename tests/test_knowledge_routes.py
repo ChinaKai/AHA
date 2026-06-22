@@ -106,8 +106,8 @@ def test_capture_api_crud_and_distill(tmp_path: Path, monkeypatch):
     # Distill runs synchronously through the seam with a stub agent.
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model):
-        run_distill_job(root, cfg, note_id, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     resp = json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -164,19 +164,19 @@ def test_capture_image_rejects_non_image(tmp_path: Path):
     assert "unsupported image type" in body["error"]
 
 
-def test_capture_distill_forwards_backend_and_model(tmp_path: Path, monkeypatch):
+def test_capture_distill_forwards_backend_model_and_proxy(tmp_path: Path, monkeypatch):
     import aha_cli.web.knowledge_routes as kr
 
     home = _setup(tmp_path)
     nid = json_response_body(_post(home, "/api/kb/capture", {"text": "raw"}))["note"]["id"]
     seen = {}
 
-    def record_dispatch(root, cfg, note_id, backend, model):
-        seen.update({"note_id": note_id, "backend": backend, "model": model})
+    def record_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
+        seen.update({"note_id": note_id, "backend": backend, "model": model, "proxy_enabled": proxy_enabled})
 
     monkeypatch.setattr(kr, "dispatch_distill_job", record_dispatch)
-    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid, "backend": "claude", "model": "claude-opus-4-8"}))
-    assert seen == {"note_id": nid, "backend": "claude", "model": "claude-opus-4-8"}
+    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False}))
+    assert seen == {"note_id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False}
 
 
 def test_capture_distill_missing_note_is_404(tmp_path: Path):

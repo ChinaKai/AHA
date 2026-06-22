@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import textwrap
@@ -293,6 +294,37 @@ class BackendRunnerSessionTests(unittest.TestCase):
             self.assertNotIn("OPENAI_BASE_URL", env)
             self.assertEqual(env["MINIMAX_API_KEY"], "openai-key")
             self.assertEqual(codex_config_env({"env_active": None, "env": [{"name": "openai", "OPENAI_API_KEY": "x"}]}), {})
+
+    def test_codex_exec_adds_common_user_bin_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_home = tmp_path / "home"
+            nvm_bin = fake_home / ".nvm" / "versions" / "node" / "v24.15.0" / "bin"
+            local_bin = fake_home / ".local" / "bin"
+            nvm_bin.mkdir(parents=True)
+            local_bin.mkdir(parents=True)
+            output = tmp_path / "reply.md"
+            output.write_text("done", encoding="utf-8")
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO("")
+
+                def wait(self) -> int:
+                    return 0
+
+            with (
+                mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+                mock.patch("aha_cli.services.backend_paths.Path.home", return_value=fake_home),
+                mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()) as popen,
+            ):
+                code, reply, _ = run_codex_exec("hello", cwd=tmp_path, output_file=output)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(reply, "done")
+            parts = popen.call_args.kwargs["env"]["PATH"].split(os.pathsep)
+            self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+            self.assertLess(parts.index(str(nvm_bin)), parts.index("/usr/bin"))
 
     def test_codex_env_group_generates_provider_overrides(self) -> None:
         overrides = codex_config_overrides(
