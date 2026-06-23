@@ -42,7 +42,7 @@ function readStoredTaskMemoView() {
   }
 }
 const initialTaskMemoStoredView = readStoredTaskMemoView();
-const initialTaskMemoHomeActive = initialTaskMemoQueryView === "memo" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "memo");
+const initialTaskMemoHomeActive = initialTaskMemoQueryView === "memo" || (!initialSelectedTaskId && !initialTaskMemoQueryView && (initialTaskMemoStoredView === "memo" || initialTaskMemoStoredView === ""));
 const initialKnowledgeHomeActive = initialTaskMemoQueryView === "kb" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "kb");
 const initialSettingsHomeActive = initialTaskMemoQueryView === "settings" || (!initialSelectedTaskId && !initialTaskMemoQueryView && initialTaskMemoStoredView === "settings");
 let selectedTaskId = (initialTaskMemoHomeActive || initialKnowledgeHomeActive || initialSettingsHomeActive) ? null : (initialSelectedTaskId || null);
@@ -92,6 +92,15 @@ function applyInitialSettingsHomeState() {
 }
 
 applyInitialSettingsHomeState();
+
+function applyInitialTaskHomeState() {
+  if (initialTaskMemoHomeActive || initialKnowledgeHomeActive || initialSettingsHomeActive) return;
+  document.getElementById("open-task-view")?.setAttribute("aria-pressed", "true");
+  document.getElementById("open-task-memos")?.setAttribute("aria-pressed", "false");
+  document.getElementById("open-knowledge-base")?.setAttribute("aria-pressed", "false");
+}
+
+applyInitialTaskHomeState();
 
 let activeTab = "conversation";
 let taskActionInFlight = false;
