@@ -22,6 +22,7 @@ class TaskCommandRouterTests(unittest.TestCase):
             format_aha_command=lambda root, run_id, task_id, command, target: f"formatted {command} for {target}",
             format_agent_command=lambda root, run_id, task_id, agent_id, command: (False, "/status", None),
             request_task_finalization=lambda root, run_id, task_id, command: f"final requested by {command}",
+            complete_selected_task=lambda root, run_id, task_id: ("completed directly", {"ok": True, "mode": "direct"}),
             reopen_selected_task=lambda root, run_id, task_id: "reopened",
             interrupt_selected_agent=lambda root, run_id, task_id, target: ("interrupted", {"interrupted": True, "target": target}),
             prepare_task_main_autostart=lambda root, run_id, task_id: {"backend": "codex", "target": "main", "task_id": task_id},
@@ -94,7 +95,7 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertNotIn("backend_autostart", payload)
         self.assertEqual(payload["message"]["message"], "formatted /aha finalize for main")
 
-    def test_aha_complete_is_not_a_finalization_alias(self) -> None:
+    def test_aha_complete_marks_task_complete_without_backend_autostart(self) -> None:
         handlers, _ = self.make_handlers()
 
         handled, forwarded, payload = handle_slash_command(
@@ -109,7 +110,8 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertIsNone(forwarded)
         self.assertNotIn("backend_autostart", payload)
-        self.assertEqual(payload["message"]["message"], "formatted /aha complete for main")
+        self.assertEqual(payload["message"]["message"], "completed directly")
+        self.assertEqual(payload["completion"]["mode"], "direct")
 
     def test_interrupt_attaches_action_payload(self) -> None:
         handlers, _ = self.make_handlers()

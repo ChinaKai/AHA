@@ -25,6 +25,7 @@ from aha_cli.store.filesystem import (
 from aha_cli.web.task_messaging import handle_send_payload, task_host_review_message_blocker
 from aha_cli.web.task_command_actions import (
     compact_reset_selected_agent,
+    complete_selected_task,
     interrupt_selected_agent,
     record_task_checkpoint,
     reopen_selected_task,
@@ -85,6 +86,35 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertEqual(detail["status"], "running")
         self.assertEqual(main_messages[-1]["result_policy"], "finalize")
         self.assertIn("Generate or update the task Final", main_messages[-1]["message"])
+
+    def test_complete_selected_task_marks_complete_without_final_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+            set_agent_status(root, run_id, "task-001", sub["id"], "running")
+            set_task_status(root, run_id, "task-001", "running")
+
+            with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[{"target": sub["id"], "status": "stopped"}]) as stop_backends:
+                message, payload = complete_selected_task(root, run_id, "task-001")
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            detail = task_snapshot(root, run_id, "task-001")
+            events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+            main_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")
+            sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == sub["id"])
+
+        self.assertIn("without generating a Final", message)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["mode"], "direct")
+        self.assertEqual(detail["task"]["status"], "completed")
+        self.assertEqual(main_agent["status"], "completed")
+        self.assertEqual(sub_agent["status"], "stopped")
+        self.assertEqual(detail["result"], "")
+        self.assertEqual(main_messages, [])
+        self.assertIn("completion_marked_at", detail["task"]["coordination"])
+        self.assertTrue(any(event["type"] == "task_completed" for event in events))
+        self.assertFalse(any(event["type"] == "task_final_requested" for event in events))
+        stop_backends.assert_called_once()
 
     def test_reopen_selected_task_unlocks_completed_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

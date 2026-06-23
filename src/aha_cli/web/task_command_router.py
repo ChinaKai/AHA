@@ -12,6 +12,7 @@ class SlashCommandHandlers:
     format_aha_command: Callable[[Path, str, str | None, str, str], str]
     format_agent_command: Callable[[Path, str, str | None, str | None, str], tuple[bool, str | None, str | None]]
     request_task_finalization: Callable[[Path, str, str | None, str], str]
+    complete_selected_task: Callable[[Path, str, str | None], tuple[str, dict]]
     reopen_selected_task: Callable[[Path, str, str | None], str]
     interrupt_selected_agent: Callable[[Path, str, str | None, str], tuple[str, dict]]
     prepare_task_main_autostart: Callable[[Path, str, str | None], dict | None]
@@ -21,6 +22,7 @@ class SlashCommandHandlers:
 
 def default_slash_command_handlers() -> SlashCommandHandlers:
     from aha_cli.web.task_command_actions import (
+        complete_selected_task,
         interrupt_selected_agent,
         request_task_finalization,
         reopen_selected_task,
@@ -32,6 +34,7 @@ def default_slash_command_handlers() -> SlashCommandHandlers:
         format_aha_command=format_aha_command,
         format_agent_command=format_agent_command,
         request_task_finalization=request_task_finalization,
+        complete_selected_task=complete_selected_task,
         reopen_selected_task=reopen_selected_task,
         interrupt_selected_agent=interrupt_selected_agent,
         prepare_task_main_autostart=prepare_task_main_autostart,
@@ -58,6 +61,7 @@ def handle_slash_command(
     stripped = message.strip()
     backend_autostart = None
     interrupt_payload = None
+    completion_payload = None
     target = selected_target(payload)
 
     if not stripped.startswith("/"):
@@ -88,6 +92,8 @@ def handle_slash_command(
         if name == "final":
             backend_autostart = handlers.prepare_task_main_autostart(root, run_id, task_id)
             reply = handlers.request_task_finalization(root, run_id, task_id, stripped)
+        elif name == "complete":
+            reply, completion_payload = handlers.complete_selected_task(root, run_id, task_id)
         elif name == "reopen":
             reply = handlers.reopen_selected_task(root, run_id, task_id)
         elif name == "interrupt":
@@ -95,7 +101,7 @@ def handle_slash_command(
         else:
             reply = handlers.format_aha_command(root, run_id, task_id, stripped, target)
     else:
-        reply = f"Unknown command: {stripped.split()[0]}. Supported slash commands: /aha final, /aha reopen, /aha interrupt, /agent <command>."
+        reply = f"Unknown command: {stripped.split()[0]}. Supported slash commands: /aha final, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
     handlers.append_event(root, run_id, "aha_command_handled", {"task_id": task_id, "command": stripped})
     response = handlers.append_message(
@@ -115,6 +121,8 @@ def handle_slash_command(
         command_response["backend_autostart"] = backend_autostart
     if interrupt_payload is not None:
         command_response["interrupt"] = interrupt_payload
+    if completion_payload is not None:
+        command_response["completion"] = completion_payload
     return True, None, command_response
 
 

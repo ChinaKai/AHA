@@ -88,6 +88,7 @@ from aha_cli.web.http_utils import parse_json_body, parse_multipart_form, parse_
 from aha_cli.web.run_api import require_api_run_id
 from aha_cli.web.status import recover_stale_running_agents
 from aha_cli.web.task_actions import (
+    complete_selected_task,
     handle_send_payload,
     parse_task_context_management_fields,
     parse_task_hardware_debug_fields,
@@ -212,10 +213,14 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             task = set_task_hidden(root, run_id, task_id, True)
         elif action == "restore":
             task = set_task_hidden(root, run_id, task_id, False)
-        elif action in {"final", "complete"}:
+        elif action == "final":
             final_payload = request_task_finalization_with_backend(root, run_id, task_id, f"/api/task/{task_id}/{action}")
             task = task_snapshot(root, run_id, task_id)["task"]
             return route_result({"ok": True, "task": task, **final_payload})
+        elif action == "complete":
+            _message, completion_payload = complete_selected_task(root, run_id, task_id)
+            status = "200 OK" if completion_payload.get("ok") else "404 Not Found"
+            return route_result(completion_payload, status)
         elif action in {"reopen", "resume"}:
             from aha_cli.store.filesystem import reopen_task
 

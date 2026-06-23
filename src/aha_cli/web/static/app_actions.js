@@ -69,7 +69,7 @@
         },
         complete: {
           title: "Complete task?",
-          message: "Ask task-main to produce the final answer for this task.",
+          message: "Mark this task completed without generating a Final.",
           confirmLabel: "Complete",
           details: [["Task", taskId]]
         }

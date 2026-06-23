@@ -1288,6 +1288,29 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["task"]["status"], "awaiting_user")
 
+    def test_task_action_complete_marks_complete_without_finalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Direct complete API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[]) as stop_backends:
+                    response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/complete", method="POST"))
+                    body = json_response_body(response)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["mode"], "direct")
+        self.assertEqual(body["task"]["status"], "completed")
+        self.assertNotIn("message", body)
+        self.assertNotIn("backend", body)
+        self.assertEqual(main_messages, [])
+        stop_backends.assert_called_once()
+
     def test_task_lightweight_snapshots_exclude_heavy_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

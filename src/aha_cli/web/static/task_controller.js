@@ -125,6 +125,7 @@
       const visibilityAction = task?.hidden ? "restore" : "hide";
       const visibilityLabel = task?.hidden ? t("task.restore", "Restore") : t("common.hide", "Hide");
       setTaskSettingsButton(taskSettingsButton("completion"), completionAction, completionLabel, disabled);
+      setTaskSettingsButton(taskSettingsButton("direct-complete"), "complete", t("task.complete", "Complete"), disabled || locked);
       setTaskSettingsButton(taskSettingsButton("visibility"), visibilityAction, visibilityLabel, disabled);
       setTaskSettingsButton(taskSettingsButton("delete"), "delete", t("task.delete", "Delete"), disabled);
     }

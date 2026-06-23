@@ -43,16 +43,17 @@ class TaskCommandFormatTests(unittest.TestCase):
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
         self.assertIn("/aha final", help_text)
+        self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)
         self.assertIn("/agent <command>", help_text)
         self.assertNotIn("/aha checkpoint", help_text)
         self.assertNotIn("/aha status", help_text)
         self.assertNotIn("/aha agents", help_text)
-        self.assertNotIn("/aha complete", help_text)
         self.assertNotIn("/aha done", help_text)
         self.assertNotIn("/aha finalize", help_text)
-        for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, complete_text, done_text, unknown_text):
+        self.assertIn("without asking task-main", complete_text)
+        for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, done_text, unknown_text):
             self.assertIn("Unsupported AHA command", text)
 
     def test_format_aha_without_task_and_missing_task(self) -> None:

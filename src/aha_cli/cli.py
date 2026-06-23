@@ -108,6 +108,7 @@ from aha_cli.store.knowledge import (
 )
 from aha_cli.services.knowledge_git import auto_commit_after_change as knowledge_auto_commit
 from aha_cli.web.server import request_task_finalization_with_backend, run_ui_server
+from aha_cli.web.task_command_actions import complete_selected_task
 from aha_cli.websocket.server import run_ws_server
 
 
@@ -1246,6 +1247,11 @@ def cmd_task(args: argparse.Namespace) -> int:
         backend = payload.get("backend")
         if backend:
             print(f"Backend: {backend.get('status')} pid={backend.get('pid') or '-'}")
+    elif args.task_cmd == "complete":
+        message, payload = complete_selected_task(root, run_id, args.task_id)
+        print(message)
+        if not payload.get("ok"):
+            return 1
     elif args.task_cmd == "reopen":
         reopen_task(root, run_id, args.task_id)
         recovery = run_stale_runtime_recovery(root, run_id, task_id=args.task_id, apply=False)

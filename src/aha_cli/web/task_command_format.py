@@ -6,7 +6,7 @@ from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import task_snapshot
 
 
-SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha final, /aha reopen, /aha interrupt, /agent <command>."
+SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha final, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
 
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
@@ -23,6 +23,8 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
         return f"Task not found: {task_id}"
     if name == "final":
         return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
+    if name == "complete":
+        return "Use `/aha complete` from the selected task conversation to mark the task completed without asking task-main to generate a Final."
     if name == "reopen":
         return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
     if name == "interrupt":

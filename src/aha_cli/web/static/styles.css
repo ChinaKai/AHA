@@ -2118,15 +2118,17 @@ body.auth-required .login-view:not(.hidden) {
   overflow-wrap: anywhere;
 }
 .task-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--card-gap);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
   padding-top: 4px;
 }
 .task-action {
+  min-width: 0;
   min-height: var(--control-height-sm);
   padding: 0 var(--control-padding-x-sm);
   font-size: 12px;
+  white-space: nowrap;
 }
 .task-action.danger {
   border-color: #fecaca;

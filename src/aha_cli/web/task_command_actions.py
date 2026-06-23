@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aha_cli.services.backend_runtime import backend_status, stop_backend
+from aha_cli.services.backend_runtime import backend_status, stop_backend, stop_task_backends
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import request_round_summary_if_ready
 from aha_cli.services.session_phase import transition_agent_phase
@@ -11,6 +11,7 @@ from aha_cli.services.subagent_state import pending_current_round_sub_agents
 from aha_cli.store.filesystem import (
     append_event,
     append_task_round,
+    complete_task,
     inbox_path,
     reopen_task,
     run_dir,
@@ -27,6 +28,9 @@ from aha_cli.web.task_runtime import (
     request_task_finalization_with_backend,
     start_prepared_backend,
 )
+
+
+_ACTIVE_AGENT_STATUSES = {"pending", "running", "waiting"}
 
 
 def compact_reset_selected_agent(root: Path, run_id: str, task_id: str | None, target: str, *, restart: bool = True) -> tuple[str, dict]:
@@ -206,8 +210,52 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
     )
 
 
+def _settle_agents_for_direct_completion(root: Path, run_id: str, task_id: str, task: dict) -> list[str]:
+    settled: list[str] = []
+    for agent in task.get("agents", []):
+        agent_id = str(agent.get("id") or "").strip()
+        if not agent_id:
+            continue
+        status = str(agent.get("status") or "").lower()
+        if agent_id == "main":
+            if status != "completed":
+                set_agent_status(root, run_id, task_id, agent_id, "completed", 0)
+                settled.append(agent_id)
+        elif status in _ACTIVE_AGENT_STATUSES:
+            set_agent_status(root, run_id, task_id, agent_id, "stopped")
+            settled.append(agent_id)
+    return settled
+
+
+def complete_selected_task(root: Path, run_id: str, task_id: str | None) -> tuple[str, dict]:
+    if not task_id:
+        return "No task is selected.", {"ok": False, "reason": "no_task"}
+    try:
+        detail = task_snapshot(root, run_id, task_id)
+    except KeyError:
+        return f"Task not found: {task_id}", {"ok": False, "reason": "task_not_found"}
+    try:
+        complete_task(root, run_id, task_id, 0)
+        settled_agents = _settle_agents_for_direct_completion(root, run_id, task_id, detail["task"])
+        stopped_backends = stop_task_backends(root, run_id, task_id, timeout=2.0)
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except SystemExit:
+        return f"Task not found: {task_id}", {"ok": False, "reason": "task_not_found"}
+    return (
+        f"{task_id} completed without generating a Final. Reopen it to continue follow-up.",
+        {
+            "ok": True,
+            "task": task,
+            "mode": "direct",
+            "settled_agents": settled_agents,
+            "stopped_backends": stopped_backends,
+        },
+    )
+
+
 __all__ = [
     "compact_reset_selected_agent",
+    "complete_selected_task",
     "finalization_prompt",
     "format_task_journal_for_prompt",
     "interrupt_selected_agent",

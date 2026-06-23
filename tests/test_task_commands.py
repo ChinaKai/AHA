@@ -48,6 +48,7 @@ class TaskCommandTests(unittest.TestCase):
                 empty_handled, empty_forwarded, empty_reply = format_agent_command(aha_root, run_id, "task-001", "main", "/agent")
 
         self.assertIn("/aha final", help_text)
+        self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)
         self.assertIn("/agent <command>", help_text)
@@ -100,6 +101,58 @@ class TaskCommandTests(unittest.TestCase):
         self.assertNotIn("完成第一轮", main_messages[-1]["message"])
         self.assertIn("task_final_requested", event_types)
         self.assertEqual(task["status"], "running")
+
+    def test_task_commands_direct_complete_does_not_request_finalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Command complete", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[]) as stop_backends:
+                    handled, forwarded, payload = handle_slash_command(
+                        root,
+                        run_id,
+                        {"sender": "browser", "target": "main"},
+                        "/aha complete",
+                        "task-001",
+                    )
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                event_types = [json.loads(line)["type"] for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
+                task = status_snapshot(root, run_id)["tasks"][0]
+
+        self.assertTrue(handled)
+        self.assertIsNone(forwarded)
+        self.assertEqual(payload["completion"]["mode"], "direct")
+        self.assertEqual(task["status"], "completed")
+        self.assertEqual(task["agents"][0]["status"], "completed")
+        self.assertEqual(main_messages, [])
+        self.assertIn("task_completed", event_types)
+        self.assertNotIn("task_final_requested", event_types)
+        stop_backends.assert_called_once()
+
+    def test_cli_task_complete_marks_task_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "CLI complete", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[]) as stop_backends:
+                    code, output = self.run_cli("task", "complete", run_id, "task-001")
+                task = status_snapshot(root, run_id)["tasks"][0]
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertEqual(code, 0)
+        self.assertIn("completed without generating a Final", output)
+        self.assertEqual(task["status"], "completed")
+        self.assertEqual(task["agents"][0]["status"], "completed")
+        self.assertEqual(main_messages, [])
+        stop_backends.assert_called_once()
 
     def test_task_commands_reopen_and_removed_compact_reset_slash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

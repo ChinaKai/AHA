@@ -365,6 +365,8 @@ Every task starts with `round-001`:
 
 `/aha final` and `POST /api/task/<task-id>/final` ask task-main to produce the final answer. A finalized round stores `final.md` and `final.meta.json`, updates `last_final_round_id`, and marks the task terminal when the backend result is completed.
 
+`/aha complete`, `aha task complete`, and `POST /api/task/<task-id>/complete` mark the task `completed` without asking task-main to generate a Final. This direct completion path does not write `final.md`; reopen the task before sending follow-up work.
+
 `/aha reopen`, `aha task reopen`, and `POST /api/task/<task-id>/reopen` reopen the task for follow-up. If the previous round was finalized, AHA starts the next round and keeps the old final.
 
 ## Proxy Configuration

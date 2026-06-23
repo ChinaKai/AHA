@@ -1989,6 +1989,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("confirmDialogAction(confirmPayloads[action])", update_task_block)
         self.assertIn('title: "Hide task?"', update_task_block)
         self.assertIn('title: "Generate Final?"', update_task_block)
+        self.assertIn('title: "Complete task?"', update_task_block)
+        self.assertIn('message: "Mark this task completed without generating a Final."', update_task_block)
         self.assertNotIn("confirm(`Hide", update_task_block)
         self.assertNotIn("confirm(`Ask task-main", update_task_block)
 
@@ -2287,6 +2289,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('class="task-list-controls"', html)
         self.assertIn('id="task-settings-panel"', html)
         self.assertIn('id="task-settings-actions"', html)
+        self.assertIn('data-task-settings-role="direct-complete"', html)
         self.assertIn('id="task-visibility-filter"', html)
         self.assertIn('class="task-create-row"', html)
         self.assertIn('class="task-create-trigger"', html)
@@ -2852,6 +2855,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn('details class="task-more"', task_list_script)
         self.assertIn("data-task-settings-trigger", task_list_script)
         self.assertIn("data-task-settings-action", task_controller_script)
+        self.assertIn('taskSettingsButton("direct-complete")', task_controller_script)
+        self.assertIn('t("task.complete", "Complete")', task_controller_script)
         self.assertIn("let taskSettingsTaskId", task_controller_script)
         self.assertIn("function taskSettingsTask()", task_controller_script)
         self.assertIn("function renderTaskSettingsPanel(task, options = {})", task_controller_script)
@@ -2981,6 +2986,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(".task.active .task-title", styles)
         self.assertIn("position: fixed;", styles)
         self.assertIn(".task-settings-panel", styles)
+        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr));", styles)
         self.assertIn(".agent-settings-panel", styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", styles)
         self.assertNotIn(".agent-card-more", styles)
@@ -3214,6 +3220,7 @@ class FrontendStaticTests(unittest.TestCase):
         script = (root / "src" / "aha_cli" / "web" / "static" / "app_controller_factory.js").read_text(encoding="utf-8")
 
         self.assertIn('name: "/aha final"', script)
+        self.assertIn('name: "/aha complete"', script)
         self.assertIn('name: "/aha reopen"', script)
         self.assertIn('name: "/aha interrupt"', script)
         self.assertNotIn('name: "/aha help"', script)
@@ -3222,7 +3229,6 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn('name: "/aha checkpoint"', script)
         self.assertNotIn('name: "/aha phase"', script)
         self.assertNotIn('name: "/aha session compact-reset"', script)
-        self.assertNotIn('name: "/aha complete"', script)
         self.assertNotIn("Alias for /aha final", script)
 
     def test_frontend_has_weixin_console_entry(self) -> None:
