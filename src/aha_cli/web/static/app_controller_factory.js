@@ -371,6 +371,7 @@
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
       closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
       playConsolePopoverEl, selectedAgentInfoEl, sendFormEl, sessionMenuEl, settingsContentEl,
+      skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
       settingsDialogEl, taskApprovalEl, taskBackendEl, taskCreateConfirmDetailsEl,
       taskCreateConfirmDialogEl, taskCreateDialogEl, taskDraftStateEl, taskFormEl, taskMemoLinkClearEl,
       taskMemoLinkSummaryEl, taskMemoPickerEl, taskMemoPickerFilterEl, taskMemoPickerListEl,
@@ -455,6 +456,33 @@
       currentRunId: deps.currentRunId,
       escapeHtml: deps.escapeHtml,
       fetchJson: deps.fetchJson,
+      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setWeixinConsoleOpen: deps.setWeixinConsoleOpen
+    });
+
+    const tokenUsageController = window.AHATokenUsage.createTokenUsageController({
+      runIdEl: elements.runIdEl,
+      sessionMenuEl,
+      tokenUsageEl,
+      tokenUsagePopoverEl
+    }, {
+      apiUrl: deps.apiUrl,
+      currentRunId: deps.currentRunId,
+      fetchJson: deps.fetchJson,
+      windowRef: deps.windowRef
+    });
+
+    const skillsConsoleController = window.AHASkillsConsole.createSkillsConsoleController({
+      sessionMenuEl,
+      skillsConsoleEl,
+      skillsConsolePopoverEl
+    }, {
+      apiUrl: deps.apiUrl,
+      confirmDialogAction: deps.confirmDialogAction,
+      escapeHtml: deps.escapeHtml,
+      fetchJson: deps.fetchJson,
+      onSkillsChanged: deps.onSkillsChanged,
+      setPlayConsoleOpen: deps.setPlayConsoleOpen,
       setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
       setWeixinConsoleOpen: deps.setWeixinConsoleOpen
     });
@@ -657,8 +685,10 @@
       messageComposer,
       playConsoleController,
       settingsController,
+      skillsConsoleController,
       taskCreateController,
       taskMemoController,
+      tokenUsageController,
       weixinConsoleController
     });
   }

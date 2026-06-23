@@ -117,6 +117,8 @@ let timelineView = null;
 let optimisticEvents = null;
 let accessControlController = null;
 let playConsoleController = null;
+let skillsConsoleController = null;
+let tokenUsageController = null;
 let weixinConsoleController = null;
 let runtimeOptions = null;
 let promptMetricsPopover = null;
@@ -438,6 +440,8 @@ appBridge = window.AHAAppBridge.createAppBridge({
   runController: () => runController,
   runtimeOptions: () => runtimeOptions,
   settingsController: () => settingsController,
+  skillsConsoleController: () => skillsConsoleController,
+  tokenUsageController: () => tokenUsageController,
   statusController: () => statusController,
   taskMemoController: () => taskMemoController,
   taskController: () => taskController,
@@ -537,6 +541,7 @@ const {
   renderSelectedHeader,
   renderSessionMenu,
   renderSessionSummary,
+  renderSkillsConsolePopover,
   renderTaskList,
   renderTimelineEvent,
   renderTurnTimer,
@@ -561,6 +566,7 @@ const {
   setRunLifecycleState,
   setRunMaintenanceConsoleOpen,
   setSessionMenu,
+  setSkillsConsoleOpen,
   setWebRestartState,
   setWeixinConsoleOpen,
   switchRun,

@@ -364,9 +364,12 @@ def token_usage_daily_response(
             target=str(query.get("target", [""])[0] or ""),
             backend=str(query.get("backend", [""])[0] or ""),
             limit_days=limit_days,
+            offline=query_bool(query, "offline"),
         )
     except ValueError as exc:
         return json_response({"error": str(exc)}, "400 Bad Request")
+    except RuntimeError as exc:
+        return json_response({"error": str(exc)}, "502 Bad Gateway")
     return head_or_json(method, payload, request_headers=headers)
 
 

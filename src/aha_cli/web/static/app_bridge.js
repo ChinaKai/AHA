@@ -162,6 +162,14 @@
       controllers.playConsoleController?.()?.setPlayConsoleOpen(open);
     }
 
+    function renderSkillsConsolePopover() {
+      controllers.skillsConsoleController?.()?.renderSkillsConsolePopover();
+    }
+
+    function setSkillsConsoleOpen(open) {
+      controllers.skillsConsoleController?.()?.setSkillsConsoleOpen(open);
+    }
+
     function renderWeixinConsolePopover() {
       controllers.weixinConsoleController?.()?.renderWeixinConsolePopover();
     }
@@ -221,6 +229,8 @@
     function initSessionControl() {
       controllers.runController?.()?.bind();
       controllers.weixinConsoleController?.()?.bind();
+      controllers.skillsConsoleController?.()?.bind();
+      controllers.tokenUsageController?.()?.bind();
     }
 
     function selectedTask() {
@@ -658,6 +668,7 @@
       renderSelectedHeader,
       renderSessionMenu,
       renderSessionSummary,
+      renderSkillsConsolePopover,
       renderTaskList,
       renderTaskVisibilityFilter,
       renderTimelineEvent,
@@ -683,6 +694,7 @@
       setRunLifecycleState,
       setRunMaintenanceConsoleOpen,
       setSessionMenu,
+      setSkillsConsoleOpen,
       setWebRestartState,
       setWeixinConsoleOpen,
       switchRun,

@@ -24,11 +24,6 @@
     return `$${number.toFixed(number < 0.01 ? 6 : 4)}`;
   }
 
-  function currentRunId() {
-    const text = String(document.getElementById("run-id")?.textContent || "").trim();
-    return text && text !== "-" ? text : "";
-  }
-
   function localTimezone() {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -39,7 +34,7 @@
 
   function usageSummaryCells(usage = {}) {
     return [
-      ["token_usage.billable_input", "Billable input", usage.billable_input_tokens],
+      ["token_usage.input", "Input", usage.input_tokens],
       ["token_usage.cache_read", "Cache read", usage.cache_read_tokens],
       ["token_usage.cache_creation", "Cache create", usage.cache_creation_tokens],
       ["token_usage.output", "Output", usage.output_tokens],
@@ -65,12 +60,12 @@
   }
 
   function dailyRowsHtml(days = []) {
-    if (!days.length) return `<div class="token-usage-empty">${escapeHtml(t("token_usage.empty", "No usage events"))}</div>`;
+    if (!days.length) return `<div class="token-usage-empty">${escapeHtml(t("token_usage.empty", "No usage records"))}</div>`;
     return `<div class="token-usage-table-wrap"><table class="token-usage-table">
       <thead>
         <tr>
           <th>${escapeHtml(t("token_usage.date", "Date"))}</th>
-          <th>${escapeHtml(t("token_usage.billable_input", "Billable input"))}</th>
+          <th>${escapeHtml(t("token_usage.input", "Input"))}</th>
           <th>${escapeHtml(t("token_usage.cache_read", "Cache read"))}</th>
           <th>${escapeHtml(t("token_usage.cache_creation", "Cache create"))}</th>
           <th>${escapeHtml(t("token_usage.output", "Output"))}</th>
@@ -82,7 +77,7 @@
         ${days.slice().reverse().map(day => (
           `<tr>
             <td><strong>${escapeHtml(day.date || "-")}</strong>${backendBreakdownHtml(day)}</td>
-            <td>${escapeHtml(numberText(day.billable_input_tokens))}</td>
+            <td>${escapeHtml(numberText(day.input_tokens))}</td>
             <td>${escapeHtml(numberText(day.cache_read_tokens))}</td>
             <td>${escapeHtml(numberText(day.cache_creation_tokens))}</td>
             <td>${escapeHtml(numberText(day.output_tokens))}</td>
@@ -94,43 +89,35 @@
     </table></div>`;
   }
 
-  function apiUrl(runId, timezone) {
-    const query = new URLSearchParams({
-      run_id: runId,
-      timezone
-    });
-    return `/api/usage/daily?${query.toString()}`;
-  }
-
-  function bindTokenUsage() {
-    const button = document.getElementById("token-usage");
-    const popover = document.getElementById("token-usage-popover");
-    const runIdEl = document.getElementById("run-id");
-    const sessionMenu = document.getElementById("session-menu");
-    if (!button || !popover) return;
-
+  function createTokenUsageController(elements = {}, deps = {}) {
+    const button = elements.tokenUsageEl;
+    const popover = elements.tokenUsagePopoverEl;
+    const sessionMenu = elements.sessionMenuEl;
+    const runIdEl = elements.runIdEl;
+    const windowRef = deps.windowRef || window;
     let open = false;
     let loading = false;
     let data = null;
     let error = "";
     let loadedRunId = "";
+    let bound = false;
 
-    function syncButton() {
-      const disabled = !currentRunId();
-      button.disabled = disabled;
-      if (disabled && open) setOpen(false);
+    function currentRunId() {
+      const value = String(deps.currentRunId?.() || runIdEl?.textContent || "").trim();
+      return value && value !== "-" ? value : "";
     }
 
-    function render() {
-      button.setAttribute("aria-expanded", String(open));
-      popover.hidden = !open;
-      sessionMenu?.classList?.toggle("token-usage-open", open);
-      if (!open) return;
+    function usageApiUrl(timezone) {
+      return deps.apiUrl?.("/api/usage/daily", { timezone }) || `/api/usage/daily?${new URLSearchParams({ timezone }).toString()}`;
+    }
+
+    function renderPopover() {
+      if (!popover || !open) return;
       const timezone = data?.timezone || localTimezone();
       const totals = data?.totals || {};
       const state = loading
         ? t("token_usage.loading", "Loading usage...")
-        : error || `${t("token_usage.timezone", "Timezone")}: ${timezone} · ${t("token_usage.events", "Events")}: ${numberText(data?.matched_events || 0)}`;
+        : error || `${t("token_usage.timezone", "Timezone")}: ${timezone} · ${t("token_usage.days", "Days")}: ${numberText(data?.matched_events || 0)}`;
       popover.innerHTML = `<section class="token-usage-panel">
         <div class="token-usage-head">
           <div>
@@ -139,7 +126,6 @@
           </div>
           <div class="token-usage-actions">
             <button type="button" data-token-usage-refresh>${escapeHtml(t("common.refresh", "Refresh"))}</button>
-            <button type="button" data-token-usage-close>${escapeHtml(t("common.close", "Close"))}</button>
           </div>
         </div>
         <div class="token-usage-metrics">${usageSummaryCells(totals)}</div>
@@ -147,81 +133,76 @@
       </section>`;
     }
 
-    async function load(force = false) {
+    async function loadTokenUsage(options = {}) {
       const runId = currentRunId();
       if (!runId) {
         data = null;
         error = t("run.none", "No run selected");
-        render();
+        renderPopover();
         return;
       }
-      if (!force && data && loadedRunId === runId) {
-        render();
+      if (!options.force && data && loadedRunId === runId) {
+        renderPopover();
         return;
       }
-      loading = true;
-      error = "";
+      if (!options.silent) {
+        loading = true;
+        error = "";
+        renderPopover();
+      }
       loadedRunId = runId;
-      render();
       try {
-        const response = await fetch(apiUrl(runId, localTimezone()));
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(payload?.error || `${response.status} ${response.statusText}`.trim());
-        if (loadedRunId !== runId) return;
-        data = payload || {};
+        data = await deps.fetchJson?.(
+          usageApiUrl(localTimezone()),
+          {},
+          t("token_usage.load_failed", "Failed to load usage")
+        ) || {};
       } catch (err) {
-        if (loadedRunId !== runId) return;
         data = null;
         error = `${t("token_usage.load_failed", "Failed to load usage")}: ${err?.message || String(err)}`;
       } finally {
-        if (loadedRunId === runId) {
-          loading = false;
-          render();
+        loading = false;
+        if (open && loadedRunId === runId) renderPopover();
+      }
+    }
+
+    function setOpen(nextOpen) {
+      open = Boolean(nextOpen && currentRunId() && popover);
+      if (!popover) return;
+      sessionMenu?.classList?.toggle("token-usage-open", open);
+      popover.hidden = !open;
+      button?.setAttribute("aria-expanded", String(open));
+      if (open) {
+        renderPopover();
+        void loadTokenUsage({ silent: Boolean(data && loadedRunId === currentRunId()) });
+      } else {
+        popover.innerHTML = "";
+      }
+    }
+
+    function bind() {
+      if (bound) return;
+      bound = true;
+      popover?.addEventListener("click", event => {
+        event.stopPropagation();
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("[data-token-usage-refresh]")) {
+          void loadTokenUsage({ force: true });
         }
-      }
+      });
+      windowRef.addEventListener?.("aha:languagechange", () => {
+        if (open) renderPopover();
+      });
     }
 
-    function setOpen(value) {
-      open = Boolean(value && currentRunId());
-      render();
-      if (open) void load(false);
-    }
-
-    button.addEventListener("click", event => {
-      event.stopPropagation();
-      setOpen(!open);
+    return Object.freeze({
+      bind,
+      isOpen: () => open,
+      loadTokenUsage,
+      renderTokenUsagePopover: renderPopover,
+      setTokenUsageOpen: setOpen
     });
-    popover.addEventListener("click", event => {
-      event.stopPropagation();
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("[data-token-usage-close]")) {
-        setOpen(false);
-        return;
-      }
-      if (target?.closest("[data-token-usage-refresh]")) {
-        void load(true);
-      }
-    });
-    document.addEventListener("click", event => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (open && !popover.contains(target) && !button.contains(target)) setOpen(false);
-    });
-    document.addEventListener("keydown", event => {
-      if (event.key === "Escape" && open) setOpen(false);
-    });
-    window.addEventListener("aha:languagechange", render);
-    if (runIdEl) {
-      new MutationObserver(() => {
-        syncButton();
-        if (open && currentRunId() !== loadedRunId) void load(true);
-      }).observe(runIdEl, { childList: true, characterData: true, subtree: true });
-    }
-    syncButton();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", bindTokenUsage, { once: true });
-  } else {
-    bindTokenUsage();
-  }
+  window.AHATokenUsage = Object.freeze({ createTokenUsageController });
 })();

@@ -1,14 +1,39 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from aha_cli.store.io import iter_jsonl_records_from
-from aha_cli.store.paths import event_path
+CCUSAGE_NPX_PACKAGE = "ccusage@20.0.14"
+CCUSAGE_TIMEOUT_SECONDS = 45
+
+CCUSAGE_SOURCE_COMMANDS = {
+    "claude": "claude",
+    "claude-code": "claude",
+    "codex": "codex",
+    "opencode": "opencode",
+    "amp": "amp",
+    "droid": "droid",
+    "codebuff": "codebuff",
+    "hermes": "hermes",
+    "pi": "pi",
+    "goose": "goose",
+    "kilo": "kilo",
+    "copilot": "copilot",
+    "gemini": "gemini",
+    "kimi": "kimi",
+    "qwen": "qwen",
+    "openclaw": "openclaw",
+}
 
 TOKEN_USAGE_ZERO = {
     "event_count": 0,
+    "raw_input_tokens": 0,
     "input_tokens": 0,
     "billable_input_tokens": 0,
     "cache_read_tokens": 0,
@@ -42,19 +67,6 @@ def _non_negative_float(value: object) -> float:
     return number if number > 0 else 0.0
 
 
-def _parse_datetime(value: object) -> dt.datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed
-
-
 def _parse_date(value: str | None, field: str) -> dt.date | None:
     text = str(value or "").strip()
     if not text:
@@ -65,77 +77,17 @@ def _parse_date(value: str | None, field: str) -> dt.date | None:
         raise ValueError(f"{field} must be YYYY-MM-DD") from exc
 
 
-def _timezone(name: str | None) -> ZoneInfo:
+def _timezone_name(name: str | None) -> str:
     tz_name = str(name or "UTC").strip() or "UTC"
     try:
-        return ZoneInfo(tz_name)
+        ZoneInfo(tz_name)
     except ZoneInfoNotFoundError as exc:
         raise ValueError(f"unknown timezone: {tz_name}") from exc
+    return tz_name
 
 
 def _empty_counts() -> dict:
     return dict(TOKEN_USAGE_ZERO)
-
-
-def _usage_cache_creation_tokens(usage: dict) -> int:
-    cache_creation = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else None
-    if cache_creation:
-        five_min = _non_negative_int(cache_creation.get("ephemeral_5m_input_tokens"))
-        one_hour = _non_negative_int(cache_creation.get("ephemeral_1h_input_tokens"))
-        if five_min or one_hour:
-            return five_min + one_hour
-    return _non_negative_int(usage.get("cache_creation_input_tokens"))
-
-
-def normalize_agent_usage_event(event: dict) -> dict | None:
-    if event.get("type") != "agent_usage":
-        return None
-    data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    if not usage:
-        return None
-
-    backend = str(data.get("backend") or data.get("source") or usage.get("backend") or "").strip().lower()
-    model = str(data.get("model") or usage.get("model") or usage.get("model_name") or "").strip()
-    raw_input_tokens = _non_negative_int(usage.get("input_tokens"))
-    output_tokens = _non_negative_int(usage.get("output_tokens"))
-    reasoning_output_tokens = _non_negative_int(usage.get("reasoning_output_tokens"))
-    has_codex_cache = "cached_input_tokens" in usage
-    is_codex = backend == "codex" or has_codex_cache
-    if has_codex_cache:
-        cache_read_tokens = min(_non_negative_int(usage.get("cached_input_tokens")), raw_input_tokens)
-    else:
-        cache_read_tokens = _non_negative_int(usage.get("cache_read_input_tokens"))
-    cache_creation_tokens = 0 if is_codex else _usage_cache_creation_tokens(usage)
-    billable_input_tokens = max(0, raw_input_tokens - cache_read_tokens) if is_codex else raw_input_tokens
-    if is_codex:
-        total_tokens = _non_negative_int(usage.get("total_tokens")) or raw_input_tokens + output_tokens + reasoning_output_tokens
-    else:
-        total_tokens = raw_input_tokens + cache_read_tokens + cache_creation_tokens + output_tokens
-
-    if not any((raw_input_tokens, output_tokens, reasoning_output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens)):
-        return None
-
-    return {
-        "ts": event.get("ts"),
-        "event_id": event.get("event_id"),
-        "run_id": event.get("run_id"),
-        "task_id": str(data.get("task_id") or "").strip(),
-        "target": str(data.get("target") or "").strip(),
-        "backend": backend or "unknown",
-        "model": model,
-        "usage": {
-            "event_count": 1,
-            "input_tokens": raw_input_tokens,
-            "billable_input_tokens": billable_input_tokens,
-            "cache_read_tokens": cache_read_tokens,
-            "cache_creation_tokens": cache_creation_tokens,
-            "output_tokens": output_tokens,
-            "reasoning_output_tokens": reasoning_output_tokens,
-            "total_tokens": total_tokens,
-            "cost_usd": _non_negative_float(usage.get("total_cost_usd") or usage.get("cost_usd")),
-        },
-    }
 
 
 def _add_counts(target: dict, usage: dict) -> None:
@@ -146,26 +98,177 @@ def _add_counts(target: dict, usage: dict) -> None:
             target[key] = int(target.get(key, 0)) + int(usage.get(key, 0))
 
 
-def _breakdown_key(entry: dict, fields: tuple[str, ...]) -> str:
-    return "\0".join(str(entry.get(field) or "") for field in fields)
+def _first_value(data: dict, names: tuple[str, ...]) -> object:
+    for name in names:
+        if name in data and data.get(name) not in (None, ""):
+            return data.get(name)
+    return None
 
 
-def _add_breakdown(group: dict, name: str, fields: tuple[str, ...], entry: dict) -> None:
-    key = _breakdown_key(entry, fields)
-    items = group.setdefault(name, {})
-    item = items.get(key)
-    if item is None:
-        item = {field: entry.get(field) or "" for field in fields}
-        item.update(_empty_counts())
-        items[key] = item
-    _add_counts(item, entry["usage"])
-
-
-def _finalize_breakdowns(items: dict[str, dict]) -> list[dict]:
-    return sorted(
-        items.values(),
-        key=lambda item: (-int(item.get("total_tokens", 0)), str(item.get("backend") or ""), str(item.get("task_id") or "")),
+def _ccusage_counts(data: dict) -> dict:
+    input_tokens = _non_negative_int(_first_value(data, ("inputTokens", "totalInputTokens", "input_tokens")))
+    cache_read_tokens = _non_negative_int(
+        _first_value(
+            data,
+            (
+                "cacheReadTokens",
+                "cacheReadInputTokens",
+                "cachedInputTokens",
+                "totalCacheReadTokens",
+                "cache_read_tokens",
+            ),
+        )
     )
+    cache_creation_tokens = _non_negative_int(
+        _first_value(
+            data,
+            (
+                "cacheCreationTokens",
+                "cacheCreationInputTokens",
+                "totalCacheCreationTokens",
+                "cache_creation_tokens",
+            ),
+        )
+    )
+    output_tokens = _non_negative_int(_first_value(data, ("outputTokens", "totalOutputTokens", "output_tokens")))
+    reasoning_output_tokens = _non_negative_int(
+        _first_value(data, ("reasoningOutputTokens", "totalReasoningOutputTokens", "reasoning_output_tokens"))
+    )
+    total_tokens = _non_negative_int(_first_value(data, ("totalTokens", "total_tokens")))
+    if not total_tokens:
+        total_tokens = input_tokens + cache_read_tokens + cache_creation_tokens + output_tokens + reasoning_output_tokens
+    cost_usd = _non_negative_float(_first_value(data, ("totalCost", "costUSD", "totalCostUSD", "cost_usd", "cost")))
+    return {
+        "event_count": _non_negative_int(_first_value(data, ("entryCount", "entries", "eventCount", "count"))),
+        "raw_input_tokens": input_tokens,
+        "input_tokens": input_tokens,
+        "billable_input_tokens": input_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
+        "output_tokens": output_tokens,
+        "reasoning_output_tokens": reasoning_output_tokens,
+        "total_tokens": total_tokens,
+        "cost_usd": cost_usd,
+    }
+
+
+def _ccusage_base_command() -> list[str]:
+    configured = str(os.environ.get("AHA_CCUSAGE_COMMAND") or "").strip()
+    if configured:
+        return shlex.split(configured)
+    ccusage = shutil.which("ccusage")
+    if ccusage:
+        return [ccusage]
+    npx = shutil.which("npx")
+    if npx:
+        package = str(os.environ.get("AHA_CCUSAGE_NPX_PACKAGE") or CCUSAGE_NPX_PACKAGE).strip() or CCUSAGE_NPX_PACKAGE
+        return [npx, "--yes", package]
+    raise RuntimeError("ccusage command not found; install ccusage or set AHA_CCUSAGE_COMMAND")
+
+
+def _ccusage_daily_args(
+    *,
+    timezone: str,
+    since: dt.date | None,
+    until: dt.date | None,
+    backend: str,
+    offline: bool,
+) -> list[str]:
+    source = ""
+    if backend:
+        source = CCUSAGE_SOURCE_COMMANDS.get(backend)
+        if not source:
+            supported = ", ".join(sorted(CCUSAGE_SOURCE_COMMANDS))
+            raise ValueError(f"unsupported ccusage backend/source: {backend}; supported: {supported}")
+    args = ([source, "daily"] if source else ["daily"]) + ["--json", "--timezone", timezone]
+    if since:
+        args += ["--since", since.isoformat()]
+    if until:
+        args += ["--until", until.isoformat()]
+    if offline:
+        args.append("--offline")
+    return args
+
+
+def _run_ccusage_json(args: list[str], *, root: Path | None = None) -> dict:
+    command = _ccusage_base_command() + args
+    env = dict(os.environ)
+    env.setdefault("NO_COLOR", "1")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(root) if root else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=CCUSAGE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ccusage timed out after {CCUSAGE_TIMEOUT_SECONDS}s") from exc
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"ccusage failed with exit code {result.returncode}: {message[:500]}")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("ccusage returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("ccusage returned unexpected JSON")
+    return payload
+
+
+def _model_breakdowns(data: dict, source: str) -> list[dict]:
+    breakdowns = data.get("modelBreakdowns") or data.get("model_breakdowns") or data.get("models") or []
+    items: list[dict] = []
+    if isinstance(breakdowns, dict):
+        iterable = []
+        for model, value in breakdowns.items():
+            if isinstance(value, dict):
+                iterable.append({"model": model, **value})
+    elif isinstance(breakdowns, list):
+        iterable = [item for item in breakdowns if isinstance(item, dict)]
+    else:
+        iterable = []
+    for item in iterable:
+        counts = _ccusage_counts(item)
+        model = str(item.get("model") or item.get("modelName") or item.get("name") or "").strip()
+        counts.update({"backend": str(item.get("source") or source or "ccusage").strip() or "ccusage", "model": model})
+        items.append(counts)
+    return sorted(items, key=lambda item: (-int(item.get("total_tokens", 0)), str(item.get("model") or "")))
+
+
+def _ccusage_days(payload: dict, source: str) -> list[dict]:
+    raw_days = payload.get("daily") or payload.get("data") or []
+    if not isinstance(raw_days, list):
+        return []
+    days: list[dict] = []
+    for item in raw_days:
+        if not isinstance(item, dict):
+            continue
+        date = str(item.get("date") or item.get("day") or "").strip()
+        if not date:
+            continue
+        counts = _ccusage_counts(item)
+        days.append(
+            {
+                "date": date[:10],
+                **counts,
+                "by_backend": _model_breakdowns(item, source),
+                "by_task": [],
+            }
+        )
+    return sorted(days, key=lambda item: item["date"])
+
+
+def _ccusage_totals(payload: dict, days: list[dict]) -> dict:
+    totals = payload.get("totals") if isinstance(payload.get("totals"), dict) else {}
+    if totals:
+        return _ccusage_counts(totals)
+    result = _empty_counts()
+    for day in days:
+        _add_counts(result, day)
+    return result
 
 
 def daily_token_usage_report(
@@ -179,8 +282,9 @@ def daily_token_usage_report(
     target: str | None = None,
     backend: str | None = None,
     limit_days: int | None = None,
+    offline: bool = False,
 ) -> dict:
-    tz = _timezone(timezone)
+    tz_name = _timezone_name(timezone)
     since_date = _parse_date(since, "since")
     until_date = _parse_date(until, "until")
     if since_date and until_date and since_date > until_date:
@@ -188,76 +292,42 @@ def daily_token_usage_report(
 
     task_filter = str(task_id or "").strip()
     target_filter = str(target or "").strip()
+    if task_filter or target_filter:
+        raise ValueError("task_id and target filters are not supported by ccusage-backed daily usage")
     backend_filter = str(backend or "").strip().lower()
-    day_groups: dict[str, dict] = {}
-    totals = _empty_counts()
-    path = event_path(root, run_id)
-    records, last_event_id = iter_jsonl_records_from(path)
-    scanned_events = 0
-    matched_events = 0
 
-    for event, line_end in records:
-        scanned_events += 1
-        normalized = normalize_agent_usage_event(event | {"event_id": event.get("event_id", line_end)})
-        if not normalized:
-            continue
-        if task_filter and normalized["task_id"] != task_filter:
-            continue
-        if target_filter and normalized["target"] != target_filter:
-            continue
-        if backend_filter and normalized["backend"] != backend_filter:
-            continue
-        timestamp = _parse_datetime(normalized.get("ts"))
-        if timestamp is None:
-            continue
-        day = timestamp.astimezone(tz).date()
-        if since_date and day < since_date:
-            continue
-        if until_date and day > until_date:
-            continue
-        day_key = day.isoformat()
-        group = day_groups.get(day_key)
-        if group is None:
-            group = {
-                "date": day_key,
-                **_empty_counts(),
-                "_by_backend": {},
-                "_by_task": {},
-            }
-            day_groups[day_key] = group
-        matched_events += 1
-        _add_counts(group, normalized["usage"])
-        _add_counts(totals, normalized["usage"])
-        _add_breakdown(group, "_by_backend", ("backend", "model"), normalized)
-        _add_breakdown(group, "_by_task", ("task_id", "target", "backend"), normalized)
-
-    days = []
-    for group in sorted(day_groups.values(), key=lambda item: item["date"]):
-        group["by_backend"] = _finalize_breakdowns(group.pop("_by_backend"))
-        group["by_task"] = _finalize_breakdowns(group.pop("_by_task"))
-        days.append(group)
-    matched_events_before_limit = matched_events
+    args = _ccusage_daily_args(
+        timezone=tz_name,
+        since=since_date,
+        until=until_date,
+        backend=backend_filter,
+        offline=offline,
+    )
+    payload = _run_ccusage_json(args, root=root)
+    source = CCUSAGE_SOURCE_COMMANDS.get(backend_filter, "ccusage")
+    days = _ccusage_days(payload, source)
+    days_before_limit = list(days)
     if limit_days is not None:
         days = days[-max(1, int(limit_days)) :]
         totals = _empty_counts()
-        matched_events = 0
         for day in days:
             _add_counts(totals, day)
-            matched_events += int(day.get("event_count", 0))
+    else:
+        totals = _ccusage_totals(payload, days)
 
     return {
         "run_id": run_id,
-        "timezone": str(timezone or "UTC").strip() or "UTC",
-        "source": "agent_usage_events",
-        "last_event_id": last_event_id,
-        "scanned_events": scanned_events,
-        "matched_events": matched_events,
-        "matched_events_before_limit": matched_events_before_limit,
+        "timezone": tz_name,
+        "source": "ccusage",
+        "ccusage_args": args,
+        "scanned_events": 0,
+        "matched_events": len(days),
+        "matched_events_before_limit": len(days_before_limit),
         "filters": {
             "since": since_date.isoformat() if since_date else "",
             "until": until_date.isoformat() if until_date else "",
-            "task_id": task_filter,
-            "target": target_filter,
+            "task_id": "",
+            "target": "",
             "backend": backend_filter,
         },
         "totals": totals,

@@ -9,6 +9,7 @@ const {
   runSettingsActionsEl, runSettingsCloseEl, runSettingsPanelEl, runSettingsProtectionEl, runSettingsSubtitleEl,
   runRenameFormEl, runSelectEl, runStateEl, selectedAgentInfoEl, selectedIdEl, selectedStatusEl,
   selectedTaskMetaEl, selectedTitleEl, sessionControlEl, sessionDetailTextEl, sessionMenuEl, sessionRefreshEl,
+  skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
   sessionTitleEl, sessionToggleEl, summaryEl, taskRunContextEl, taskSettingsActionsEl, taskSettingsCloseEl,
   taskSettingsPanelEl, taskSettingsSubtitleEl, tasksEl, taskVisibilityFilterEl,
   webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
@@ -689,7 +690,14 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   setRunMaintenanceConsoleOpen,
   setSelectedTaskId: value => { selectedTaskId = value || null; },
   setSessionMenu,
+  setSkillsConsoleOpen,
   setWeixinConsoleOpen,
+  onSkillsChanged: options => {
+    bootstrapData = { ...(bootstrapData || {}), skill_options: Array.isArray(options) ? options : [] };
+    taskOptionsController?.renderTaskSkillOptions?.();
+    taskConfigController?.renderTaskSkillsEditor?.();
+    taskConfigController?.renderTaskHardwareEditor?.();
+  },
   syncCreateTaskSupervisionModeFields,
   syncBootstrapModelOptions,
   syncBootstrapProxyDefaultsForInput: bootstrapConfigHelpers.syncBootstrapProxyDefaultsForInput,
@@ -710,6 +718,8 @@ const {
   taskMemoController
 } = featureControllers;
 playConsoleController = featureControllers.playConsoleController;
+skillsConsoleController = featureControllers.skillsConsoleController;
+tokenUsageController = featureControllers.tokenUsageController;
 weixinConsoleController = featureControllers.weixinConsoleController;
 const taskController = window.AHATaskController.createTaskController({
   headerWorkspaceDirEl,
@@ -855,6 +865,10 @@ const runController = window.AHARunController.createRunController({
   sessionRefreshEl,
   sessionTitleEl,
   sessionToggleEl,
+  skillsConsoleEl,
+  skillsConsolePopoverEl,
+  tokenUsageEl,
+  tokenUsagePopoverEl,
   summaryEl,
   taskRunContextEl,
   webRestartEl,
@@ -884,6 +898,8 @@ const runController = window.AHARunController.createRunController({
   formatMetricBytes,
   renderAccessControlStatus,
   renderPlayConsolePopover,
+  renderSkillsConsolePopover,
+  renderTokenUsagePopover: () => tokenUsageController.renderTokenUsagePopover(),
   runMaintenanceView,
   renderWeixinConsolePopover,
   realtimeTransportText,
@@ -900,7 +916,11 @@ const runController = window.AHARunController.createRunController({
   runTitleOf,
   sessionOptionLabel,
   setPlayConsoleOpen,
+  setSkillsConsoleOpen,
+  setTokenUsageOpen: value => tokenUsageController.setTokenUsageOpen(value),
   setWeixinConsoleOpen,
+  skillsConsoleOpen: () => skillsConsoleController.isOpen(),
+  tokenUsageOpen: () => tokenUsageController.isOpen(),
   statusData: () => statusData,
   switchRun,
   updateStatusRunTitle: (runName, updatedAt) => {

@@ -203,6 +203,13 @@ When a selected skill is relevant, the backend prompt tells the agent to read
 the referenced `SKILL.md` before acting. Skills are independent from device
 configuration and can be reused for non-hardware capabilities.
 
+The Web settings integrations surface can manage service-home skills through
+`/api/skills`. The API lists skills discovered under `aha_home_path(root)/skills`,
+reads a skill's `SKILL.md` plus optional `agents/openai.yaml`, saves or creates a
+skill at `/api/skills/<id>`, and deletes managed skill directories. Skill ids
+must use lowercase letters, digits, and hyphens so writes remain confined to the
+AHA skills root.
+
 Tasks may also carry optional board-side automation context under
 `hardware_debug`. The setting is disabled by default for archive and old-plan
 compatibility. New tasks store a list of hardware channels. An empty channel

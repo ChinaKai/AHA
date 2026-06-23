@@ -104,11 +104,9 @@
                 </section>
                 <div class="run-admin-actions">
                   <button id="aha-settings" type="button" aria-controls="settings-dialog" aria-expanded="false" data-i18n="common.settings">Settings</button>
-                  <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
                   <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
                   <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
                   <button id="web-upgrade" class="button-ghost" type="button" data-i18n="run.upgrade_web">Upgrade</button>
-                  <div id="token-usage-popover" class="token-usage-popover" hidden></div>
                 </div>
                 <div id="web-restart-state" class="meta"></div>
                 <div id="settings-dialog" class="settings-popover" aria-labelledby="settings-title" hidden>
@@ -125,9 +123,13 @@
               <div class="run-actions-section run-actions-section-secondary run-integrations-section">
                 <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
                 <div class="web-service-actions">
+                  <button id="skills-console" class="button-ghost" type="button" aria-controls="skills-console-popover" aria-expanded="false" data-i18n="skills.title">Skills</button>
+                  <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
                   <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
                   <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
                 </div>
+                <div id="skills-console-popover" class="skills-console-popover" hidden></div>
+                <div id="token-usage-popover" class="token-usage-popover" hidden></div>
                 <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
                 <div id="play-console-popover" class="play-console-popover" hidden></div>
               </div>
@@ -912,6 +914,7 @@
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>
+  <script src="/static/skills_console.js"></script>
   <script src="/static/knowledge_entry.js"></script>
   <script src="/static/runtime_config.js"></script>
   <script src="/static/agent_config_controller.js"></script>

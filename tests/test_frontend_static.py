@@ -33,6 +33,31 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
         self.assertIn('"run.upgrade_web": "升级"', i18n)
 
+    def test_integrations_include_skills_console(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="skills-console"', html)
+        self.assertIn('id="skills-console-popover"', html)
+        self.assertIn('<script src="/static/skills_console.js"></script>', html)
+        self.assertIn('"skills.title": "Skills"', i18n)
+        self.assertIn('"skills.subtitle": "管理当前 AHA home 中发现的技能。"', i18n)
+        self.assertIn(".skills-console-popover", styles)
+        self.assertIn(".skills-console-body", styles)
+        self.assertIn(".skills-console-head button", styles)
+        self.assertIn(".skills-console-editor textarea", styles)
+        self.assertIn("white-space: pre-wrap;", styles)
+        self.assertIn("overflow-wrap: anywhere;", styles)
+        self.assertIn('wrap="soft"', (root / "skills_console.js").read_text(encoding="utf-8"))
+        self.assertIn('skillsConsoleEl: "skills-console"', registry)
+        self.assertIn("window.AHASkillsConsole.createSkillsConsoleController", factory)
+        self.assertIn("skillsConsoleController = featureControllers.skillsConsoleController", wiring)
+
     def test_daily_token_usage_entry_is_available_from_run_console(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
@@ -42,15 +67,30 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('id="token-usage"', html)
         self.assertIn('id="token-usage-popover"', html)
+        system_start = html.index('<div class="run-admin-actions">')
+        integration_start = html.index('<div class="web-service-actions">')
+        system_actions = html[system_start : html.index('<div id="web-restart-state"', system_start)]
+        integration_actions = html[integration_start : html.index('<div id="skills-console-popover"', integration_start)]
+        self.assertNotIn('id="token-usage"', system_actions)
+        self.assertIn('id="token-usage"', integration_actions)
+        self.assertNotIn('id="token-usage-popover"', integration_actions)
+        self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
         self.assertIn('<script src="/static/token_usage.js"></script>', html)
         self.assertIn('"run.token_usage": "Daily usage"', i18n)
         self.assertIn('"run.token_usage": "每日用量"', i18n)
         self.assertIn(".token-usage-popover", styles)
         self.assertIn(".token-usage-table", styles)
+        self.assertIn('sessionMenu?.classList?.toggle("token-usage-open", open)', script)
+        self.assertIn(".session-menu.token-usage-open", styles)
+        self.assertIn(".session-menu.token-usage-open .token-usage-popover", styles)
+        self.assertIn("body.settings-home .session-menu.token-usage-open", styles)
         self.assertIn("/api/usage/daily", script)
-        self.assertIn("billable_input_tokens", script)
+        self.assertIn("input_tokens", script)
         self.assertIn("cache_read_tokens", script)
         self.assertIn("cache_creation_tokens", script)
+        self.assertIn("reasoning_output_tokens", script)
+        self.assertIn("total_tokens", script)
+        self.assertNotIn("data-token-usage-close", script)
 
     def test_knowledge_console_supports_i18n_and_mobile_layout(self) -> None:
         root = static_root()

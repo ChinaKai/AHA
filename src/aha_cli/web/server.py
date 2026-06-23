@@ -31,6 +31,7 @@ from aha_cli.web.run_api import ApiRunNotFound, require_api_run_id, workspace_op
 from aha_cli.web.knowledge_routes import knowledge_route_response
 from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
+from aha_cli.web.skill_routes import skill_route_response
 from aha_cli.web.status import recover_stale_running_agent, recover_stale_running_agents, web_status_snapshot
 from aha_cli.web.system_routes import (
     WEB_RESTART_EXIT_CODE,
@@ -143,6 +144,8 @@ async def handle_ui_client(
                 response = knowledge_route_response(root, method, path, query, body, headers)
             if response is None:
                 response = game_route_response(root, run_id, method, path)
+            if response is None:
+                response = skill_route_response(root, method, path, body)
             if response is None:
                 response = system_route_response(
                     root,

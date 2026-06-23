@@ -420,16 +420,19 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrat
 }
 .session-menu.weixin-open,
 .session-menu.play-open,
+.session-menu.skills-open,
 .session-menu.token-usage-open {
   overflow: visible;
 }
 body.settings-home .session-menu.weixin-open,
 body.settings-home .session-menu.play-open,
+body.settings-home .session-menu.skills-open,
 body.settings-home .session-menu.token-usage-open {
   overflow: auto;
 }
 body.settings-home .session-menu.weixin-open .weixin-console-popover,
 body.settings-home .session-menu.play-open .play-console-popover,
+body.settings-home .session-menu.skills-open .skills-console-popover,
 body.settings-home .session-menu.token-usage-open .token-usage-popover {
   position: static;
   width: 100%;
@@ -801,6 +804,19 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
 }
+.skills-console-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(860px, calc(100vw - 32px));
+  max-height: min(78dvh, 760px);
+  overflow: auto;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
 .token-usage-popover {
   position: absolute;
   top: calc(100% + 8px);
@@ -873,6 +889,13 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   width: min(420px, calc(100vw - 32px));
   max-height: min(calc(var(--app-viewport-height) - 96px), 560px);
 }
+.session-menu.skills-open .skills-console-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(860px, calc(100vw - 32px));
+  max-height: min(calc(var(--app-viewport-height) - 96px), 760px);
+}
 .session-menu.token-usage-open .token-usage-popover {
   position: absolute;
   top: calc(100% + 8px);
@@ -889,6 +912,7 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
 }
 .weixin-console-popover[hidden],
 .play-console-popover[hidden],
+.skills-console-popover[hidden],
 .token-usage-popover[hidden],
 .settings-popover[hidden],
 .run-maintenance-popover[hidden] {
@@ -901,6 +925,11 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   background: transparent;
 }
 .play-console {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.skills-console {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -1019,6 +1048,131 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   margin: 4px 0 0;
   color: #667085;
   font-size: 12px;
+}
+.skills-console-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e4e7ec;
+}
+.skills-console-head > div {
+  min-width: 0;
+}
+.skills-console-head button {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+.skills-console-head h3 {
+  margin: 0;
+  color: #101828;
+  font-size: 18px;
+}
+.skills-console-head p {
+  margin: 4px 0;
+  color: #667085;
+  font-size: 12px;
+}
+.skills-console-head code {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: #475467;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-console-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+}
+.skills-console-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  max-height: 600px;
+  overflow: auto;
+}
+.skills-console-list-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344054;
+  text-align: left;
+}
+.skills-console-list-item.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+.skills-console-list-item strong,
+.skills-console-list-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-console-list-item span {
+  color: #667085;
+  font-size: 11px;
+}
+.skills-console-detail {
+  min-width: 0;
+}
+.skills-console-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.skills-console-editor {
+  min-width: 0;
+}
+.skills-console-editor textarea {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.skills-console-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.skills-console-empty,
+.skills-console-message {
+  padding: 10px 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  color: #667085;
+  font-size: 12px;
+}
+.skills-console-message.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+.skills-console-message.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
 }
 .play-game-list {
   display: grid;
@@ -5368,6 +5522,18 @@ body.empty-run .panel {
     width: min(420px, calc(100vw - 430px));
     max-height: min(calc(var(--app-viewport-height) - 80px), 560px);
   }
+  .session-menu.skills-open .skills-console-popover {
+    top: 0;
+    right: calc(100% + 10px);
+    width: clamp(620px, calc(100vw - 430px), 860px);
+    max-height: min(calc(var(--app-viewport-height) - 80px), 760px);
+  }
+  .session-menu.token-usage-open .token-usage-popover {
+    top: 0;
+    right: calc(100% + 10px);
+    width: clamp(620px, calc(100vw - 430px), 760px);
+    max-height: min(calc(var(--app-viewport-height) - 80px), 720px);
+  }
   main {
     height: auto;
     min-height: 0;
@@ -5552,6 +5718,26 @@ body.empty-run .panel {
     max-height: none;
   }
   .session-menu.play-open .play-console-popover {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    z-index: 80;
+    width: auto;
+    max-height: none;
+  }
+  .session-menu.skills-open .skills-console-popover {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    z-index: 80;
+    width: auto;
+    max-height: none;
+  }
+  .session-menu.token-usage-open .token-usage-popover {
     position: fixed;
     top: 72px;
     right: 12px;
@@ -6037,6 +6223,7 @@ body.empty-run .panel {
   }
   .weixin-console-popover,
   .play-console-popover,
+  .skills-console-popover,
   .token-usage-popover,
   .run-maintenance-popover {
     left: 0;
@@ -6048,6 +6235,21 @@ body.empty-run .panel {
   }
   .token-usage-head {
     display: grid;
+  }
+  .skills-console-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .skills-console-head button {
+    width: 100%;
+    min-width: 0;
+  }
+  .skills-console-body {
+    grid-template-columns: 1fr;
+  }
+  .skills-console-list {
+    max-height: 180px;
   }
   .task-header {
     display: none;

@@ -91,6 +91,8 @@
       if (settingsTab !== "integrations") {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
       }
       if (settingsTab !== "system") closeSystemSettingsPanel();
     }
@@ -527,6 +529,8 @@
       if (elements.webUpgradeEl) elements.webUpgradeEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.playConsoleEl) elements.playConsoleEl.disabled = actionInFlight || !hasRun;
+      if (elements.skillsConsoleEl) elements.skillsConsoleEl.disabled = actionInFlight;
+      if (elements.tokenUsageEl) elements.tokenUsageEl.disabled = actionInFlight || !hasRun;
       if (elements.runMaintenanceRefreshEl) {
         elements.runMaintenanceRefreshEl.disabled = runMaintenanceLoading || runMaintenanceActionInFlight || actionInFlight || !hasRun;
       }
@@ -538,8 +542,14 @@
         setRunMaintenanceConsoleOpen(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
+        if (actionInFlight) deps.setSkillsConsoleOpen?.(false);
       } else if (runMaintenanceConsoleOpen && elements.runMaintenancePopoverEl) {
         renderRunMaintenance();
+      } else if (deps.skillsConsoleOpen?.() && elements.skillsConsolePopoverEl) {
+        deps.renderSkillsConsolePopover?.();
+      } else if (deps.tokenUsageOpen?.() && elements.tokenUsagePopoverEl) {
+        deps.renderTokenUsagePopover?.();
       } else if (deps.weixinConsoleOpen?.() && elements.weixinConsolePopoverEl) {
         deps.renderWeixinConsolePopover?.();
       } else if (deps.playConsoleOpen?.() && elements.playConsolePopoverEl) {
@@ -601,6 +611,8 @@
       if (!sessionMenuOpen) {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
         closeSystemSettingsPanel();
         syncHomeViewButtons();
       }
@@ -612,6 +624,8 @@
       if (runMaintenanceConsoleOpen) {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
       } else {
         runMaintenanceRunId = "";
       }
@@ -778,12 +792,46 @@
       elements.weixinConsoleEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
-        deps.setWeixinConsoleOpen?.(!deps.weixinConsoleOpen?.());
+        const nextOpen = !deps.weixinConsoleOpen?.();
+        if (nextOpen) {
+          deps.setPlayConsoleOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+          deps.setTokenUsageOpen?.(false);
+        }
+        deps.setWeixinConsoleOpen?.(nextOpen);
       });
       elements.playConsoleEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
-        deps.setPlayConsoleOpen?.(!deps.playConsoleOpen?.());
+        const nextOpen = !deps.playConsoleOpen?.();
+        if (nextOpen) {
+          deps.setWeixinConsoleOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+          deps.setTokenUsageOpen?.(false);
+        }
+        deps.setPlayConsoleOpen?.(nextOpen);
+      });
+      elements.skillsConsoleEl?.addEventListener("click", event => {
+        event.stopPropagation();
+        if (runActionInFlight()) return;
+        const nextOpen = !deps.skillsConsoleOpen?.();
+        if (nextOpen) {
+          deps.setWeixinConsoleOpen?.(false);
+          deps.setPlayConsoleOpen?.(false);
+          deps.setTokenUsageOpen?.(false);
+        }
+        deps.setSkillsConsoleOpen?.(nextOpen);
+      });
+      elements.tokenUsageEl?.addEventListener("click", event => {
+        event.stopPropagation();
+        if (runActionInFlight() || !currentRunId()) return;
+        const nextOpen = !deps.tokenUsageOpen?.();
+        if (nextOpen) {
+          deps.setWeixinConsoleOpen?.(false);
+          deps.setPlayConsoleOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+        }
+        deps.setTokenUsageOpen?.(nextOpen);
       });
       elements.runMaintenancePopoverEl?.addEventListener("click", event => {
         event.stopPropagation();
@@ -803,6 +851,8 @@
       });
       elements.weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.playConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
+      elements.skillsConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
+      elements.tokenUsagePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.runImportEl?.addEventListener("click", () => {
         if (runActionInFlight()) return;
         elements.runImportFileEl?.click();
@@ -842,6 +892,12 @@
         if (deps.playConsoleOpen?.() && !elements.playConsoleEl?.contains(target) && !elements.playConsolePopoverEl?.contains(target)) {
           deps.setPlayConsoleOpen?.(false);
         }
+        if (deps.skillsConsoleOpen?.() && !elements.skillsConsoleEl?.contains(target) && !elements.skillsConsolePopoverEl?.contains(target)) {
+          deps.setSkillsConsoleOpen?.(false);
+        }
+        if (deps.tokenUsageOpen?.() && !elements.tokenUsageEl?.contains(target) && !elements.tokenUsagePopoverEl?.contains(target)) {
+          deps.setTokenUsageOpen?.(false);
+        }
       });
       elements.documentRef?.addEventListener("keydown", event => {
         if (event.key === "Escape") {
@@ -851,6 +907,8 @@
           closeRunCreateDialog();
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+          deps.setTokenUsageOpen?.(false);
         }
       });
       renderSessionMenu();
