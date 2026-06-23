@@ -53,7 +53,16 @@ class AutoContextCompactTests(unittest.TestCase):
                 with (
                     mock.patch(
                         "aha_cli.services.auto_context_compact.backend_status",
-                        return_value={"status": "stopped", "context_pressure": {"level": "watch", "percent": 80.0}},
+                        return_value={
+                            "status": "stopped",
+                            "context_pressure": {
+                                "level": "watch",
+                                "percent": 80.0,
+                                "runtime_percent": 80.0,
+                                "pressure_is_runtime": True,
+                                "pressure_source": "runtime.last_token_usage.input_tokens",
+                            },
+                        },
                     ),
                     mock.patch(
                         "aha_cli.services.auto_context_compact.compact_reset_backend_session",
@@ -83,7 +92,7 @@ class AutoContextCompactTests(unittest.TestCase):
         self.assertTrue(any("AHA 已自动整理 `main` 的 agent context" in message for message in messages))
         self.assertTrue(any("tasks/task-001/compacts/main.md" in message for message in messages))
 
-    def test_turn_end_auto_compact_rotates_session_without_stopping_worker(self) -> None:
+    def test_turn_end_auto_compact_no_longer_resets_running_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             aha_root = root / ".aha"
@@ -112,24 +121,72 @@ class AutoContextCompactTests(unittest.TestCase):
                         run_id,
                         "task-001",
                         "main",
-                        backend_state={"status": "running", "context_pressure": {"level": "watch", "percent": 80.0}},
+                        backend_state={
+                            "status": "running",
+                            "context_pressure": {
+                                "level": "watch",
+                                "percent": 80.0,
+                                "runtime_percent": 80.0,
+                                "pressure_is_runtime": True,
+                                "pressure_source": "runtime.last_token_usage.input_tokens",
+                            },
+                        },
                     )
                     conversation = conversation_events_page(aha_root, run_id, "task-001", "main", categories={"chat"})
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result["trigger"], "turn_end")
-        self.assertEqual(result["backend_status"], "running")
-        compact_reset.assert_called_once_with(
-            aha_root,
-            run_id,
-            "task-001",
-            "main",
-            reason="large",
-            restart=False,
-            stop_backend_before_reset=False,
-        )
+        self.assertIsNone(result)
+        compact_reset.assert_not_called()
         messages = [event["data"]["message"] for event in conversation["events"] if event["type"] == "message"]
-        self.assertTrue(any("AHA 已自动整理 `main` 的 agent context" in message for message in messages))
+        self.assertFalse(any("AHA 已自动整理 `main` 的 agent context" in message for message in messages))
+
+    def test_start_backend_auto_compact_ignores_prompt_estimate_pressure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Auto compact prompt estimate", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_context_management_config(
+                    aha_root,
+                    run_id,
+                    "task-001",
+                    auto_compact_enabled=True,
+                    auto_compact_threshold_percent=75,
+                )
+                session = ensure_session(aha_root, run_id, "task-001", "main", "codex", model="gpt-5.5")
+                session["backend_session_id"] = "codex-session-estimated-context"
+                save_session(aha_root, session)
+
+                with (
+                    mock.patch(
+                        "aha_cli.services.auto_context_compact.backend_status",
+                        return_value={
+                            "status": "stopped",
+                            "context_pressure": {
+                                "level": "high",
+                                "percent": 95.0,
+                                "prompt_estimate_percent": 95.0,
+                                "pressure_is_estimate": True,
+                                "pressure_source": "prompt_metrics.tokens",
+                            },
+                        },
+                    ),
+                    mock.patch(
+                        "aha_cli.services.auto_context_compact.compact_reset_backend_session",
+                        return_value={"ok": True, "summary_path": "tasks/task-001/compacts/main.md"},
+                    ) as compact_reset,
+                    mock.patch(
+                        "aha_cli.services.auto_context_compact.start_backend",
+                        return_value={"status": "running", "started": True},
+                    ) as start_backend,
+                ):
+                    backend = start_backend_after_auto_compact(aha_root, run_id, "main", backend="codex", task_id="task-001")
+
+        self.assertEqual(backend["status"], "running")
+        compact_reset.assert_not_called()
+        start_backend.assert_called_once()
 
 
 if __name__ == "__main__":

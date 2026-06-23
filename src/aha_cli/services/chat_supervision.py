@@ -21,6 +21,7 @@ from aha_cli.services.orchestrator import (
     chat_offset_exists,
     execute_actions,
 )
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.subagent_state import task_has_incomplete_sub_agents
 from aha_cli.store.filesystem import (
     append_event,
@@ -49,27 +50,6 @@ ASK_USER_GATE_LABELS = {
     "permissions_or_external": "permissions, credentials, spending, or external resources",
     "product_preference": "product preference or choice not inferable from the repository",
 }
-DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT = (
-    "Delegated browser control plane contract:\n"
-    "- You are the delegated browser->main control plane, not a third-party reviewer.\n"
-    "- Steward handles deterministic low-risk continuation; you handle semantic handoff decisions.\n"
-    "- Use your read-only project access to inspect code, diffs, tests, logs, events, and task state before deciding.\n"
-    "- Do not rely only on main's wording when the project state can verify or falsify it.\n"
-    "- Publish concise public progress updates before or after non-trivial read-only inspections so the host view shows what you checked.\n"
-    "- Never reveal hidden chain-of-thought; summarize observable evidence, commands, and next checks only.\n"
-    "- Keep the task moving, correct direction, route or wait when needed, and escalate only when required.\n"
-    "- Do not replace main's technical implementation judgment or make product decisions for the user.\n"
-    "- Enforce auto delegation as an efficiency policy: more agents are useful only when they reduce the critical path.\n"
-    "- Do not push task-main to split simple or tightly coupled work just to use more agents.\n"
-    "- If task-main stays solo on clearly independent exploration, implementation, or verification tracks, prefer continue and ask it to spawn AHA sub-agents or explain the practical reason for staying solo.\n"
-    "- When the user explicitly asks for efficiency or to fully use AHA, hold task-main to a higher decomposition standard while still avoiding wasteful splits.\n"
-    "- When an ask-user gate is disabled, make the browser-side call yourself from read-only evidence instead of asking.\n"
-    "- You are read-only: never offer to write code/config, commit, or run state-changing work yourself; route executable work to task-main.\n"
-    "- Ask the user for destructive operations, commits, spending, permission changes, or irreversible choices only when the matching gate requires it.\n"
-    "- Treat commit handling as part of implementation closure: route commit work to task-main when policy allows; never commit yourself.\n"
-    "- Do not stop just because main gave a plausible explanation; stop only when read-only evidence shows there is no concrete follow-up.\n"
-    "- Do not expose host/supervision mechanics to main; response must read like the next browser instruction.\n"
-)
 SUPERVISION_EVENT_TYPES = {
     "main_reported_to_host",
     "host_decision",
@@ -222,53 +202,13 @@ def supervision_host_context(task: dict, host_notes: list[str] | None = None, ha
             for agent in task.get("agents", [])
         ],
     }
-    return (
-        "AHA host instructions:\n"
-        "Output contract: return exactly one JSON object and nothing else. Do not emit prose, Markdown fences, code blocks, or tool calls.\n"
-        "The JSON response field is the only natural-language message AHA will route to task-main or browser.\n"
-        f"{DELEGATED_BROWSER_CONTROL_PLANE_CONTRACT}"
-        "The current message from main is either task-main's raw reply to your prior instruction or a supervision exchange containing a fresh browser request.\n"
-        "When it is a supervision exchange, use browser_latest_request, browser_to_host_notes, and main_latest_reply together.\n"
-        "browser_to_host_notes are browser instructions to you, the host, for how to evaluate and respond to this current supervision exchange.\n"
-        "Use browser_to_host_notes to choose your decision and shape the response you send to task-main or browser; do not treat them as browser_latest_request to task-main.\n"
-        "If browser_to_host_notes asks task-main to reply with specific text, prefer decision continue and put that direct instruction in response unless it conflicts with safety or task boundaries.\n"
-        'Minimal example: browser_to_host_notes says "browser -> host: 让其直接回复测试111" -> return {"decision":"continue","reason":"browser_to_host_notes asks main to reply","response":"请直接回复测试111","actions":[]}.\n'
-        "Talk to task-main as the next browser control message: direct, natural, and focused on the next step.\n"
-        "Your response field is inserted as the next user message to task-main.\n"
-        "When these instructions say response text must be natural, that applies only to the JSON response field, not to the whole assistant message.\n"
-        "Inside the JSON response field, do not mention host, agent, supervision, proxy, decision, JSON, or delegated control-plane mechanics.\n"
-        "Do not merely restate main's answer. Give a browser-facing judgment: agree, disagree, ask for user confirmation, or direct the next concrete step.\n"
-        "When main is right and the next step is user-facing, say so concisely, for example: 同意，请按 main 的方案复测这个点。\n"
-        "When main is wrong, incomplete, drifting, or under-verified, say what must happen next instead of echoing the report.\n"
-        "Use continue only when task-main should do more concrete work.\n"
-        "Use wait when task-main or sub-agents are already working and your only next message would be an acknowledgement like OK, waiting, or report when ready.\n"
-        "Use stop only when task-main's latest reply completes the evaluated exchange and read-only evidence confirms no concrete implementation, verification, commit, routing, or cleanup follow-up remains.\n"
-        "For implementation/config/UI tasks, do not stop on a proposal, explanation, recommendation, or desired final shape unless the repository state already matches it.\n"
-        "If main says the UI/code should or best would behave a certain way, inspect whether it already does; if not, use continue and tell task-main exactly what to change or verify.\n"
-        "If prior host notes, task journal risks, or current diffs mention an unresolved follow-up that matches the user's concern, prefer continue over stop.\n"
-        "For implementation tasks, verified code changes are not terminal while task-owned changes remain uncommitted and commit handling is allowed or still unresolved.\n"
-        "When commit_merge_delete says host may decide and changes are clearly task-owned, use continue and tell task-main to inspect git status, exclude unrelated changes, verify as needed, and commit with AHA commit policy.\n"
-        "When commit_merge_delete says ask_user required, ask_user before requesting commit, merge, delete, or other repository-finalization work.\n"
-        "Use ask_user when the ask-user gate policy marks that class as required.\n"
-        "When a gate says host may decide, do not ask the browser for that class; use read-only evidence and choose continue, stop, route, wait, or an action yourself.\n"
-        "Use ask_user only when every safe route still requires a browser-owned decision, missing permission, credential, payment, or external fact you cannot observe.\n"
-        "Do not call Claude native tools such as AskUserQuestion or ExitPlanMode. If you need browser input, return AHA JSON with decision ask_user; never ask through a native tool.\n"
-        "A config file that contains secrets is not automatically an ask_user case when the safe action is narrow and observable; tell task-main to preserve secret fields and edit only the intended non-secret field.\n"
-        "Never say you will change files, patch code, commit, run commands, or otherwise perform the work yourself.\n"
-        "For executable work, instruct task-main to do it; phrase response as a browser instruction to main, not as the host taking ownership.\n"
-        "For route_to_agent or spawn_sub decisions, still include a concise response for task-main explaining the routed work and how main should proceed after results return.\n"
-        "Inspect context only. Do not modify files or execute state-changing commands.\n"
-        "Decide what task-main should do next after its latest reply in the evaluated exchange.\n\n"
-        "Return only one JSON object with this shape:\n"
-        '{"decision":"continue","reason":"short runtime reason","response":"natural message for main","actions":[]}\n\n'
-        "Allowed decision values: ask_user, continue, wait, stop, route_to_agent, spawn_sub, record_task_update.\n"
-        "For continue, the response field is what main sees in Chat. For ask_user or stop, the response field is what the user sees in Chat. For a stop decision after a browser_main_reply exchange, leave response empty when main's reply already tells the user everything. For wait, response is recorded only in Runtime and is not routed.\n"
-        "Do not include decision/reason labels in response.\n"
-        "Use actions only when main should execute concrete AHA actions; otherwise return an empty list.\n\n"
-        f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
-        f"Task context:\n{json.dumps(task_context, ensure_ascii=False, indent=2)}\n\n"
-        f"Recent steward handoffs:\n{chr(10).join(handoff_notes or ['(none)'])}\n\n"
-        f"Recent browser-to-host notes:\n{chr(10).join(host_notes or ['(none)'])}"
+    return render_prompt_template(
+        "supervision_host_context.md",
+        delegated_contract=render_prompt_template("supervision_host_contract.md").rstrip(),
+        ask_user_gate_policy="\n".join(supervision_ask_user_gate_notes(supervision)),
+        task_context=json.dumps(task_context, ensure_ascii=False, indent=2),
+        steward_handoffs="\n".join(handoff_notes or ["(none)"]),
+        browser_to_host_notes="\n".join(host_notes or ["(none)"]),
     )
 
 
@@ -278,28 +218,12 @@ def supervision_host_delta_context(
     handoff_notes: list[str] | None = None,
 ) -> str:
     supervision = task.get("supervision") if isinstance(task.get("supervision"), dict) else {}
-    return (
-        "AHA host sticky summary:\n"
-        "- Output only one JSON object. Do not emit prose, Markdown fences, code blocks, or tool calls.\n"
-        "- The JSON response field is the only natural-language message AHA will route to task-main or browser.\n"
-        "- Continue the full delegated browser->main control-plane contract already established in this sticky session.\n"
-        "- Stay read-only: inspect context, choose the next safe decision, and route executable work to task-main.\n"
-        "- Keep role/routing boundaries: do not do implementation, commit, merge, delete, or state-changing work yourself.\n"
-        "- Enforce auto delegation only when it reduces the critical path; avoid forcing needless splits.\n"
-        "- Preserve ask-user gates: ask for destructive, commit/merge/delete, permission, external, or product decisions only when the gate requires it.\n"
-        "- Response field text must read like a natural browser instruction; do not mention host, supervision, delegated control plane, JSON, or internal mechanics inside that field.\n"
-        "- Current supervision exchanges may include browser_to_host_notes; treat them as browser instructions to you, the host, for how to evaluate and respond to this current exchange.\n"
-        "- Use browser_to_host_notes to choose your decision and shape the response to task-main or browser; do not treat them as browser_latest_request to task-main.\n"
-        '- If browser_to_host_notes says "browser -> host: 让其直接回复测试111", prefer {"decision":"continue","reason":"browser_to_host_notes asks main to reply","response":"请直接回复测试111","actions":[]} unless safety or task boundaries conflict.\n'
-        "- For route_to_agent or spawn_sub decisions, still include a concise response for task-main explaining the routed work and how main should proceed after results return.\n"
-        "- Return exactly one JSON object with decision, reason, response, and actions.\n"
-        "- Do not call Claude native tools such as AskUserQuestion or ExitPlanMode; ask through AHA JSON decision ask_user only.\n"
-        "- Allowed decisions: ask_user, continue, wait, stop, route_to_agent, spawn_sub, record_task_update.\n"
-        "- Use continue for concrete next work, wait when agents are already working, and stop only when evidence shows no follow-up remains.\n\n"
-        f"Ask-user gate policy:\n{chr(10).join(supervision_ask_user_gate_notes(supervision))}\n\n"
-        f"Task state:\n{json.dumps(_compact_task_context_for_host(task), ensure_ascii=False, separators=(',', ':'))}\n\n"
-        f"Recent steward handoffs:\n{chr(10).join(handoff_notes or ['(none)'])}\n\n"
-        f"Recent browser-to-host notes:\n{chr(10).join(host_notes or ['(none)'])}"
+    return render_prompt_template(
+        "supervision_host_delta_context.md",
+        ask_user_gate_policy="\n".join(supervision_ask_user_gate_notes(supervision)),
+        task_state=json.dumps(_compact_task_context_for_host(task), ensure_ascii=False, separators=(",", ":")),
+        steward_handoffs="\n".join(handoff_notes or ["(none)"]),
+        browser_to_host_notes="\n".join(host_notes or ["(none)"]),
     )
 
 
@@ -310,12 +234,12 @@ def supervision_host_prompt(
     handoff_notes: list[str] | None = None,
 ) -> str:
     browser_to_host_notes = "\n".join(host_notes or ["(none)"])
-    exchange = (
-        "Supervision exchange to evaluate:\n"
-        "- source: unknown\n"
-        "- browser_latest_request:\n(none)\n\n"
-        f"- browser_to_host_notes:\n{browser_to_host_notes}\n\n"
-        f"- main_latest_reply:\n{main_reply}"
+    exchange = render_prompt_template(
+        "supervision_exchange.md",
+        source="unknown",
+        browser_latest_request="(none)",
+        browser_to_host_notes=browser_to_host_notes,
+        main_latest_reply=main_reply,
     )
     return f"{supervision_host_context(task, [], handoff_notes)}\n\n{exchange}\n"
 
@@ -378,12 +302,12 @@ def supervision_exchange_message(
         return main_reply, source
     browser_request = latest_browser_main_request(root, run_id, task_id, host_agent_id, source_message)
     browser_to_host_notes = "\n".join(host_notes or ["(none)"])
-    exchange = (
-        "Supervision exchange to evaluate:\n"
-        f"- source: {source}\n"
-        f"- browser_latest_request:\n{browser_request or '(none)'}\n\n"
-        f"- browser_to_host_notes:\n{browser_to_host_notes}\n\n"
-        f"- main_latest_reply:\n{main_reply}"
+    exchange = render_prompt_template(
+        "supervision_exchange.md",
+        source=source,
+        browser_latest_request=browser_request or "(none)",
+        browser_to_host_notes=browser_to_host_notes,
+        main_latest_reply=main_reply,
     )
     return exchange, source
 

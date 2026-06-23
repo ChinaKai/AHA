@@ -104,9 +104,11 @@
                 </section>
                 <div class="run-admin-actions">
                   <button id="aha-settings" type="button" aria-controls="settings-dialog" aria-expanded="false" data-i18n="common.settings">Settings</button>
+                  <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
                   <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
                   <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
                   <button id="web-upgrade" class="button-ghost" type="button" data-i18n="run.upgrade_web">Upgrade</button>
+                  <div id="token-usage-popover" class="token-usage-popover" hidden></div>
                 </div>
                 <div id="web-restart-state" class="meta"></div>
                 <div id="settings-dialog" class="settings-popover" aria-labelledby="settings-title" hidden>
@@ -906,6 +908,7 @@
   <script src="/static/prompt_metrics_view.js"></script>
   <script src="/static/prompt_metrics_popover.js"></script>
   <script src="/static/api_client.js"></script>
+  <script src="/static/token_usage.js"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>

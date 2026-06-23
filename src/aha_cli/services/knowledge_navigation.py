@@ -21,6 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.knowledge import (
     NAVIGATION_MODULES_DIR,
     NAVIGATION_FLOWS_DIR,
@@ -538,32 +539,11 @@ def _bootstrap_event_payload(
 def build_navigation_bootstrap_prompt(scan: dict, *, workspace_path: str, project_key_value: str) -> str:
     """Prompt for agent-assisted first navigation generation."""
     scan_json = json.dumps(scan, ensure_ascii=False, indent=2)
-    return (
-        "You are generating the initial AHA project navigation for a code workspace.\n"
-        "Project navigation is an agent `/init` style project briefing plus a compact map: "
-        "one small `index`, then lightweight modules/* or flows/* docs that tell agents where to look. "
-        "The index is the project manual future agents read on demand; it must be useful, concise, "
-        "and grounded in the supplied workspace evidence.\n\n"
-        "Return ONLY valid JSON. The top-level value must be an array of candidates. "
-        "Each candidate must use this shape:\n"
-        '{"kind":"navigation","scope":"project","project_key":"...",'
-        '"slug":"index|modules/<slug>|flows/<slug>","title":"...",'
-        '"body":"markdown","tags":["navigation"],"related_files":[],"confidence":0.6}\n\n'
-        "Rules:\n"
-        "- Include exactly one `index` candidate unless the scan is unusable.\n"
-        "- The `index` body MUST contain `## Project README` followed by the generated project briefing.\n"
-        "- The `index` body MUST contain `## Project Map`; put first-level module/flow links under it.\n"
-        "- Project README should cover purpose, tech stack, run/test commands, code organization, conventions, and agent caveats when supported by evidence.\n"
-        "- `index` links only directly to first-level `modules/*.md` or `flows/*.md` candidates that are also in this JSON batch.\n"
-        "- Module/flow docs stay lightweight: responsibility, key files, entry points, and caveats only.\n"
-        "- Slugs must already be normalized: `index`, `modules/<name>`, or `flows/<name>`.\n"
-        "- Use the provided project_key exactly.\n"
-        "- If there is not enough evidence for a module/flow doc, omit it instead of creating empty template noise.\n\n"
-        f"workspace_path: {workspace_path}\n"
-        f"project_key: {project_key_value}\n\n"
-        "--- COMPRESSED WORKSPACE SCAN JSON ---\n"
-        f"{scan_json}\n"
-        "--- END SCAN ---\n"
+    return render_prompt_template(
+        "knowledge_navigation_bootstrap.md",
+        workspace_path=workspace_path,
+        project_key_value=project_key_value,
+        scan_json=scan_json,
     )
 
 

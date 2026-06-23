@@ -132,11 +132,12 @@ keep backend sessions as execution continuity, not as the source of truth
 ```
 
 New tasks keep agent context auto compact off by default, with a 75%
-context-pressure threshold prefilled for users who choose to enable it. The task
-creation dialog exposes this policy so users can turn it on or adjust the
-threshold before the first backend session starts. Existing tasks without stored
-context-management metadata keep legacy compatibility defaults until they are
-explicitly edited.
+context-pressure threshold prefilled for users who choose to enable it. Automatic
+compact/reset is deliberately conservative: it only runs before a backend starts,
+and only when context pressure comes from trusted runtime token usage rather than
+the rough AHA prompt-size estimate. Turn-end implicit reset is disabled because
+clearing `backend_session_id` after a turn can reduce continuity and hurt agent
+accuracy.
 
 The durable source of truth should be AHA state, task journals, round summaries,
 finals, decisions, changed files, verification, and risks. Backend sticky

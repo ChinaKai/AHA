@@ -27,7 +27,7 @@ history, and replacing large repeated context with durable references.
 | --- | --- | --- | --- |
 | P0. Quantify overhead | Done | `3bfb34c` | Added `aha_prompt_tokens`, `backend_input_tokens`, `estimated_backend_history_tokens`, and `aha_overhead_ratio`; surfaced them in backend usage breakdown. |
 | P1. Compact reset continuation | Done | `3bfb34c` | Normal full prompts can inject a bounded compact summary after `backend_session_id` is cleared. |
-| P2. Turn-end auto compact | Done | `3bfb34c` | Added turn-end auto compact/reset that archives the old native session without stopping the idle worker. |
+| P2. Runtime-gated auto compact | Revised | `3bfb34c` + current task | Turn-end implicit compact/reset is disabled. Auto compact remains opt-in and only uses trusted runtime token pressure before backend start, not prompt-size estimates. |
 | P3. Protocol/rules on-demand injection | Done | `dc1afb5` | Full chat prompts now keep short action/commit reminders by default and inject long coordination/commit policies only on matching intent. |
 | P4. Tool output references | Done | `d479fbd` | Large Codex command output and Claude tool results now keep bounded `output_tail` plus `output_ref` artifact metadata. |
 | P5. Phase fresh session | Done | `9a3460f` | Added explicit `/aha phase <phase> [summary]` checkpointing that clears oversized native sessions without stopping the worker. |
@@ -115,7 +115,8 @@ observation, not required implementation:
 - Watch real AHA long-task metrics for `aha_overhead_ratio`,
   `estimated_backend_history_tokens`, and context pressure before changing
   defaults further.
-- Tune auto compact thresholds only after observing at least a few real
-  high-context turns.
+- Keep auto compact opt-in and runtime-gated. Do not re-enable turn-end implicit
+  reset unless real-task evidence shows it improves token use without lowering
+  agent accuracy.
 - Consider richer UI affordances for browsing `output_ref` artifacts if users
   need one-click inspection beyond existing event metadata.

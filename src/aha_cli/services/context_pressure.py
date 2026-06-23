@@ -129,15 +129,28 @@ def context_pressure(
         estimated_backend_history_tokens = max(backend_input_tokens - prompt_tokens, 0)
         if backend_input_tokens > 0:
             aha_overhead_ratio = round(prompt_tokens / backend_input_tokens, 6)
-    ratio = (input_tokens / context_window) if input_tokens is not None and context_window else None
-    level = "unknown"
-    if ratio is not None:
-        if ratio >= 0.85:
-            level = "high"
-        elif ratio >= 0.70:
-            level = "watch"
-        else:
-            level = "ok"
+    runtime_ratio = (
+        (runtime_effective_input_tokens / context_window)
+        if runtime_effective_input_tokens is not None and context_window
+        else None
+    )
+    prompt_estimate_ratio = (
+        (prompt_tokens / context_window)
+        if prompt_tokens is not None and context_window
+        else None
+    )
+    ratio = runtime_ratio if runtime_ratio is not None else prompt_estimate_ratio
+
+    def level_for_ratio(value: float | None) -> str:
+        if value is None:
+            return "unknown"
+        if value >= 0.85:
+            return "high"
+        if value >= 0.70:
+            return "watch"
+        return "ok"
+
+    level = level_for_ratio(ratio)
     if runtime_effective_input_tokens is not None:
         pressure_source = "runtime.last_token_usage.effective_input_tokens" if normalized_backend == "claude" else "runtime.last_token_usage.input_tokens"
     elif prompt_tokens is not None:
@@ -160,6 +173,15 @@ def context_pressure(
         "runtime_cached_input_tokens": runtime_cached_input_tokens,
         "runtime_cache_creation_input_tokens": runtime_cache_creation_input_tokens,
         "runtime_total_tokens": runtime_total_tokens,
+        "runtime_ratio": round(runtime_ratio, 6) if runtime_ratio is not None else None,
+        "runtime_percent": round(runtime_ratio * 100, 2) if runtime_ratio is not None else None,
+        "runtime_level": level_for_ratio(runtime_ratio),
+        "prompt_estimate_tokens": prompt_tokens,
+        "prompt_estimate_ratio": round(prompt_estimate_ratio, 6) if prompt_estimate_ratio is not None else None,
+        "prompt_estimate_percent": round(prompt_estimate_ratio * 100, 2) if prompt_estimate_ratio is not None else None,
+        "prompt_estimate_level": level_for_ratio(prompt_estimate_ratio),
+        "pressure_is_runtime": runtime_ratio is not None,
+        "pressure_is_estimate": runtime_ratio is None and prompt_estimate_ratio is not None,
         "prompt_chars": prompt_chars,
         "prompt_bytes": prompt_bytes,
         "prompt_lines": prompt_lines,

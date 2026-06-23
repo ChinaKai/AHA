@@ -140,14 +140,7 @@ def _root_cause_reaudit_gate_for_prompt(
             saw_prior_agent_reply = True
     if not (saw_prior_browser_request and saw_prior_agent_reply):
         return ""
-    return "\n".join(
-        [
-            f"AHA runtime root-cause re-audit gate for `{family}`:",
-            "- The user is following up after prior agent work in this task. Treat this as repeated feedback unless evidence proves otherwise.",
-            "- Before another patch or answer, re-read the relevant code/logs/tests and state the missed root cause.",
-            "- Do not stack another small fix until you have checked the full behavior path and verification target.",
-        ]
-    )
+    return render_prompt_template("backend_root_cause_reaudit_gate.md", model_family=family).rstrip()
 
 
 def recent_run_events(root: Path, run_id: str, limit: int) -> list[dict]:

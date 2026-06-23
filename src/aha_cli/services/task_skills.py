@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.domain.models import normalize_task_skills
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.paths import aha_home_path
 
 
@@ -57,19 +58,10 @@ def task_skills_context_for_prompt(task: dict) -> str:
     paths = config.get("enabled_paths") or []
     if not paths:
         return ""
-    lines = [
-        "Task skills context:",
-        "- enabled skill paths:",
-    ]
-    lines.extend(f"  - {path}" for path in paths)
-    lines.extend(
-        [
-            "Task skill operating rules:",
-            "- When a selected skill is relevant to the user request, read its SKILL.md before acting.",
-            "- Treat selected skills as optional task capabilities, independent from hardware device configuration.",
-        ]
+    return render_prompt_template(
+        "task_skills_context.md",
+        enabled_paths="\n".join(f"  - {path}" for path in paths),
     )
-    return "\n".join(lines)
 
 
 __all__ = ["discover_task_skill_options", "task_skills_context_for_prompt"]

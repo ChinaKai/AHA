@@ -34,6 +34,7 @@ from aha_cli.services.orchestrator import (
 )
 from aha_cli.services.progress_heartbeat import AgentProgressHeartbeat
 from aha_cli.services.prompt_artifacts import save_prompt_artifact
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import proxy_env_for_agent
 from aha_cli.services.subagent_state import task_has_incomplete_sub_agents, waiting_for_subagents_message
 from aha_cli.store.filesystem import (
@@ -89,45 +90,27 @@ AHA_ACTION_RETRY_SCHEMA = (
 
 
 def action_schema_retry_message(reason: str) -> str:
-    return "\n".join(
-        [
-            AHA_ACTION_RETRY_SCHEMA,
-            "",
-            "AHA runtime rejected your previous reply before executing actions.",
-            f"Reason: {reason}.",
-            "Return exactly one JSON object with an `actions` array and `response` string.",
-            "Allowed action types are `route_to_agent`, `spawn_sub`, and `record_task_update`.",
-            "Do not use top-level `type` or `action`; do not wrap the JSON in Markdown.",
-            "Continue from the latest active user request.",
-        ]
+    return render_prompt_template(
+        "chat_action_schema_retry.md",
+        action_retry_schema=AHA_ACTION_RETRY_SCHEMA,
+        reason=reason,
     )
 
 
 def task_update_required_retry_message() -> str:
-    return "\n".join(
-        [
-            AHA_ACTION_RETRY_SCHEMA,
-            "",
-            "AHA runtime detected repository changes from your previous turn, but your reply did not include `record_task_update`.",
-            "Before normal completion, return exactly one AHA JSON object with a `record_task_update` action.",
-            "Fill `changed_files`, `verification`, and `risks` from the actual work you performed.",
-            "Do not mix Markdown prose outside the JSON envelope.",
-        ]
+    return render_prompt_template(
+        "chat_task_update_required_retry.md",
+        action_retry_schema=AHA_ACTION_RETRY_SCHEMA,
     )
 
 
 def commit_policy_retry_message(errors: list[str], expected_generated_by: str) -> str:
     error_text = "; ".join(errors)
-    return "\n".join(
-        [
-            AHA_ACTION_RETRY_SCHEMA,
-            "",
-            "AHA runtime detected a commit message policy violation from your previous turn.",
-            f"Expected Generated-by trailer: {expected_generated_by}",
-            f"Errors: {error_text}",
-            "Amend or repair the commit before normal completion, then return an AHA JSON object with `record_task_update`.",
-            "Do not add Co-Authored-By, AHA-Task, AHA-Agent, or AHA-Scope trailers.",
-        ]
+    return render_prompt_template(
+        "chat_commit_policy_retry.md",
+        action_retry_schema=AHA_ACTION_RETRY_SCHEMA,
+        expected_generated_by=expected_generated_by,
+        error_text=error_text,
     )
 
 

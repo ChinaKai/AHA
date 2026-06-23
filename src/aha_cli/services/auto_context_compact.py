@@ -26,6 +26,16 @@ def backend_session_has_active_id(root: Path, run_id: str, task_id: str, agent_i
     return bool(session.get("backend_session_id"))
 
 
+def runtime_context_percent(pressure: dict) -> float | None:
+    pressure_source = str(pressure.get("pressure_source") or "")
+    if not pressure.get("pressure_is_runtime") and not pressure_source.startswith("runtime."):
+        return None
+    try:
+        return float(pressure.get("runtime_percent", pressure.get("percent")))
+    except (TypeError, ValueError):
+        return None
+
+
 def _auto_compact_agent_context(
     root: Path,
     run_id: str,
@@ -56,9 +66,8 @@ def _auto_compact_agent_context(
     if status not in allowed_statuses:
         return None
     pressure = state.get("context_pressure") if isinstance(state.get("context_pressure"), dict) else {}
-    try:
-        percent = float(pressure.get("percent"))
-    except (TypeError, ValueError):
+    percent = runtime_context_percent(pressure)
+    if percent is None:
         return None
     threshold = int(policy.get("auto_compact_threshold_percent") or 75)
     if percent < threshold or not backend_session_has_active_id(root, run_id, task_id, agent_id):
@@ -131,16 +140,9 @@ def auto_compact_agent_context_after_turn(
     *,
     backend_state: dict | None = None,
 ) -> dict | None:
-    return _auto_compact_agent_context(
-        root,
-        run_id,
-        task_id,
-        agent_id,
-        backend_state=backend_state,
-        allowed_statuses={"running", "stopped"},
-        stop_backend_before_reset=False,
-        trigger="turn_end",
-    )
+    # Turn-end implicit reset hurts backend-session continuity; keep the public
+    # hook for callers/tests, but do not clear backend_session_id automatically.
+    return None
 
 
 def start_backend_after_auto_compact(
@@ -189,5 +191,6 @@ __all__ = [
     "auto_compact_agent_context_after_turn",
     "auto_compact_agent_context_before_backend_start",
     "backend_session_has_active_id",
+    "runtime_context_percent",
     "start_backend_after_auto_compact",
 ]

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
+from aha_cli.services.token_usage import daily_token_usage_report
 from aha_cli.services.weixin import (
     WeixinError,
     fetch_updates,
@@ -340,6 +341,35 @@ def prompt_artifact_response(
         return json_response({"error": "prompt artifact not found"}, "404 Not Found")
 
 
+def token_usage_daily_response(
+    root: Path,
+    run_id: str,
+    method: str,
+    query: dict[str, list[str]],
+    headers: dict[str, str] | None = None,
+) -> bytes:
+    limit_days_text = str(query.get("limit_days", [""])[0] or "").strip()
+    try:
+        limit_days = int(limit_days_text) if limit_days_text else None
+    except ValueError:
+        return json_response({"error": "limit_days must be a valid integer"}, "400 Bad Request")
+    try:
+        payload = daily_token_usage_report(
+            root,
+            run_id,
+            timezone=str(query.get("timezone", query.get("tz", ["UTC"]))[0] or "UTC"),
+            since=str(query.get("since", [""])[0] or ""),
+            until=str(query.get("until", [""])[0] or ""),
+            task_id=str(query.get("task_id", [""])[0] or ""),
+            target=str(query.get("target", [""])[0] or ""),
+            backend=str(query.get("backend", [""])[0] or ""),
+            limit_days=limit_days,
+        )
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    return head_or_json(method, payload, request_headers=headers)
+
+
 def system_route_response(
     root: Path,
     default_run_id: str,
@@ -425,6 +455,9 @@ def system_route_response(
         target = query.get("target", ["main"])[0] or "main"
         task_id = query.get("task_id", [""])[0] or None
         return head_or_json(method, cached_backend_status(root, run_id, target, task_id=task_id))
+    if method in {"GET", "HEAD"} and path == "/api/usage/daily":
+        run_id = require_api_run_id(root, default_run_id, query)
+        return token_usage_daily_response(root, run_id, method, query, headers)
     if method in {"GET", "HEAD"} and path == "/api/agents/runtime":
         run_id = require_api_run_id(root, default_run_id, query)
         task_id = selected_task_id(query)

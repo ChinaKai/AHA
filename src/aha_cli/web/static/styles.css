@@ -419,15 +419,18 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrat
   grid-column: 1 / -1;
 }
 .session-menu.weixin-open,
-.session-menu.play-open {
+.session-menu.play-open,
+.session-menu.token-usage-open {
   overflow: visible;
 }
 body.settings-home .session-menu.weixin-open,
-body.settings-home .session-menu.play-open {
+body.settings-home .session-menu.play-open,
+body.settings-home .session-menu.token-usage-open {
   overflow: auto;
 }
 body.settings-home .session-menu.weixin-open .weixin-console-popover,
-body.settings-home .session-menu.play-open .play-console-popover {
+body.settings-home .session-menu.play-open .play-console-popover,
+body.settings-home .session-menu.token-usage-open .token-usage-popover {
   position: static;
   width: 100%;
   max-height: none;
@@ -798,6 +801,19 @@ body.settings-home .session-menu.play-open .play-console-popover {
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
 }
+.token-usage-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(78dvh, 720px);
+  overflow: auto;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
 .settings-popover {
   display: grid;
   gap: 12px;
@@ -857,6 +873,13 @@ body.settings-home .session-menu.play-open .play-console-popover {
   width: min(420px, calc(100vw - 32px));
   max-height: min(calc(var(--app-viewport-height) - 96px), 560px);
 }
+.session-menu.token-usage-open .token-usage-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(calc(var(--app-viewport-height) - 96px), 720px);
+}
 .run-manager.maintenance-open .run-maintenance-popover,
 .run-settings-panel.maintenance-open .run-maintenance-popover {
   position: static;
@@ -866,6 +889,7 @@ body.settings-home .session-menu.play-open .play-console-popover {
 }
 .weixin-console-popover[hidden],
 .play-console-popover[hidden],
+.token-usage-popover[hidden],
 .settings-popover[hidden],
 .run-maintenance-popover[hidden] {
   display: none;
@@ -880,6 +904,103 @@ body.settings-home .session-menu.play-open .play-console-popover {
   display: grid;
   gap: 12px;
   padding: 14px;
+}
+.token-usage-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.token-usage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e4e7ec;
+}
+.token-usage-head h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.token-usage-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+.token-usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+.token-usage-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+.token-usage-metric span {
+  min-width: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-usage-metric strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #101828;
+  font-size: 14px;
+}
+.token-usage-table-wrap {
+  overflow: auto;
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+}
+.token-usage-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.token-usage-table th,
+.token-usage-table td {
+  padding: 8px;
+  border-bottom: 1px solid #e4e7ec;
+  text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.token-usage-table th:first-child,
+.token-usage-table td:first-child {
+  text-align: left;
+}
+.token-usage-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.token-usage-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  color: #667085;
+  font-size: 11px;
+}
+.token-usage-breakdown span {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-usage-empty {
+  padding: 14px;
+  color: #667085;
+  text-align: center;
 }
 .play-console-head {
   display: flex;
@@ -5916,10 +6037,17 @@ body.empty-run .panel {
   }
   .weixin-console-popover,
   .play-console-popover,
+  .token-usage-popover,
   .run-maintenance-popover {
     left: 0;
     right: 0;
     width: auto;
+  }
+  .token-usage-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .token-usage-head {
+    display: grid;
   }
   .task-header {
     display: none;

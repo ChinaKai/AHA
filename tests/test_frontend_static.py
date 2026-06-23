@@ -33,6 +33,25 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
         self.assertIn('"run.upgrade_web": "升级"', i18n)
 
+    def test_daily_token_usage_entry_is_available_from_run_console(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+        script = (root / "token_usage.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="token-usage"', html)
+        self.assertIn('id="token-usage-popover"', html)
+        self.assertIn('<script src="/static/token_usage.js"></script>', html)
+        self.assertIn('"run.token_usage": "Daily usage"', i18n)
+        self.assertIn('"run.token_usage": "每日用量"', i18n)
+        self.assertIn(".token-usage-popover", styles)
+        self.assertIn(".token-usage-table", styles)
+        self.assertIn("/api/usage/daily", script)
+        self.assertIn("billable_input_tokens", script)
+        self.assertIn("cache_read_tokens", script)
+        self.assertIn("cache_creation_tokens", script)
+
     def test_knowledge_console_supports_i18n_and_mobile_layout(self) -> None:
         root = static_root()
         html = (root / "knowledge.html").read_text(encoding="utf-8")

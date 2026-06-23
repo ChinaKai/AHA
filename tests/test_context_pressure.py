@@ -22,6 +22,11 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["ratio"], 2.848837)
         self.assertEqual(pressure["percent"], 284.88)
         self.assertEqual(pressure["level"], "high")
+        self.assertIsNone(pressure["runtime_percent"])
+        self.assertEqual(pressure["prompt_estimate_tokens"], 735000)
+        self.assertEqual(pressure["prompt_estimate_percent"], 284.88)
+        self.assertFalse(pressure["pressure_is_runtime"])
+        self.assertTrue(pressure["pressure_is_estimate"])
 
     def test_runtime_context_window_takes_priority_over_table(self) -> None:
         pressure = context_pressure(
@@ -37,6 +42,9 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["ratio"], 0.5)
         self.assertEqual(pressure["percent"], 50.0)
         self.assertEqual(pressure["level"], "ok")
+        self.assertIsNone(pressure["runtime_percent"])
+        self.assertEqual(pressure["prompt_estimate_percent"], 50.0)
+        self.assertTrue(pressure["pressure_is_estimate"])
 
     def test_runtime_token_usage_takes_priority_over_prompt_metrics_tokens(self) -> None:
         pressure = context_pressure(
@@ -61,6 +69,12 @@ class ContextPressureTests(unittest.TestCase):
         self.assertAlmostEqual(pressure["ratio"], 226853 / 258400, places=6)
         self.assertEqual(pressure["percent"], round(226853 / 258400 * 100, 2))
         self.assertEqual(pressure["level"], "high")
+        self.assertEqual(pressure["runtime_percent"], round(226853 / 258400 * 100, 2))
+        self.assertEqual(pressure["runtime_level"], "high")
+        self.assertEqual(pressure["prompt_estimate_percent"], round(1000 / 258400 * 100, 2))
+        self.assertEqual(pressure["prompt_estimate_level"], "ok")
+        self.assertTrue(pressure["pressure_is_runtime"])
+        self.assertFalse(pressure["pressure_is_estimate"])
 
     def test_config_still_overrides_runtime_context_window(self) -> None:
         pressure = context_pressure(
@@ -76,6 +90,8 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["context_window_source"], "config")
         self.assertEqual(pressure["percent"], 50.0)
         self.assertEqual(pressure["level"], "ok")
+        self.assertEqual(pressure["prompt_estimate_percent"], 50.0)
+        self.assertTrue(pressure["pressure_is_estimate"])
 
     def test_prompt_chars_without_tokens_keeps_pressure_unknown(self) -> None:
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"chars": 120000, "bytes": 130000}})
@@ -88,6 +104,10 @@ class ContextPressureTests(unittest.TestCase):
         self.assertIsNone(pressure["percent"])
         self.assertEqual(pressure["pressure_source"], "prompt_metrics.chars")
         self.assertEqual(pressure["level"], "unknown")
+        self.assertIsNone(pressure["runtime_percent"])
+        self.assertIsNone(pressure["prompt_estimate_percent"])
+        self.assertFalse(pressure["pressure_is_runtime"])
+        self.assertFalse(pressure["pressure_is_estimate"])
 
     def test_context_window_can_be_overridden_by_config(self) -> None:
         window, source = context_window_for_model(
@@ -154,3 +174,8 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["pressure_source"], "runtime.last_token_usage.effective_input_tokens")
         self.assertEqual(pressure["percent"], 3.0)
         self.assertEqual(pressure["level"], "ok")
+        self.assertEqual(pressure["runtime_percent"], 3.0)
+        self.assertEqual(pressure["runtime_level"], "ok")
+        self.assertIsNone(pressure["prompt_estimate_percent"])
+        self.assertTrue(pressure["pressure_is_runtime"])
+        self.assertFalse(pressure["pressure_is_estimate"])
