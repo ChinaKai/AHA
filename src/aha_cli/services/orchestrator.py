@@ -604,6 +604,7 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             {
                 "task_id": task_id,
                 "action_count": len(payload.get("actions", [])) if isinstance(payload.get("actions"), list) else 0,
+                "agent_update": extraction.agent_update,
             },
         )
     executed: list[dict] = []

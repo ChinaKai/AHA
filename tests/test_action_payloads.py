@@ -34,7 +34,21 @@ class ActionPayloadTests(unittest.TestCase):
         self.assertEqual(result.payload, payload)
         self.assertTrue(result.recovered)
         self.assertIsNone(result.error)
+        self.assertEqual(result.agent_update, "已完成。")
         self.assertEqual(action_response_text(reply), "完成")
+
+    def test_extract_action_payload_recovers_single_bare_action_from_mixed_text(self) -> None:
+        payload = {
+            "actions": [{"type": "record_task_update", "summary": "done", "changed_files": [], "verification": [], "risks": []}],
+            "response": "已记录",
+        }
+        reply = f"我已经完成实现。\n{json.dumps(payload, ensure_ascii=False)}\n下一步可以提交。"
+        result = extract_action_payload_result(reply)
+
+        self.assertEqual(result.payload, payload)
+        self.assertTrue(result.recovered)
+        self.assertEqual(result.agent_update, "我已经完成实现。\n\n下一步可以提交。")
+        self.assertEqual(action_response_text(reply), "已记录")
 
     def test_extract_action_payload_ignores_embedded_json_examples(self) -> None:
         reply = textwrap.dedent(

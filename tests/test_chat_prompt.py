@@ -312,13 +312,14 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("prompt=Sgs #", prompt)
         self.assertNotIn("flash=False", prompt)
         self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("Task skills context:", sticky_prompt)
-        self.assertIn("Hardware debug context:", sticky_prompt)
-        self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", sticky_prompt)
-        self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", sticky_prompt)
-        self.assertIn("port=/dev/ttyUSB0", sticky_prompt)
-        self.assertIn("channel 2: type=telnet", sticky_prompt)
-        self.assertIn("write=True", sticky_prompt)
+        self.assertEqual(sticky_prompt, "use hardware again")
+        self.assertNotIn("Task skills context:", sticky_prompt)
+        self.assertNotIn("Hardware debug context:", sticky_prompt)
+        self.assertNotIn("/repo/.aha/skills/board-debug/SKILL.md", sticky_prompt)
+        self.assertNotIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", sticky_prompt)
+        self.assertNotIn("port=/dev/ttyUSB0", sticky_prompt)
+        self.assertNotIn("channel 2: type=telnet", sticky_prompt)
+        self.assertNotIn("write=True", sticky_prompt)
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -604,7 +605,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("User message from browser", metrics_json)
         self.assertNotIn("measure prompt", metrics_json)
 
-    def test_kimi_prompt_gets_model_specific_guidance_without_affecting_codex(self) -> None:
+    def test_claude_kimi_prompt_uses_unified_guidance_without_model_specific_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -641,20 +642,19 @@ class ChatPromptTests(unittest.TestCase):
                     resolved_model="gpt-5.5",
                 )
 
-        self.assertIn("AHA model-specific operating guidance for `kimi`:", kimi_prompt)
-        self.assertIn("Do not claim sub-agents exist until AHA creates or reuses them", kimi_prompt)
-        self.assertIn("start with an audit and write a keep/drop/redo list before editing", kimi_prompt)
-        self.assertIn("Re-audit the root cause", kimi_prompt)
-        self.assertIn("Before the first file edit/write, long-running test, or commit", kimi_prompt)
-        self.assertIn("reconcile the task journal, final summary, commits, changed_files, verification, and risks", kimi_prompt)
-        self.assertIn("model_guidance", kimi_metrics["components"])
+        self.assertIn("continue", kimi_prompt)
+        self.assertNotIn("AHA model-specific operating guidance", kimi_prompt)
+        self.assertNotIn("keep/drop/redo", kimi_prompt)
+        self.assertNotIn("long-running test, or commit", kimi_prompt)
+        self.assertNotIn("Re-audit the root cause", kimi_prompt)
+        self.assertNotIn("model_guidance", kimi_metrics["components"])
         self.assertNotIn("AHA model-specific operating guidance", codex_prompt)
         self.assertNotIn("keep/drop/redo", codex_prompt)
         self.assertNotIn("long-running test, or commit", codex_prompt)
         self.assertNotIn("Re-audit the root cause", codex_prompt)
         self.assertNotIn("model_guidance", codex_metrics["components"])
 
-    def test_minimax_sticky_delta_keeps_model_specific_guidance(self) -> None:
+    def test_minimax_sticky_delta_uses_plain_user_message_like_other_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -685,16 +685,13 @@ class ChatPromptTests(unittest.TestCase):
                 )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("AHA model-specific operating guidance for `minimax`:", prompt)
-        self.assertIn("On sticky-session resumes, do not replay completed old requirements", prompt)
-        self.assertIn("start with an audit and write a keep/drop/redo list before editing", prompt)
-        self.assertIn("Before the first file edit/write, long-running test, or commit", prompt)
-        self.assertIn("Do not say there are no risks if any unresolved product, test, or behavior issue remains", prompt)
-        self.assertIn("model_guidance", metrics["components"])
-        self.assertIn("sticky_context", metrics["components"])
+        self.assertEqual(prompt, "next request")
+        self.assertNotIn("AHA model-specific operating guidance", prompt)
+        self.assertNotIn("model_guidance", metrics["components"])
+        self.assertNotIn("sticky_context", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
 
-    def test_kimi_followup_prompt_adds_root_cause_reaudit_gate_without_affecting_codex(self) -> None:
+    def test_kimi_followup_prompt_does_not_add_model_specific_root_cause_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -733,9 +730,9 @@ class ChatPromptTests(unittest.TestCase):
                     resolved_model="gpt-5.5",
                 )
 
-        self.assertIn("AHA runtime root-cause re-audit gate for `kimi`:", kimi_prompt)
-        self.assertIn("re-read the relevant code/logs/tests", kimi_prompt)
-        self.assertIn("root_cause_reaudit_gate", kimi_metrics["components"])
+        self.assertNotIn("AHA runtime root-cause re-audit gate", kimi_prompt)
+        self.assertNotIn("re-read the relevant code/logs/tests", kimi_prompt)
+        self.assertNotIn("root_cause_reaudit_gate", kimi_metrics["components"])
         self.assertNotIn("AHA runtime root-cause re-audit gate", codex_prompt)
         self.assertNotIn("root_cause_reaudit_gate", codex_metrics["components"])
 
@@ -775,8 +772,9 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         prompt = run_agent.call_args.args[0]
-        self.assertIn("AHA model-specific operating guidance for `kimi`:", prompt)
-        self.assertIn("model_guidance", metrics_events[-1]["data"]["components"])
+        self.assertIn("check prompt", prompt)
+        self.assertNotIn("AHA model-specific operating guidance", prompt)
+        self.assertNotIn("model_guidance", metrics_events[-1]["data"]["components"])
         self.assertEqual(session["requested_model"], "env:kimi")
         self.assertEqual(session["resolved_model"], "kimi-k2.6")
         self.assertEqual(session["model"], "kimi-k2.6")
@@ -937,12 +935,12 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertIn("Current compact prompt title", prompt)
         self.assertIn("current-event", prompt)
-        self.assertIn("Current task constraints:", prompt)
-        self.assertIn("Intent priority policy:", prompt)
+        self.assertIn("Task context:", prompt)
+        self.assertIn("Intent priority:", prompt)
         self.assertNotIn("Foreign verbose task title that should stay out", prompt)
         self.assertNotIn("foreign-event", prompt)
 
-    def test_full_prompt_uses_compact_policy_reminders_without_coordination_or_commit_intent(self) -> None:
+    def test_full_prompt_uses_minimal_policy_reminders_without_coordination_or_commit_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             aha_root = root / ".aha"
@@ -958,17 +956,24 @@ class ChatPromptTests(unittest.TestCase):
                     "main",
                     {"sender": "browser", "message": "hello", "task_id": "task-001", "role": "main"},
                     "",
-                )
+        )
 
         self.assertEqual(metrics["prompt_mode"], "full")
-        self.assertIn("AHA action contract reminder:", prompt)
-        self.assertIn('"type": "spawn_sub"', prompt)
-        self.assertIn("For a brand-new sub-agent", prompt)
-        self.assertIn("Commit policy reminder:", prompt)
+        self.assertIn("Repository guard:", prompt)
+        self.assertNotIn("AHA action contract reminder:", prompt)
+        self.assertNotIn("AHA action output:", prompt)
+        self.assertNotIn('"type": "spawn_sub"', prompt)
+        self.assertNotIn("For a brand-new sub-agent", prompt)
+        self.assertNotIn("Commit policy reminder:", prompt)
+        self.assertNotIn("Run goal:", prompt)
+        self.assertNotIn("- workflow_template:", prompt)
+        self.assertNotIn("- delegation_policy:", prompt)
+        self.assertNotIn("- preferred_sub_backend:", prompt)
         self.assertNotIn("Ownership and routing policy:", prompt)
         self.assertNotIn("Commit ownership policy:", prompt)
         self.assertNotIn("Commit message policy:", prompt)
         self.assertNotIn("Generated-by:", prompt)
+        self.assertEqual(metrics["components"]["action_contract"]["chars"], 0)
         self.assertEqual(metrics["components"]["coordination_policy"]["chars"], 0)
         self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
 
@@ -988,13 +993,15 @@ class ChatPromptTests(unittest.TestCase):
                     "main",
                     {"sender": "browser", "message": "请并行拆给子 agent", "task_id": "task-001", "role": "main"},
                     "",
-                )
+        )
 
-        self.assertIn("Ownership and routing policy:", prompt)
-        self.assertIn("Do not split work just to use more agents", prompt)
-        self.assertIn("Spawn/reassign format:", prompt)
-        self.assertIn('"type": "route_to_agent"', prompt)
+        self.assertIn("AHA coordination policy:", prompt)
+        self.assertIn("AHA action output:", prompt)
+        self.assertIn("Spawn only for independent parallel work", prompt)
+        self.assertIn("Action formats:", prompt)
+        self.assertIn('"type":"route_to_agent"', prompt)
         self.assertNotIn("Commit message policy:", prompt)
+        self.assertGreater(metrics["components"]["action_contract"]["chars"], 0)
         self.assertGreater(metrics["components"]["coordination_policy"]["chars"], 0)
         self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
 
@@ -1059,20 +1066,20 @@ class ChatPromptTests(unittest.TestCase):
                 )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("Current task constraints:", prompt)
-        self.assertIn("backend-session-1", prompt)
-        self.assertIn("next request", prompt)
-        self.assertIn("Intent priority policy:", prompt)
-        self.assertIn(
-            "Current user message > task journal / active intent > compact summary / recent messages > original task description",
-            prompt,
-        )
-        self.assertIn("task.description as the original request / historical background", prompt)
+        self.assertEqual(prompt, "next request")
+        self.assertNotIn("Current task constraints:", prompt)
+        self.assertNotIn("backend-session-1", prompt)
+        self.assertNotIn("Intent priority policy:", prompt)
+        self.assertNotIn("task.description as the original request / historical background", prompt)
+        self.assertNotIn("Recent conversation:", prompt)
         self.assertNotIn("task_hidden", prompt)
-        self.assertNotIn("Ownership and routing policy", prompt)
+        self.assertNotIn("AHA coordination policy", prompt)
         self.assertNotIn("already-in-backend-session", prompt)
-        self.assertIn("sticky_context", metrics["components"])
-        self.assertIn("recent_conversation", metrics["components"])
+        self.assertNotIn("sticky_context", metrics["components"])
+        self.assertNotIn("recent_conversation", metrics["components"])
+        self.assertNotIn("run_goal", metrics["components"])
+        self.assertNotIn("prefix", metrics["components"])
+        self.assertEqual(metrics["components"]["user_message"]["chars"], len("next request"))
         self.assertNotIn("delta_status", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
         self.assertNotIn("Commit message policy:", prompt)

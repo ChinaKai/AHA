@@ -708,6 +708,7 @@ class OrchestratorTests(unittest.TestCase):
                 event["type"] == "action_payload_recovered"
                 and event["data"].get("task_id") == "task-001"
                 and event["data"].get("action_count") == 1
+                and event["data"].get("agent_update") == "已完成。"
                 for event in events
             )
         )

@@ -426,7 +426,7 @@ def test_task_assignment_prompt_embeds_context():
     prompt = task_assignment_prompt({"title": "T", "workspace_path": "/w"}, "项目已知经验 (knowledge base):\n- foo")
     assert "项目已知经验" in prompt
     # empty context still renders a valid prompt
-    assert "Collaboration mode" in task_assignment_prompt({"title": "T"}, "")
+    assert "collaboration_mode" in task_assignment_prompt({"title": "T"}, "")
 
 
 def test_dispatch_injects_knowledge_into_prompt(tmp_path: Path):

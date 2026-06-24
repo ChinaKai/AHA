@@ -61,7 +61,7 @@ class ProtocolContractTests(unittest.TestCase):
         for path in (
             "docs/protocol.md",
             "src/aha_cli/prompts/task_assignment.md",
-            "src/aha_cli/prompts/backend_task_context.md",
+            "src/aha_cli/prompts/backend_action_contract.md",
         ):
             text = read_repo_file(path)
             self.assertIn('"type": "spawn_sub"', text, path)

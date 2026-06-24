@@ -840,7 +840,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertIn("- reason: `manual`", prompt)
         self.assertIn("previous request", prompt)
         self.assertIn("Recent conversation chains", prompt)
-        self.assertIn("Intent priority policy:", prompt)
+        self.assertIn("Intent priority:", prompt)
 
     def test_compact_reset_preserves_existing_task_scoped_chat_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
