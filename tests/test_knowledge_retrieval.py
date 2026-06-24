@@ -215,7 +215,8 @@ def test_injection_adds_navigation_contract_only_when_navigation_present():
     ])
     assert "Project nav rule:" in withmap
     assert "navigation/index" in withmap
-    assert "默认不展开 navigation detail" in withmap
+    assert "大范围代码搜索" in withmap
+    assert "选择最小相关 modules/* 或 flows/*" in withmap
     assert 'kind:"navigation"' not in withmap
     assert "## 模块索引" not in withmap  # default reference mode keeps nav body out of the prompt
 

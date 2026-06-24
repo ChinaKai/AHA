@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 from pathlib import Path
+import signal
 
 from aha_cli.domain.models import default_knowledge_config, utc_now
+from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_git import auto_commit_after_change
 from aha_cli.services.knowledge_navigation import (
+    build_navigation_bootstrap_prompt,
     prepare_project_navigation,
     validate_navigation_candidates,
 )
@@ -68,9 +72,7 @@ def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, 
 
 
 def _nav_agent_log_event(stage: str, message: str, **extra) -> dict:
-    event = {"at": utc_now(), "stage": stage, "message": message}
-    event.update({key: value for key, value in extra.items() if value not in (None, "", [])})
-    return event
+    return agent_log_event(stage, message, **extra)
 
 
 def _append_nav_agent_log(root: Path, cfg: dict, draft_id: str, stage: str, message: str, **extra) -> None:
@@ -82,8 +84,60 @@ def _append_nav_agent_log(root: Path, cfg: dict, draft_id: str, stage: str, mess
         root,
         cfg,
         draft_id,
-        agent_log=[*log, _nav_agent_log_event(stage, message, **extra)],
+        agent_log=trim_agent_log([*log, _nav_agent_log_event(stage, message, **extra)]),
     )
+
+
+def _nav_progress_logger(root: Path, cfg: dict, draft_id: str):
+    def _log(event_type: str, data: dict | None = None) -> None:
+        summary = summarize_agent_progress(event_type, data)
+        if summary is None:
+            return
+        if event_type == "backend_process_started" and isinstance(data, dict):
+            updates = {}
+            if data.get("pid"):
+                updates["agent_pid"] = data.get("pid")
+            if data.get("process_group"):
+                updates["agent_process_group"] = data.get("process_group")
+            if updates:
+                try:
+                    nav_drafts.update_draft(root, cfg, draft_id, **updates)
+                except FileNotFoundError:
+                    pass
+        _append_nav_agent_log(
+            root,
+            cfg,
+            draft_id,
+            str(summary.pop("stage")),
+            str(summary.pop("message")),
+            **summary,
+        )
+
+    return _log
+
+
+def _stop_nav_agent_process(draft: dict) -> dict:
+    pid = int(draft.get("agent_pid") or 0)
+    pgid = int(draft.get("agent_process_group") or 0)
+    if not pid and not pgid:
+        return {"stopped": False, "reason": "no process recorded"}
+    try:
+        if pgid:
+            os.killpg(pgid, signal.SIGTERM)
+            return {"stopped": True, "process_group": pgid, "signal": "SIGTERM"}
+        os.kill(pid, signal.SIGTERM)
+        return {"stopped": True, "pid": pid, "signal": "SIGTERM"}
+    except ProcessLookupError:
+        return {"stopped": False, "already_exited": True, "pid": pid or None, "process_group": pgid or None}
+    except OSError as exc:
+        return {"stopped": False, "error": str(exc), "pid": pid or None, "process_group": pgid or None}
+
+
+def _nav_prompt_excerpt(text: str, *, limit: int = 4000) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + " ..."
 
 
 def run_project_nav_draft_job(
@@ -99,6 +153,20 @@ def run_project_nav_draft_job(
     proxy_enabled: bool | None = None,
     agent=None,
 ) -> dict:
+    prompt = build_navigation_bootstrap_prompt(
+        {},
+        workspace_path=workspace_path,
+        project_key_value=project_key_value or "",
+    )
+    try:
+        nav_drafts.update_draft(
+            root,
+            cfg,
+            draft_id,
+            agent={"status": "prompt_ready", "prompt_excerpt": _nav_prompt_excerpt(prompt)},
+        )
+    except FileNotFoundError:
+        return {"ok": False, "skipped": "draft missing"}
     _append_nav_agent_log(
         root,
         cfg,
@@ -120,12 +188,13 @@ def run_project_nav_draft_job(
             model=model,
             proxy_enabled=proxy_enabled,
             agent=agent,
+            progress_callback=_nav_progress_logger(root, cfg, draft_id),
         )
     except Exception as exc:  # noqa: BLE001 - background job must be recorded, not crash the server
         result = {"ok": False, "error": str(exc), "candidates": 0}
 
     current = nav_drafts.read_draft(root, cfg, draft_id)
-    if current is None or current.get("status") == "rejected":
+    if current is None or current.get("status") in {"rejected", "stopped"}:
         return {"ok": False, "skipped": "draft rejected or missing"}
     if result.get("ok"):
         status = "completed"
@@ -200,6 +269,135 @@ def _note_view(note: dict | None) -> dict | None:
     return view
 
 
+def _candidate_source_note_id(candidate: dict) -> str:
+    source = candidate.get("source") if isinstance(candidate.get("source"), dict) else {}
+    return str(candidate.get("source_note_id") or source.get("note_id") or "").strip()
+
+
+def _pending_for_note(root: Path, cfg: dict, note_id: str, note: dict | None = None) -> list[dict]:
+    note_id = str(note_id or "").strip()
+    if not note_id:
+        return []
+    candidate_ids = {str(item) for item in ((note or {}).get("candidate_ids") or []) if str(item)}
+    return [
+        candidate
+        for candidate in list_pending(root, cfg)
+        if str(candidate.get("id") or "") in candidate_ids or _candidate_source_note_id(candidate) == note_id
+    ]
+
+
+def _set_note_remaining_candidates(
+    root: Path,
+    cfg: dict,
+    note_id: str,
+    *,
+    empty_status: str,
+) -> dict:
+    note_id = str(note_id or "").strip()
+    if not note_id:
+        return {"source_note_id": None, "source_note_exists": False, "candidate_ids": []}
+    note = capture.read_note(root, cfg, note_id)
+    if note is None:
+        return {"source_note_id": note_id, "source_note_exists": False, "candidate_ids": []}
+    remaining = _pending_for_note(root, cfg, note_id, note)
+    remaining_ids = [str(candidate.get("id") or "") for candidate in remaining if str(candidate.get("id") or "")]
+    if remaining_ids:
+        capture.update_note(root, cfg, note_id, status="distilled", candidate_ids=remaining_ids, last_error="")
+        return {
+            "source_note_id": note_id,
+            "source_note_exists": True,
+            "status": "distilled",
+            "candidate_ids": remaining_ids,
+        }
+    capture.update_note(root, cfg, note_id, status=empty_status, candidate_ids=[], last_error="")
+    return {
+        "source_note_id": note_id,
+        "source_note_exists": True,
+        "status": empty_status,
+        "candidate_ids": [],
+    }
+
+
+def _capture_note_summary(note: dict | None) -> dict | None:
+    if note is None:
+        return None
+    text = str(note.get("text") or "")
+    title = str(note.get("title") or "").strip()
+    if not title:
+        title = text.splitlines()[0][:80] if text.splitlines() else str(note.get("id") or "")
+    return {
+        "id": note.get("id"),
+        "title": title,
+        "scope_hint": note.get("scope_hint"),
+        "status": note.get("status"),
+    }
+
+
+def _candidate_summary(candidate: dict) -> dict:
+    return {
+        "id": candidate.get("id"),
+        "title": candidate.get("title"),
+        "scope": candidate.get("scope"),
+        "kind": candidate.get("kind"),
+        "project_key": candidate.get("project_key"),
+        "slug": candidate.get("slug"),
+        "status": candidate.get("status"),
+    }
+
+
+def _candidate_view(candidate: dict, notes_by_id: dict[str, dict] | None = None) -> dict:
+    view = dict(candidate)
+    source_note_id = _candidate_source_note_id(candidate)
+    if source_note_id:
+        view["source_note_id"] = source_note_id
+        if notes_by_id is not None:
+            note = notes_by_id.get(source_note_id)
+            if note is not None:
+                view["source_note"] = _capture_note_summary(note)
+    return view
+
+
+def _note_with_refs(note: dict, pending: list[dict], entries: list[dict]) -> dict:
+    view = _note_view(note) or {}
+    note_id = str(note.get("id") or "")
+    candidate_ids = {str(item) for item in (note.get("candidate_ids") or []) if str(item)}
+    candidate_refs = [
+        _candidate_summary(candidate)
+        for candidate in pending
+        if str(candidate.get("id") or "") in candidate_ids or _candidate_source_note_id(candidate) == note_id
+    ]
+    entry_refs = [
+        _entry_summary(entry)
+        for entry in entries
+        if str((entry.get("meta") or {}).get("source_note_id") or "") == note_id
+    ]
+    view["candidate_refs"] = candidate_refs
+    view["entry_refs"] = entry_refs
+    if view.get("status") == "distilled" and candidate_ids and not candidate_refs and not entry_refs:
+        view["status"] = "raw"
+        view["candidate_ids"] = []
+    return view
+
+
+def _capture_note_matches_query(note: dict, query: str) -> bool:
+    needle = (query or "").strip().lower()
+    if not needle:
+        return True
+    fields: list[str] = [
+        note.get("id"),
+        note.get("title"),
+        note.get("text"),
+        note.get("scope_hint"),
+        note.get("status"),
+        " ".join(str(item) for item in (note.get("candidate_ids") or [])),
+    ]
+    for candidate in note.get("candidate_refs") or []:
+        fields.extend([candidate.get("id"), candidate.get("title"), candidate.get("scope"), candidate.get("kind")])
+    for entry in note.get("entry_refs") or []:
+        fields.extend([entry.get("id"), entry.get("slug"), entry.get("title"), entry.get("scope"), entry.get("type")])
+    return needle in " ".join(str(item or "") for item in fields).lower()
+
+
 def _entry_summary(entry: dict) -> dict:
     meta = entry.get("meta", {})
     return {
@@ -212,6 +410,7 @@ def _entry_summary(entry: dict) -> dict:
         "tags": meta.get("tags", []),
         "status": meta.get("status", "active"),
         "review_after": meta.get("review_after"),
+        "source_note_id": meta.get("source_note_id"),
         "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
         "path": entry.get("path"),
@@ -480,8 +679,9 @@ def knowledge_route_response(
         search = str(query.get("q", [""])[0] or "").strip()
         kind = str(query.get("kind", [""])[0] or "").strip() or None
         want_type = type_for_kind(kind) if kind in ("solutions", "wiki", "navigation") else None
+        all_entries = iter_all_entries(root, cfg)
         entries = []
-        for entry in iter_all_entries(root, cfg):
+        for entry in all_entries:
             meta = entry.get("meta", {})
             if meta.get("type") == "navigation":
                 continue
@@ -494,7 +694,24 @@ def knowledge_route_response(
             if search and not _entry_matches_query(entry, search):
                 continue
             entries.append(_entry_summary(entry))
-        return _ok(method, {"entries": entries, "count": len(entries)})
+        source_note_ids = {str(entry.get("source_note_id") or "") for entry in entries if entry.get("source_note_id")}
+        if source_note_ids:
+            existing_note_ids = {str(note.get("id") or "") for note in capture.list_notes(root, cfg)}
+            for entry in entries:
+                source_note_id = str(entry.get("source_note_id") or "")
+                if source_note_id:
+                    entry["source_note_exists"] = source_note_id in existing_note_ids
+        payload = {"entries": entries, "count": len(entries)}
+        if search:
+            pending = list_pending(root, cfg)
+            capture_notes = [
+                note
+                for note in (_note_with_refs(n, pending, all_entries) for n in capture.list_notes(root, cfg))
+                if _capture_note_matches_query(note, search)
+            ]
+            payload["capture_notes"] = capture_notes
+            payload["capture_count"] = len(capture_notes)
+        return _ok(method, payload)
 
     if method in {"GET", "HEAD"} and path == "/api/kb/entry":
         identifier = str(query.get("id", [""])[0] or query.get("slug", [""])[0] or "").strip()
@@ -680,6 +897,11 @@ def knowledge_route_response(
                 "project_key": project_key_value,
                 "workspace_path": context["workspace_path"],
             }, "409 Conflict")
+        prompt = build_navigation_bootstrap_prompt(
+            {},
+            workspace_path=context["workspace_path"],
+            project_key_value=project_key_value,
+        )
         draft = nav_drafts.create_draft(root, cfg, {
             "status": "running",
             "workspace_path": context["workspace_path"],
@@ -690,6 +912,7 @@ def knowledge_route_response(
             "model": model,
             "proxy_enabled": proxy_enabled,
             "summary": "Project nav generation running",
+            "agent": {"status": "prompt_ready", "prompt_excerpt": _nav_prompt_excerpt(prompt)},
             "agent_log": [
                 _nav_agent_log_event(
                     "queued",
@@ -776,6 +999,32 @@ def knowledge_route_response(
             "git": git_result,
         })
 
+    if method == "POST" and path == "/api/kb/project-nav/draft/stop":
+        payload = parse_json_body(body) if body.strip() else {}
+        draft_id = str(payload.get("draft_id") or payload.get("id") or "").strip()
+        if not draft_id:
+            return json_response({"error": "draft_id required"}, "400 Bad Request")
+        draft = nav_drafts.read_draft(root, cfg, draft_id)
+        if draft is None:
+            return json_response({"error": f"navigation draft not found: {draft_id}"}, "404 Not Found")
+        if draft.get("status") != "running":
+            return json_response({"error": "only running navigation drafts can be stopped"}, "400 Bad Request")
+        stop_result = _stop_nav_agent_process(draft)
+        _append_nav_agent_log(root, cfg, draft_id, "stopped", "Project nav generation stopped", **stop_result)
+        updated = nav_drafts.update_draft(
+            root,
+            cfg,
+            draft_id,
+            status="stopped",
+            stopped_at=utc_now(),
+            summary="Project nav generation stopped",
+            stop=stop_result,
+            candidates=[],
+        )
+        updated.pop("_path", None)
+        updated.pop("candidates", None)
+        return json_response({"ok": True, "draft": updated, "stop": stop_result})
+
     if method == "POST" and path == "/api/kb/project-nav/draft/reject":
         payload = parse_json_body(body) if body.strip() else {}
         draft_id = str(payload.get("draft_id") or payload.get("id") or "").strip()
@@ -837,7 +1086,9 @@ def knowledge_route_response(
         })
 
     if method in {"GET", "HEAD"} and path == "/api/kb/pending":
-        return _ok(method, {"pending": list_pending(root, cfg), "count": len(list_pending(root, cfg))})
+        notes_by_id = {str(note.get("id")): note for note in capture.list_notes(root, cfg)}
+        pending = [_candidate_view(candidate, notes_by_id) for candidate in list_pending(root, cfg)]
+        return _ok(method, {"pending": pending, "count": len(pending)})
 
     if method == "POST" and path == "/api/kb/approve":
         payload = parse_json_body(body) if body.strip() else {}
@@ -847,6 +1098,7 @@ def knowledge_route_response(
         candidate = next((c for c in list_pending(root, cfg) if c.get("id") == cid), None)
         if candidate is None:
             return json_response({"error": f"no pending candidate: {cid}"}, "404 Not Found")
+        source_note_id = _candidate_source_note_id(candidate)
         existing = entry_exists(
             root, cfg,
             candidate.get("scope", "project"),
@@ -855,6 +1107,36 @@ def knowledge_route_response(
             candidate.get("slug") or slugify(candidate.get("title", "")),
         )
         entry_path = approve_candidate(root, cfg, cid)
+        source_note = {"source_note_id": source_note_id or None, "source_note_deleted": False, "candidate_ids": []}
+        if source_note_id:
+            note = capture.read_note(root, cfg, source_note_id)
+            if note is not None:
+                remaining = _pending_for_note(root, cfg, source_note_id, note)
+                remaining_ids = [
+                    str(item.get("id") or "") for item in remaining if str(item.get("id") or "")
+                ]
+                if remaining_ids:
+                    capture.update_note(
+                        root,
+                        cfg,
+                        source_note_id,
+                        status="distilled",
+                        candidate_ids=remaining_ids,
+                        last_error="",
+                    )
+                    source_note.update({
+                        "source_note_exists": True,
+                        "source_note_deleted": False,
+                        "candidate_ids": remaining_ids,
+                    })
+                else:
+                    source_note.update({
+                        "source_note_exists": False,
+                        "source_note_deleted": capture.delete_note(root, cfg, source_note_id),
+                        "candidate_ids": [],
+                    })
+            else:
+                source_note["source_note_exists"] = False
         git_result = auto_commit_after_change(
             root, f"chore(knowledge): approve '{candidate.get('title', 'entry')}'", cfg
         )
@@ -870,6 +1152,7 @@ def knowledge_route_response(
                 "slug": candidate.get("slug") or slugify(candidate.get("title", "")),
                 "title": candidate.get("title"),
             },
+            "source_note": source_note,
             "git": git_result,
         })
 
@@ -878,9 +1161,15 @@ def knowledge_route_response(
         cid = str(payload.get("candidate_id") or "").strip()
         if not cid:
             return json_response({"error": "candidate_id required"}, "400 Bad Request")
-        if not remove_pending(root, cfg, cid):
+        candidate = next((c for c in list_pending(root, cfg) if c.get("id") == cid), None)
+        if candidate is None:
             return json_response({"error": f"no pending candidate: {cid}"}, "404 Not Found")
-        return json_response({"ok": True, "rejected": cid})
+        source_note_id = _candidate_source_note_id(candidate)
+        remove_pending(root, cfg, cid)
+        source_note = _set_note_remaining_candidates(root, cfg, source_note_id, empty_status="raw")
+        if source_note.get("source_note_id"):
+            source_note["source_note_kept"] = bool(source_note.get("source_note_exists"))
+        return json_response({"ok": True, "rejected": cid, "source_note": source_note})
 
     if method in {"GET", "HEAD"} and path == "/api/kb/config":
         return _ok(method, _knowledge_settings(cfg))
@@ -922,12 +1211,18 @@ def knowledge_route_response(
 
     if method in {"GET", "HEAD"} and path == "/api/kb/capture":
         note_id = str(query.get("id", [""])[0] or "").strip()
+        pending = list_pending(root, cfg)
+        entries = iter_all_entries(root, cfg)
         if note_id:
-            note = _note_view(capture.read_note(root, cfg, note_id))
+            raw_note = capture.read_note(root, cfg, note_id)
+            note = _note_with_refs(raw_note, pending, entries) if raw_note is not None else None
             if note is None:
                 return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
             return _ok(method, note)
-        notes = [_note_view(n) for n in capture.list_notes(root, cfg)]
+        search = str(query.get("q", [""])[0] or "").strip()
+        notes = [_note_with_refs(n, pending, entries) for n in capture.list_notes(root, cfg)]
+        if search:
+            notes = [note for note in notes if _capture_note_matches_query(note, search)]
         return _ok(method, {"notes": notes, "count": len(notes)})
 
     if method == "POST" and path == "/api/kb/capture":

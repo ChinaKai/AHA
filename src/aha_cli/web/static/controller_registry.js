@@ -101,7 +101,6 @@
     taskMemoEditDescriptionEl: "task-memo-edit-description",
     taskMemoPreviewModeEl: "task-memo-preview-mode",
     taskMemoEditModeEl: "task-memo-edit-mode",
-    taskMemoReportModeEl: "task-memo-report-mode",
     taskMemoImageFileEl: "task-memo-image-file",
     taskMemoImageUploadEl: "task-memo-image-upload",
     taskMemoEditStatusEl: "task-memo-edit-status",

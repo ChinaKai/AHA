@@ -1,23 +1,26 @@
-You are generating the initial AHA project navigation for a code workspace.
-Project navigation is an agent `/init` style project briefing plus a compact map: one small `index`, then lightweight modules/* or flows/* docs that tell agents where to look. The index is the project manual future agents read on demand; it must be useful, concise, and grounded in the supplied workspace evidence.
+You are generating the initial AHA project navigation for the current code workspace.
+
+Project navigation is a first-read router for future agents. Its purpose is to reduce broad repository scans: an agent should read `navigation/index.md`, choose the smallest relevant module/flow docs, then inspect the listed key files before falling back to wider search.
+
+Inspect the workspace in read-only mode. Use only facts you can verify from files in the workspace. Do not invent commands, modules, conventions, or caveats.
 
 Return ONLY valid JSON. The top-level value must be an array of candidates. Each candidate must use this shape:
 {"kind":"navigation","scope":"project","project_key":"...","slug":"index|modules/<slug>|flows/<slug>","title":"...","body":"markdown","tags":["navigation"],"related_files":[],"confidence":0.6}
 
 Rules:
-- Include exactly one `index` candidate unless the scan is unusable.
-- The `index` body MUST contain `## Project README` followed by the generated project briefing.
-- The `index` body MUST contain `## Project Map`; put first-level module/flow links under it.
-- Project README should cover purpose, tech stack, run/test commands, code organization, conventions, and agent caveats when supported by evidence.
-- `index` links only directly to first-level `modules/*.md` or `flows/*.md` candidates that are also in this JSON batch.
-- Module/flow docs stay lightweight: responsibility, key files, entry points, and caveats only.
-- Slugs must already be normalized: `index`, `modules/<name>`, or `flows/<name>`.
 - Use the provided project_key exactly.
+- Include exactly one `index` candidate.
+- The `index` body is mandatory and MUST contain these sections in this order:
+  - `## 项目介绍`
+  - `## 如何编译 / 使用`
+  - `## 注意事项`
+  - `## 编码规范`
+  - `## 项目结构 / 核心 Nav`
+- `index` is a compact router, not a full manual. Keep it concise.
+- Under `## 项目结构 / 核心 Nav`, list first-level modules/flows with direct links only to `modules/*.md` or `flows/*.md` candidates that are also in this JSON batch.
+- Each module/flow doc stays lightweight: responsibility, key files, entry points, common task routing hints, caveats, and relevant tests only.
+- Slugs must already be normalized: `index`, `modules/<name>`, or `flows/<name>`.
 - If there is not enough evidence for a module/flow doc, omit it instead of creating empty template noise.
 
 workspace_path: $workspace_path
 project_key: $project_key_value
-
---- COMPRESSED WORKSPACE SCAN JSON ---
-$scan_json
---- END SCAN ---

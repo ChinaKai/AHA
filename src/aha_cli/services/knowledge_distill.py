@@ -400,9 +400,9 @@ def filter_project_nav_candidates(
     *,
     allow_bootstrap: bool = False,
 ) -> tuple[list[dict], dict | None]:
+    if allow_bootstrap:
+        return candidates, None
     if project_nav_enabled(config):
-        if allow_bootstrap:
-            return candidates, None
         skipped_missing_index: list[dict] = []
         kept: list[dict] = []
         for candidate in candidates:
@@ -520,14 +520,20 @@ def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: 
         module_lines = f"- [{label}]({href})" if section == "### 模块索引" else "-"
         flow_lines = f"- [{label}]({href})" if section == "### 入口 / 关键流程" else "-"
         return "\n".join([
-            "## Project README",
-            "- 待补充：项目目标、技术栈、运行/测试方式、代码组织约定和 agent 开工前注意事项。",
+            "## 项目介绍",
+            "- 待补充：项目目标、技术栈和运行形态。",
             "",
-            "## 使用规则",
+            "## 如何编译 / 使用",
+            "- 待补充：安装、运行、构建、测试或常用调试命令。",
+            "",
+            "## 注意事项",
             "- 本入口只列第一层模块/流程；更深层入口由对应父文档维护。",
-            "- 新增子文档时只补直接父入口，避免全量展开。",
+            "- 开工先读本入口，再按任务命中的模块/流程链接读取少量文档；不要全量扫描 navigation。",
             "",
-            "## Project Map",
+            "## 编码规范",
+            "- 待补充：项目内命名、测试、目录、生成物、协议或 UI 约定。",
+            "",
+            "## 项目结构 / 核心 Nav",
             "",
             "### 模块索引",
             module_lines,
@@ -765,30 +771,41 @@ def _sidecar_navigation_body(candidate: dict) -> str:
                 module_lines.append(f"- {str(mod).strip()}")
     entry_points = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("entry_points") or candidate.get("entries")))
     gaps = str(candidate.get("gaps") or candidate.get("todo") or "").strip()
+    coding = str(
+        candidate.get("coding_standards")
+        or candidate.get("coding_conventions")
+        or candidate.get("conventions")
+        or candidate.get("style")
+        or ""
+    ).strip()
     readme_lines = [project_readme or "-"]
     if architecture:
         readme_lines.extend(["", "### 架构 / 组织", architecture])
     parts = [
-        "## Project README",
+        "## 项目介绍",
         "\n".join(readme_lines),
         "",
-        "## Project Map",
+        "## 如何编译 / 使用",
+        "-",
+        "",
+        "## 注意事项",
+        diagnostic_paths or "-",
+        "",
+        gaps or "-",
+        "",
+        "- 开工先读本入口，再按任务命中的模块/流程链接读取少量文档；不要把整个 navigation 全量读入。",
+        "- 收尾只更新本次真实影响的 `modules/*`、`flows/*` 或入口链接；普通任务不要全量重写项目导航。",
+        "",
+        "## 编码规范",
+        coding or "-",
+        "",
+        "## 项目结构 / 核心 Nav",
         "",
         "### 模块索引",
         "\n".join(module_lines) if module_lines else "-",
         "",
         "### 入口 / 关键流程",
         entry_points or "-",
-        "",
-        "## 常用排查路径",
-        diagnostic_paths or "-",
-        "",
-        "## 盲区 / 待补充",
-        gaps or "-",
-        "",
-        "## 使用规则",
-        "- 开工先读本入口，再按任务命中的模块/流程链接读取少量文档；不要把整个 navigation 全量读入。",
-        "- 收尾只更新本次真实影响的 `modules/*`、`flows/*` 或入口链接；普通任务不要全量重写项目导航。",
     ]
     return "\n".join(parts).strip() + "\n"
 
@@ -986,7 +1003,8 @@ def distill_and_enqueue(
 ) -> dict:
     """Produce candidates and route them through the curation gate."""
     cfg = knowledge_config(config)
-    if not cfg.get("enabled"):
+    allow_navigation_bootstrap = bool((context or {}).get("allow_navigation_bootstrap"))
+    if not cfg.get("enabled") and not allow_navigation_bootstrap:
         return {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
 
     gate = (cfg.get("curation") or {}).get("gate", "manual")
@@ -1001,7 +1019,7 @@ def distill_and_enqueue(
         config,
         candidates,
         context,
-        allow_bootstrap=bool((context or {}).get("allow_navigation_bootstrap")),
+        allow_bootstrap=allow_navigation_bootstrap,
     )
     if not candidates:
         result = {"ok": True, "candidates": 0, "gate": gate}

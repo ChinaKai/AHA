@@ -194,15 +194,21 @@ def render_navigation_body(scan: dict, *, link_modules: bool = True) -> str:
         module_lines.append(line)
     entry_lines = [f"- `{item}`" for item in (scan.get("entry_points") or [])]
     parts = [
-        "## Project README",
+        "## 项目介绍",
         overview or "(待补充：项目目标、技术栈、运行/测试方式、代码组织约定和 agent 开工前注意事项)",
         "",
-        "## 使用规则",
-        "- 本入口只维护第一层模块/流程链接；更深层入口由对应父文档维护。",
-        "- 开工先读本入口，再按任务命中的模块/流程链接逐层读取少量文档；不要把整个 navigation 全量读入。",
+        "## 如何编译 / 使用",
+        "- (待补充：安装、运行、构建、测试或常用调试命令)",
+        "",
+        "## 注意事项",
+        "- 本入口是首层路由：开工先读本入口，再按任务命中的模块/流程链接读取少量文档。",
+        "- 不要把整个 navigation 全量读入；优先读取相关 nav 文档列出的关键文件。",
         "- 收尾只更新本次真实影响的子文档；如果子文档没有直接父入口，只补直接父入口链接。",
         "",
-        "## Project Map",
+        "## 编码规范",
+        "- (待补充：项目内命名、测试、目录、生成物、协议或 UI 约定)",
+        "",
+        "## 项目结构 / 核心 Nav",
         "",
         "### 模块索引",
         "\n".join(module_lines) if module_lines else "- (未发现可索引模块)",
@@ -321,12 +327,6 @@ def build_navigation_candidates(
             "source": source or {},
         })
     return candidates
-
-
-def _project_nav_enabled(config: dict | None) -> bool:
-    cfg = knowledge_config(config)
-    nav = cfg.get("project_nav") if isinstance(cfg.get("project_nav"), dict) else {}
-    return bool(nav.get("enabled", True))
 
 
 def _navigation_parent_slug(slug: str) -> str | None:
@@ -538,12 +538,10 @@ def _bootstrap_event_payload(
 
 def build_navigation_bootstrap_prompt(scan: dict, *, workspace_path: str, project_key_value: str) -> str:
     """Prompt for agent-assisted first navigation generation."""
-    scan_json = json.dumps(scan, ensure_ascii=False, indent=2)
     return render_prompt_template(
         "knowledge_navigation_bootstrap.md",
         workspace_path=workspace_path,
         project_key_value=project_key_value,
-        scan_json=scan_json,
     )
 
 
@@ -612,11 +610,12 @@ def _agent_navigation_candidates(
     *,
     workspace_path: str,
     project_key_value: str,
-    scan: dict,
+    scan: dict | None = None,
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
     agent: NavigationAgent | None = None,
+    progress_callback: Callable[[str, dict], None] | None = None,
 ) -> tuple[list[dict] | None, dict]:
     if not (agent or backend or model):
         return None, {"status": "failed", "error": "backend not selected"}
@@ -633,7 +632,8 @@ def _agent_navigation_candidates(
             "cwd": workspace_path,
             "workspace_path": workspace_path,
             "project_key": project_key_value,
-            "scan": scan,
+            "scan": scan or {},
+            "progress_callback": progress_callback,
         })
     except NavigationAgentError as exc:
         return None, {"status": "failed", "error": str(exc), "prompt_excerpt": prompt_excerpt}
@@ -690,23 +690,9 @@ def prepare_project_navigation(
     model: str | None = None,
     proxy_enabled: bool | None = None,
     agent: NavigationAgent | None = None,
+    progress_callback: Callable[[str, dict], None] | None = None,
 ) -> dict:
     """Generate and validate the first project navigation batch without writing it."""
-    cfg = knowledge_config(config)
-    if not cfg.get("enabled"):
-        result = {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
-        result["event"] = _bootstrap_event_payload(status="skipped", project_key_value=None, reason=result["skipped"])
-        return result
-    if not _project_nav_enabled(config):
-        result = {
-            "ok": True,
-            "skipped": "project navigation disabled",
-            "candidates": 0,
-            "navigation": {"skipped": {"reason": "project navigation disabled", "candidates": 0}},
-        }
-        result["event"] = _bootstrap_event_payload(status="skipped", project_key_value=None, reason=result["skipped"])
-        return result
-
     key = project_key_value or project_key(Path(workspace_path), goal=goal)
     existing_index = entry_path_for(root, config, "project", "navigation", key, NAVIGATION_SLUG)
     if existing_index:
@@ -720,18 +706,17 @@ def prepare_project_navigation(
         result["event"] = _bootstrap_event_payload(status="skipped", project_key_value=key, reason=result["skipped"])
         return result
 
-    scan = scan_workspace(workspace_path)
     agent_info: dict = {"status": "not_run"}
     candidates, agent_info = _agent_navigation_candidates(
         root,
         config,
         workspace_path=workspace_path,
         project_key_value=key,
-        scan=scan,
         backend=backend,
         model=model,
         proxy_enabled=proxy_enabled,
         agent=agent,
+        progress_callback=progress_callback,
     )
     if candidates is None:
         error = agent_info.get("error") or agent_info.get("reason") or "navigation agent did not produce candidates"
@@ -788,6 +773,7 @@ def bootstrap_project_navigation(
     model: str | None = None,
     proxy_enabled: bool | None = None,
     agent: NavigationAgent | None = None,
+    progress_callback: Callable[[str, dict], None] | None = None,
 ) -> dict:
     """Create the first project navigation batch if the project has no index."""
     prepared = prepare_project_navigation(
@@ -800,6 +786,7 @@ def bootstrap_project_navigation(
         model=model,
         proxy_enabled=proxy_enabled,
         agent=agent,
+        progress_callback=progress_callback,
     )
     if prepared.get("skipped") or not prepared.get("ok"):
         return prepared
@@ -840,6 +827,7 @@ def generate_navigation_candidate(
     model: str | None = None,
     proxy_enabled: bool | None = None,
     agent: NavigationAgent | None = None,
+    progress_callback: Callable[[str, dict], None] | None = None,
 ) -> dict:
     """Build and route project navigation candidates through the curation gate."""
     return bootstrap_project_navigation(
@@ -852,4 +840,5 @@ def generate_navigation_candidate(
         model=model,
         proxy_enabled=proxy_enabled,
         agent=agent,
+        progress_callback=progress_callback,
     )

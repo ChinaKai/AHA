@@ -185,7 +185,12 @@ def test_distill_note_writes_agent_log_success_and_error(tmp_path: Path):
     cfg = _cfg()
     note = create_note(home, cfg, text="raw retry idea", scope_hint="personal")
 
-    result = distill_note(home, cfg, note["id"], backend="claude", model="env:work", agent=_stub(_sidecar_reply(_ONE_CANDIDATE)))
+    def _agent(ctx):
+        ctx["progress_callback"]("agent_command_started", {"command": "Read raw note"})
+        ctx["progress_callback"]("agent_usage", {"usage": {"total_tokens": 123}})
+        return _sidecar_reply(_ONE_CANDIDATE)
+
+    result = distill_note(home, cfg, note["id"], backend="claude", model="env:work", agent=_agent)
     assert result["ok"] and result["log_id"]
 
     log = read_distill_log(home, cfg, note["id"])
@@ -195,6 +200,10 @@ def test_distill_note_writes_agent_log_success_and_error(tmp_path: Path):
     assert "raw retry idea" in log["prompt"]
     assert "aha_knowledge_candidates" in log["reply"]
     assert log["candidate_ids"] == result["candidate_ids"]
+    assert [item["stage"] for item in log["agent_log"]][:2] == ["running", "tool"]
+    assert any("Read raw note" in item["message"] for item in log["agent_log"])
+    assert any(item.get("total_tokens") == 123 for item in log["agent_log"])
+    assert log["agent_log"][-1]["stage"] == "completed"
 
     bad_note = create_note(home, cfg, text="backend fails", scope_hint="personal")
 
@@ -375,6 +384,34 @@ def test_distill_rerun_replaces_previous_candidates(tmp_path: Path):
     assert pending[0]["title"] == "另一条"
 
 
+def test_redistill_replaces_pending_and_targets_existing_entry(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    note = create_note(home, cfg, text="raw", scope_hint="personal")
+
+    distill_note(home, cfg, note["id"], agent=_stub(_sidecar_reply(_ONE_CANDIDATE)))
+    first = list_pending(home, cfg)[0]
+    entry_path = approve_candidate(home, cfg, first["id"])
+    entry = read_entry(entry_path)
+    assert entry["meta"]["source_note_id"] == note["id"]
+
+    second = '[{"kind":"solutions","title":"新的退避标题","body":"## 适用场景\\n远程调用\\n## 推荐做法\\n新版"}]'
+    distill_note(home, cfg, note["id"], agent=_stub(_sidecar_reply(second)))
+    pending = list_pending(home, cfg)
+    assert len(pending) == 1
+    assert pending[0]["title"] == "新的退避标题"
+    assert pending[0]["action"] == "update"
+    assert pending[0]["updates_entry_id"] == entry["meta"]["id"]
+    assert pending[0]["slug"] == entry["meta"]["slug"]
+
+    third = '[{"kind":"solutions","title":"第三版退避标题","body":"## 适用场景\\n远程调用\\n## 推荐做法\\n第三版"}]'
+    distill_note(home, cfg, note["id"], agent=_stub(_sidecar_reply(third)))
+    pending = list_pending(home, cfg)
+    assert len(pending) == 1
+    assert pending[0]["title"] == "第三版退避标题"
+    assert pending[0]["updates_entry_id"] == entry["meta"]["id"]
+
+
 def test_distill_unbound_project_candidate_downgrades_to_personal(tmp_path: Path):
     home = _home(tmp_path)
     cfg = _cfg()
@@ -469,14 +506,22 @@ def test_distill_prompt_lists_images_without_pretending_to_see_them(tmp_path: Pa
     assert "Do NOT invent image contents" in prompt
 
 
-def test_distill_prompt_allows_readonly_diagnostics_to_update_navigation(tmp_path: Path):
+def test_distill_prompt_uses_title_and_body_as_one_clean_article(tmp_path: Path):
     from aha_cli.services.knowledge_capture_distill import build_capture_prompt
 
-    prompt = build_capture_prompt({"text": "只读排查发现微信通知入口", "scope_hint": "project"})
+    prompt = build_capture_prompt({"title": "微信通知", "text": "只读排查发现微信通知入口", "scope_hint": "project"})
 
-    assert "Read-only diagnostics count" in prompt
-    assert "diagnostic_paths" in prompt
-    assert "navigation_reason" in prompt
+    assert "整理成一篇逻辑清晰的文章" in prompt
+    assert "不要拓展" in prompt
+    assert "不要修改核心内容" in prompt
+    assert "不要拆成多条候选" in prompt
+    assert "不搜索、不读取知识库" in prompt
+    assert "--- NOTE TITLE ---" in prompt
+    assert "微信通知" in prompt
+    assert "--- NOTE BODY ---" in prompt
+    assert "只读排查发现微信通知入口" in prompt
+    assert '"kind":"wiki"' in prompt
+    assert "aha_knowledge_candidates" in prompt
 
 
 def test_approve_promotes_capture_note_assets_to_entry(tmp_path: Path):

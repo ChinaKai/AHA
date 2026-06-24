@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -272,6 +273,71 @@ def handle_codex_event(
             )
 
 
+def codex_callback_events(line: str) -> list[tuple[str, dict]]:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(event, dict):
+        return []
+    raw_type = event.get("type")
+    events: list[tuple[str, dict]] = []
+    if raw_type == "thread.started":
+        events.append(("agent_thread", {"thread_id": event.get("thread_id")}))
+    elif raw_type == "error":
+        events.append(("agent_error", {"message": event.get("message", "")}))
+    elif raw_type == "turn.completed":
+        usage = event.get("usage", {})
+        events.append(("agent_usage", {"usage": usage if isinstance(usage, dict) else {}}))
+    elif raw_type in {"item.started", "item.completed"}:
+        item = event.get("item", {})
+        if not isinstance(item, dict):
+            return events
+        item_type = item.get("type")
+        if item_type == "agent_message" and raw_type == "item.completed":
+            events.append(("agent_message", {"text": item.get("text", "")}))
+        elif item_type == "command_execution":
+            data = {
+                "command": item.get("command", ""),
+                "status": item.get("status", ""),
+                "exit_code": item.get("exit_code"),
+            }
+            if raw_type == "item.completed":
+                output = str(item.get("aggregated_output") or "")
+                data["output_chars"] = len(output)
+                data["output_tail"] = tail_text(output)
+                events.append(("agent_command_finished", data))
+            else:
+                events.append(("agent_command_started", data))
+    elif raw_type == "response_item":
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        payload_type = payload.get("type")
+        if payload_type == "function_call":
+            tool_name = str(payload.get("name") or "tool")
+            args = str(payload.get("arguments") or "").strip()
+            command = f"{tool_name} {args}".strip()
+            events.append(("agent_command_started", {"tool_name": tool_name, "command": command, "status": "in_progress"}))
+        elif payload_type == "function_call_output":
+            output = str(payload.get("output") or "")
+            events.append(("agent_command_finished", {"output_tail": tail_text(output), "output_chars": len(output)}))
+        elif payload_type == "message":
+            texts: list[str] = []
+            for item in payload.get("content") or []:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("transcript")
+                    if text:
+                        texts.append(str(text))
+            events.append(("agent_message", {"text": "\n".join(texts).strip()}))
+        elif payload_type == "reasoning":
+            events.append(("agent_activity", {"message": "Agent is reasoning"}))
+    elif raw_type == "event_msg":
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if payload.get("type") == "token_count":
+            info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+            events.append(("agent_usage", {"usage": info}))
+    return events
+
+
 def run_codex_exec(
     prompt: str,
     *,
@@ -291,6 +357,8 @@ def run_codex_exec(
     session: dict | None = None,
     proxy_env: dict[str, str] | None = None,
     codex_config: dict | None = None,
+    event_callback: Callable[[str, dict], None] | None = None,
+    start_new_session: bool = False,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     requested_model = session.get("requested_model") if session is not None and "requested_model" in session else model
@@ -334,6 +402,7 @@ def run_codex_exec(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
+            start_new_session=start_new_session,
         )
     except OSError as exc:
         exit_code = 127 if isinstance(exc, FileNotFoundError) else 1
@@ -347,6 +416,11 @@ def run_codex_exec(
         )
         output_file.write_text(message, encoding="utf-8")
         return exit_code, message, session
+    if event_callback:
+        event_callback(
+            "backend_process_started",
+            {"pid": process.pid, "process_group": process.pid if start_new_session else None},
+        )
     assert process.stdin is not None
     assert process.stdout is not None
     try:
@@ -356,8 +430,9 @@ def run_codex_exec(
         pass
     for raw_line in process.stdout:
         print(raw_line, end="", flush=True)
+        line = raw_line.strip()
         handle_codex_event(
-            raw_line.strip(),
+            line,
             events_file=events_file,
             run_id=run_id,
             task_id=task_id,
@@ -365,6 +440,9 @@ def run_codex_exec(
             target=target,
             session=session,
         )
+        if event_callback:
+            for event_type, event_data in codex_callback_events(line):
+                event_callback(event_type, event_data)
     exit_code = process.wait()
     final_text = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
     return exit_code, final_text, session

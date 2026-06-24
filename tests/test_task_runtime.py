@@ -8,7 +8,11 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import chat_offset_path
+from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import inbox_path, iter_jsonl_from, read_json, run_dir, update_task_supervision_config
+from aha_cli.store.io import write_json
+from aha_cli.store.knowledge import NAVIGATION_SLUG, init_knowledge_base, project_key, write_entry
+from aha_cli.store.paths import config_path
 from aha_cli.web.task_runtime import (
     message_backend_autostart_config,
     prepare_task_main_autostart,
@@ -80,9 +84,52 @@ class TaskRuntimeTests(unittest.TestCase):
         self.assertEqual(messages[-1]["final_context"]["journal_count"], 0)
         self.assertEqual(messages[-1]["final_context"]["to_at"], detail["task"]["coordination"]["final_summary_requested_at"])
         self.assertIn("AHA finalization request.", messages[-1]["message"])
+        self.assertIn("Knowledge/nav feedback context:", messages[-1]["message"])
+        self.assertIn("knowledge_enabled: false", messages[-1]["message"])
+        self.assertIn("Knowledge/nav feedback is not active", messages[-1]["message"])
         self.assertNotIn("Final source range:", messages[-1]["message"])
+        self.assertNotIn("<aha_knowledge_candidates>", messages[-1]["message"])
         self.assertEqual(detail["task"]["status"], "running")
         self.assertTrue(detail["task"]["coordination"]["final_summary_requested_at"])
+
+    def test_request_finalization_injects_nav_feedback_context_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Runtime nav final", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                cfg = load_config(root)
+                cfg["knowledge"]["enabled"] = True
+                cfg["knowledge"]["project_nav"]["enabled"] = True
+                write_json(config_path(root), cfg)
+                key = project_key(root, goal="Runtime nav final")
+                init_knowledge_base(root, cfg)
+                write_entry(
+                    root,
+                    config=cfg,
+                    scope="project",
+                    kind="navigation",
+                    project_key_value=key,
+                    title="Runtime nav",
+                    body="## 项目介绍\nRuntime nav index.\n",
+                    slug=NAVIGATION_SLUG,
+                    meta={"type": "navigation"},
+                )
+
+                payload = request_task_finalization_with_backend(root, run_id, "task-001", "/aha final", autostart_backend=False)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        prompt = messages[-1]["message"]
+        self.assertIn("Finalization requested", payload["message"])
+        self.assertIn("knowledge_enabled: true", prompt)
+        self.assertIn("project_nav_enabled: true", prompt)
+        self.assertIn("project_nav_index_exists: true", prompt)
+        self.assertIn(f"project_key: {key}", prompt)
+        self.assertIn("This is a byproduct of finalizing the current task, not a new task", prompt)
+        self.assertIn("Do not inspect files, run commands, or broaden analysis only to maintain nav.", prompt)
+        self.assertIn("<aha_knowledge_candidates>", prompt)
 
     def test_start_dispatched_task_backend_uses_from_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

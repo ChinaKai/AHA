@@ -187,8 +187,9 @@ def _navigation_header(entries: list[dict]) -> list[str]:
     if not any(_is_navigation_entry(e) for e in entries):
         return []
     return [
-        "⚑ 本项目已有项目导航（navigation/index 置顶）：先读入口，再按任务命中逐层读取少量 modules/* 或 flows/*，避免全局通读；"
-        "收尾时若改动影响模块职责/入口/架构/盲区，请只用 kind:\"navigation\" 回写受影响文档；新子文档缺直接父入口时补最小父入口链接。"
+        "⚑ 本项目已有项目导航（navigation/index 置顶）：在做大范围代码搜索或打开大量文件前，必须先读入口；"
+        "用 Project Map 选择最小相关 modules/* 或 flows/*，再读其列出的关键文件；"
+        "只有 nav 不覆盖或与代码冲突时才做定向搜索。冲突时以代码为准，收尾只回写受影响的 kind:\"navigation\" 文档。"
     ]
 
 
@@ -198,7 +199,7 @@ def _navigation_reference_lines(entries: list[dict], kb_root: Path | None) -> li
         return []
     path = _entry_path(nav_index, kb_root)
     lines = [
-        "Project nav rule: 先读 navigation/index 入口，再按入口链接定位相关 module/flow；默认不展开 navigation detail。",
+        "Project nav rule: 在做大范围代码搜索或打开大量文件前，必须先读 navigation/index；用 Project Map 选择最小相关 modules/* 或 flows/*，再读这些 nav 文档和列出的关键文件；只有 nav 不覆盖或与代码冲突时才做定向搜索，冲突时以代码为准。",
     ]
     if path:
         lines.append(f"Project nav path: {path}")

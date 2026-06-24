@@ -325,6 +325,7 @@ def run_claude_exec(
     proxy_env: dict[str, str] | None = None,
     claude_config: dict | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
+    start_new_session: bool = False,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     session_id = session.get("backend_session_id") if session else None
@@ -364,6 +365,7 @@ def run_claude_exec(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
+            start_new_session=start_new_session,
         )
     except OSError as exc:
         exit_code = 127 if isinstance(exc, FileNotFoundError) else 1
@@ -377,6 +379,11 @@ def run_claude_exec(
         )
         output_file.write_text(message, encoding="utf-8")
         return exit_code, message, session
+    if event_callback:
+        event_callback(
+            "backend_process_started",
+            {"pid": process.pid, "process_group": process.pid if start_new_session else None},
+        )
     assert process.stdin is not None
     assert process.stdout is not None
     try:

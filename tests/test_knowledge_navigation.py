@@ -65,8 +65,11 @@ def _navigation_agent_reply(project_key: str) -> str:
             "slug": "index",
             "title": "demo 导航入口",
             "body": (
-                "## Project README\nDemo is a test project for agents.\n\n"
-                "## Project Map\n### 模块索引\n- [core](modules/core.md)\n- [web](modules/web.md)\n"
+                "## 项目介绍\nDemo is a test project for agents.\n\n"
+                "## 如何编译 / 使用\n- `python -m pytest`\n\n"
+                "## 注意事项\n- Keep nav concise.\n\n"
+                "## 编码规范\n- Follow existing style.\n\n"
+                "## 项目结构 / 核心 Nav\n### 模块索引\n- [core](modules/core.md)\n- [web](modules/web.md)\n"
             ),
             "tags": ["navigation", "index"],
             "related_files": ["README.md"],
@@ -124,7 +127,7 @@ def test_build_navigation_candidate_shape(tmp_path: Path):
     assert cand["meta"]["update_mode"] == "bootstrap"
     assert cand["meta"]["navigation_role"] == "index"
     assert cand["title"].endswith("导航入口")
-    for header in ("## Project README", "## 使用规则", "## Project Map", "### 模块索引", "### 入口"):
+    for header in ("## 项目介绍", "## 如何编译 / 使用", "## 注意事项", "## 编码规范", "## 项目结构 / 核心 Nav", "### 模块索引", "### 入口"):
         assert header in cand["body"]
     # Index-only candidates are safe to enqueue by themselves: they do not link
     # docs that this batch is not also producing.
@@ -148,9 +151,11 @@ def test_navigation_bootstrap_prompt_requires_project_readme_and_map(tmp_path: P
         project_key_value="demo-key",
     )
 
-    assert "`index` body MUST contain `## Project README`" in prompt
-    assert "`index` body MUST contain `## Project Map`" in prompt
-    assert "agent `/init` style project briefing" in prompt
+    assert "Project navigation is a first-read router" in prompt
+    assert "Inspect the workspace in read-only mode" in prompt
+    assert "`## 项目介绍`" in prompt
+    assert "`## 项目结构 / 核心 Nav`" in prompt
+    assert "COMPRESSED WORKSPACE SCAN JSON" not in prompt
 
 
 def _linked_navigation_slugs(body: str) -> set[str]:
@@ -259,19 +264,21 @@ def test_bootstrap_skips_existing_navigation_index_without_overwrite(tmp_path: P
     assert read_entry(seed_path)["body"] == "## 模块索引\n- existing"
 
 
-def test_bootstrap_project_nav_disabled_does_not_generate(tmp_path: Path):
+def test_bootstrap_project_nav_disabled_still_allows_explicit_generation(tmp_path: Path):
     home = tmp_path / ".aha"
+    ws = _make_project(tmp_path)
     cfg = _cfg(gate="manual")
     cfg["knowledge"]["project_nav"]["enabled"] = False
     init_knowledge_base(home, cfg)
 
     result = bootstrap_project_navigation(
-        home, cfg, workspace_path=str(tmp_path / "missing"), project_key_value="demo-key"
+        home, cfg, workspace_path=str(ws), project_key_value="demo-key",
+        backend="codex", agent=lambda _context: _navigation_agent_reply("demo-key"),
     )
 
     assert result["ok"] is True
-    assert result["skipped"] == "project navigation disabled"
-    assert list_pending(home, cfg) == []
+    assert result["validation"]["ok"] is True
+    assert {item["slug"] for item in list_pending(home, cfg)} == {"index", "modules/core", "modules/web"}
 
 
 def test_navigation_is_pinned_to_top_of_retrieval(tmp_path: Path):
@@ -331,8 +338,8 @@ def test_navigation_sidecar_writeback_updates_existing_map(tmp_path: Path):
     updated = entries[0]
     assert updated["meta"]["id"] == seed_id  # stable id preserved across write-back
     assert updated["meta"]["slug"] == NAVIGATION_SLUG
-    assert "## Project README" in updated["body"]
-    assert "## Project Map" in updated["body"]
+    assert "## 项目介绍" in updated["body"]
+    assert "## 项目结构 / 核心 Nav" in updated["body"]
     assert "new — fresh role" in updated["body"] and "updated overview" in updated["body"]
     assert "[new](modules/new.md)" not in updated["body"]
     assert "**old**" not in updated["body"]
@@ -354,8 +361,8 @@ def test_sidecar_navigation_kind_is_normalized(tmp_path: Path):
     assert out[0]["meta"]["type"] == "navigation"
     assert "store — filesystem store" in out[0]["body"]
     assert "[store](modules/store.md)" not in out[0]["body"]
-    assert "## Project README" in out[0]["body"]
-    assert "## Project Map" in out[0]["body"]
+    assert "## 项目介绍" in out[0]["body"]
+    assert "## 项目结构 / 核心 Nav" in out[0]["body"]
     assert "### 模块索引" in out[0]["body"]
 
 

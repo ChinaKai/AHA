@@ -21,6 +21,7 @@ from aha_cli.backends.claude import (
 )
 from aha_cli.backends.codex import (
     build_codex_exec_command,
+    codex_callback_events,
     codex_config_env,
     codex_config_overrides,
     handle_codex_event,
@@ -395,6 +396,32 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(output_ref["chars"], 1300)
         self.assertTrue(output_ref["path"].startswith("tasks/task-001/artifacts/command-output/sub-001-"))
         self.assertEqual(artifact_text, "x" * 1300)
+
+    def test_codex_callback_events_include_modern_json_stream(self) -> None:
+        started = codex_callback_events(json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"sed -n '1,20p' pyproject.toml\"}",
+            },
+        }))
+        usage = codex_callback_events(json.dumps({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {"total_tokens": 42},
+                    "last_token_usage": {"total_tokens": 7},
+                },
+            },
+        }))
+
+        self.assertEqual(started[0][0], "agent_command_started")
+        self.assertEqual(started[0][1]["tool_name"], "exec_command")
+        self.assertIn("pyproject.toml", started[0][1]["command"])
+        self.assertEqual(usage[0][0], "agent_usage")
+        self.assertEqual(usage[0][1]["usage"]["total_token_usage"]["total_tokens"], 42)
 
     def test_codex_event_ignores_non_object_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

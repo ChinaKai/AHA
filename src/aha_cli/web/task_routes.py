@@ -73,6 +73,7 @@ from aha_cli.store.filesystem import (
 from aha_cli.store.task_memos import (
     create_task_memo,
     delete_task_memo,
+    normalize_memo_status,
     read_task_memos,
     update_task_memo,
 )
@@ -100,7 +101,6 @@ from aha_cli.web.task_actions import (
     start_prepared_backend,
     start_dispatched_task_backend,
 )
-from aha_cli.web.task_runtime import request_memo_completion_report_with_backend
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
@@ -454,6 +454,56 @@ def enrich_task_memos(root: Path, run_id: str, memos: list[dict]) -> list[dict]:
     return [enrich_task_memo(root, run_id, memo) for memo in memos]
 
 
+def find_task_memo_record(root: Path, run_id: str, memo_id: str) -> dict | None:
+    return next((item for item in read_task_memos(root, run_id) if item.get("id") == memo_id), None)
+
+
+def memo_request_task_final_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_task_memo_update_payload(body: bytes) -> tuple[dict, bool]:
+    payload = parse_json_body(body)
+    request_task_final = False
+    if isinstance(payload, dict):
+        request_task_final = memo_request_task_final_value(payload.pop("request_task_final", False))
+        memo_payload = payload.get("memo")
+        if isinstance(memo_payload, dict):
+            request_task_final = request_task_final or memo_request_task_final_value(memo_payload.pop("request_task_final", False))
+    return payload, request_task_final
+
+
+def memo_completion_finalization_payload(root: Path, run_id: str, before: dict | None, updated: dict, *, request_task_final: bool) -> dict:
+    if not request_task_final:
+        return {}
+    if not before:
+        return {}
+    if normalize_memo_status(before.get("status")) == "done":
+        return {}
+    if normalize_memo_status(updated.get("status")) != "done":
+        return {}
+    memo_id = str(updated.get("id") or "").strip()
+    task_id = str(updated.get("created_task_id") or "").strip()
+    if not task_id:
+        return {}
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        append_event(root, run_id, "task_memo_final_skipped", {"memo_id": memo_id, "task_id": task_id, "reason": "task not found"})
+        return {"task_finalization": {"requested": False, "task_id": task_id, "skipped": "task not found"}}
+    if _task_is_terminal(task):
+        append_event(root, run_id, "task_memo_final_skipped", {"memo_id": memo_id, "task_id": task_id, "reason": "task already terminal"})
+        return {"task_finalization": {"requested": False, "task_id": task_id, "skipped": "task already terminal"}}
+    result = request_task_finalization_with_backend(root, run_id, task_id, "/aha final")
+    append_event(root, run_id, "task_memo_final_requested", {"memo_id": memo_id, "task_id": task_id})
+    payload: dict = {"task_finalization": {"requested": True, "task_id": task_id, "message": result.get("message") or ""}}
+    if result.get("backend"):
+        payload["backend"] = result["backend"]
+    return payload
+
+
 def task_memo_query_value(query: dict[str, list[str]], key: str) -> str:
     return str(query.get(key, [""])[0] or "").strip()
 
@@ -518,21 +568,15 @@ def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, que
             memo_id, _, action = suffix.partition("/")
             if not memo_id:
                 return route_result({"error": "memo id is required"}, "400 Bad Request")
-            if action == "completion-report" and method == "POST":
-                try:
-                    result = request_memo_completion_report_with_backend(root, run_id, memo_id)
-                except KeyError as exc:
-                    return route_result({"error": str(exc)}, "404 Not Found")
-                except (SystemExit, ValueError) as exc:
-                    return route_result({"error": str(exc)}, "400 Bad Request")
-                payload = {"ok": True, "memo": enrich_task_memo(root, run_id, result["memo"])}
-                if result.get("backend"):
-                    payload["backend"] = result["backend"]
-                return route_result(payload)
             if action:
                 return route_not_handled()
             if method in {"PATCH", "POST"}:
-                return route_result({"ok": True, "memo": enrich_task_memo(root, run_id, update_task_memo(root, run_id, memo_id, parse_json_body(body)))})
+                before = find_task_memo_record(root, run_id, memo_id)
+                update_payload, request_task_final = parse_task_memo_update_payload(body)
+                updated = update_task_memo(root, run_id, memo_id, update_payload)
+                payload = {"ok": True, "memo": enrich_task_memo(root, run_id, updated)}
+                payload.update(memo_completion_finalization_payload(root, run_id, before, updated, request_task_final=request_task_final))
+                return route_result(payload)
             if method == "DELETE":
                 return route_result({"ok": True, "memo": delete_task_memo(root, run_id, memo_id)})
         return route_not_handled()

@@ -804,6 +804,10 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
     body = record.get("body", "")
     meta = dict(record.get("meta") or {})
     slug = normalize_entry_slug(record.get("slug")) if record.get("slug") else slugify(str(record.get("title") or ""))
+    source = record.get("source") if isinstance(record.get("source"), dict) else {}
+    source_note_id = str(record.get("source_note_id") or source.get("note_id") or "").strip()
+    if source_note_id:
+        meta.setdefault("source_note_id", source_note_id)
 
     # Phase 5b: if this candidate came from a capture note, copy that note's
     # image assets into the entry's assets dir and leave a traceable reference.

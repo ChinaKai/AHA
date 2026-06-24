@@ -91,29 +91,40 @@ def format_finalization_context_for_prompt(context: dict | None) -> str:
     ).rstrip()
 
 
-def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None, final_context: dict | None = None) -> str:
+def format_knowledge_feedback_context_for_prompt(context: dict | None) -> str:
+    context = context or {}
+    knowledge_enabled = bool(context.get("knowledge_enabled"))
+    project_nav_enabled = bool(context.get("project_nav_enabled"))
+    project_nav_index_exists = bool(context.get("project_nav_index_exists"))
+    project_key_value = str(context.get("project_key") or "-")
+    if knowledge_enabled and project_nav_enabled and project_nav_index_exists:
+        return render_prompt_template(
+            "finalization_knowledge_feedback_enabled.md",
+            project_key_value=project_key_value,
+            workspace_path=context.get("workspace_path") or "-",
+        ).rstrip()
+    return render_prompt_template(
+        "finalization_knowledge_feedback_disabled.md",
+        knowledge_enabled=str(knowledge_enabled).lower(),
+        project_nav_enabled=str(project_nav_enabled).lower(),
+        project_nav_index_exists=str(project_nav_index_exists).lower(),
+        project_key_value=project_key_value,
+    ).rstrip()
+
+
+def finalization_prompt(
+    task_id: str,
+    title: str,
+    rounds: list[dict] | None = None,
+    final_context: dict | None = None,
+    knowledge_feedback_context: str | None = None,
+) -> str:
     del rounds, final_context
     return render_prompt_template(
         "finalization.md",
         task_id=task_id,
         title=title,
-    )
-
-
-def memo_completion_report_prompt(memo: dict, task: dict, rounds: list[dict] | None = None, report_context: dict | None = None) -> str:
-    del rounds
-    context = report_context or {}
-    return render_prompt_template(
-        "memo_completion_report.md",
-        memo_id=memo.get("id") or "",
-        memo_title=memo.get("title") or "",
-        memo_status=memo.get("status") or "",
-        memo_completed_at=memo.get("completed_at") or "",
-        memo_description=memo.get("description") or "",
-        task_id=task.get("id") or context.get("task_id") or "",
-        task_title=task.get("title") or "",
-        requested_at=context.get("requested_at") or "",
-        attachment_dir=context.get("attachment_dir") or "-",
+        knowledge_feedback_context=knowledge_feedback_context or "",
     )
 
 
@@ -122,6 +133,6 @@ __all__ = [
     "format_finalization_context_for_prompt",
     "format_agent_command",
     "format_aha_command",
+    "format_knowledge_feedback_context_for_prompt",
     "format_task_journal_for_prompt",
-    "memo_completion_report_prompt",
 ]

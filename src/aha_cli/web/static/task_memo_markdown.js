@@ -400,21 +400,13 @@
     let detachModeControls = null;
     let markdownMode = "preview";
     let markdownDisabled = false;
-    let reportState = { status: "none", report: "", error: "" };
-
-    function reportModeAvailable() {
-      return ["generating", "ready", "failed"].includes(reportState.status) || Boolean(reportState.report.trim());
-    }
 
     function syncMarkdownMode() {
-      if (markdownMode === "report" && !reportModeAvailable()) markdownMode = "preview";
       const isEdit = markdownMode === "edit";
-      const isReport = markdownMode === "report";
       if (elements.taskMemoMarkdownEditorEl) {
         elements.taskMemoMarkdownEditorEl.dataset.mode = markdownMode;
         elements.taskMemoMarkdownEditorEl.classList.toggle("is-edit", isEdit);
         elements.taskMemoMarkdownEditorEl.classList.toggle("is-preview", markdownMode === "preview");
-        elements.taskMemoMarkdownEditorEl.classList.toggle("is-report", isReport);
       }
       if (elements.taskMemoEditDescriptionEl) {
         elements.taskMemoEditDescriptionEl.hidden = !isEdit;
@@ -433,17 +425,10 @@
         elements.taskMemoEditModeEl.classList.toggle("active", isEdit);
         elements.taskMemoEditModeEl.setAttribute("aria-pressed", String(isEdit));
       }
-      if (elements.taskMemoReportModeEl) {
-        const hasReportMode = reportModeAvailable();
-        elements.taskMemoReportModeEl.hidden = !hasReportMode;
-        elements.taskMemoReportModeEl.setAttribute("aria-hidden", String(!hasReportMode));
-        elements.taskMemoReportModeEl.classList.toggle("active", isReport);
-        elements.taskMemoReportModeEl.setAttribute("aria-pressed", String(isReport));
-      }
     }
 
     function setMode(mode, controlOptions = {}) {
-      markdownMode = mode === "edit" ? "edit" : (mode === "report" ? "report" : "preview");
+      markdownMode = mode === "edit" ? "edit" : "preview";
       renderDescriptionEditor();
       syncMarkdownMode();
       if (markdownMode === "edit" && controlOptions.focus !== false) {
@@ -453,7 +438,7 @@
 
     function setDisabled(disabled) {
       markdownDisabled = Boolean(disabled);
-      [elements.taskMemoPreviewModeEl, elements.taskMemoEditModeEl, elements.taskMemoReportModeEl].forEach(element => {
+      [elements.taskMemoPreviewModeEl, elements.taskMemoEditModeEl].forEach(element => {
         if (element) element.disabled = markdownDisabled;
       });
       if (elements.taskMemoEditDescriptionEl) elements.taskMemoEditDescriptionEl.disabled = markdownDisabled;
@@ -464,59 +449,15 @@
       syncMarkdownMode();
     }
 
-    function setReport(report = {}) {
-      reportState = {
-        status: String(report.status || "none").trim().toLowerCase().replace(/-/g, "_"),
-        report: String(report.report || ""),
-        error: String(report.error || ""),
-      };
-      if (markdownMode === "report" && !reportModeAvailable()) markdownMode = "preview";
-      renderDescriptionEditor();
-    }
-
-    function renderReportEditor(editorEl) {
-      const status = ["none", "generating", "ready", "failed"].includes(reportState.status) ? reportState.status : "none";
-      const report = reportState.report.trim();
-      const error = reportState.error.trim();
-      editorEl.classList.toggle("task-memo-report-view", true);
-      if (status === "generating") {
-        const message = documentRef.createElement("div");
-        message.className = "task-memo-report-status";
-        message.textContent = t("memo.report_generating", "Completion report is generating. Memo is read-only.");
-        editorEl.appendChild(message);
-        return;
-      }
-      if (status === "failed") {
-        const message = documentRef.createElement("div");
-        message.className = "task-memo-report-status";
-        message.textContent = error || t("memo.report_failed", "Report generation failed.");
-        editorEl.appendChild(message);
-        return;
-      }
-      if (report) {
-        renderMarkdownPreview(editorEl, report, { documentRef, apiUrl, t });
-        return;
-      }
-      const empty = documentRef.createElement("div");
-      empty.className = "task-memo-report-status";
-      empty.textContent = t("memo.report_empty", "No completion report yet.");
-      editorEl.appendChild(empty);
-    }
-
     function renderDescriptionEditor() {
       const editorEl = elements.taskMemoDescriptionEditorEl;
       const markdown = elements.taskMemoEditDescriptionEl?.value || "";
       if (editorEl && documentRef) {
         editorEl.innerHTML = "";
-        editorEl.classList.toggle("task-memo-report-view", markdownMode === "report");
-        if (markdownMode === "report") {
-          renderReportEditor(editorEl);
-        } else {
-          renderMarkdownPreview(editorEl, markdown, { documentRef, apiUrl, t });
-        }
+        renderMarkdownPreview(editorEl, markdown, { documentRef, apiUrl, t });
         if (!editorEl.childNodes.length) editorEl.appendChild(documentRef.createElement("br"));
       }
-      renderMemoAttachmentList(elements.taskMemoAttachmentListEl, markdownMode === "report" ? "" : markdown, { documentRef, apiUrl, t });
+      renderMemoAttachmentList(elements.taskMemoAttachmentListEl, markdown, { documentRef, apiUrl, t });
       syncMarkdownMode();
     }
 
@@ -585,7 +526,7 @@
 
     function insertDescriptionImageMarkdown(markdown) {
       const textarea = elements.taskMemoEditDescriptionEl;
-      if (markdownDisabled || markdownMode === "report") return;
+      if (markdownDisabled) return;
       if (!textarea || !markdown) return;
       if (imagePaste?.insertTextareaImageMarkdown) {
         imagePaste.insertTextareaImageMarkdown(textarea, markdown, { windowRef });
@@ -723,7 +664,7 @@
     function attachImagePaste() {
       if (detachImagePaste || !elements.taskMemoEditDescriptionEl || !imagePaste?.clipboardImageFiles) return;
       const listener = event => {
-        if (markdownDisabled || markdownMode === "report") return;
+        if (markdownDisabled) return;
         const files = imagePaste.clipboardImageFiles(event);
         if (!files.length) return;
         event.preventDefault();
@@ -744,14 +685,11 @@
       if (detachModeControls) return;
       const previewListener = () => setMode("preview", { focus: false });
       const editListener = () => setMode("edit");
-      const reportListener = () => setMode("report", { focus: false });
       elements.taskMemoPreviewModeEl?.addEventListener("click", previewListener);
       elements.taskMemoEditModeEl?.addEventListener("click", editListener);
-      elements.taskMemoReportModeEl?.addEventListener("click", reportListener);
       detachModeControls = () => {
         elements.taskMemoPreviewModeEl?.removeEventListener("click", previewListener);
         elements.taskMemoEditModeEl?.removeEventListener("click", editListener);
-        elements.taskMemoReportModeEl?.removeEventListener("click", reportListener);
       };
     }
 
@@ -768,8 +706,7 @@
       renderDescriptionEditor,
       renderMemoAttachmentList,
       setDisabled,
-      setMode,
-      setReport
+      setMode
     });
   }
 

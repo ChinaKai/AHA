@@ -332,23 +332,6 @@
       return t(`memo.status_${normalized}`, normalized);
     }
 
-    function memoReportStatus(memo = {}) {
-      const status = String(memo.report_status || "none").trim().toLowerCase().replace(/-/g, "_");
-      return ["none", "generating", "ready", "failed"].includes(status) ? status : "none";
-    }
-
-    function isMemoReportGenerating(memo = {}) {
-      return memoReportStatus(memo) === "generating";
-    }
-
-    function memoReportPayload(memo = {}) {
-      return {
-        status: memoReportStatus(memo),
-        report: String(memo.completion_report || ""),
-        error: String(memo.report_error || ""),
-      };
-    }
-
     function memoFilterLabel(filter) {
       const normalized = String(filter || "day");
       if (normalized === "day") return t("memo.filter_day", "Day");
@@ -1158,7 +1141,6 @@
       if (editorMode === "create") return editorFieldsHaveContent(current);
       const memo = selectedMemo();
       if (!memo) return false;
-      if (isMemoReportGenerating(memo)) return false;
       const baseline = editorFieldsFromMemo(memo);
       return current.title !== baseline.title
         || current.description !== baseline.description
@@ -1172,14 +1154,13 @@
 
     function updateSaveState() {
       const isEmpty = editorMode === "empty";
-      const reportGenerating = editorMode === "edit" && isMemoReportGenerating(selectedMemo());
       const canSave = editorCanSave();
       const showCancel = editorMode === "create" || (editorMode === "edit" && canSave);
-      const blockTaskAction = editorMode === "edit" && (canSave || reportGenerating);
+      const blockTaskAction = editorMode === "edit" && canSave;
       setHidden(elements.taskMemoCancelEl, !showCancel);
       setHidden(elements.taskMemoSaveEl, isEmpty);
-      setDisabled(elements.taskMemoSaveEl, !canSave || reportGenerating);
-      setDisabled(elements.taskMemoConvertEl, editorMode !== "edit" || reportGenerating);
+      setDisabled(elements.taskMemoSaveEl, !canSave);
+      setDisabled(elements.taskMemoConvertEl, editorMode !== "edit");
       if (elements.taskMemoConvertEl) {
         elements.taskMemoConvertEl.classList.toggle("task-memo-action-blocked", blockTaskAction);
         elements.taskMemoConvertEl.setAttribute("aria-disabled", String(editorMode !== "edit" || blockTaskAction));
@@ -1210,18 +1191,18 @@
       }
     }
 
-    async function confirmCompletionReportGeneration(memo = {}) {
-      const taskId = String(memo.created_task_id || "").trim();
-      if (!taskId) return false;
+    async function confirmLinkedTaskFinalization(taskId) {
+      const id = String(taskId || "").trim();
+      if (!id) return false;
       if (deps.confirmDialogAction) {
         return await deps.confirmDialogAction({
-          title: t("memo.report_generate_title", "Generate completion report?"),
-          message: t("memo.report_generate_message", "This memo is linked to a task. Generate a completion report with the task main agent in the background?"),
-          details: [[t("task.id", "Task"), taskId]],
+          title: t("memo.task_final_confirm_title", "Complete linked task?"),
+          message: t("memo.task_final_confirm_message", "This memo is linked to a task. Also request task Final and complete it when the Final is written?"),
+          details: [[t("task.id", "Task"), id]],
           actions: [
             {
               value: "confirm",
-              label: t("memo.report_confirm", "Generate report"),
+              label: t("memo.task_final_confirm", "Complete task"),
               primary: true
             },
             {
@@ -1231,18 +1212,7 @@
           ]
         });
       }
-      return Promise.resolve(windowRef.confirm(t("memo.report_generate_message", "This memo is linked to a task. Generate a completion report with the task main agent in the background?")));
-    }
-
-    async function requestCompletionReport(memo = {}) {
-      const memoId = String(memo.id || "").trim();
-      if (!memoId) return null;
-      const response = await deps.fetchJson(deps.apiUrl(`/api/task-memos/${encodeURIComponent(memoId)}/completion-report`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}"
-      }, "Failed to generate memo completion report");
-      return response?.memo || null;
+      return Promise.resolve(windowRef.confirm(t("memo.task_final_confirm_message", "This memo is linked to a task. Also request task Final and complete it when the Final is written?")));
     }
 
     function isCompactMemoViewport() {
@@ -1264,14 +1234,12 @@
       }
       const draftMemo = memoWithDraftTaskLink(memo);
       const linked = Boolean(draftMemo?.created_task_id);
-      const reportGenerating = isMemoReportGenerating(memo);
       setHidden(elements.taskMemoTaskLinkFieldEl, false);
       setHidden(elements.taskMemoTaskPickerToggleEl, false);
       setText(elements.taskMemoTaskPickerToggleEl, linked ? t("memo.task_change", "Change task") : t("memo.task_choose", "Choose task"));
       if (elements.taskMemoTaskLinkClearEl) elements.taskMemoTaskLinkClearEl.hidden = !linked;
-      setDisabled(elements.taskMemoTaskPickerToggleEl, reportGenerating);
-      setDisabled(elements.taskMemoTaskLinkClearEl, reportGenerating || !linked);
-      if (reportGenerating) taskPickerOpen = false;
+      setDisabled(elements.taskMemoTaskPickerToggleEl, false);
+      setDisabled(elements.taskMemoTaskLinkClearEl, !linked);
       if (elements.taskMemoTaskPickerEl) elements.taskMemoTaskPickerEl.hidden = !taskPickerOpen;
       if (elements.taskMemoTaskPickerSearchEl && elements.taskMemoTaskPickerSearchEl.value !== taskPickerSearch) {
         elements.taskMemoTaskPickerSearchEl.value = taskPickerSearch;
@@ -1342,7 +1310,6 @@
       const isEdit = Boolean(memo);
       const isCreate = editorMode === "create";
       const isEmpty = !isCreate && !isEdit;
-      const reportGenerating = isEdit && isMemoReportGenerating(memo);
       if (isEdit) {
         ensureDraftTaskLink(memo);
         fillEditor(memo);
@@ -1360,11 +1327,9 @@
         scheduled_date: elements.taskMemoEditDateEl?.value || selectedDate,
         end_date: elements.taskMemoEditEndDateEl?.value || ""
       });
-      memoMarkdownTools?.setReport?.(isEdit ? memoReportPayload(memo) : {});
-      if (reportGenerating) memoMarkdownTools?.setMode?.("report", { focus: false });
       const editorStatus = isEdit ? memo?.status : (isCreate ? elements.taskMemoEditStatusEl?.value : "todo");
-      renderStatusOptions(editorStatus, isEmpty || reportGenerating);
-      syncTerminalDateFields({ disabled: isEmpty || reportGenerating, defaultDate: isCreate });
+      renderStatusOptions(editorStatus, isEmpty);
+      syncTerminalDateFields({ disabled: isEmpty, defaultDate: isCreate });
       renderTaskLinkPicker(memo, isEdit);
       setText(elements.taskMemoEditorTitleEl, isEdit
         ? t("memo.editor_edit", "Edit memo")
@@ -1374,9 +1339,7 @@
             ? t("memo.editor_empty", "Select or create a memo")
             : t("memo.workspace_needed", "Create a run"));
       setText(elements.taskMemoEditorHintEl, isEdit
-        ? (reportGenerating
-          ? t("memo.report_generating", "Completion report is generating. Memo is read-only.")
-          : t("memo.editor_edit_hint", "Update this memo or turn it into a task."))
+        ? t("memo.editor_edit_hint", "Update this memo or turn it into a task.")
         : isCreate
           ? t("memo.editor_create_hint", "Fill in a future task idea, then save it as a memo.")
           : hasRun
@@ -1390,22 +1353,22 @@
         elements.taskMemoEditClosedDateEl,
         elements.taskMemoEditDescriptionEl
       ]
-        .forEach(element => setDisabled(element, isEmpty || reportGenerating));
-      syncTerminalDateFields({ disabled: isEmpty || reportGenerating, defaultDate: isCreate });
+        .forEach(element => setDisabled(element, isEmpty));
+      syncTerminalDateFields({ disabled: isEmpty, defaultDate: isCreate });
       if (elements.taskMemoDescriptionEditorEl) {
-        elements.taskMemoDescriptionEditorEl.setAttribute("aria-disabled", String(isEmpty || reportGenerating));
+        elements.taskMemoDescriptionEditorEl.setAttribute("aria-disabled", String(isEmpty));
       }
-      memoMarkdownTools?.setDisabled?.(isEmpty || reportGenerating);
+      memoMarkdownTools?.setDisabled?.(isEmpty);
       setHidden(elements.taskMemoImageUploadEl, isEmpty);
-      setDisabled(elements.taskMemoImageUploadEl, isEmpty || reportGenerating);
+      setDisabled(elements.taskMemoImageUploadEl, isEmpty);
       setHidden(elements.taskMemoImageFileEl, isEmpty);
-      setDisabled(elements.taskMemoImageFileEl, isEmpty || reportGenerating);
+      setDisabled(elements.taskMemoImageFileEl, isEmpty);
       setHidden(elements.taskMemoCancelEl, !isCreate);
       setHidden(elements.taskMemoConvertEl, !isEdit);
       setHidden(elements.taskMemoDeleteEl, !isEdit);
       setDisabled(elements.taskMemoNewEl, !hasRun);
-      setDisabled(elements.taskMemoDeleteEl, !isEdit || reportGenerating);
-      setDisabled(elements.taskMemoConvertEl, !isEdit || reportGenerating);
+      setDisabled(elements.taskMemoDeleteEl, !isEdit);
+      setDisabled(elements.taskMemoConvertEl, !isEdit);
       setText(elements.taskMemoSaveEl, t("memo.save", "Save"));
       setText(elements.taskMemoConvertEl, memoWithDraftTaskLink(memo)?.created_task_id
         ? t("memo.jump_task", "Jump to Task")
@@ -1491,12 +1454,15 @@
       }
       const baseline = creating ? null : editorFieldsFromMemo(memo);
       const payload = readEditorPayload();
-      const shouldOfferReport = Boolean(
+      const shouldOfferTaskFinal = Boolean(
         !creating
         && payload.status === "done"
         && baseline?.status !== "done"
         && String(payload.created_task_id || "").trim()
       );
+      if (shouldOfferTaskFinal) {
+        payload.request_task_final = await confirmLinkedTaskFinalization(payload.created_task_id);
+      }
       const url = creating ? deps.apiUrl("/api/task-memos") : deps.apiUrl(`/api/task-memos/${encodeURIComponent(memo.id)}`);
       const method = creating ? "POST" : "PATCH";
       const response = await deps.fetchJson(url, {
@@ -1516,21 +1482,10 @@
         draftTaskLinkId = String(response?.memo?.created_task_id || "").trim();
         draftTaskLinkDirty = false;
         writePersistedSelectedMemoId(selectedMemoId);
-        setState(t("memo.saved", "Memo saved."));
-      }
-      if (!creating && shouldOfferReport) {
-        const savedMemo = response?.memo || null;
-        const confirmed = await confirmCompletionReportGeneration(savedMemo);
-        if (confirmed) {
-          const reportMemo = await requestCompletionReport(savedMemo);
-          if (reportMemo?.id) {
-            selectedMemoId = reportMemo.id;
-            draftTaskLinkMemoId = reportMemo.id;
-            draftTaskLinkId = String(reportMemo.created_task_id || "").trim();
-            draftTaskLinkDirty = false;
-          }
-          setState(t("memo.report_queued", "Completion report generation started."));
-        }
+        const finalization = response?.task_finalization || null;
+        setState(finalization?.requested
+          ? t("memo.task_final_queued", "Linked task finalization started.")
+          : t("memo.saved", "Memo saved."));
       }
       await loadMemos();
     }
@@ -1538,7 +1493,6 @@
     function linkSelectedTask(taskId) {
       const memo = editorMode === "edit" ? selectedMemo() : null;
       if (!memo) return;
-      if (isMemoReportGenerating(memo)) return;
       const nextTaskId = String(taskId || "").trim();
       ensureDraftTaskLink(memo);
       const currentTaskId = currentDraftTaskLinkId(memo);

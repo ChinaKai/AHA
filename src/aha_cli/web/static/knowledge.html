@@ -68,6 +68,7 @@
     #capture-list .kb-card h3 { font-size: 14px; }
     .kb-cap-preview { font-size: 12px; color: var(--color-text); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 2.8em; overflow: hidden; }
     .kb-capture-toolbar { justify-content: flex-end; margin: 0 0 8px; }
+    .kb-section-title { margin: 16px 0 6px; font-size: 14px; color: var(--color-text-strong); }
     .kb-modal { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
     .kb-modal[hidden] { display: none; }
     .kb-modal-card { background: var(--color-surface); padding: 16px; border-radius: var(--radius-md); min-width: 260px; max-width: 92vw; display: grid; gap: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
@@ -75,6 +76,20 @@
     .kb-log-modal { width: min(92vw, 860px); max-height: 90vh; overflow: auto; }
     .kb-log-label { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
     .kb-log-body { max-height: min(360px, 35vh); overflow: auto; }
+    .kb-agent-thread { display: grid; gap: 8px; max-height: min(420px, 42vh); overflow: auto; }
+    .kb-agent-message {
+      display: grid; gap: 4px; padding: 9px 10px;
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm);
+      background: var(--color-surface-muted);
+    }
+    .kb-agent-message[data-role="browser-main"] { border-left: 3px solid var(--color-primary); }
+    .kb-agent-message[data-role="agent-update"] { border-left: 3px solid var(--color-info, var(--color-primary)); }
+    .kb-agent-message[data-role="main-browser"] { border-left: 3px solid var(--color-success); }
+    .kb-agent-message[data-role="error"] { border-left: 3px solid var(--color-danger); }
+    .kb-agent-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--color-text-subtle); }
+    .kb-agent-role { font-weight: 700; color: var(--color-text-strong); }
+    .kb-agent-text { font-size: 13px; color: var(--color-text); overflow-wrap: anywhere; white-space: pre-wrap; }
+    .kb-agent-detail { font-size: 12px; color: var(--color-text-subtle); overflow-wrap: anywhere; white-space: pre-wrap; }
     .kb-capture-form { width: min(92vw, 640px); }
     .kb-capture-form textarea, .kb-cap-edit, .kb-cap-edit-title { width: 100%; box-sizing: border-box; }
     .kb-capture-form textarea, .kb-cap-edit { resize: vertical; }
@@ -258,6 +273,8 @@
     <div class="kb-modal-card kb-log-modal">
       <h3 data-i18n="knowledge.capture_agent_log">Agent log</h3>
       <div id="cap-log-meta" class="kb-muted"></div>
+      <div class="kb-log-label" data-i18n="knowledge.project_nav_agent_progress">Agent progress</div>
+      <div id="cap-agent-log" class="kb-agent-thread"></div>
       <div class="kb-log-label" data-i18n="knowledge.capture_log_prompt">Prompt</div>
       <pre id="cap-log-prompt" class="kb-body kb-log-body"></pre>
       <div class="kb-log-label" data-i18n="knowledge.capture_log_reply">Reply</div>
@@ -285,20 +302,33 @@
       <h3 id="nav-draft-title">Project navigation draft</h3>
       <div id="nav-draft-meta" class="kb-muted"></div>
       <div id="nav-draft-summary" class="kb-muted"></div>
-      <div class="kb-log-label" data-i18n="knowledge.project_nav_agent_progress">Agent progress</div>
-      <pre id="nav-draft-agent-log" class="kb-body kb-log-body"></pre>
-      <div class="kb-log-label" data-i18n="knowledge.capture_log_prompt">Prompt</div>
-      <pre id="nav-draft-prompt" class="kb-body kb-log-body"></pre>
-      <div class="kb-log-label" data-i18n="knowledge.capture_log_reply">Reply</div>
-      <pre id="nav-draft-reply" class="kb-body kb-log-body"></pre>
       <div class="kb-log-label" data-i18n="knowledge.project_nav_entries_preview">Entries preview</div>
       <div id="nav-draft-entries"></div>
       <div class="kb-log-label" data-i18n="knowledge.project_nav_validation">Validation</div>
       <pre id="nav-draft-validation" class="kb-body kb-log-body"></pre>
       <div class="kb-card-actions">
+        <button class="kb-reject" type="button" id="nav-draft-stop" data-i18n="knowledge.stop">Stop</button>
         <button class="kb-approve" type="button" id="nav-draft-accept" data-i18n="knowledge.approve">Approve</button>
         <button class="kb-reject" type="button" id="nav-draft-reject" data-i18n="knowledge.reject">Reject</button>
         <button class="button-ghost" type="button" id="nav-draft-close" data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="nav-agent-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-log-modal">
+      <h3 id="nav-agent-title" data-i18n="knowledge.capture_agent_log">Agent log</h3>
+      <div id="nav-agent-meta" class="kb-muted"></div>
+      <div id="nav-agent-summary" class="kb-muted"></div>
+      <div class="kb-log-label" data-i18n="knowledge.project_nav_agent_progress">Agent progress</div>
+      <div id="nav-draft-agent-log" class="kb-agent-thread"></div>
+      <div class="kb-log-label" data-i18n="knowledge.capture_log_prompt">Prompt</div>
+      <pre id="nav-draft-prompt" class="kb-body kb-log-body"></pre>
+      <div class="kb-log-label" data-i18n="knowledge.capture_log_reply">Reply</div>
+      <pre id="nav-draft-reply" class="kb-body kb-log-body"></pre>
+      <div class="kb-card-actions">
+        <button class="kb-reject" type="button" id="nav-agent-stop" data-i18n="knowledge.stop">Stop</button>
+        <button class="button-ghost" type="button" id="nav-agent-close" data-i18n="common.close">Close</button>
       </div>
     </div>
   </div>
@@ -412,7 +442,7 @@
       }
     }
 
-    const state = { entries: [], navigation: [], navDrafts: [], activeNavDraft: null, navDraftPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, activeDistillLogNote: null, distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -592,6 +622,63 @@
       return t("knowledge.proxy_off", "Proxy off");
     }
 
+    function formatAgentLog(agentLog, fallback = "") {
+      const items = Array.isArray(agentLog) ? agentLog : [];
+      if (!items.length) return fallback || "";
+      return items.map((item) => [
+        item.at ? localTime(item.at) : "",
+        item.stage || "",
+        item.message || "",
+        item.backend || "",
+        item.model || "",
+        item.total_tokens ? formatText("knowledge.agent_tokens", { count: item.total_tokens }, item.total_tokens + " tokens") : "",
+        item.output_chars ? formatText("knowledge.agent_output_chars", { count: item.output_chars }, item.output_chars + " chars") : "",
+        item.excerpt || "",
+      ].filter(Boolean).join(" · ")).join("\n");
+    }
+
+    function latestAgentLogLine(agentLog) {
+      const items = Array.isArray(agentLog) ? agentLog : [];
+      const item = items.length ? items[items.length - 1] : null;
+      if (!item) return "";
+      return [item.at ? localTime(item.at) : "", item.stage || "", item.message || ""].filter(Boolean).join(" · ");
+    }
+
+    function agentLogRole(item) {
+      const stage = String(item?.stage || "").toLowerCase();
+      if (["queued", "running"].includes(stage)) return "browser-main";
+      if (["failed", "error", "stopped"].includes(stage)) return "error";
+      if (["completed", "distilled"].includes(stage)) return "main-browser";
+      return "agent-update";
+    }
+
+    function agentLogDetails(item) {
+      return [
+        item.backend || "",
+        item.model || "",
+        item.total_tokens ? formatText("knowledge.agent_tokens", { count: item.total_tokens }, item.total_tokens + " tokens") : "",
+        item.last_tokens ? formatText("knowledge.agent_last_tokens", { count: item.last_tokens }, item.last_tokens + " last") : "",
+        item.output_chars ? formatText("knowledge.agent_output_chars", { count: item.output_chars }, item.output_chars + " chars") : "",
+        item.pid ? "pid " + item.pid : "",
+        item.process_group ? "pgid " + item.process_group : "",
+        item.excerpt || "",
+      ].filter(Boolean).join(" · ");
+    }
+
+    function renderAgentConversationLog(agentLog, fallback = "") {
+      const items = Array.isArray(agentLog) ? agentLog : [];
+      const rows = items.length ? items : (fallback ? [{ stage: "agent-update", message: fallback }] : []);
+      return rows.map((item) => {
+        const role = agentLogRole(item);
+        const detail = agentLogDetails(item);
+        return `<div class="kb-agent-message" data-role="${esc(role)}">
+          <div class="kb-agent-meta"><span class="kb-agent-role">${esc(role)}</span>${item.at ? `<span>${esc(localTime(item.at))}</span>` : ""}${item.stage ? `<span>${esc(item.stage)}</span>` : ""}</div>
+          <div class="kb-agent-text">${esc(item.message || "-")}</div>
+          ${detail ? `<div class="kb-agent-detail">${esc(detail)}</div>` : ""}
+        </div>`;
+      }).join("");
+    }
+
     function renderProjectNavDrafts() {
       $("#nav-draft-list").innerHTML = state.navDrafts.length
         ? state.navDrafts.map((draft) => {
@@ -603,18 +690,24 @@
               draft.backend || "",
               draft.model || "",
               projectNavProxyLabel(draft.proxy_enabled),
-              timeLine(draft, ["created_at", "updated_at", "completed_at", "accepted_at", "rejected_at"]),
+              timeLine(draft, ["created_at", "updated_at", "completed_at", "stopped_at", "accepted_at", "rejected_at"]),
             ].filter(Boolean).join(" · ");
             const canAccept = draft.status === "completed";
-            const canReject = draft.status === "completed" || draft.status === "failed";
+            const canStop = draft.status === "running";
+            const canReject = draft.status === "completed" || draft.status === "failed" || draft.status === "stopped";
             const summary = draft.error || draft.summary || draft.skipped || "";
+            const latestLog = latestAgentLogLine(draft.agent_log);
             return `<div class="kb-card"><h3>${esc(t("knowledge.project_nav_generation", "Navigation generation"))}</h3>
               <div><span class="kb-tag">${status}</span></div>
               <div class="kb-muted">${esc(meta)}</div>
               ${summary ? `<div class="kb-muted">${esc(summary)}</div>` : ""}
+              ${latestLog ? `<div class="kb-muted">${esc(latestLog)}</div>` : ""}
               <div class="kb-card-actions kb-inline-actions kb-nav-draft-actions">
                 <button class="button-ghost" type="button" onclick="viewProjectNavDraft('${id}')">${esc(t("knowledge.view", "View"))}</button>
-                <button class="button-ghost" type="button" onclick="viewProjectNavDraft('${id}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
+                <button class="button-ghost" type="button" onclick="viewProjectNavAgent('${id}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
+                ${canStop ? `
+                <button class="kb-reject" type="button" onclick="stopProjectNavDraft('${id}')">${esc(t("knowledge.stop", "Stop"))}</button>
+                ` : ""}
                 ${canAccept ? `
                 <button class="kb-approve" type="button" onclick="acceptProjectNavDraft('${id}')">${esc(t("knowledge.approve", "Approve"))}</button>
                 ` : ""}
@@ -635,8 +728,35 @@
     }
 
     function closeProjectNavDraftModal() {
+      if (state.navDraftDetailPoll) {
+        clearTimeout(state.navDraftDetailPoll);
+        state.navDraftDetailPoll = null;
+      }
       state.activeNavDraft = null;
       $("#nav-draft-modal").hidden = true;
+    }
+
+    function scheduleProjectNavDraftDetailPoll() {
+      if (state.navDraftDetailPoll) {
+        clearTimeout(state.navDraftDetailPoll);
+        state.navDraftDetailPoll = null;
+      }
+      if (!state.activeNavDraft || $("#nav-draft-modal").hidden || state.activeNavDraft.status !== "running") return;
+      state.navDraftDetailPoll = setTimeout(refreshActiveProjectNavDraft, 1800);
+    }
+
+    async function refreshActiveProjectNavDraft() {
+      const id = state.activeNavDraft?.id;
+      if (!id || $("#nav-draft-modal").hidden) return;
+      try {
+        const data = await api("/api/kb/project-nav/draft?id=" + encodeURIComponent(id));
+        state.activeNavDraft = data.draft;
+        renderProjectNavDraftModal();
+        await loadProjectNavDrafts();
+      } catch (e) {
+        $("#nav-draft-summary").textContent = formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message);
+        scheduleProjectNavDraftDetailPoll();
+      }
     }
 
     function renderProjectNavDraftModal() {
@@ -646,8 +766,6 @@
         return;
       }
       const entries = Array.isArray(draft.candidates) ? draft.candidates : [];
-      const agent = draft.agent || {};
-      const agentLog = Array.isArray(draft.agent_log) ? draft.agent_log : [];
       $("#nav-draft-title").textContent = `${t("knowledge.project_nav_generation", "Navigation generation")} · ${draft.status || "-"}`;
       $("#nav-draft-meta").textContent = [
         draft.project_key || "-",
@@ -655,20 +773,9 @@
         draft.backend || "",
         draft.model || "",
         projectNavProxyLabel(draft.proxy_enabled),
-        timeLine(draft, ["created_at", "updated_at", "completed_at", "accepted_at", "rejected_at"]),
+        timeLine(draft, ["created_at", "updated_at", "completed_at", "stopped_at", "accepted_at", "rejected_at"]),
       ].filter(Boolean).join(" · ");
       $("#nav-draft-summary").textContent = draft.error || draft.summary || draft.skipped || "";
-      $("#nav-draft-agent-log").textContent = agentLog.length
-        ? agentLog.map((item) => [
-            item.at ? localTime(item.at) : "",
-            item.stage || "",
-            item.message || "",
-            item.backend || "",
-            item.model || "",
-          ].filter(Boolean).join(" · ")).join("\n")
-        : [agent.status, agent.error].filter(Boolean).join(" · ");
-      $("#nav-draft-prompt").textContent = agent.prompt_excerpt || "";
-      $("#nav-draft-reply").textContent = agent.reply_excerpt || (agent.error ? "ERROR:\n" + agent.error : "");
       $("#nav-draft-entries").innerHTML = entries.length
         ? entries.map((candidate) => `<div class="kb-card">
             <h3>${esc(candidate.title || candidate.slug || "Navigation entry")}</h3>
@@ -678,10 +785,71 @@
         : `<p class="kb-muted">${esc(t("knowledge.project_nav_empty", "No project navigation entries"))}</p>`;
       $("#nav-draft-validation").textContent = JSON.stringify(draft.validation || {}, null, 2);
       const canAccept = draft.status === "completed";
-      const canReject = draft.status === "completed" || draft.status === "failed";
+      const canStop = draft.status === "running";
+      const canReject = draft.status === "completed" || draft.status === "failed" || draft.status === "stopped";
+      $("#nav-draft-stop").hidden = !canStop;
       $("#nav-draft-accept").hidden = !canAccept;
       $("#nav-draft-reject").hidden = !canReject;
       $("#nav-draft-modal").hidden = false;
+      scheduleProjectNavDraftDetailPoll();
+    }
+
+    function closeProjectNavAgentModal() {
+      if (state.navAgentPoll) {
+        clearTimeout(state.navAgentPoll);
+        state.navAgentPoll = null;
+      }
+      state.activeNavAgentDraft = null;
+      $("#nav-agent-modal").hidden = true;
+    }
+
+    function scheduleProjectNavAgentPoll() {
+      if (state.navAgentPoll) {
+        clearTimeout(state.navAgentPoll);
+        state.navAgentPoll = null;
+      }
+      if (!state.activeNavAgentDraft || $("#nav-agent-modal").hidden || state.activeNavAgentDraft.status !== "running") return;
+      state.navAgentPoll = setTimeout(refreshActiveProjectNavAgent, 1800);
+    }
+
+    async function refreshActiveProjectNavAgent() {
+      const id = state.activeNavAgentDraft?.id;
+      if (!id || $("#nav-agent-modal").hidden) return;
+      try {
+        const data = await api("/api/kb/project-nav/draft?id=" + encodeURIComponent(id));
+        state.activeNavAgentDraft = data.draft;
+        renderProjectNavAgentModal();
+        await loadProjectNavDrafts();
+      } catch (e) {
+        $("#nav-agent-summary").textContent = formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message);
+        scheduleProjectNavAgentPoll();
+      }
+    }
+
+    function renderProjectNavAgentModal() {
+      const draft = state.activeNavAgentDraft;
+      if (!draft) {
+        $("#nav-agent-modal").hidden = true;
+        return;
+      }
+      const agent = draft.agent || {};
+      const agentLog = Array.isArray(draft.agent_log) ? draft.agent_log : [];
+      $("#nav-agent-title").textContent = `${t("knowledge.capture_agent_log", "Agent log")} · ${draft.status || "-"}`;
+      $("#nav-agent-meta").textContent = [
+        draft.project_key || "-",
+        draft.workspace_path || "",
+        draft.backend || "",
+        draft.model || "",
+        projectNavProxyLabel(draft.proxy_enabled),
+        timeLine(draft, ["created_at", "updated_at", "completed_at", "stopped_at", "accepted_at", "rejected_at"]),
+      ].filter(Boolean).join(" · ");
+      $("#nav-agent-summary").textContent = draft.error || draft.summary || draft.skipped || "";
+      $("#nav-draft-agent-log").innerHTML = renderAgentConversationLog(agentLog, [agent.status, agent.error].filter(Boolean).join(" · "));
+      $("#nav-draft-prompt").textContent = agent.prompt_excerpt || "";
+      $("#nav-draft-reply").textContent = agent.reply_excerpt || (agent.error ? "ERROR:\n" + agent.error : "");
+      $("#nav-agent-stop").hidden = draft.status !== "running";
+      $("#nav-agent-modal").hidden = false;
+      scheduleProjectNavAgentPoll();
     }
 
     window.viewProjectNavDraft = async (id) => {
@@ -689,6 +857,16 @@
         const data = await api("/api/kb/project-nav/draft?id=" + encodeURIComponent(id));
         state.activeNavDraft = data.draft;
         renderProjectNavDraftModal();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    };
+
+    window.viewProjectNavAgent = async (id) => {
+      try {
+        const data = await api("/api/kb/project-nav/draft?id=" + encodeURIComponent(id));
+        state.activeNavAgentDraft = data.draft;
+        renderProjectNavAgentModal();
       } catch (e) {
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
       }
@@ -706,21 +884,46 @@
     }
 
     window.acceptProjectNavDraft = async (id) => {
+      if (!confirm(formatText("knowledge.confirm_accept_project_nav", { id }, "Approve project nav draft " + id + " and write entries?"))) return;
       try {
         const result = await api("/api/kb/project-nav/draft/accept", { method: "POST", body: JSON.stringify({ draft_id: id }) });
         toast(formatText("knowledge.project_nav_accepted", { count: result.written_count || 0 }, "Project nav accepted: " + (result.written_count || 0) + " entries"));
         if (state.activeNavDraft?.id === id) closeProjectNavDraftModal();
+        if (state.activeNavAgentDraft?.id === id) closeProjectNavAgentModal();
         await loadProjectNavDrafts(); await loadNavigation(); await loadStatus();
       } catch (e) {
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
       }
     };
 
+    window.stopProjectNavDraft = async (id) => {
+      if (!confirm(formatText("knowledge.confirm_stop_project_nav", { id }, "Stop project nav generation " + id + "?"))) return;
+      try {
+        const result = await api("/api/kb/project-nav/draft/stop", { method: "POST", body: JSON.stringify({ draft_id: id }) });
+        toast(result.stop?.stopped
+          ? t("knowledge.project_nav_stopped", "Project nav generation stopped")
+          : (result.stop?.already_exited ? t("knowledge.project_nav_already_stopped", "Project nav agent already exited") : t("knowledge.project_nav_stopped", "Project nav generation stopped")));
+        if (state.activeNavDraft?.id === id) {
+          state.activeNavDraft = result.draft;
+          renderProjectNavDraftModal();
+        }
+        if (state.activeNavAgentDraft?.id === id) {
+          state.activeNavAgentDraft = result.draft;
+          renderProjectNavAgentModal();
+        }
+        await loadProjectNavDrafts(); await loadStatus();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    };
+
     window.rejectProjectNavDraft = async (id) => {
+      if (!confirm(formatText("knowledge.confirm_reject_project_nav", { id }, "Reject project nav draft " + id + "?"))) return;
       try {
         await api("/api/kb/project-nav/draft/reject", { method: "POST", body: JSON.stringify({ draft_id: id }) });
         toast(t("knowledge.project_nav_rejected", "Project nav draft rejected"));
         if (state.activeNavDraft?.id === id) closeProjectNavDraftModal();
+        if (state.activeNavAgentDraft?.id === id) closeProjectNavAgentModal();
         await loadProjectNavDrafts();
       } catch (e) {
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
@@ -766,8 +969,27 @@
       renderEntryReferenceModal();
     }
 
+    function renderEntryCaptureResults() {
+      if (!state.entryCapture.length) return "";
+      return `<h3 class="kb-section-title">${esc(t("knowledge.capture_matches", "Capture matches"))}</h3>` + state.entryCapture.map((n) => {
+        const title = n.title || String(n.text || "").split("\n")[0] || n.id;
+        const assocText = captureAssociationSummary(n);
+        const statusLabel = t("knowledge.capture_status_" + n.status, n.status);
+        return `<div class="kb-card" data-note-id="${esc(n.id)}">
+          <h3>${esc(title.slice(0, 80))}</h3>
+          <div class="kb-muted">${esc(t("knowledge.tab_capture", "Capture"))} · ${esc(n.scope_hint || "-")} · ${esc(statusLabel)}${assocText ? " · " + esc(assocText) : ""}</div>
+          <div class="kb-muted">${esc(timeLine(n))}</div>
+          <div class="kb-card-actions kb-inline-actions">
+            <button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(n.id))}')">${esc(t("knowledge.open_note", "Note"))}</button>
+          </div>
+          ${renderCaptureRefs(n)}
+          <div class="kb-cap-preview">${esc(String(n.text || "").slice(0, 180))}</div>
+        </div>`;
+      }).join("");
+    }
+
     function renderEntries() {
-      $("#entries-list").innerHTML = state.entries.length
+      const entryHtml = state.entries.length
         ? state.entries.map((e) => {
             const entryId = e.id || e.slug;
             const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
@@ -777,6 +999,9 @@
             const status = e.status || "active";
             const isProjectNavIndex = e.type === "navigation" && e.slug === "index" && e.project_key;
             const deleteLabel = isProjectNavIndex ? t("knowledge.reset_project_nav", "Reset project nav") : t("knowledge.delete", "Delete");
+            const sourceNoteButton = e.source_note_id && e.source_note_exists !== false
+              ? `<button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(e.source_note_id))}')">${esc(t("knowledge.open_note", "Note"))}</button>`
+              : "";
             return `<div class="kb-card"><h3>${esc(e.title)}</h3>
             <div class="kb-muted">${esc(e.scope)}/${esc(e.type)} · ${esc(e.project_key || "-")} · ${esc(entryId)} · ${esc(status)}</div>
             <div class="kb-muted">${esc(timeLine(e))}</div>
@@ -786,13 +1011,15 @@
               <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
               <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
               <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
+              ${sourceNoteButton}
               <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>
             </div>
             ${isActive && !isEditing ? `<div class="kb-muted">${esc(state.activeEntry.path)}</div><div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
             ${isEditing ? renderEditForm(state.activeEntry) : ""}
           </div>`;
           }).join("")
-        : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
+        : (state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`);
+      $("#entries-list").innerHTML = entryHtml + renderEntryCaptureResults();
       renderEntryMarkdown();
     }
 
@@ -848,6 +1075,7 @@
       if ($("#f-search").value.trim()) q.set("q", $("#f-search").value.trim());
       const data = await api("/api/kb/entries?" + q.toString());
       state.entries = data.entries;
+      state.entryCapture = data.capture_notes || [];
       state.activeEntry = null;
       state.referenceEntry = null;
       state.editingReference = false;
@@ -1044,12 +1272,19 @@
         ? state.pending.map((c) => {
           const expanded = state.pendingExpanded.has(String(c.id || ""));
           const encodedId = esc(encodeURIComponent(String(c.id || "")));
+          const pendingDomId = esc(String(c.id || ""));
+          const sourceNote = c.source_note || null;
+          const sourceNoteButton = sourceNote?.id
+            ? `<button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(sourceNote.id))}')">${esc(t("knowledge.open_note", "Note"))}</button>`
+            : "";
           const bodyToggleLabel = expanded ? t("common.close", "Close") : t("knowledge.view", "View");
-          return `<div class="kb-card"><h3>${esc(c.title)}</h3>
+          return `<div class="kb-card" data-pending-id="${pendingDomId}"><h3>${esc(c.title)}</h3>
             <div class="kb-muted">${esc(c.scope)}/${esc(c.kind)} · ${esc(c.project_key || "-")} · ${esc(c.id)} · ${esc(t("knowledge.confidence", "confidence"))} ${esc((c.meta || {}).confidence)}</div>
+            ${sourceNote ? `<div class="kb-muted">${esc(t("knowledge.source_note", "Source note"))}: ${esc(sourceNote.title || sourceNote.id)}</div>` : ""}
             <div class="kb-muted">${esc(timeLine(c, ["created_at", "updated_at", "last_seen_at"]))}</div>
             <div class="kb-card-actions kb-pending-actions kb-inline-actions">
               <button class="button-ghost" type="button" aria-expanded="${expanded ? "true" : "false"}" onclick="togglePendingBody('${encodedId}')">${esc(bodyToggleLabel)}</button>
+              ${sourceNoteButton}
               <button class="kb-approve" type="button" onclick="decide('approve','${esc(c.id)}')">${esc(t("knowledge.approve", "Approve"))}</button>
               <button class="kb-reject" type="button" onclick="decide('reject','${esc(c.id)}')">${esc(t("knowledge.reject", "Reject"))}</button>
             </div>
@@ -1081,7 +1316,32 @@
       renderPending();
     };
 
+    function scrollToDataValue(attr, value) {
+      for (const el of document.querySelectorAll(`[${attr}]`)) {
+        if (el.getAttribute(attr) === value) {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+          return true;
+        }
+      }
+      return false;
+    }
+
+    window.openCandidate = async (encodedId) => {
+      const id = decodeURIComponent(String(encodedId || ""));
+      if (!id) return;
+      showTab("pending");
+      await loadPending();
+      state.pendingExpanded.add(id);
+      renderPending();
+      setTimeout(() => scrollToDataValue("data-pending-id", id), 0);
+    };
+
     window.decide = async (kind, id) => {
+      const candidate = state.pending.find((item) => String(item.id || "") === String(id || ""));
+      const title = candidate?.title || id;
+      const confirmKey = kind === "approve" ? "knowledge.confirm_approve_candidate" : "knowledge.confirm_reject_candidate";
+      const fallback = kind === "approve" ? "Approve candidate " + title + "?" : "Reject candidate " + title + "?";
+      if (!confirm(formatText(confirmKey, { title }, fallback))) return;
       try {
         const r = await api("/api/kb/" + kind, { method: "POST", body: JSON.stringify({ candidate_id: id }) });
         toast(kind === "approve"
@@ -1113,6 +1373,40 @@
       }
     }
 
+    function captureAssociationSummary(note) {
+      const pendingCount = (note.candidate_refs || []).length;
+      const entryCount = (note.entry_refs || []).length;
+      const fallbackCount = pendingCount || entryCount ? 0 : (note.candidate_ids || []).length;
+      const parts = [];
+      if (pendingCount) {
+        parts.push(formatText("knowledge.capture_pending_candidates", { count: pendingCount }, pendingCount + " pending"));
+      }
+      if (entryCount) {
+        parts.push(formatText("knowledge.capture_entries", { count: entryCount }, entryCount + " knowledge"));
+      }
+      if (!parts.length && fallbackCount) {
+        parts.push(formatText("knowledge.capture_candidates", { count: fallbackCount }, fallbackCount + " candidate(s)"));
+      }
+      return parts.join(" · ");
+    }
+
+    function renderCaptureRefs(note) {
+      const buttons = [];
+      for (const candidate of note.candidate_refs || []) {
+        const id = String(candidate.id || "");
+        if (!id) continue;
+        const label = candidate.title || id;
+        buttons.push(`<button class="button-ghost" type="button" onclick="openCandidate('${esc(encodeURIComponent(id))}')">${esc(t("knowledge.open_candidate", "Candidate"))}: ${esc(label)}</button>`);
+      }
+      for (const entry of note.entry_refs || []) {
+        const id = String(entry.id || entry.slug || "");
+        if (!id) continue;
+        const label = entry.title || entry.slug || id;
+        buttons.push(`<button class="button-ghost" type="button" onclick="openEntryReference('${esc(encodeURIComponent(id))}')">${esc(t("knowledge.open_knowledge", "Knowledge"))}: ${esc(label)}</button>`);
+      }
+      return buttons.length ? `<div class="kb-card-actions kb-inline-actions">${buttons.join("")}</div>` : "";
+    }
+
     function renderCapture() {
       $("#capture-list").innerHTML = state.capture.length
         ? state.capture.map((n) => {
@@ -1120,12 +1414,17 @@
             const expanded = state.expandedNote === n.id;
             const full = n.text || "";
             const statusLabel = t("knowledge.capture_status_" + n.status, n.status);
+            const assocText = captureAssociationSummary(n);
             const infoText = n.status === "distilled"
-              ? " · " + formatText("knowledge.capture_candidates", { count: (n.candidate_ids || []).length }, (n.candidate_ids || []).length + " candidate(s)")
+              ? (assocText ? " · " + assocText : "")
               : n.status === "error" ? " · " + (n.last_error || "") : "";
+            const hasProducedKnowledge = (n.candidate_ids || []).length || (n.candidate_refs || []).length || (n.entry_refs || []).length;
+            const distillLabel = n.status === "distilling"
+              ? t("knowledge.capture_distilling", "Distilling…")
+              : hasProducedKnowledge ? t("knowledge.capture_redistill", "Redistill") : t("knowledge.capture_distill", "Distill");
             const uploadLabel = `<label class="kb-cap-upload">${esc(t("knowledge.capture_add_image", "+ image"))}<input type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="uploadNoteImage('${esc(n.id)}', this)" /></label>`;
             const actions = `<div class="kb-card-actions kb-cap-actions">
-                <button class="kb-approve" type="button" ${n.status === "distilling" ? "disabled" : ""} onclick="distillNote('${esc(n.id)}')">${esc(t("knowledge.capture_distill", "Distill"))}</button>
+                <button class="kb-approve" type="button" ${n.status === "distilling" ? "disabled" : ""} onclick="distillNote('${esc(n.id)}')">${esc(distillLabel)}</button>
                 <button class="button-ghost" type="button" onclick="showDistillLog('${esc(n.id)}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
                 <button class="button-ghost" type="button" onclick="toggleNote('${esc(n.id)}')">${esc(expanded ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
                 <button class="button-ghost" type="button" onclick="${editing ? "cancelNoteEdit()" : `editNote('${esc(n.id)}')`}">${esc(editing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
@@ -1141,10 +1440,11 @@
               : expanded
               ? `<div class="kb-body kb-cap-md" data-md-id="${esc(n.id)}"></div>`
               : `<div class="kb-cap-preview">${esc(full.slice(0, 140))}</div>`;
-            return `<div class="kb-card"><h3>${esc(n.title || (full.split("\n")[0] || n.id).slice(0, 80))}</h3>
+            return `<div class="kb-card" data-note-id="${esc(n.id)}"><h3>${esc(n.title || (full.split("\n")[0] || n.id).slice(0, 80))}</h3>
               <div class="kb-muted">${esc(n.scope_hint)} · ${esc(statusLabel)}${esc(infoText)}</div>
               <div class="kb-muted">${esc(timeLine(n))}</div>
               ${actions}
+              ${renderCaptureRefs(n)}
               ${body}
               </div>`;
           }).join("")
@@ -1266,6 +1566,16 @@
     window.editNote = (id) => { state.editingNote = id; renderCapture(); };
     window.cancelNoteEdit = () => { state.editingNote = null; renderCapture(); };
     window.toggleNote = (id) => { state.expandedNote = state.expandedNote === id ? null : id; renderCapture(); };
+    window.openCaptureNote = async (encodedId) => {
+      const id = decodeURIComponent(String(encodedId || ""));
+      if (!id) return;
+      showTab("capture");
+      await loadCapture();
+      state.editingNote = null;
+      state.expandedNote = id;
+      renderCapture();
+      setTimeout(() => scrollToDataValue("data-note-id", id), 0);
+    };
     window.saveNote = async (id) => {
       const title = document.querySelector(`.kb-cap-edit-title[data-id="${id}"]`).value.trim();
       const text = document.querySelector(`.kb-cap-edit[data-id="${id}"]`).value;
@@ -1282,21 +1592,60 @@
       try { await api("/api/kb/capture", { method: "DELETE", body: JSON.stringify({ id }) }); await loadCapture(); await loadStatus(); }
       catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
-    function closeDistillLogModal() { $("#cap-log-modal").hidden = true; }
-    window.showDistillLog = async (id) => {
+    function closeDistillLogModal() {
+      if (state.distillLogPoll) {
+        clearTimeout(state.distillLogPoll);
+        state.distillLogPoll = null;
+      }
+      state.activeDistillLogNote = null;
+      $("#cap-log-modal").hidden = true;
+    }
+
+    function renderDistillLog(log, fallbackMessage = "") {
+      log = log || {};
+      const model = log.model || "default";
+      const times = [log.started_at, log.finished_at].filter(Boolean).map(localTime).join(" -> ");
+      $("#cap-log-meta").textContent = [log.status || fallbackMessage, log.backend, model, times].filter(Boolean).join(" · ");
+      $("#cap-agent-log").innerHTML = renderAgentConversationLog(log.agent_log, fallbackMessage);
+      $("#cap-log-prompt").textContent = log.prompt || "";
+      $("#cap-log-reply").textContent = log.reply || (log.error ? "ERROR:\n" + log.error : "");
+      $("#cap-log-modal").hidden = false;
+    }
+
+    function scheduleDistillLogPoll(log) {
+      if (state.distillLogPoll) {
+        clearTimeout(state.distillLogPoll);
+        state.distillLogPoll = null;
+      }
+      if (!state.activeDistillLogNote || $("#cap-log-modal").hidden) return;
+      if (!log || log.status === "running") {
+        state.distillLogPoll = setTimeout(refreshActiveDistillLog, 1500);
+      }
+    }
+
+    async function refreshActiveDistillLog(force = false) {
+      const id = state.activeDistillLogNote;
+      if (!id || (!force && $("#cap-log-modal").hidden)) return;
       try {
         const data = await api("/api/kb/capture/distill-log?id=" + encodeURIComponent(id));
         const log = data.log || {};
-        const model = log.model || "default";
-        const times = [log.started_at, log.finished_at].filter(Boolean).map(localTime).join(" -> ");
-        $("#cap-log-meta").textContent = [log.status, log.backend, model, times].filter(Boolean).join(" · ");
-        $("#cap-log-prompt").textContent = log.prompt || "";
-        $("#cap-log-reply").textContent = log.reply || (log.error ? "ERROR:\n" + log.error : "");
-        $("#cap-log-modal").hidden = false;
+        renderDistillLog(log);
+        scheduleDistillLogPoll(log);
       } catch (e) {
         const missing = t("knowledge.capture_log_missing", "No distill log yet");
-        toast(e.message === "distill log not found" ? missing : formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+        if (e.message === "distill log not found") {
+          renderDistillLog(null, missing);
+          const note = state.capture.find((item) => item.id === id);
+          if (note?.status === "distilling") scheduleDistillLogPoll(null);
+        } else {
+          toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+        }
       }
+    };
+
+    window.showDistillLog = async (id) => {
+      state.activeDistillLogNote = id;
+      await refreshActiveDistillLog(true);
     };
     $("#cap-log-close").addEventListener("click", closeDistillLogModal);
     $("#cap-log-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-log-modal") closeDistillLogModal(); });
@@ -1501,14 +1850,19 @@
     });
     $("#nav-draft-close").addEventListener("click", closeProjectNavDraftModal);
     $("#nav-draft-modal").addEventListener("click", (ev) => { if (ev.target.id === "nav-draft-modal") closeProjectNavDraftModal(); });
+    $("#nav-draft-stop").addEventListener("click", () => { if (state.activeNavDraft?.id) stopProjectNavDraft(state.activeNavDraft.id); });
     $("#nav-draft-accept").addEventListener("click", () => { if (state.activeNavDraft?.id) acceptProjectNavDraft(state.activeNavDraft.id); });
     $("#nav-draft-reject").addEventListener("click", () => { if (state.activeNavDraft?.id) rejectProjectNavDraft(state.activeNavDraft.id); });
+    $("#nav-agent-close").addEventListener("click", closeProjectNavAgentModal);
+    $("#nav-agent-modal").addEventListener("click", (ev) => { if (ev.target.id === "nav-agent-modal") closeProjectNavAgentModal(); });
+    $("#nav-agent-stop").addEventListener("click", () => { if (state.activeNavAgentDraft?.id) stopProjectNavDraft(state.activeNavAgentDraft.id); });
     $("#nav-generate").addEventListener("click", async () => {
       const payload = projectNavActionPayload();
       if (!payload.workspace_path) {
         toast(t("knowledge.project_nav_workspace_required", "Select a workspace first"));
         return;
       }
+      if (!confirm(formatText("knowledge.confirm_generate_project_nav", { workspace: payload.workspace_path }, "Generate project navigation for " + payload.workspace_path + "?"))) return;
       state.navLastBackend = payload.backend || "";
       state.navLastModel = payload.model || "";
       state.navLastProxyEnabled = Boolean(payload.proxy_enabled);
@@ -1517,6 +1871,8 @@
         const message = formatText("knowledge.project_nav_generation_started", { id: result.draft_id || "-" }, "Project nav generation started: " + (result.draft_id || "-"));
         $("#nav-result").textContent = result.project_key ? `${message} · ${result.project_key}` : message;
         toast(message);
+        state.activeNavAgentDraft = result.draft;
+        renderProjectNavAgentModal();
         await loadProjectNavDrafts(); await loadStatus();
       } catch (e) {
         const message = projectNavGenerateErrorMessage(e);
@@ -1539,6 +1895,7 @@
       renderNavigationList();
       renderProjectNavDrafts();
       renderProjectNavDraftModal();
+      renderProjectNavAgentModal();
       renderProjectNavWorkspaceSelect();
       renderNavigationAgents();
       if (state.activeTab === "settings") loadSettings();

@@ -140,6 +140,125 @@ def test_capture_api_crud_and_distill(tmp_path: Path, monkeypatch):
     assert _get(home, "/api/kb/capture")["count"] == 0
 
 
+def test_capture_search_and_relationship_refs(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+    from aha_cli.services.knowledge_capture_distill import run_distill_job
+
+    home = _setup(tmp_path)
+    created = json_response_body(_post(home, "/api/kb/capture", {
+        "text": "raw retry idea",
+        "title": "retry note",
+        "scope_hint": "personal",
+    }))
+    nid = created["note"]["id"]
+    reply = _capture_sidecar('[{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"}]')
+
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+
+    monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
+    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
+
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert note["candidate_refs"][0]["title"] == "退避策略"
+    assert note["entry_refs"] == []
+    searched = _get(home, "/api/kb/entries", {"q": ["退避"]})
+    assert searched["count"] == 0
+    assert searched["capture_notes"][0]["id"] == nid
+
+    pending = _get(home, "/api/kb/pending")["pending"][0]
+    assert pending["source_note_id"] == nid
+    assert pending["source_note"]["title"] == "retry note"
+
+    approved = json_response_body(_post(home, "/api/kb/approve", {"candidate_id": pending["id"]}))
+    assert approved["ok"] is True
+    assert approved["source_note"]["source_note_deleted"] is True
+
+    note_after = knowledge_route_response(home, "GET", "/api/kb/capture", {"id": [nid]}, b"", {})
+    assert b"404" in note_after.split(b"\r\n", 1)[0]
+
+    entries = _get(home, "/api/kb/entries", {"q": ["退避"]})
+    assert entries["entries"][0]["source_note_id"] == nid
+    assert entries["entries"][0]["source_note_exists"] is False
+    assert entries["capture_notes"] == []
+
+    json_response_body(_delete(home, "/api/kb/entry", {"id": entries["entries"][0]["id"]}))
+    entries_after_delete = _get(home, "/api/kb/entries", {"q": ["退避"]})
+    assert entries_after_delete["entries"] == []
+    assert entries_after_delete["capture_notes"] == []
+
+
+def test_capture_reject_preserves_source_note(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+    from aha_cli.services.knowledge_capture_distill import run_distill_job
+
+    home = _setup(tmp_path)
+    created = json_response_body(_post(home, "/api/kb/capture", {
+        "text": "raw retry idea",
+        "title": "retry note",
+        "scope_hint": "personal",
+    }))
+    nid = created["note"]["id"]
+    reply = _capture_sidecar('[{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"}]')
+
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+
+    monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
+    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
+    pending = _get(home, "/api/kb/pending")["pending"][0]
+
+    rejected = json_response_body(_post(home, "/api/kb/reject", {"candidate_id": pending["id"]}))
+    assert rejected["ok"] is True
+    assert rejected["source_note"]["source_note_kept"] is True
+    assert rejected["source_note"]["status"] == "raw"
+
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert note["text"] == "raw retry idea"
+    assert note["status"] == "raw"
+    assert note["candidate_ids"] == []
+    assert note["candidate_refs"] == []
+    assert note["entry_refs"] == []
+
+
+def test_capture_approve_deletes_source_note_after_last_candidate(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+    from aha_cli.services.knowledge_capture_distill import run_distill_job
+
+    home = _setup(tmp_path)
+    created = json_response_body(_post(home, "/api/kb/capture", {
+        "text": "raw retry and timeout ideas",
+        "scope_hint": "personal",
+    }))
+    nid = created["note"]["id"]
+    reply = _capture_sidecar(
+        "["
+        '{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"},'
+        '{"kind":"wiki","title":"超时策略","body":"## 结论\\n设置上限"}'
+        "]"
+    )
+
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+
+    monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
+    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
+    pending = _get(home, "/api/kb/pending")["pending"]
+    assert len(pending) == 2
+
+    first = json_response_body(_post(home, "/api/kb/approve", {"candidate_id": pending[0]["id"]}))
+    assert first["source_note"]["source_note_deleted"] is False
+    assert len(first["source_note"]["candidate_ids"]) == 1
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert len(note["candidate_refs"]) == 1
+
+    second_id = first["source_note"]["candidate_ids"][0]
+    second = json_response_body(_post(home, "/api/kb/approve", {"candidate_id": second_id}))
+    assert second["source_note"]["source_note_deleted"] is True
+    missing = knowledge_route_response(home, "GET", "/api/kb/capture", {"id": [nid]}, b"", {})
+    assert b"404" in missing.split(b"\r\n", 1)[0]
+
+
 def test_capture_image_upload_serve_and_delete(tmp_path: Path):
     import base64
 
@@ -325,8 +444,11 @@ def _project_nav_agent_reply(project_key: str) -> str:
             "slug": "index",
             "title": "Agent nav",
             "body": (
-                "## Project README\nNav Demo is a generated project briefing for agents.\n\n"
-                "## Project Map\n### 模块索引\n- [Core](modules/core.md)\n"
+                "## 项目介绍\nNav Demo is a generated project briefing for agents.\n\n"
+                "## 如何编译 / 使用\n- `python -m pytest`\n\n"
+                "## 注意事项\n- Keep nav concise.\n\n"
+                "## 编码规范\n- Follow existing style.\n\n"
+                "## 项目结构 / 核心 Nav\n### 模块索引\n- [Core](modules/core.md)\n"
             ),
             "tags": ["navigation", "index"],
             "related_files": ["src/nav_demo/core"],
@@ -386,10 +508,11 @@ def test_project_nav_generate_creates_completed_draft_without_pending_candidates
     detail = _get(home, "/api/kb/project-nav/draft", {"id": [result["draft_id"]]})["draft"]
     assert {item["slug"] for item in detail["candidates"]} == {"index", "modules/core"}
     index_candidate = next(item for item in detail["candidates"] if item["slug"] == "index")
-    assert "## Project README" in index_candidate["body"]
-    assert "## Project Map" in index_candidate["body"]
-    assert "COMPRESSED WORKSPACE SCAN JSON" in detail["agent"]["prompt_excerpt"]
-    assert "## Project README" in detail["agent"]["reply_excerpt"]
+    assert "## 项目介绍" in index_candidate["body"]
+    assert "## 项目结构 / 核心 Nav" in index_candidate["body"]
+    assert "Inspect the workspace in read-only mode" in detail["agent"]["prompt_excerpt"]
+    assert "COMPRESSED WORKSPACE SCAN JSON" not in detail["agent"]["prompt_excerpt"]
+    assert "Agent nav" in detail["agent"]["reply_excerpt"]
     assert list_pending(home, load_config(home)) == []
 
     accepted = json_response_body(_post(home, "/api/kb/project-nav/draft/accept", {"draft_id": result["draft_id"]}))
@@ -415,9 +538,12 @@ def test_project_nav_generate_uses_agent_assisted_candidates(tmp_path: Path, mon
     def agent(context: dict) -> str:
         assert context["backend"] == "codex"
         assert context["model"] == "gpt-test"
-        assert "COMPRESSED WORKSPACE SCAN JSON" in context["prompt"]
-        assert "`index` body MUST contain `## Project README`" in context["prompt"]
-        assert "`index` body MUST contain `## Project Map`" in context["prompt"]
+        assert "Inspect the workspace in read-only mode" in context["prompt"]
+        assert "COMPRESSED WORKSPACE SCAN JSON" not in context["prompt"]
+        assert "`## 项目介绍`" in context["prompt"]
+        assert "`## 项目结构 / 核心 Nav`" in context["prompt"]
+        context["progress_callback"]("agent_command_started", {"command": "Read pyproject.toml"})
+        context["progress_callback"]("agent_usage", {"usage": {"total_tokens": 456}})
         return json.dumps([
             {
                 "kind": "navigation",
@@ -426,8 +552,11 @@ def test_project_nav_generate_uses_agent_assisted_candidates(tmp_path: Path, mon
                 "slug": "index",
                 "title": "Agent nav",
                 "body": (
-                    "## Project README\nAgent generated project briefing.\n\n"
-                    "## Project Map\n### 模块索引\n- [Agent Core](modules/agent-core.md)\n"
+                    "## 项目介绍\nAgent generated project briefing.\n\n"
+                    "## 如何编译 / 使用\n- `python -m pytest`\n\n"
+                    "## 注意事项\n- Keep nav concise.\n\n"
+                    "## 编码规范\n- Follow existing style.\n\n"
+                    "## 项目结构 / 核心 Nav\n### 模块索引\n- [Agent Core](modules/agent-core.md)\n"
                 ),
                 "tags": ["navigation", "index"],
                 "related_files": ["src/nav_demo/core"],
@@ -461,6 +590,8 @@ def test_project_nav_generate_uses_agent_assisted_candidates(tmp_path: Path, mon
     assert drafts[0]["status"] == "completed"
     assert drafts[0]["agent"]["status"] == "used"
     assert drafts[0]["validation"]["ok"] is True
+    assert any("Read pyproject.toml" in item["message"] for item in drafts[0]["agent_log"])
+    assert any(item.get("total_tokens") == 456 for item in drafts[0]["agent_log"])
     assert list_pending(home, load_config(home)) == []
     accepted = json_response_body(_post(home, "/api/kb/project-nav/draft/accept", {"draft_id": result["draft_id"]}))
     assert accepted["written_count"] == 2
@@ -487,7 +618,8 @@ def test_project_nav_generate_fails_when_agent_output_invalid(tmp_path: Path, mo
     drafts = _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"]
     assert drafts[0]["status"] == "failed"
     assert drafts[0]["agent"]["status"] == "invalid"
-    assert "COMPRESSED WORKSPACE SCAN JSON" in drafts[0]["agent"]["prompt_excerpt"]
+    assert "Inspect the workspace in read-only mode" in drafts[0]["agent"]["prompt_excerpt"]
+    assert "COMPRESSED WORKSPACE SCAN JSON" not in drafts[0]["agent"]["prompt_excerpt"]
     assert drafts[0]["agent"]["reply_excerpt"] == "not json"
     assert [item["stage"] for item in drafts[0]["agent_log"]] == ["queued", "running", "failed"]
     assert "fallback" not in drafts[0]["agent"]
@@ -527,6 +659,38 @@ def test_project_nav_draft_reject_discards_without_writing_entries(tmp_path: Pat
     assert retry["draft_id"] != result["draft_id"]
     assert _get(home, "/api/kb/project-nav", {"project_key": ["demo-key"]})["entries"] == []
     assert list_pending(home, load_config(home)) == []
+
+
+def test_project_nav_running_draft_can_be_stopped_and_retried(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+
+    monkeypatch.setattr(kr, "dispatch_project_nav_job", lambda *args, **kwargs: None)
+    home = _setup(tmp_path)
+    ws = _make_nav_workspace(tmp_path)
+
+    result = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    }))
+    assert "Inspect the workspace in read-only mode" in result["draft"]["agent"]["prompt_excerpt"]
+
+    stopped = json_response_body(_post(home, "/api/kb/project-nav/draft/stop", {"draft_id": result["draft_id"]}))
+
+    assert stopped["ok"] is True
+    assert stopped["draft"]["status"] == "stopped"
+    assert stopped["stop"]["reason"] == "no process recorded"
+    assert stopped["draft"]["agent_log"][-1]["stage"] == "stopped"
+    drafts = _get(home, "/api/kb/project-nav/drafts", {"project_key": ["demo-key"]})["drafts"]
+    assert drafts[0]["status"] == "stopped"
+
+    retry = json_response_body(_post(home, "/api/kb/project-nav", {
+        "workspace_path": str(ws),
+        "project_key": "demo-key",
+        "backend": "codex",
+    }))
+    assert retry["ok"] is True
+    assert retry["draft_id"] != result["draft_id"]
 
 
 def test_project_nav_generate_conflicts_when_navigation_already_exists(tmp_path: Path, monkeypatch):

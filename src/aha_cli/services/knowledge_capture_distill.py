@@ -25,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
+from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_distill import (
     filter_project_nav_candidates,
     normalize_sidecar_candidates,
@@ -33,8 +34,15 @@ from aha_cli.services.knowledge_distill import (
 )
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import backend_proxy_config, normalize_proxy_value
-from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, remove_pending
-from aha_cli.store.knowledge_capture import create_distill_log, read_note, update_distill_log, update_note
+from aha_cli.store.knowledge import (
+    enqueue_candidate,
+    init_knowledge_base,
+    iter_all_entries,
+    kind_for_type,
+    list_pending,
+    remove_pending,
+)
+from aha_cli.store.knowledge_capture import create_distill_log, read_distill_log, read_note, update_distill_log, update_note
 from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 
 # Seam: raw context -> agent reply text (expected to contain the sidecar block).
@@ -68,12 +76,14 @@ def _image_manifest(note: dict) -> str:
 def build_capture_prompt(note: dict) -> str:
     """Prompt instructing an agent to turn one raw note into KB candidates."""
     scope_hint = str(note.get("scope_hint") or "personal")
+    title = str(note.get("title") or "").strip()
     text = str(note.get("text") or "")
     manifest = _image_manifest(note)
     return render_prompt_template(
         "knowledge_capture_prompt.md",
         scope_hint=scope_hint,
-        raw_note=text,
+        title=title,
+        body=text,
         image_manifest=manifest,
     )
 
@@ -117,6 +127,12 @@ def default_capture_agent(context: dict) -> str:
     prompt = str(context.get("prompt") or "")
     cwd = Path(context.get("cwd") or Path.cwd())
     proxy_env = _backend_proxy_env(config, backend, context.get("proxy_enabled"))
+    progress_callback = context.get("progress_callback")
+    if callable(progress_callback):
+        progress_callback(
+            "backend_started",
+            {"backend": backend, "model": model, "cwd": str(cwd), "proxy_enabled": context.get("proxy_enabled")},
+        )
     try:
         with tempfile.TemporaryDirectory() as tmp:
             output_file = Path(tmp) / "capture_reply.txt"
@@ -129,6 +145,8 @@ def default_capture_agent(context: dict) -> str:
                     prompt, cwd=cwd, output_file=output_file,
                     codex_bin=codex_bin, model=model, sandbox="read-only",
                     approval="never", codex_config=codex_config, proxy_env=proxy_env,
+                    event_callback=progress_callback if callable(progress_callback) else None,
+                    start_new_session=True,
                 )
             else:
                 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, run_claude_exec
@@ -141,7 +159,11 @@ def default_capture_agent(context: dict) -> str:
                     prompt, cwd=cwd, output_file=output_file,
                     claude_bin=claude_bin, model=command_model, permission_mode="plan",
                     claude_config=claude_config, proxy_env=proxy_env,
+                    event_callback=progress_callback if callable(progress_callback) else None,
+                    start_new_session=True,
                 )
+            if callable(progress_callback):
+                progress_callback("backend_finished", {"reply_chars": len(reply or "")})
             return reply or ""
     except Exception as exc:  # noqa: BLE001 - surface as a typed error to the caller
         raise CaptureAgentError(str(exc)) from exc
@@ -154,6 +176,80 @@ def _downgrade_unbound_project(candidate: dict) -> dict:
         candidate["scope"] = "personal"
         candidate["project_key"] = None
     return candidate
+
+
+def _candidate_source_note_id(candidate: dict) -> str:
+    source = candidate.get("source") if isinstance(candidate.get("source"), dict) else {}
+    return str(candidate.get("source_note_id") or source.get("note_id") or "").strip()
+
+
+def _remove_pending_for_note(root: Path, config: dict | None, note: dict) -> None:
+    """Drop every pending candidate produced by this note, including older
+    records from before note.candidate_ids was reliable."""
+    note_id = str(note.get("id") or "").strip()
+    old_ids = {str(item) for item in (note.get("candidate_ids") or []) if str(item)}
+    for candidate in list_pending(root, config):
+        candidate_id = str(candidate.get("id") or "").strip()
+        if candidate_id in old_ids or (note_id and _candidate_source_note_id(candidate) == note_id):
+            remove_pending(root, config, candidate_id)
+
+
+def _entries_for_note(root: Path, config: dict | None, note_id: str) -> list[dict]:
+    note_id = str(note_id or "").strip()
+    if not note_id:
+        return []
+    return [
+        entry for entry in iter_all_entries(root, config)
+        if str((entry.get("meta") or {}).get("source_note_id") or "").strip() == note_id
+    ]
+
+
+def _entry_kind(entry: dict) -> str:
+    return kind_for_type((entry.get("meta") or {}).get("type"))
+
+
+def _candidate_matches_entry(candidate: dict, entry: dict) -> bool:
+    meta = entry.get("meta") or {}
+    if str(candidate.get("kind") or "solutions") != _entry_kind(entry):
+        return False
+    if str(candidate.get("scope") or "project") != str(meta.get("scope") or "project"):
+        return False
+    if (candidate.get("project_key") or None) != (meta.get("project_key") or None):
+        return False
+    cand_slug = str(candidate.get("slug") or "").strip()
+    return not cand_slug or cand_slug == str(meta.get("slug") or "").strip()
+
+
+def _bind_candidates_to_existing_entries(candidates: list[dict], existing_entries: list[dict]) -> list[dict]:
+    """Make redistill candidates update existing entries from the same note
+    instead of creating a parallel pending item with a new slug."""
+    if not candidates or not existing_entries:
+        return candidates
+    used: set[str] = set()
+    for candidate in candidates:
+        match: dict | None = None
+        for entry in existing_entries:
+            entry_id = str((entry.get("meta") or {}).get("id") or entry.get("path") or "")
+            if entry_id in used:
+                continue
+            if _candidate_matches_entry(candidate, entry):
+                match = entry
+                break
+        if match is None and len(candidates) == 1 and len(existing_entries) == 1:
+            match = existing_entries[0]
+        if match is None:
+            continue
+        meta = match.get("meta") or {}
+        entry_id = str(meta.get("id") or match.get("path") or "")
+        used.add(entry_id)
+        candidate["scope"] = str(meta.get("scope") or candidate.get("scope") or "project")
+        candidate["kind"] = _entry_kind(match)
+        candidate["project_key"] = meta.get("project_key") if candidate["scope"] == "project" else None
+        candidate["slug"] = meta.get("slug")
+        candidate["action"] = "update"
+        if meta.get("id"):
+            candidate["updates_entry_id"] = meta.get("id")
+    return candidates
 
 
 def _effective_backend(config: dict | None, backend: str | None) -> str:
@@ -176,6 +272,33 @@ def _effective_model(config: dict | None, backend: str, model: str | None) -> st
         if isinstance(backend_cfg, dict):
             return backend_cfg.get("model")
     return None
+
+
+def _append_distill_agent_log(root: Path, config: dict | None, note_id: str, log_id: str, event: dict) -> None:
+    try:
+        log = read_distill_log(root, config, note_id, log_id)
+        if log is None:
+            return
+        current = log.get("agent_log") if isinstance(log.get("agent_log"), list) else []
+        update_distill_log(root, config, note_id, log_id, agent_log=trim_agent_log([*current, event]))
+    except FileNotFoundError:
+        return
+
+
+def _progress_logger(root: Path, config: dict | None, note_id: str, log_id: str):
+    def _log(event_type: str, data: dict | None = None) -> None:
+        summary = summarize_agent_progress(event_type, data)
+        if summary is None:
+            return
+        _append_distill_agent_log(
+            root,
+            config,
+            note_id,
+            log_id,
+            agent_log_event(str(summary.pop("stage")), str(summary.pop("message")), **summary),
+        )
+
+    return _log
 
 
 def distill_note(
@@ -209,9 +332,19 @@ def distill_note(
         "status": "running",
         "prompt": prompt,
         "started_at": utc_now(),
+        "agent_log": [
+            agent_log_event(
+                "running",
+                "Capture distill queued for agent",
+                backend=effective_backend,
+                model=effective_model,
+                proxy_enabled=effective_proxy_enabled,
+            )
+        ],
     })
     log_id = log["id"]
     agent_fn = agent or default_capture_agent
+    progress_callback = _progress_logger(root, config, note_id, log_id)
     try:
         reply = agent_fn({
             "prompt": prompt,
@@ -221,15 +354,18 @@ def distill_note(
             "proxy_enabled": effective_proxy_enabled,
             "config": config,
             "cwd": root,
+            "progress_callback": progress_callback,
         })
     except CaptureAgentError as exc:
         error = f"capture agent failed: {exc}"
+        _append_distill_agent_log(root, config, note_id, log_id, agent_log_event("failed", error))
         update_distill_log(root, config, note_id, log_id, status="error", error=error, finished_at=utc_now())
         return {"ok": False, "error": error, "log_id": log_id}
 
     _, raw_candidates, sidecar_error = split_knowledge_sidecar(reply or "")
     if raw_candidates is None:
         error = sidecar_error or "no knowledge candidates in agent reply"
+        _append_distill_agent_log(root, config, note_id, log_id, agent_log_event("failed", error))
         update_distill_log(root, config, note_id, log_id, status="error", reply=reply or "", error=error, finished_at=utc_now())
         return {"ok": False, "error": error, "log_id": log_id}
 
@@ -244,13 +380,14 @@ def distill_note(
         # (a reverse lookup via note.candidate_ids remains as a compat path).
         c["source_note_id"] = note_id
         normalized.append(c)
+    normalized = _bind_candidates_to_existing_entries(normalized, _entries_for_note(root, config, note_id))
     normalized, skipped_navigation = filter_project_nav_candidates(root, config, normalized, {"source_type": "capture_note"})
     normalized = ensure_navigation_parent_entries(root, config, normalized, {"source": source})
 
     init_knowledge_base(root, config)
-    # Re-run replacement: drop candidates this note enqueued previously.
-    for old_id in note.get("candidate_ids") or []:
-        remove_pending(root, config, old_id)
+    # Re-run replacement: drop every pending candidate from this note, including
+    # older records whose ids are no longer in note.candidate_ids.
+    _remove_pending_for_note(root, config, note)
 
     enqueued_ids: list[str] = []
     enqueued_paths: list[str] = []
@@ -265,6 +402,13 @@ def distill_note(
         skipped=skipped_navigation,
     )
 
+    _append_distill_agent_log(
+        root,
+        config,
+        note_id,
+        log_id,
+        agent_log_event("completed", f"{len(enqueued_ids)} candidate(s) ready for review", candidates=len(enqueued_ids)),
+    )
     update_note(root, config, note_id, status="distilled", candidate_ids=enqueued_ids, last_error="")
     update_distill_log(
         root, config, note_id, log_id,
