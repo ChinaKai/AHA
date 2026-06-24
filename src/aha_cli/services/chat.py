@@ -14,7 +14,12 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import mark_backend_stopped, start_backend, stop_task_backends
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
-from aha_cli.services.chat_prompt_context import chat_prompt, chat_prompt_with_metrics, model_family_for_guidance
+from aha_cli.services.chat_prompt_context import (
+    CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY,
+    chat_prompt,
+    chat_prompt_with_metrics,
+    model_family_for_guidance,
+)
 from aha_cli.services.chat_supervision import (
     SUPERVISION_FAILURE_FALLBACK_STATUS,
     apply_supervision_host_decision,
@@ -82,6 +87,26 @@ SUPERVISION_SKIP_COORDINATIONS = {
     "system_status",
     "verification_status",
 }
+
+
+def _apply_context_fingerprint_updates(session: dict, prompt_metrics: dict) -> None:
+    updates = prompt_metrics.get(CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY)
+    if not isinstance(updates, dict) or not updates:
+        return
+    delivered = session.get("delivered_context_fingerprints")
+    if not isinstance(delivered, dict):
+        delivered = {}
+    changed = False
+    for key, value in updates.items():
+        name = str(key)
+        fingerprint = str(value or "")
+        if delivered.get(name) == fingerprint:
+            continue
+        delivered[name] = fingerprint
+        changed = True
+    if changed:
+        session["delivered_context_fingerprints"] = delivered
+        session["updated_at"] = utc_now()
 
 def action_retry_schema() -> str:
     return render_prompt_template("chat_action_retry_schema.md").strip()
@@ -769,6 +794,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     exit_code = 1
                     reply = f"{backend_name.title()} backend crashed while handling agent turn: {type(exc).__name__}: {exc}"
                 if session:
+                    if exit_code == 0:
+                        _apply_context_fingerprint_updates(session, prompt_metrics)
                     save_session(root, session)
                 if is_memo_report:
                     try:

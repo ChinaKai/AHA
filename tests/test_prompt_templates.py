@@ -39,6 +39,7 @@ SAMPLE_VALUES = {
     "commit_policy": "Commit policy reminder.",
     "compact_summary": "Compact summary.",
     "context": "Recovered after backend restart.",
+    "sections": "Updated AHA context.",
     "coordination_policy": "Coordination policy.",
     "created_at": "2026-01-01T00:00:00+00:00",
     "current_agent": '{"id":"main"}',

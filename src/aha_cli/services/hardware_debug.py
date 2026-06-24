@@ -6,6 +6,8 @@ from aha_cli.services.prompt_templates import render_prompt_template
 
 def hardware_debug_context_for_prompt(task: dict) -> str:
     config = normalize_task_hardware_debug(task.get("hardware_debug"))
+    if not config.get("enabled"):
+        return ""
     channels = config.get("channels") or []
     if not channels:
         return ""

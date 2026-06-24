@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from aha_cli.services.chat_supervision import (
@@ -90,6 +91,7 @@ COORDINATION_POLICY_INTENT_TERMS = (
     "协作",
     "拆分",
 )
+CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY = "context_fingerprint_updates"
 
 
 def model_family_for_guidance(backend: str | None, *model_values: object) -> str | None:
@@ -266,6 +268,80 @@ def _recovery_context_for_prompt(item: dict) -> str:
     if not context:
         return ""
     return render_prompt_template("backend_recovery_context.md", context=context).rstrip()
+
+
+def _context_fingerprint(text: str) -> str:
+    normalized = "\n".join(line.rstrip() for line in str(text or "").strip().splitlines()).strip()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _knowledge_enabled_for_prompt(root: Path) -> bool:
+    try:
+        from aha_cli.store.config import load_config
+
+        config = load_config(root)
+        knowledge = config.get("knowledge") if isinstance(config, dict) else {}
+        return bool(isinstance(knowledge, dict) and knowledge.get("enabled"))
+    except (Exception, SystemExit):
+        return False
+
+
+def _knowledge_context_delta_for_prompt(root: Path, run_id: str, task: dict) -> str:
+    try:
+        from aha_cli.services.knowledge_retrieval import knowledge_context_for_task
+
+        context = knowledge_context_for_task(root, run_id, task).rstrip()
+    except (Exception, SystemExit):
+        context = ""
+    return context or render_prompt_template("backend_knowledge_enabled_empty.md").rstrip()
+
+
+def _prompt_context_fingerprints(root: Path, task: dict | None) -> dict[str, str]:
+    if not task:
+        return {}
+    hardware_context = hardware_debug_context_for_prompt(task).rstrip()
+    skills_context = task_skills_context_for_prompt(task).rstrip()
+    return {
+        "hardware_debug": _context_fingerprint(hardware_context),
+        "task_skills": _context_fingerprint(skills_context),
+        "knowledge_enabled": "enabled" if _knowledge_enabled_for_prompt(root) else "disabled",
+    }
+
+
+def _delivered_context_fingerprints(session: dict | None) -> dict[str, str]:
+    delivered = session.get("delivered_context_fingerprints") if isinstance(session, dict) else None
+    if not isinstance(delivered, dict):
+        return {}
+    return {str(key): str(value or "") for key, value in delivered.items()}
+
+
+def _sticky_context_delta_for_prompt(
+    root: Path,
+    run_id: str,
+    task: dict | None,
+    session: dict | None,
+    current_fingerprints: dict[str, str],
+) -> str:
+    if not task:
+        return ""
+    delivered = _delivered_context_fingerprints(session)
+    sections: list[str] = []
+    hardware_context = hardware_debug_context_for_prompt(task).rstrip()
+    if current_fingerprints.get("hardware_debug") and delivered.get("hardware_debug") != current_fingerprints.get("hardware_debug"):
+        sections.append(hardware_context)
+    skills_context = task_skills_context_for_prompt(task).rstrip()
+    if current_fingerprints.get("task_skills") and delivered.get("task_skills") != current_fingerprints.get("task_skills"):
+        sections.append(skills_context)
+    if current_fingerprints.get("knowledge_enabled") == "enabled" and delivered.get("knowledge_enabled") != "enabled":
+        sections.append(_knowledge_context_delta_for_prompt(root, run_id, task))
+    if not sections:
+        return ""
+    return render_prompt_template(
+        "backend_context_delta.md",
+        sections="\n\n".join(section for section in sections if section.strip()),
+    ).rstrip()
 
 
 def _host_notes_for_prompt(root: Path, run_id: str, task_id: str, target: str, item: dict) -> list[str]:
@@ -641,6 +717,7 @@ def _fill_prompt_metrics(
     is_agent_command: bool,
     event_limit: int | None = None,
     prompt_mode: str = "full",
+    context_fingerprint_updates: dict[str, str] | None = None,
 ) -> None:
     if metrics is None:
         return
@@ -659,6 +736,8 @@ def _fill_prompt_metrics(
     )
     if event_limit is not None:
         metrics["event_limit"] = event_limit
+    if context_fingerprint_updates:
+        metrics[CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY] = dict(context_fingerprint_updates)
 
 
 def chat_prompt_with_metrics(
@@ -741,6 +820,7 @@ def chat_prompt(
         "recovery_context": _recovery_context_for_prompt(item),
     }
     task_context = ""
+    context_fingerprint_updates: dict[str, str] = {}
     if task_id:
         try:
             detail = task_snapshot(root, run_id, str(task_id))
@@ -758,6 +838,8 @@ def chat_prompt(
                 and (agent or {}).get("session_policy") == "sticky"
                 and (agent or {}).get("backend_session_id")
             )
+            if not is_result_request:
+                context_fingerprint_updates = _prompt_context_fingerprints(root, detail["task"])
             if is_agent_command:
                 command = str(item.get("message", "") or "")
                 original_command = str(item.get("original_command", "") or "")
@@ -870,6 +952,8 @@ def chat_prompt(
                     role=item.get("role", ""),
                     workspace=detail["task"].get("workspace_path", ""),
                 )
+            elif sticky_delta:
+                task_context = ""
             else:
                 task_context = render_prompt_template(
                     "backend_task_context.md",
@@ -949,7 +1033,6 @@ def chat_prompt(
     if sticky_delta:
         is_supervision_host = bool(task and is_task_supervision_host_agent(task, target))
         needs_conversation_events = is_supervision_host
-        has_special_sticky_context = False
         event_limit = conversation_chain_limit if needs_conversation_events else 0
         conversation_events = (
             recent_conversation_events(
@@ -968,6 +1051,77 @@ def chat_prompt(
             if is_supervision_host
             else ""
         )
+        sticky_context_parts: list[str] = []
+        context_delta = _sticky_context_delta_for_prompt(
+            root,
+            run_id,
+            task,
+            session,
+            context_fingerprint_updates,
+        )
+        if context_delta:
+            sticky_context_parts.append(context_delta)
+            components["context_delta"] = context_delta
+        if is_supervision_host and task:
+            host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
+            supervision_context = supervision_host_delta_context(
+                task,
+                host_notes,
+                supervision_host_handoff_notes(root, run_id, str(task_id)),
+            )
+            sticky_context_parts.append(supervision_context.rstrip())
+            components["supervision_host_delta_context"] = supervision_context
+            if recent_conversation:
+                supervision_conversation = render_prompt_template(
+                    "backend_recent_supervision_conversation.md",
+                    recent_conversation=recent_conversation,
+                ).rstrip()
+                sticky_context_parts.append(supervision_conversation)
+                components["recent_conversation"] = recent_conversation
+        sticky_agent_context = str(components.get("agent_context") or "").strip()
+        sticky_commit_policy = str(components.get("commit_policy") or "").strip()
+        sticky_coordination_policy = str(components.get("coordination_policy") or "").strip()
+        sticky_recovery_context = str(components.get("recovery_context") or "").strip()
+        for stale_component in (
+            "task_context",
+            "task_journal",
+            "supervision_host_context",
+            "run_goal",
+            "action_contract",
+            "compact_summary",
+        ):
+            components.pop(stale_component, None)
+        if sticky_agent_context:
+            sticky_context_parts.append(sticky_agent_context)
+            components["agent_context"] = sticky_agent_context
+        else:
+            components.pop("agent_context", None)
+        if sticky_coordination_policy:
+            sticky_context_parts.append(sticky_coordination_policy)
+            components["coordination_policy"] = sticky_coordination_policy
+        else:
+            components.pop("coordination_policy", None)
+        if sticky_commit_policy:
+            sticky_context_parts.append(sticky_commit_policy)
+            components["commit_policy"] = sticky_commit_policy
+        else:
+            components.pop("commit_policy", None)
+        if not sticky_context_parts and not sticky_recovery_context:
+            prompt = str(item.get("message") or "")
+            raw_components = {"user_message": prompt}
+            _fill_prompt_metrics(
+                metrics,
+                prompt,
+                target=target,
+                item=item,
+                components=raw_components,
+                is_finalization=is_finalization,
+                is_agent_command=is_agent_command,
+                event_limit=0,
+                prompt_mode="sticky_delta",
+                context_fingerprint_updates=context_fingerprint_updates,
+            )
+            return prompt
         sticky_context = render_prompt_template(
             "backend_sticky_context.md",
             task_id=task_id,
@@ -985,54 +1139,11 @@ def chat_prompt(
             approval=(agent or {}).get("approval") or (task or {}).get("preferred_approval") or "-",
             session_policy=(agent or {}).get("session_policy") or "-",
             backend_session_id=(agent or {}).get("backend_session_id") or "-",
-            task_skills_context=task_skills_context_for_prompt(task or {}).rstrip(),
-            hardware_debug_context=hardware_debug_context_for_prompt(task or {}).rstrip(),
-        )
-        if is_supervision_host and task:
-            host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
-            supervision_context = supervision_host_delta_context(
-                task,
-                host_notes,
-                supervision_host_handoff_notes(root, run_id, str(task_id)),
-            )
-            sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_context}\n"
-            components["supervision_host_delta_context"] = supervision_context
-            has_special_sticky_context = True
-            if recent_conversation:
-                supervision_conversation = render_prompt_template(
-                    "backend_recent_supervision_conversation.md",
-                    recent_conversation=recent_conversation,
-                ).rstrip()
-                sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_conversation}\n"
-                components["recent_conversation"] = recent_conversation
-        sticky_agent_context = str(components.get("agent_context") or "").strip()
-        sticky_commit_policy = str(components.get("commit_policy") or "").strip()
-        sticky_coordination_policy = str(components.get("coordination_policy") or "").strip()
-        for stale_component in (
-            "task_context",
-            "task_journal",
-            "supervision_host_context",
-            "run_goal",
-        ):
-            components.pop(stale_component, None)
-        if sticky_agent_context:
-            sticky_context = f"{sticky_context.rstrip()}\n\n{sticky_agent_context}\n"
-            components["agent_context"] = sticky_agent_context
-            has_special_sticky_context = True
-        else:
-            components.pop("agent_context", None)
-        if sticky_coordination_policy:
-            sticky_context = f"{sticky_context.rstrip()}\n\n{sticky_coordination_policy}\n"
-            components["coordination_policy"] = sticky_coordination_policy
-            has_special_sticky_context = True
-        else:
-            components.pop("coordination_policy", None)
-        if sticky_commit_policy:
-            sticky_context = f"{sticky_context.rstrip()}\n\n{sticky_commit_policy}\n"
-            components["commit_policy"] = sticky_commit_policy
-            has_special_sticky_context = True
-        else:
-            components.pop("commit_policy", None)
+            task_skills_context="",
+            hardware_debug_context="",
+        ).rstrip()
+        if sticky_context_parts:
+            sticky_context = f"{sticky_context}\n\n" + "\n\n".join(sticky_context_parts)
         components.update(
             {
                 "sticky_context": sticky_context,
@@ -1062,6 +1173,7 @@ def chat_prompt(
             is_agent_command=is_agent_command,
             event_limit=event_limit,
             prompt_mode="sticky_delta",
+            context_fingerprint_updates=context_fingerprint_updates,
         )
         return prompt
     if is_result_request:
@@ -1107,11 +1219,13 @@ def chat_prompt(
         is_finalization=is_finalization,
         is_agent_command=is_agent_command,
         event_limit=event_limit,
+        context_fingerprint_updates=context_fingerprint_updates,
     )
     return prompt
 
 
 __all__ = [
+    "CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY",
     "chat_prompt",
     "chat_prompt_with_metrics",
     "compact_summary_context",

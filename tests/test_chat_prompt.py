@@ -22,6 +22,7 @@ from aha_cli.store.filesystem import (
     update_task_skills_config,
     update_task_supervision_config,
 )
+from aha_cli.store.paths import config_path
 
 
 class ChatPromptTests(unittest.TestCase):
@@ -145,6 +146,34 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         auto_compact.assert_called_once_with(aha_root, run_id, "task-001", "main")
+
+    def test_codex_chat_records_delivered_context_fingerprints_after_successful_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Context fingerprint delivery", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_hardware_debug_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    channels=[{"type": "uart", "settings": {"port": "/dev/ttyUSB0"}}],
+                )
+                update_task_skills_config(root, run_id, "task-001", enabled_paths=["/repo/.aha/skills/board-debug/SKILL.md"])
+                append_message(root, run_id, "main", "first turn", sender="browser", task_id="task-001", role="main")
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+
+                session = read_json(run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json")
+
+        self.assertEqual(code, 0)
+        delivered = session["delivered_context_fingerprints"]
+        self.assertTrue(delivered["hardware_debug"])
+        self.assertTrue(delivered["task_skills"])
+        self.assertEqual(delivered["knowledge_enabled"], "disabled")
 
     def test_codex_chat_surfaces_backend_error_to_browser_chat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -282,10 +311,11 @@ class ChatPromptTests(unittest.TestCase):
                     enabled_paths=["/repo/.aha/skills/board-debug/SKILL.md"],
                 )
                 item = append_message(root, run_id, "main", "use hardware", sender="browser", task_id="task-001", role="main")
-                prompt = chat_prompt(root, run_id, "main", item, "")
+                prompt, full_metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = full_metrics["context_fingerprint_updates"]
                 session_file.write_text(json.dumps(session), encoding="utf-8")
                 sticky_item = append_message(
                     root,
@@ -312,8 +342,8 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("prompt=Sgs #", prompt)
         self.assertNotIn("flash=False", prompt)
         self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("AHA sticky-session delta turn", sticky_prompt)
-        self.assertIn("use hardware again", sticky_prompt)
+        self.assertEqual(sticky_prompt, "use hardware again")
+        self.assertEqual(set(sticky_metrics["components"]), {"user_message"})
         self.assertNotIn("Task skills context:", sticky_prompt)
         self.assertNotIn("Hardware debug context:", sticky_prompt)
         self.assertNotIn("/repo/.aha/skills/board-debug/SKILL.md", sticky_prompt)
@@ -655,7 +685,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("Re-audit the root cause", codex_prompt)
         self.assertNotIn("model_guidance", codex_metrics["components"])
 
-    def test_minimax_sticky_delta_uses_minimal_aha_envelope_like_other_models(self) -> None:
+    def test_minimax_sticky_delta_passes_plain_user_message_like_other_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -686,11 +716,10 @@ class ChatPromptTests(unittest.TestCase):
                 )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("AHA sticky-session delta turn", prompt)
-        self.assertIn("next request", prompt)
+        self.assertEqual(prompt, "next request")
         self.assertNotIn("AHA model-specific operating guidance", prompt)
         self.assertNotIn("model_guidance", metrics["components"])
-        self.assertIn("sticky_context", metrics["components"])
+        self.assertEqual(set(metrics["components"]), {"user_message"})
         self.assertNotIn("task_context", metrics["components"])
 
     def test_kimi_followup_prompt_does_not_add_model_specific_root_cause_gate(self) -> None:
@@ -1068,8 +1097,8 @@ class ChatPromptTests(unittest.TestCase):
         )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertIn("AHA sticky-session delta turn", prompt)
-        self.assertIn("next request", prompt)
+        self.assertEqual(prompt, "next request")
+        self.assertNotIn("prefix", prompt)
         self.assertNotIn("Current task constraints:", prompt)
         self.assertNotIn("backend-session-1", prompt)
         self.assertNotIn("Intent priority policy:", prompt)
@@ -1078,15 +1107,106 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("task_hidden", prompt)
         self.assertNotIn("AHA coordination policy", prompt)
         self.assertNotIn("already-in-backend-session", prompt)
-        self.assertIn("sticky_context", metrics["components"])
+        self.assertEqual(set(metrics["components"]), {"user_message"})
         self.assertNotIn("recent_conversation", metrics["components"])
         self.assertNotIn("run_goal", metrics["components"])
-        self.assertIn("prefix", metrics["components"])
         self.assertEqual(metrics["components"]["user_message"]["chars"], len("next request"))
         self.assertNotIn("delta_status", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
         self.assertNotIn("Commit message policy:", prompt)
         self.assertNotIn("commit_policy", metrics["components"])
+
+    def test_sticky_delta_injects_runtime_context_delta_once_for_task_capability_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sticky task capability delta", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "disabled",
+                }
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                update_task_hardware_debug_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    channels=[
+                        {
+                            "type": "uart",
+                            "settings": {"port": "/dev/ttyUSB0", "baudrate": 115200},
+                            "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
+                            "permissions": {"read": True, "write": True},
+                        }
+                    ],
+                )
+                update_task_skills_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    enabled_paths=["/repo/.aha/skills/board-debug/SKILL.md"],
+                )
+
+                item = append_message(root, run_id, "main", "continue", sender="browser", task_id="task-001", role="main")
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+                session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                next_item = append_message(root, run_id, "main", "next", sender="browser", task_id="task-001", role="main")
+                next_prompt, next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
+
+        self.assertIn("AHA runtime context update", prompt)
+        self.assertIn("Hardware debug context:", prompt)
+        self.assertIn("Task skills context:", prompt)
+        self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", prompt)
+        self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", prompt)
+        self.assertIn("continue", prompt)
+        self.assertIn("context_delta", metrics["components"])
+        self.assertTrue(metrics["context_fingerprint_updates"]["hardware_debug"])
+        self.assertTrue(metrics["context_fingerprint_updates"]["task_skills"])
+        self.assertEqual(next_prompt, "next")
+        self.assertEqual(set(next_metrics["components"]), {"user_message"})
+
+    def test_sticky_delta_injects_knowledge_delta_once_when_knowledge_is_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sticky knowledge delta", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "disabled",
+                }
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                cfg_path = config_path(root)
+                cfg = read_json(cfg_path)
+                cfg["knowledge"]["enabled"] = True
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+                item = append_message(root, run_id, "main", "continue", sender="browser", task_id="task-001", role="main")
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+                session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                next_item = append_message(root, run_id, "main", "next", sender="browser", task_id="task-001", role="main")
+                next_prompt, next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
+
+        self.assertIn("AHA runtime context update", prompt)
+        self.assertIn("Knowledge base context:", prompt)
+        self.assertIn("Knowledge base is now enabled for this task", prompt)
+        self.assertEqual(metrics["context_fingerprint_updates"]["knowledge_enabled"], "enabled")
+        self.assertEqual(next_prompt, "next")
+        self.assertEqual(set(next_metrics["components"]), {"user_message"})
 
     def test_sticky_delta_expands_commit_policy_on_commit_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

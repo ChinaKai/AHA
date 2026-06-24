@@ -924,6 +924,8 @@ def update_task_hardware_debug_config(
         hardware_debug = normalize_task_hardware_debug(task.get("hardware_debug"))
         if channels is not UNSET:
             hardware_debug["channels"] = channels
+            if enabled is UNSET:
+                hardware_debug["enabled"] = bool(channels)
         elif any(item is not UNSET for item in (devices, operation_skill_path, permissions)):
             existing_uart = next(
                 (channel for channel in hardware_debug.get("channels") or [] if isinstance(channel, dict) and channel.get("type") == "uart"),
@@ -949,6 +951,8 @@ def update_task_hardware_debug_config(
                     "permissions": permissions if permissions is not UNSET else existing_uart.get("permissions", {}),
                 }
             ]
+            if enabled is UNSET:
+                hardware_debug["enabled"] = bool(hardware_debug["channels"])
         # The master switch only controls visibility/activation; it never discards
         # configured channels so toggling it back on restores the previous setup.
         if enabled is not UNSET:

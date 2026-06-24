@@ -742,6 +742,7 @@ def make_session(
         "backend_session_id": None,
         "history_backend_sessions": [],
         "compact_summary": None,
+        "delivered_context_fingerprints": {},
         "workspace_path": workspace_path,
         "status": "active",
         "created_at": utc_now(),
