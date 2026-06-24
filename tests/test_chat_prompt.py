@@ -312,7 +312,8 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("prompt=Sgs #", prompt)
         self.assertNotIn("flash=False", prompt)
         self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
-        self.assertEqual(sticky_prompt, "use hardware again")
+        self.assertIn("AHA sticky-session delta turn", sticky_prompt)
+        self.assertIn("use hardware again", sticky_prompt)
         self.assertNotIn("Task skills context:", sticky_prompt)
         self.assertNotIn("Hardware debug context:", sticky_prompt)
         self.assertNotIn("/repo/.aha/skills/board-debug/SKILL.md", sticky_prompt)
@@ -654,7 +655,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("Re-audit the root cause", codex_prompt)
         self.assertNotIn("model_guidance", codex_metrics["components"])
 
-    def test_minimax_sticky_delta_uses_plain_user_message_like_other_models(self) -> None:
+    def test_minimax_sticky_delta_uses_minimal_aha_envelope_like_other_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -685,10 +686,11 @@ class ChatPromptTests(unittest.TestCase):
                 )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertEqual(prompt, "next request")
+        self.assertIn("AHA sticky-session delta turn", prompt)
+        self.assertIn("next request", prompt)
         self.assertNotIn("AHA model-specific operating guidance", prompt)
         self.assertNotIn("model_guidance", metrics["components"])
-        self.assertNotIn("sticky_context", metrics["components"])
+        self.assertIn("sticky_context", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])
 
     def test_kimi_followup_prompt_does_not_add_model_specific_root_cause_gate(self) -> None:
@@ -1063,10 +1065,11 @@ class ChatPromptTests(unittest.TestCase):
                         "ts": "2026-01-01T00:00:00+00:00",
                     },
                     "prefix",
-                )
+        )
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
-        self.assertEqual(prompt, "next request")
+        self.assertIn("AHA sticky-session delta turn", prompt)
+        self.assertIn("next request", prompt)
         self.assertNotIn("Current task constraints:", prompt)
         self.assertNotIn("backend-session-1", prompt)
         self.assertNotIn("Intent priority policy:", prompt)
@@ -1075,10 +1078,10 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("task_hidden", prompt)
         self.assertNotIn("AHA coordination policy", prompt)
         self.assertNotIn("already-in-backend-session", prompt)
-        self.assertNotIn("sticky_context", metrics["components"])
+        self.assertIn("sticky_context", metrics["components"])
         self.assertNotIn("recent_conversation", metrics["components"])
         self.assertNotIn("run_goal", metrics["components"])
-        self.assertNotIn("prefix", metrics["components"])
+        self.assertIn("prefix", metrics["components"])
         self.assertEqual(metrics["components"]["user_message"]["chars"], len("next request"))
         self.assertNotIn("delta_status", metrics["components"])
         self.assertNotIn("task_context", metrics["components"])

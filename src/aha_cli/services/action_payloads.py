@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+
+from aha_cli.services.prompt_templates import render_prompt_template
 from typing import NamedTuple
 
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
@@ -141,10 +143,7 @@ def invalid_action_schema_reason(payload: dict) -> str | None:
 
 
 def invalid_action_schema_message(reason: str) -> str:
-    return (
-        "Invalid AHA action schema: "
-        f"{reason}. Use {{\"actions\":[{{\"type\":\"route_to_agent\", ...}}], \"response\":\"...\"}}."
-    )
+    return render_prompt_template("action_invalid_schema.md", reason=reason).strip()
 
 
 def action_response_text(text: str) -> str:

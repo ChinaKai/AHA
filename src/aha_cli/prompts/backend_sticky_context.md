@@ -1,1 +1,1 @@
-AHA sticky-session delta turn. The full AHA bootstrap prompt was already injected earlier in this same backend session. Use the current user message below as the active request; rely on existing session instructions unless a special context block follows.
+AHA sticky-session delta turn. This backend session was resumed and carries prior conversation context. Stay in AHA mode, keep your current AHA agent role, and treat the latest user message as the active request. AHA is only providing the runtime envelope here, not replaying full task history.

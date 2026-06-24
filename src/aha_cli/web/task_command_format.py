@@ -42,56 +42,66 @@ def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id:
 
 def format_task_journal_for_prompt(rounds: list[dict]) -> str:
     if not rounds:
-        return "Task journal (chronological ordered list):\n1. (empty)"
-    lines = ["Task journal (chronological ordered list):"]
+        return render_prompt_template("finalization_task_journal_empty.md").rstrip()
+    items: list[str] = []
     for index, item in enumerate(rounds[-50:], start=1):
-        lines.append(f"{index}. {item.get('summary')}")
+        metadata: list[str] = []
         if item.get("journal_id"):
-            lines.append(f"   - journal_id: {item.get('journal_id')}")
-        lines.append(f"   - round_id: {item.get('round_id')}")
-        lines.append(f"   - trigger: {item.get('trigger')}")
+            metadata.append(_format_journal_field("journal_id", item.get("journal_id")))
+        metadata.append(_format_journal_field("round_id", item.get("round_id")))
+        metadata.append(_format_journal_field("trigger", item.get("trigger")))
         if item.get("at"):
-            lines.append(f"   - at: {item.get('at')}")
+            metadata.append(_format_journal_field("at", item.get("at")))
         changed_files = item.get("changed_files") or []
         verification = item.get("verification") or []
         risks = item.get("risks") or []
         if changed_files:
-            lines.append(f"   - files: {', '.join(str(path) for path in changed_files)}")
+            metadata.append(_format_journal_field("files", ", ".join(str(path) for path in changed_files)))
         if verification:
-            lines.append(f"   - verification: {'; '.join(str(check) for check in verification)}")
+            metadata.append(_format_journal_field("verification", "; ".join(str(check) for check in verification)))
         if risks:
-            lines.append(f"   - risks: {'; '.join(str(risk) for risk in risks)}")
-    return "\n".join(lines)
+            metadata.append(_format_journal_field("risks", "; ".join(str(risk) for risk in risks)))
+        items.append(
+            render_prompt_template(
+                "finalization_task_journal_item.md",
+                index=index,
+                summary=item.get("summary"),
+                metadata="\n".join(metadata),
+            ).rstrip()
+        )
+    return render_prompt_template("finalization_task_journal.md", items="\n".join(items)).rstrip()
+
+
+def _format_journal_field(name: str, value: object) -> str:
+    return render_prompt_template("finalization_task_journal_field.md", field_name=name, value=value).rstrip()
 
 
 def format_finalization_context_for_prompt(context: dict | None) -> str:
     context = context or {}
     journal_ids = context.get("journal_ids") if isinstance(context.get("journal_ids"), list) else []
     round_ids = context.get("round_ids") if isinstance(context.get("round_ids"), list) else []
-    return "\n".join(
-        [
-            "Final source range:",
-            f"- source: {context.get('source') or 'task_journal'}",
-            f"- from: {context.get('from_at') or '-'}",
-            f"- to: {context.get('to_at') or '-'}",
-            f"- journal_count: {context.get('journal_count', len(journal_ids))}",
-            f"- journal_ids: {', '.join(str(item) for item in journal_ids) if journal_ids else '-'}",
-            f"- round_ids: {', '.join(str(item) for item in round_ids) if round_ids else '-'}",
-        ]
-    )
+    return render_prompt_template(
+        "finalization_source_context.md",
+        source=context.get("source") or "task_journal",
+        from_at=context.get("from_at") or "-",
+        to_at=context.get("to_at") or "-",
+        journal_count=context.get("journal_count", len(journal_ids)),
+        journal_ids=", ".join(str(item) for item in journal_ids) if journal_ids else "-",
+        round_ids=", ".join(str(item) for item in round_ids) if round_ids else "-",
+    ).rstrip()
 
 
 def finalization_prompt(task_id: str, title: str, rounds: list[dict] | None = None, final_context: dict | None = None) -> str:
+    del rounds, final_context
     return render_prompt_template(
         "finalization.md",
         task_id=task_id,
         title=title,
-        final_context=format_finalization_context_for_prompt(final_context),
-        task_journal=format_task_journal_for_prompt(rounds or []),
     )
 
 
 def memo_completion_report_prompt(memo: dict, task: dict, rounds: list[dict] | None = None, report_context: dict | None = None) -> str:
+    del rounds
     context = report_context or {}
     return render_prompt_template(
         "memo_completion_report.md",
@@ -104,7 +114,6 @@ def memo_completion_report_prompt(memo: dict, task: dict, rounds: list[dict] | N
         task_title=task.get("title") or "",
         requested_at=context.get("requested_at") or "",
         attachment_dir=context.get("attachment_dir") or "-",
-        task_journal=format_task_journal_for_prompt(rounds or []),
     )
 
 

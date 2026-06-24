@@ -83,16 +83,14 @@ SUPERVISION_SKIP_COORDINATIONS = {
     "verification_status",
 }
 
-AHA_ACTION_RETRY_SCHEMA = (
-    '{"actions":[{"type":"record_task_update","summary":"...","changed_files":[],"verification":[],"risks":[]}],'
-    '"response":"..."}'
-)
+def action_retry_schema() -> str:
+    return render_prompt_template("chat_action_retry_schema.md").strip()
 
 
 def action_schema_retry_message(reason: str) -> str:
     return render_prompt_template(
         "chat_action_schema_retry.md",
-        action_retry_schema=AHA_ACTION_RETRY_SCHEMA,
+        action_retry_schema=action_retry_schema(),
         reason=reason,
     )
 
@@ -100,7 +98,7 @@ def action_schema_retry_message(reason: str) -> str:
 def task_update_required_retry_message() -> str:
     return render_prompt_template(
         "chat_task_update_required_retry.md",
-        action_retry_schema=AHA_ACTION_RETRY_SCHEMA,
+        action_retry_schema=action_retry_schema(),
     )
 
 
@@ -108,7 +106,7 @@ def commit_policy_retry_message(errors: list[str], expected_generated_by: str) -
     error_text = "; ".join(errors)
     return render_prompt_template(
         "chat_commit_policy_retry.md",
-        action_retry_schema=AHA_ACTION_RETRY_SCHEMA,
+        action_retry_schema=action_retry_schema(),
         expected_generated_by=expected_generated_by,
         error_text=error_text,
     )

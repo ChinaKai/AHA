@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.backends.registry import normalize_model_selector
-from aha_cli.domain.models import utc_now, workflow_template_guidance
+from aha_cli.domain.models import utc_now
 from aha_cli.services.action_payloads import (
     AHA_ACTION_TYPES,
     action_response_text,
@@ -56,24 +56,6 @@ from aha_cli.store.filesystem import (
 REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 SUPERVISION_STUB_DECISION = "ask_user"
-COLLABORATION_GUIDANCE = {
-    "auto": (
-        "Auto: the agent owns the efficiency decision. Prefer spawning sub-agents when independent "
-        "exploration, implementation, or verification tracks reduce the critical path. Stay solo "
-        "for simple or tightly coupled tasks, and never split work just to use more agents."
-    ),
-    "solo": "Solo: do not spawn sub-agents. Handle the work directly as task-main.",
-    "pair": (
-        "Pair: use at most one sub-agent for a genuinely parallel responsibility, such as "
-        "implementation, research, or review. Keep task-main as lead and merger."
-    ),
-    "team": (
-        "Team: use up to two sub-agents for parallel responsibility areas. Prefer disjoint "
-        "scopes such as coder plus viewer/verifier while task-main leads and merges."
-    ),
-}
-
-
 def task_has_active_followup(task: dict) -> bool:
     if task.get("status") in TERMINAL_AGENT_STATUSES:
         return False
@@ -86,18 +68,14 @@ def task_has_active_followup(task: dict) -> bool:
 
 
 def task_assignment_prompt(task: dict, knowledge_context: str = "") -> str:
-    collaboration_mode = str(task.get("collaboration_mode") or "auto")
-    workflow_template = str(task.get("workflow_template") or "auto")
     return render_prompt_template(
         "task_assignment.md",
         task_title=task.get("title", ""),
         task_description=task.get("description", ""),
         workspace_path=task.get("workspace_path") or "(not set)",
         knowledge_context=(knowledge_context or "").rstrip(),
-        collaboration_mode=collaboration_mode,
-        collaboration_guidance=COLLABORATION_GUIDANCE.get(collaboration_mode, COLLABORATION_GUIDANCE["auto"]),
-        workflow_template=workflow_template,
-        workflow_guidance=workflow_template_guidance(workflow_template),
+        collaboration_mode=str(task.get("collaboration_mode") or "auto"),
+        workflow_template=str(task.get("workflow_template") or "auto"),
         delegation_policy=task.get("delegation_policy", "auto"),
         max_sub_agents=task.get("max_sub_agents", 0),
         preferred_sub_backend=task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex",

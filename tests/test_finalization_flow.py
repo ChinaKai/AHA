@@ -425,7 +425,7 @@ class FinalizationFlowTests(unittest.TestCase):
                 self.assertEqual(main["status"], "waiting")
                 self.assertEqual(main["waiting_reason"], "subagents")
 
-    def test_finalization_prompt_includes_task_journal(self) -> None:
+    def test_finalization_prompt_is_minimal_and_uses_backend_session_context(self) -> None:
         prompt = finalization_prompt(
             "task-001",
             "Journal task",
@@ -441,13 +441,13 @@ class FinalizationFlowTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("Task journal (chronological ordered list):", prompt)
-        self.assertIn("1. 完成小修复", prompt)
-        self.assertIn("round-001", prompt)
-        self.assertIn("完成小修复", prompt)
-        self.assertIn("Use the Task journal as the primary source", prompt)
-        self.assertIn("chronological ordered list", prompt)
-        self.assertIn("Final source range:", prompt)
+        self.assertIn("AHA finalization request.", prompt)
+        self.assertIn("Use your resumed backend session context", prompt)
+        self.assertIn("Return concise Markdown only", prompt)
+        self.assertNotIn("Task journal (chronological ordered list):", prompt)
+        self.assertNotIn("round-001", prompt)
+        self.assertNotIn("完成小修复", prompt)
+        self.assertNotIn("Final source range:", prompt)
 
     def test_removed_aha_checkpoint_does_not_record_task_round(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -509,6 +509,10 @@ class FinalizationFlowTests(unittest.TestCase):
 
         self.assertTrue(metrics["is_finalization"])
         self.assertEqual(metrics["event_limit"], 0)
-        self.assertIn("omitted for finalization", prompt)
+        self.assertIn("omitted for this AHA result request", prompt)
+        self.assertIn("AHA runtime context:", prompt)
+        self.assertIn("Use your resumed backend session context", prompt)
         self.assertNotIn("NOISY_RECENT_EVENT", prompt)
+        self.assertNotIn("Task journal (chronological ordered list):", prompt)
+        self.assertNotIn("Commit message policy:", prompt)
         self.assertLess(metrics["components"]["recent_conversation"]["chars"], 120)

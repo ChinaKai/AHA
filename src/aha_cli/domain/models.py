@@ -751,18 +751,14 @@ def make_session(
 
 def task_prompt(goal: str, mode: str, task: dict, write_scopes: list[str]) -> str:
     scope_text = "\n".join(f"- {scope}" for scope in write_scopes) or "- none"
-    mutability = (
-        "You may edit only the declared write scope."
-        if mode == "implementation"
-        else "Read-only research: do not modify files."
-    )
+    mutability_template = "subtask_mutability_implementation.md" if mode == "implementation" else "subtask_mutability_research.md"
     return render_prompt_template(
         "subtask.md",
         goal=goal,
         task_title=task["title"],
         task_description=task.get("description", ""),
         mode=mode,
-        mutability=mutability,
+        mutability=render_prompt_template(mutability_template).strip(),
         write_scope=scope_text,
     )
 

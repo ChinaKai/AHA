@@ -1,84 +1,67 @@
 from __future__ import annotations
 
+from aha_cli.services.prompt_templates import render_prompt_template
+
+
+def _workflow_guidance(template_id: str) -> str:
+    return render_prompt_template(f"workflow_guidance_{template_id}.md").strip()
+
+
 WORKFLOW_TEMPLATE_DEFINITIONS = (
     {
         "id": "auto",
         "label": "Auto detect",
         "description": "Automatically choose the fastest execution strategy from the task details.",
-        "guidance": (
-            "Auto detect: choose the fastest execution path from the task details. Use sub-agents only "
-            "when independent tracks can reduce elapsed time."
-        ),
+        "guidance": _workflow_guidance("auto"),
         "order": 0,
     },
     {
         "id": "bugfix",
         "label": "Bugfix",
         "description": "Diagnosis, fix, and regression verification strategy.",
-        "guidance": (
-            "Bugfix: split only if diagnosis, implementation, and regression checks can proceed in "
-            "parallel with low coordination cost."
-        ),
+        "guidance": _workflow_guidance("bugfix"),
         "order": 10,
     },
     {
         "id": "feature",
         "label": "Feature",
         "description": "Design, implementation, tests, and documentation strategy.",
-        "guidance": (
-            "Feature: keep main responsible for design and integration; use sub-agents for isolated "
-            "implementation, tests, or documentation tracks when that shortens the critical path."
-        ),
+        "guidance": _workflow_guidance("feature"),
         "order": 20,
     },
     {
         "id": "review",
         "label": "Review",
         "description": "Independent code, test, and risk review strategy.",
-        "guidance": (
-            "Review: use sub-agents for independent risk, test, or code review passes; main merges "
-            "findings and decides what matters."
-        ),
+        "guidance": _workflow_guidance("review"),
         "order": 30,
     },
     {
         "id": "embedded-driver",
         "label": "Embedded driver",
         "description": "Datasheet/register analysis, driver work, and boundary-test strategy.",
-        "guidance": (
-            "Embedded driver: separate datasheet/register analysis, driver implementation, and "
-            "boundary-test work when those tracks can run independently."
-        ),
+        "guidance": _workflow_guidance("embedded-driver"),
         "order": 40,
     },
     {
         "id": "fault-debug",
         "label": "Fault debug",
         "description": "Crash/log analysis, recent-change review, and reproduction strategy.",
-        "guidance": (
-            "Fault debug: separate crash/log analysis, recent-change review, and reproduction or "
-            "verification planning when available evidence supports parallel work."
-        ),
+        "guidance": _workflow_guidance("fault-debug"),
         "order": 50,
     },
     {
         "id": "hil-regression",
         "label": "HIL regression",
         "description": "HIL test matrix, automation/log inspection, and regression-risk strategy.",
-        "guidance": (
-            "HIL regression: split test-matrix preparation, automation/log inspection, and regression "
-            "risk review when hardware or logs make those tracks independent."
-        ),
+        "guidance": _workflow_guidance("hil-regression"),
         "order": 60,
     },
     {
         "id": "release",
         "label": "Release",
         "description": "Changelog/docs, build/package checks, and release risk review strategy.",
-        "guidance": (
-            "Release: separate changelog/docs, build/package checks, and final risk review while main "
-            "keeps the release decision centralized."
-        ),
+        "guidance": _workflow_guidance("release"),
         "order": 70,
     },
 )

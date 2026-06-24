@@ -201,8 +201,7 @@ def _has_intent_term(text: str, terms: tuple[str, ...]) -> bool:
 
 
 def _prompt_needs_commit_policy(item: dict, *, is_finalization: bool) -> bool:
-    if is_finalization:
-        return True
+    del is_finalization
     return _has_intent_term(_intent_text_for_prompt(item), COMMIT_POLICY_INTENT_TERMS)
 
 
@@ -240,7 +239,11 @@ def _action_contract_for_prompt(needed: bool) -> str:
 def _agent_context_for_prompt(current_agent: dict, visible_agents: list[dict], needed: bool) -> str:
     if not needed:
         return ""
-    return f"Agent context:\n- current_agent: {current_agent}\n- visible_agents: {visible_agents}"
+    return render_prompt_template(
+        "backend_agent_context.md",
+        current_agent=current_agent,
+        visible_agents=visible_agents,
+    ).rstrip()
 
 
 def _commit_policy_for_prompt(
@@ -262,14 +265,7 @@ def _recovery_context_for_prompt(item: dict) -> str:
     context = str(item.get("recovery_context") or "").strip()
     if not context:
         return ""
-    return "\n".join(
-        [
-            "AHA recovery context for this backend turn:",
-            context,
-            "",
-            "Treat this as runtime context only; it is not part of the user's latest message.",
-        ]
-    )
+    return render_prompt_template("backend_recovery_context.md", context=context).rstrip()
 
 
 def _host_notes_for_prompt(root: Path, run_id: str, task_id: str, target: str, item: dict) -> list[str]:
@@ -325,7 +321,8 @@ def _truncate_for_prompt(value: object, limit: int = PROMPT_CONVERSATION_MESSAGE
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
         return text
-    return text[: max(0, limit - 15)].rstrip() + " ...[truncated]"
+    suffix = " " + render_prompt_template("backend_truncated_message_suffix.md").strip()
+    return text[: max(0, limit - len(suffix))].rstrip() + suffix
 
 
 def recent_conversation_events(
@@ -371,16 +368,31 @@ def _conversation_line(event: dict, message_limit: int) -> str:
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     sender, recipient = _conversation_message_endpoints(event)
     ts = str(data.get("ts") or event.get("ts") or "-")
-    return f"- {ts} {sender} -> {recipient}: {_truncate_for_prompt(data.get('message'), message_limit)}"
+    return render_prompt_template(
+        "backend_recent_conversation_line.md",
+        ts=ts,
+        sender=sender,
+        recipient=recipient,
+        message=_truncate_for_prompt(data.get("message"), message_limit),
+    ).rstrip()
 
 
 def _format_conversation_chains(chains: list[list[dict]], message_limit: int) -> str:
-    lines = [f"Recent conversation chains (last {len(chains)}, oldest first):"]
+    chain_texts: list[str] = []
     for index, chain in enumerate(chains, 1):
-        lines.append(f"Chain {index}:")
-        for event in chain:
-            lines.append(_conversation_line(event, message_limit))
-    return "\n".join(lines)
+        messages = "\n".join(_conversation_line(event, message_limit) for event in chain)
+        chain_texts.append(
+            render_prompt_template(
+                "backend_recent_conversation_chain.md",
+                index=index,
+                messages=messages,
+            ).rstrip()
+        )
+    return render_prompt_template(
+        "backend_recent_conversation_chains.md",
+        chain_count=len(chains),
+        chains="\n".join(chain_texts),
+    ).rstrip()
 
 
 def _format_conversation_with_budget(chains: list[list[dict]], budget: int) -> str:
@@ -401,7 +413,8 @@ def _format_conversation_with_budget(chains: list[list[dict]], budget: int) -> s
     text = _format_conversation_chains(selected[-1:], PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT)
     if len(text) <= budget:
         return text
-    return text[: max(0, budget - 25)].rstrip() + "\n...[truncated to budget]"
+    suffix = "\n" + render_prompt_template("backend_truncated_budget_suffix.md").strip()
+    return text[: max(0, budget - len(suffix))].rstrip() + suffix
 
 
 def format_recent_conversation(
@@ -410,7 +423,7 @@ def format_recent_conversation(
     budget: int = PROMPT_RECENT_CONVERSATION_CHAR_BUDGET,
 ) -> str:
     if not events:
-        return "(no prior conversation for this task/agent)"
+        return render_prompt_template("backend_recent_conversation_empty.md").strip()
     chains: list[list[dict]] = []
     current: list[dict] = []
     for event in events:
@@ -678,7 +691,8 @@ def _limit_compact_summary_text(text: str, limit: int = 4800) -> str:
     stripped = text.strip()
     if len(stripped) <= limit:
         return stripped
-    return stripped[: max(0, limit - 120)].rstrip() + "\n\n[compact summary truncated to prompt budget]"
+    suffix = "\n\n" + render_prompt_template("backend_compact_summary_truncated_suffix.md").strip()
+    return stripped[: max(0, limit - len(suffix))].rstrip() + suffix
 
 
 def compact_summary_context(root: Path, run_id: str, session: dict | None, *, limit_chars: int = 4800) -> str:
@@ -690,11 +704,11 @@ def compact_summary_context(root: Path, run_id: str, session: dict | None, *, li
         return ""
     path = run_dir(root, run_id) / relpath
     if not path.exists():
-        return f"Backend compact summary: `{relpath}` was referenced but not found.\n"
+        return render_prompt_template("backend_compact_summary_missing.md", relpath=relpath)
     text = _limit_compact_summary_text(path.read_text(encoding="utf-8", errors="replace"), limit_chars)
     if not text:
         return ""
-    return f"Backend compact summary from previous session:\n{text}\n"
+    return render_prompt_template("backend_compact_summary_context.md", summary=text)
 
 
 def chat_prompt(
@@ -714,6 +728,7 @@ def chat_prompt(
     result_policy = item.get("result_policy")
     is_finalization = result_policy == "finalize"
     is_memo_report = result_policy == "memo_report"
+    is_result_request = is_finalization or is_memo_report
     is_agent_command = item.get("command_namespace") == "agent"
     task = None
     agent = None
@@ -739,7 +754,7 @@ def chat_prompt(
                 merged_agent["session_status"] = session.get("status")
                 agent = merged_agent
             sticky_delta = bool(
-                not is_finalization
+                not is_result_request
                 and (agent or {}).get("session_policy") == "sticky"
                 and (agent or {}).get("backend_session_id")
             )
@@ -784,10 +799,7 @@ def chat_prompt(
                     is_agent_command=is_agent_command,
                 )
                 return prompt
-            existing_final = detail.get("result", "").strip()
             final_context = ""
-            if is_finalization and existing_final:
-                final_context = f"- existing Final chars: {len(existing_final)}\n"
             should_resume_from_compact = bool(
                 not is_finalization
                 and not is_memo_report
@@ -797,19 +809,10 @@ def chat_prompt(
             )
             compact_context = (
                 compact_summary_context(root, run_id, session)
-                if is_finalization or is_memo_report or should_resume_from_compact
+                if should_resume_from_compact
                 else ""
             )
-            rounds = detail.get("rounds", [])
             journal_context = ""
-            if rounds and (is_finalization or is_memo_report):
-                recent_rounds = rounds[-10:]
-                journal_lines = ["Task journal:"]
-                for round_item in recent_rounds:
-                    journal_lines.append(
-                        f"- {round_item.get('round_id')} [{round_item.get('trigger')}] {round_item.get('summary')}"
-                    )
-                journal_context = "\n".join(journal_lines)
             visible_agents = agents_visible_to_prompt(detail["task"], target)
             policy_backend = backend or (session or {}).get("backend") or (agent or {}).get("backend") or task.get("preferred_backend")
             policy_model = (
@@ -820,13 +823,17 @@ def chat_prompt(
                 or (agent or {}).get("model")
                 or task.get("preferred_model")
             )
-            commit_policy_needed = _prompt_needs_commit_policy(item, is_finalization=is_finalization)
-            coordination_policy_needed = _prompt_needs_coordination_policy(
-                detail["task"],
-                target,
-                item,
-                commit_policy_needed=commit_policy_needed,
-                visible_agents=visible_agents,
+            commit_policy_needed = False if is_result_request else _prompt_needs_commit_policy(item, is_finalization=is_finalization)
+            coordination_policy_needed = (
+                False
+                if is_result_request
+                else _prompt_needs_coordination_policy(
+                    detail["task"],
+                    target,
+                    item,
+                    commit_policy_needed=commit_policy_needed,
+                    visible_agents=visible_agents,
+                )
             )
             commit_policy = _commit_policy_for_prompt(
                 commit_policy_needed,
@@ -854,40 +861,50 @@ def chat_prompt(
                     "compact_summary": compact_context,
                 }
             )
-            task_context = render_prompt_template(
-                "backend_task_context.md",
-                task_id=task_id,
-                title=detail["task"].get("title", ""),
-                description=detail["task"].get("description", ""),
-                status=detail["task"].get("status", ""),
-                role=item.get("role", ""),
-                workspace=detail["task"].get("workspace_path", ""),
-                collaboration_mode=detail["task"].get("collaboration_mode", "auto"),
-                workflow_template=detail["task"].get("workflow_template", "auto"),
-                delegation_policy=detail["task"].get("delegation_policy", "auto"),
-                max_sub_agents=detail["task"].get("max_sub_agents", 0),
-                preferred_sub_backend=(
-                    detail["task"].get("preferred_sub_backend")
-                    or detail["task"].get("preferred_backend")
-                    or "codex"
-                ),
-                preferred_sub_model=(
-                    detail["task"].get("preferred_sub_model")
-                    or detail["task"].get("preferred_model")
-                    or "default"
-                ),
-                current_agent=current_agent_constraints,
-                agents=visible_agent_constraints,
-                agent_context=agent_context,
-                task_skills_context=task_skills_context_for_prompt(detail["task"]).rstrip(),
-                hardware_debug_context=hardware_debug_context_for_prompt(detail["task"]).rstrip(),
-                final_context=final_context.rstrip(),
-                task_journal=journal_context,
-                compact_summary=compact_context.rstrip(),
-                action_contract=action_contract,
-                coordination_policy=coordination_policy,
-                commit_policy=commit_policy,
-            )
+            if is_result_request:
+                task_context = render_prompt_template(
+                    "backend_task_context_minimal.md",
+                    task_id=task_id,
+                    title=detail["task"].get("title", ""),
+                    status=detail["task"].get("status", ""),
+                    role=item.get("role", ""),
+                    workspace=detail["task"].get("workspace_path", ""),
+                )
+            else:
+                task_context = render_prompt_template(
+                    "backend_task_context.md",
+                    task_id=task_id,
+                    title=detail["task"].get("title", ""),
+                    description=detail["task"].get("description", ""),
+                    status=detail["task"].get("status", ""),
+                    role=item.get("role", ""),
+                    workspace=detail["task"].get("workspace_path", ""),
+                    collaboration_mode=detail["task"].get("collaboration_mode", "auto"),
+                    workflow_template=detail["task"].get("workflow_template", "auto"),
+                    delegation_policy=detail["task"].get("delegation_policy", "auto"),
+                    max_sub_agents=detail["task"].get("max_sub_agents", 0),
+                    preferred_sub_backend=(
+                        detail["task"].get("preferred_sub_backend")
+                        or detail["task"].get("preferred_backend")
+                        or "codex"
+                    ),
+                    preferred_sub_model=(
+                        detail["task"].get("preferred_sub_model")
+                        or detail["task"].get("preferred_model")
+                        or "default"
+                    ),
+                    current_agent=current_agent_constraints,
+                    agents=visible_agent_constraints,
+                    agent_context=agent_context,
+                    task_skills_context=task_skills_context_for_prompt(detail["task"]).rstrip(),
+                    hardware_debug_context=hardware_debug_context_for_prompt(detail["task"]).rstrip(),
+                    final_context=final_context.rstrip(),
+                    task_journal=journal_context,
+                    compact_summary=compact_context.rstrip(),
+                    action_contract=action_contract,
+                    coordination_policy=coordination_policy,
+                    commit_policy=commit_policy,
+                )
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):
                 host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
                 supervision_context = supervision_host_context(
@@ -899,7 +916,7 @@ def chat_prompt(
                 components["supervision_host_context"] = supervision_context
             components["task_context"] = task_context
         except KeyError:
-            task_context = f"Current task context: task_id={task_id} was referenced but not found.\n"
+            task_context = render_prompt_template("backend_task_context_missing.md", task_id=task_id)
             components["task_context"] = task_context
     prompt_backend = (
         backend
@@ -927,7 +944,7 @@ def chat_prompt(
     else:
         mode_template = "mode_instruction_default.md"
     mode_instruction = render_prompt_template(mode_template).strip()
-    event_limit = 0 if is_finalization else PROMPT_CONVERSATION_CHAIN_LIMIT
+    event_limit = 0 if is_result_request else PROMPT_CONVERSATION_CHAIN_LIMIT
     conversation_chain_limit = event_limit
     if sticky_delta:
         is_supervision_host = bool(task and is_task_supervision_host_agent(task, target))
@@ -982,7 +999,11 @@ def chat_prompt(
             components["supervision_host_delta_context"] = supervision_context
             has_special_sticky_context = True
             if recent_conversation:
-                sticky_context = f"{sticky_context.rstrip()}\n\nRecent supervision conversation:\n{recent_conversation}\n"
+                supervision_conversation = render_prompt_template(
+                    "backend_recent_supervision_conversation.md",
+                    recent_conversation=recent_conversation,
+                ).rstrip()
+                sticky_context = f"{sticky_context.rstrip()}\n\n{supervision_conversation}\n"
                 components["recent_conversation"] = recent_conversation
         sticky_agent_context = str(components.get("agent_context") or "").strip()
         sticky_commit_policy = str(components.get("commit_policy") or "").strip()
@@ -1012,22 +1033,6 @@ def chat_prompt(
             has_special_sticky_context = True
         else:
             components.pop("commit_policy", None)
-        if not has_special_sticky_context and not str(components.get("recovery_context") or "").strip():
-            prompt = str(item.get("message") or "")
-            for stale_component in ("prefix", "recovery_context", "sticky_context"):
-                components.pop(stale_component, None)
-            _fill_prompt_metrics(
-                metrics,
-                prompt,
-                target=target,
-                item=item,
-                components=components,
-                is_finalization=is_finalization,
-                is_agent_command=is_agent_command,
-                event_limit=0,
-                prompt_mode="sticky_delta",
-            )
-            return prompt
         components.update(
             {
                 "sticky_context": sticky_context,
@@ -1059,8 +1064,8 @@ def chat_prompt(
             prompt_mode="sticky_delta",
         )
         return prompt
-    if is_finalization:
-        recent_conversation = "(omitted for finalization; use the Task journal and current finalization request)"
+    if is_result_request:
+        recent_conversation = render_prompt_template("backend_result_conversation_omitted.md").strip()
     else:
         conversation_events = recent_conversation_events(
             root,
@@ -1071,11 +1076,12 @@ def chat_prompt(
             item,
         )
         recent_conversation = format_recent_conversation(conversation_events, conversation_chain_limit)
+    empty_task_context = render_prompt_template("backend_task_context_none.md").strip()
     components.update(
         {
             "mode_instruction": mode_instruction,
             "recent_conversation": recent_conversation,
-            "task_context": task_context or "Current task context: none",
+            "task_context": task_context or empty_task_context,
         }
     )
     prompt = render_prompt_template(
@@ -1084,7 +1090,7 @@ def chat_prompt(
         target=target,
         mode_instruction=mode_instruction,
         run_goal=plan["goal"],
-        task_context=task_context or "Current task context: none",
+        task_context=task_context or empty_task_context,
         recent_conversation=recent_conversation,
         recovery_context=components["recovery_context"],
         sender=_current_message_sender_label(item),
