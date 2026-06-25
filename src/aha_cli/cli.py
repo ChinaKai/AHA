@@ -908,7 +908,12 @@ def format_knowledge_status(status: dict) -> str:
     general = status.get("general", {})
     lines.append(
         f"  general: wiki={general.get('wiki', 0)} "
-        f"solutions={general.get('solutions', 0)} navigation={general.get('navigation', 0)}"
+        f"solutions={general.get('solutions', 0)}"
+    )
+    personal = status.get("personal", {})
+    lines.append(
+        f"  personal: wiki={personal.get('wiki', 0)} "
+        f"solutions={personal.get('solutions', 0)}"
     )
     projects = status.get("projects", [])
     if projects:

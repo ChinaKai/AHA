@@ -24,9 +24,12 @@ from aha_cli.store.knowledge_capture import promote_assets_for_entry
 from aha_cli.store import knowledge_capture as cap_store
 from aha_cli.store.knowledge_capture import (
     CAPTURE_DIR,
+    CAPTURE_DISTILL_DIR,
+    LEGACY_CAPTURE_DIR,
     ImageRejected,
     add_note_image,
     create_note,
+    capture_dir,
     delete_note,
     list_distill_logs,
     list_notes,
@@ -99,14 +102,59 @@ def test_capture_invalid_scope_hint_falls_back_to_personal(tmp_path: Path):
     assert note["scope_hint"] == "personal"
 
 
-def test_capture_dir_is_gitignored(tmp_path: Path):
+def test_capture_assets_are_syncable_and_distill_logs_are_ignored(tmp_path: Path):
     home = _home(tmp_path)
     cfg = _cfg()
-    create_note(home, cfg, text="secret-ish raw dump")
+    note = create_note(home, cfg, text="raw user material")
+    stored = read_note(home, cfg, note["id"])
+    assert capture_dir(home, cfg).name == CAPTURE_DIR
+    assert Path(stored["_path"]).parent == capture_dir(home, cfg)
+
     kb_root = home / "knowledge"
-    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8")
-    assert f"{CAPTURE_DIR}/" in gitignore
+    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert f"{CAPTURE_DIR}/" not in gitignore
+    assert f"{CAPTURE_DIR}/{CAPTURE_DISTILL_DIR}/" in gitignore
+    assert f"{LEGACY_CAPTURE_DIR}/" not in gitignore
     assert ".pending/" in gitignore  # existing exclusion preserved
+
+
+def test_legacy_capture_dir_migrates_to_syncable_capture(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    kb_root = knowledge_root(home, cfg)
+    legacy = kb_root / LEGACY_CAPTURE_DIR
+    asset_dir = legacy / "assets" / "cap_old"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "a.png").write_bytes(_PNG)
+    write_json(
+        legacy / "cap_old.json",
+        {
+            "id": "cap_old",
+            "title": "old",
+            "text": "legacy note",
+            "scope_hint": "personal",
+            "images": [
+                {
+                    "name": "a.png",
+                    "original": "a.png",
+                    "mime": "image/png",
+                    "size": len(_PNG),
+                    "path": f"{LEGACY_CAPTURE_DIR}/assets/cap_old/a.png",
+                }
+            ],
+            "status": "raw",
+            "candidate_ids": [],
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    notes = list_notes(home, cfg)
+
+    assert [note["id"] for note in notes] == ["cap_old"]
+    assert not legacy.exists()
+    assert (kb_root / CAPTURE_DIR / "cap_old.json").is_file()
+    assert read_note_image(home, cfg, "cap_old", "a.png") == (_PNG, "image/png")
 
 
 def test_cli_capture_add_list_show_rm(tmp_path: Path):
@@ -499,7 +547,7 @@ def test_distill_prompt_lists_images_without_pretending_to_see_them(tmp_path: Pa
     from aha_cli.services.knowledge_capture_distill import build_capture_prompt
 
     note = {"text": "see attached", "scope_hint": "personal",
-            "images": [{"name": "a.png", "original": "a.png", "mime": "image/png", "size": 10, "path": ".capture/assets/n/a.png"}]}
+            "images": [{"name": "a.png", "original": "a.png", "mime": "image/png", "size": 10, "path": "capture/assets/n/a.png"}]}
     prompt = build_capture_prompt(note)
     assert "a.png" in prompt
     assert "NOT visually analyzed" in prompt
@@ -546,10 +594,10 @@ def test_approve_promotes_capture_note_assets_to_entry(tmp_path: Path):
     copied = Path(entry_path).parent / "assets" / Path(entry_path).stem / img_name
     assert copied.is_file() and copied.read_bytes() == _PNG
 
-    # Raw .capture asset is left intact (only removed when the note is deleted).
-    raw_asset = knowledge_root(home, cfg) / note["images"][0]["path"] if note.get("images") else None
-    raw = home / "knowledge" / f".capture/assets/{note['id']}"
-    assert any(raw.iterdir())
+    # Raw capture asset is left intact (only removed when the note is deleted).
+    stored = read_note(home, cfg, note["id"])
+    raw_asset = knowledge_root(home, cfg) / stored["images"][0]["path"]
+    assert raw_asset.is_file() and raw_asset.read_bytes() == _PNG
 
 
 def test_promote_assets_idempotent_never_overwrites(tmp_path: Path):

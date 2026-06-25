@@ -44,6 +44,11 @@ ENTRY_KINDS = ("wiki", "solutions", "navigation")
 # `personal` is a user scratch scope: stored and searchable like general, but
 # deliberately NOT auto-injected into task prompts (see knowledge_retrieval).
 SCOPES = ("general", "project", "personal")
+ENTRY_KINDS_BY_SCOPE = {
+    "general": ("wiki", "solutions"),
+    "personal": ("wiki", "solutions"),
+    "project": ENTRY_KINDS,
+}
 
 # Stable mapping between on-disk kind (directory) and frontmatter ``type``.
 _KIND_TO_TYPE = {"wiki": "wiki", "solutions": "solution", "navigation": "navigation"}
@@ -62,6 +67,11 @@ def kind_for_type(entry_type: str | None) -> str:
 
 def type_for_kind(kind: str) -> str:
     return _KIND_TO_TYPE.get(str(kind or ""), "solution")
+
+
+def entry_kinds_for_scope(scope: str) -> tuple[str, ...]:
+    return ENTRY_KINDS_BY_SCOPE.get(str(scope or ""), ())
+
 
 _FRONTMATTER_FENCE = "---"
 
@@ -206,17 +216,19 @@ def scope_dir(kb_root: Path, scope: str, project_key_value: str | None) -> Path:
 
 
 def entry_dir(kb_root: Path, scope: str, kind: str, project_key_value: str | None) -> Path:
-    if kind not in ENTRY_KINDS:
-        raise ValueError(f"unknown entry kind: {kind!r}")
-    return scope_dir(kb_root, scope, project_key_value) / kind
+    root = scope_dir(kb_root, scope, project_key_value)
+    if kind not in entry_kinds_for_scope(scope):
+        raise ValueError(f"entry kind {kind!r} is not valid for scope {scope!r}")
+    return root / kind
 
 
 def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     """Create the knowledge base skeleton. Idempotent."""
     kb_root = knowledge_root(root, config)
     created = not kb_root.exists()
-    for kind in ENTRY_KINDS:
+    for kind in entry_kinds_for_scope("general"):
         (kb_root / GENERAL_DIR / kind).mkdir(parents=True, exist_ok=True)
+    for kind in entry_kinds_for_scope("personal"):
         (kb_root / PERSONAL_DIR / kind).mkdir(parents=True, exist_ok=True)
     (kb_root / PROJECTS_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -235,11 +247,19 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     if not readme.exists():
         readme.write_text(_render_readme(), encoding="utf-8")
 
-    # Unreviewed candidates and navigation drafts are review/runtime state and
-    # must never be committed/pushed as durable knowledge entries.
+    # Unreviewed candidates, distill logs, and navigation drafts are
+    # review/runtime state. Raw capture notes/assets are user material and stay
+    # syncable, so only the generated distill logs are ignored.
     gitignore = kb_root / KNOWLEDGE_GITIGNORE_FILE
-    required_ignores = [f"{PENDING_DIR}/", ".capture/", f"{NAV_DRAFTS_DIR}/"]
+    required_ignores = [
+        f"{PENDING_DIR}/",
+        "capture/distill/",
+        ".capture/distill/",
+        f"{NAV_DRAFTS_DIR}/",
+    ]
+    obsolete_ignores = {".capture/", "capture/"}
     existing = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    existing = [line for line in existing if line.strip() not in obsolete_ignores]
     normalized_existing = {line.strip() for line in existing}
     missing = [line for line in required_ignores if line not in normalized_existing]
     if missing:
@@ -260,13 +280,19 @@ def _render_readme() -> str:
         "independently of runs/tasks.\n\n"
         "- `general/wiki` — cross-project tutorials and technical references\n"
         "- `general/solutions` — cross-project reusable playbooks\n"
+        "- `personal/wiki` — personal notes that should be searchable but not auto-injected\n"
+        "- `personal/solutions` — personal reusable playbooks\n"
         "- `projects/<project-key>/solutions` — rare reusable project playbooks\n"
         "- `projects/<project-key>/navigation/index.md` — the project navigation entry point\n"
         "- `projects/<project-key>/navigation/modules/*.md` — on-demand module docs\n"
-        "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n\n"
+        "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n"
+        "- `capture/*.json` — raw user notes awaiting distill, kept syncable\n"
+        "- `capture/assets/*` — raw note attachments, kept syncable\n\n"
         "Project navigation is incremental: read `navigation/index.md` first, then "
         "only the module/flow docs relevant to the task; each nav doc owns one "
         "link layer, and updates should touch only the docs affected by the task.\n\n"
+        "`capture/distill/`, `.pending/`, and `.nav_drafts/` are review/runtime "
+        "state and are ignored by git.\n\n"
         "Entries are Markdown files with a JSON frontmatter block. Do not edit "
         "`aha-knowledge.json` by hand.\n"
     )
@@ -429,16 +455,17 @@ def list_entries(
 
 
 def iter_all_entries(root: Path, config: dict | None = None) -> list[dict]:
-    """Return every tracked entry across general + all projects, both kinds."""
+    """Return every tracked entry across all scopes and valid kinds."""
     kb_root = knowledge_root(root, config)
     results: list[dict] = []
-    for kind in ENTRY_KINDS:
+    for kind in entry_kinds_for_scope("general"):
         results.extend(list_entries(root, config=config, scope="general", kind=kind))
+    for kind in entry_kinds_for_scope("personal"):
         results.extend(list_entries(root, config=config, scope="personal", kind=kind))
     projects_root = kb_root / PROJECTS_DIR
     if projects_root.is_dir():
         for proj in sorted(p for p in projects_root.iterdir() if p.is_dir()):
-            for kind in ENTRY_KINDS:
+            for kind in entry_kinds_for_scope("project"):
                 results.extend(
                     list_entries(
                         root, config=config, scope="project", kind=kind,
@@ -585,8 +612,14 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
         except (OSError, ValueError):
             schema_version = None
 
-    general = {kind: _count_md(kb_root / GENERAL_DIR / kind) for kind in ENTRY_KINDS}
-    personal = {kind: _count_md(kb_root / PERSONAL_DIR / kind) for kind in ENTRY_KINDS}
+    general = {
+        kind: _count_md(kb_root / GENERAL_DIR / kind)
+        for kind in entry_kinds_for_scope("general")
+    }
+    personal = {
+        kind: _count_md(kb_root / PERSONAL_DIR / kind)
+        for kind in entry_kinds_for_scope("personal")
+    }
     projects: list[dict] = []
     projects_root = kb_root / PROJECTS_DIR
     if projects_root.is_dir():
@@ -594,7 +627,10 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
             projects.append(
                 {
                     "project_key": proj.name,
-                    "counts": {kind: _count_md(proj / kind) for kind in ENTRY_KINDS},
+                    "counts": {
+                        kind: _count_md(proj / kind)
+                        for kind in entry_kinds_for_scope("project")
+                    },
                 }
             )
 

@@ -16,15 +16,15 @@
 ## 已锁定的设计决策
 
 - **新 scope `personal`**：默认落点；**不进任务开工注入**（`retrieve_for_task` 不收集 personal），只通过 `kb search` / `kb list` / Web 按需检索召回。
-- **raw note（capture inbox）**：独立存储 `.capture/`（每条 JSON），**默认不进 git**（原始未审、可能含敏感信息），与 `.pending/` 同性质。只有 approve 成正式条目后才随 git 同步。
+- **raw note（capture inbox）**：独立存储 `capture/`（每条 JSON），图片等附件放 `capture/assets/`，这属于用户资料，默认可随知识库同步；只有整理过程日志 `capture/distill/` 与 `.pending/` 一类流程态内容进 `.gitignore`。
 - **agent 整理**：one-shot 调用（非完整 task 编排），可选 backend/model；输出沿用 `<aha_knowledge_candidates>` JSON，复用 `split_knowledge_sidecar` 解析 → 入 pending。
-- **图片**：纳入 KB 随 git 同步；同 scope 的 `assets/`；护栏=大小上限+降采样；agent 标注每图 `transcribed`（转录后弃）/ `keep-as-asset`（留原图、正文 `![]()` 引用）；有图必须多模态模型。
+- **图片**：raw 阶段在 `capture/assets/` 保留并同步；approve 时复制到正式条目的 `assets/`；护栏=大小上限+降采样；agent 标注每图 `transcribed`（转录后弃）/ `keep-as-asset`（留原图、正文 `![]()` 引用）；有图必须多模态模型。
 - **Web Capture tab**：类 Entries 的列表，每条 raw note 可查看/编辑/删除/「整理为候选」；慢 LLM 调用走 job + 轮询，不阻塞。
 
 ## 分期计划（依赖链：scope → inbox → distill → web → images）
 
 - [x] **Phase 1 — `personal` scope**：store `SCOPES`/`scope_dir`/`init`/`iter_all_entries`/`status` 支持 personal；retrieval 注入天然排除 personal；CLI/Web scope 筛选加 personal。focused tests：personal 条目不被注入、能被 search/list/iter 召回。
-- [x] **Phase 2 — capture inbox 存储 + CLI**：`.capture/` raw note CRUD（id/text/images/scope_hint/created_at/status/candidate_ids）；`aha kb capture add|list|show|edit|rm`。`.capture/` 加入 `.gitignore`。focused tests：CRUD、不进 git。
+- [x] **Phase 2 — capture inbox 存储 + CLI**：`capture/` raw note CRUD（id/text/images/scope_hint/created_at/status/candidate_ids）；`aha kb capture add|list|show|edit|rm`。当前规则：raw note 和 `capture/assets/` 可同步，`capture/distill/` 忽略。focused tests：CRUD、gitignore 边界。
 - [x] **Phase 3 — distill-on-demand（完成）**：`aha kb capture distill <id>` → one-shot agent distiller（可选 backend/model）→ 解析 sidecar → 入 pending；note 标 `distilled` 并记 `candidate_ids`，重跑替换上次候选。
   - 核对结论：AHA **无稳定 in-process「prompt→reply」API**——backends 是子进程 CLI（`run_claude_exec`/`run_codex_exec`，返回 `(exit_code, reply, session)`，仅 prompt/cwd/output_file 必填）。故按预案抽**窄 service seam**：`knowledge_capture_distill.CaptureAgent`（`ctx→reply_text`），默认实现 `default_capture_agent` 薄封装 run_claude_exec/run_codex_exec（无新依赖、best-effort、可替换），测试注入 deterministic stub。
   - 复用：`split_knowledge_sidecar` 解析 + `normalize_sidecar_candidates`（已扩展支持 personal scope 和 navigation 分类）+ `enqueue_candidate` 始终入 pending（raw 必经人工审核）。Wiki 仅用于非项目通用/个人文档；项目结构、模块职责、入口、约束进入 navigation；project 候选无 key 时降级 personal。
@@ -38,23 +38,23 @@
 ## Phase 5 设计定稿（图片资产，保守方案）
 
 **已锁定决策（用户拍板）**
-- raw note 阶段图片落 `.capture/assets/<note-id>/<filename>`，随 `.capture/` **不入 git**。
-- approve 成正式条目时，再把图片复制到该条目的 assets 目录，随条目入 git 同步。
+- raw note 阶段图片落 `capture/assets/<note-id>/<filename>`，属于用户原始资料，随知识库同步。
+- approve 成正式条目时，再把图片复制到该条目的 assets 目录，条目内引用正式副本。
 - **不长期把 base64 存 JSON**：上传可走 base64 / data URL，但**落盘为文件**；note 只保存 `{path（相对 KB root）, mime, size, filename}`。
 - 护栏（**无新依赖版本**）：仅允许 `png/jpeg/webp`（按 magic bytes 嗅探，不信任扩展名）；单图与单 note 总大小上限，超限**拒绝**；降采样若现有依赖不支持则**先不做**。
 - 多模态：**核对结论 = 当前 `build_claude_exec_command`/`build_codex_exec_command` 无任何图片/附件入参，exec 只传文本 prompt（stdin/`-p`）**。故本期 distill **不做真实视觉**——仅把图片清单（filename/mime/size/path）写入 prompt，并显式标注「图片未被视觉理解，待 backend 图片输入能力接入」。**不得伪装已看图**。
 
 **拆期**
-- **5a（本期，最小闭环）**：note 图片上传/列出/删除（落盘 `.capture/assets/<id>/`、护栏、note.images 元数据）；图片读取路由（缩略图预览）；distill prompt 注入图片清单 + 未视觉理解声明；Web Capture tab 上传 + 预览 + 删除；focused tests。
+- **5a（本期，最小闭环）**：note 图片上传/列出/删除（落盘 `capture/assets/<id>/`、护栏、note.images 元数据）；图片读取路由（缩略图预览）；distill prompt 注入图片清单 + 未视觉理解声明；Web Capture tab 上传 + 预览 + 删除；focused tests。
 - **5b（in_progress）**：approve 时把 note 资产复制进条目 assets 目录、条目正文/metadata 留可追溯引用；候选↔note 资产关联；backend 具备图片输入后接真实 vision。
 
 ### Phase 5b 设计定稿（approve 资产迁移，保守）
 
 **边界（用户拍板）**
-- approve **只负责复制**：把 capture 资产从 `.capture/assets/<note-id>/` 复制到正式条目的 assets 目录，并在条目正文/metadata 留可追溯引用。
+- approve **只负责复制**：把 capture 资产从 `capture/assets/<note-id>/` 复制到正式条目的 assets 目录，并在条目正文/metadata 留可追溯引用。
 - approve 流程内**不执行 git commit/push**：只让文件进入「可被现有同步/提交机制管理」的状态（条目所在 tracked 树）；提交仍由既有 `auto_commit_after_change`/`kb sync` 等机制负责。
 - 候选↔来源 note 关联：**优先显式 `source_note_id`**（distill 时写入候选），同时保留 `note.candidate_ids` 反查兼容路径。
-- **幂等**：重复 approve/重试不重复复制、不覆盖无关或已存在文件（dest 已存在则跳过）；raw `.capture/assets` **不删除**（仅用户删 note 时随 note 清理）。
+- **幂等**：重复 approve/重试不重复复制、不覆盖无关或已存在文件（dest 已存在则跳过）；raw `capture/assets` **不删除**（仅用户删 note 时随 note 清理）。
 
 **落点**
 - 条目资产目录：`<entry_dir>/assets/<slug>/`（即 `<scope>/<kind>/assets/<slug>/`，与 `<slug>.md` 同级的 `assets/` 子目录；`list_entries` 只 glob `*.md`，不受影响）。条目正文相对引用 `![](assets/<slug>/<file>)`。
@@ -78,6 +78,7 @@
 
 ## 进度日志
 
+- 2026-06-25：**知识库目录归属优化**。`navigation` 收敛为 project-only 分类，`general`/`personal` 只保留 `wiki` 与 `solutions`；raw capture 从 `.capture/` 调整为可同步的 `capture/`，`capture/assets/` 不再被忽略，只有 `capture/distill/`、`.pending/`、`.nav_drafts/` 等流程态目录进 `.gitignore`；旧 `.capture` 自动迁移/兼容读取。
 - 2026-06-20：计划成文。开始 Phase 1（personal scope）。
 - 2026-06-20：**Phase 1 完成**。store 新增 `personal` scope（`PERSONAL_DIR`/`SCOPES`/`scope_dir`/`init`/`iter_all_entries`/`status`）；retrieval 注入天然排除 personal（`retrieve_for_task` 只收集 project/general）；CLI `kb add`/`kb list` `--scope` 加 personal；Web scope 筛选下拉 + i18n（个人/Personal）。新增 `tests/test_knowledge_personal.py`（3 项：存储+status、不注入但可 search 召回、CLI add/list）。验证：`pytest tests/ -q` → 695 passed；`node --check i18n.js` OK。改动未提交。
 - 2026-06-20：**Phase 2 完成**。新增 `store/knowledge_capture.py`（`.capture/` raw note CRUD：create/list/read/update/delete，id=`cap_<uuid>`，字段 text/title/scope_hint/images/status/candidate_ids/时间戳）；`.capture/` 自动写入 KB `.gitignore`（保留既有 `.pending/`）。CLI 新增 `aha kb capture add|list|show|edit|rm`（支持 `--text-file -` 读 stdin）。新增 `tests/test_knowledge_capture.py`（5 项：CRUD、非法 scope 回落 personal、gitignore、CLI 增删查、add 需文本）。验证：`pytest tests/ -q` → 700 passed；端到端 add(stdin)/edit/list/gitignore OK。改动未提交。下一步 Phase 3。

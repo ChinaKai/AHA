@@ -45,6 +45,45 @@
     .kb-inline-actions { display: flex; flex-wrap: nowrap; overflow-x: auto; }
     .kb-inline-actions button { flex: 0 0 auto; white-space: nowrap; }
     .kb-entry-actions button { min-width: 0; }
+    .kb-entry-tree {
+      display: grid; gap: 2px; margin: 10px 0; padding: 6px;
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+      background: var(--color-surface);
+    }
+    .kb-tree-group {
+      min-width: 0; border: 0; border-radius: var(--radius-sm); background: transparent;
+    }
+    .kb-tree-group > summary {
+      display: flex; align-items: center; gap: 8px; min-height: 30px;
+      cursor: pointer; list-style-position: inside; padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      color: var(--color-text-strong); font-size: 13px; font-weight: 650;
+    }
+    .kb-tree-group > summary:hover { background: var(--color-surface-muted); }
+    .kb-tree-count {
+      flex: 0 0 auto; margin-left: auto; padding: 1px 7px;
+      border-radius: 999px; background: var(--status-bg);
+      color: var(--color-text-subtle); font-size: 11px; font-weight: 500;
+    }
+    .kb-tree-children {
+      display: grid; gap: 2px; margin-left: 14px; padding: 2px 0 4px 12px;
+      border-left: 1px solid var(--color-border-subtle);
+    }
+    .kb-tree-level-2, .kb-tree-level-3, .kb-tree-level-4 { margin-top: 0; }
+    .kb-tree-entry {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+      gap: 8px; min-width: 0; padding: 7px 8px; border-radius: var(--radius-sm);
+      overflow-wrap: anywhere;
+    }
+    .kb-tree-entry:hover { background: var(--color-surface-muted); }
+    .kb-tree-entry-main { min-width: 0; display: grid; gap: 2px; }
+    .kb-tree-entry h4 { margin: 0; font-size: 13px; color: var(--color-text-strong); }
+    .kb-tree-entry-tags { min-height: 0; }
+    .kb-tree-entry-actions { justify-content: flex-end; flex-wrap: nowrap; margin: 0; }
+    .kb-tree-entry-actions button { min-height: 24px; padding: 0 8px; font-size: 11px; }
+    .kb-tree-entry > .kb-muted,
+    .kb-tree-entry > .kb-body,
+    .kb-tree-entry > .kb-edit-form { grid-column: 1 / -1; }
     .kb-pending-actions { margin: 0 0 2px; }
     button.kb-approve { border-color: #bbf7d0; background: var(--color-success-surface); color: var(--color-success); font-weight: 650; }
     button.kb-reject { border-color: #fecaca; background: var(--color-danger-surface); color: var(--color-danger); }
@@ -154,6 +193,14 @@
       }
       .kb-entry-actions.kb-inline-actions button {
         width: auto; flex: 0 0 auto;
+      }
+      .kb-tree-entry { grid-template-columns: 1fr; gap: 6px; padding: 7px 6px; }
+      .kb-tree-children { margin-left: 8px; padding-left: 8px; }
+      .kb-tree-entry-actions {
+        display: flex; grid-template-columns: none; overflow-x: auto; justify-content: flex-start;
+      }
+      .kb-tree-entry-actions button {
+        width: auto; flex: 0 0 auto; min-height: 28px;
       }
       .kb-cap-actions {
         display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px;
@@ -988,37 +1035,152 @@
       }).join("");
     }
 
-    function renderEntries() {
-      const entryHtml = state.entries.length
-        ? state.entries.map((e) => {
-            const entryId = e.id || e.slug;
-            const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
-            const isActive = activeId === entryId;
-            const isEditing = state.editingEntry === entryId && isActive;
-            const encodedId = encodeURIComponent(entryId);
-            const status = e.status || "active";
-            const isProjectNavIndex = e.type === "navigation" && e.slug === "index" && e.project_key;
-            const deleteLabel = isProjectNavIndex ? t("knowledge.reset_project_nav", "Reset project nav") : t("knowledge.delete", "Delete");
-            const sourceNoteButton = e.source_note_id && e.source_note_exists !== false
-              ? `<button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(e.source_note_id))}')">${esc(t("knowledge.open_note", "Note"))}</button>`
-              : "";
-            return `<div class="kb-card"><h3>${esc(e.title)}</h3>
-            <div class="kb-muted">${esc(e.scope)}/${esc(e.type)} · ${esc(e.project_key || "-")} · ${esc(entryId)} · ${esc(status)}</div>
-            <div class="kb-muted">${esc(timeLine(e))}</div>
-            <div>${(e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("")}</div>
-            <div class="kb-card-actions kb-entry-actions">
-              <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(isActive && !isEditing ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
-              <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
-              <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
-              <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
-              ${sourceNoteButton}
-              <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>
-            </div>
-            ${isActive && !isEditing ? `<div class="kb-muted">${esc(state.activeEntry.path)}</div><div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
-            ${isEditing ? renderEditForm(state.activeEntry) : ""}
-          </div>`;
-          }).join("")
+    function entryIdentity(entry) {
+      return String(entry?.id || entry?.slug || "");
+    }
+
+    function entryTitle(entry) {
+      return String(entry?.title || entry?.slug || entryIdentity(entry) || "-");
+    }
+
+    function entryScopeLabel(scope) {
+      if (scope === "project") return t("knowledge.scope_project", "Project");
+      if (scope === "general") return t("knowledge.scope_general", "General");
+      if (scope === "personal") return t("knowledge.scope_personal", "Personal");
+      return scope || "-";
+    }
+
+    function entryTypeLabel(type) {
+      if (type === "solution" || type === "solutions") return t("knowledge.type_solutions", "Solutions");
+      if (type === "wiki") return t("knowledge.type_wiki", "Wiki");
+      return type || "-";
+    }
+
+    function entryCategoryLabel(entry) {
+      const tags = Array.isArray(entry?.tags) ? entry.tags.filter(Boolean) : [];
+      return tags[0] || t("knowledge.entry_uncategorized", "Uncategorized");
+    }
+
+    function renderEntryItem(e, options = {}) {
+      const entryId = entryIdentity(e);
+      const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
+      const isActive = activeId === entryId;
+      const isEditing = state.editingEntry === entryId && isActive;
+      const encodedId = encodeURIComponent(entryId);
+      const status = e.status || "active";
+      const isProjectNavIndex = e.type === "navigation" && e.slug === "index" && e.project_key;
+      const deleteLabel = isProjectNavIndex ? t("knowledge.reset_project_nav", "Reset project nav") : t("knowledge.delete", "Delete");
+      const sourceNoteButton = e.source_note_id && e.source_note_exists !== false
+        ? `<button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(e.source_note_id))}')">${esc(t("knowledge.open_note", "Note"))}</button>`
+        : "";
+      const metaLine = `${entryScopeLabel(e.scope)}/${entryTypeLabel(e.type)} · ${e.project_key || "-"} · ${entryId} · ${status}`;
+      const tagHtml = (e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("");
+      const actions = `<div class="kb-card-actions kb-entry-actions${options.tree ? " kb-tree-entry-actions" : ""}">
+        <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(isActive && !isEditing ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
+        <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
+        <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
+        <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
+        ${sourceNoteButton}
+        <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>
+      </div>`;
+      const expanded = `${isActive && !isEditing ? `<div class="kb-muted">${esc(state.activeEntry.path)}</div><div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
+        ${isEditing ? renderEditForm(state.activeEntry) : ""}`;
+      if (options.tree) {
+        return `<div class="kb-tree-entry">
+          <div class="kb-tree-entry-main">
+            <h4>${esc(entryTitle(e))}</h4>
+            <div class="kb-muted">${esc(metaLine)}</div>
+            <div class="kb-tree-entry-tags">${tagHtml}</div>
+          </div>
+          ${actions}
+          ${expanded}
+        </div>`;
+      }
+      return `<div class="kb-card"><h3>${esc(entryTitle(e))}</h3>
+        <div class="kb-muted">${esc(metaLine)}</div>
+        <div class="kb-muted">${esc(timeLine(e))}</div>
+        <div>${tagHtml}</div>
+        ${actions}
+        ${expanded}
+      </div>`;
+    }
+
+    function sortEntriesByTitle(entries) {
+      return [...entries].sort((a, b) => entryTitle(a).localeCompare(entryTitle(b), undefined, { sensitivity: "base" }));
+    }
+
+    function ensureTreeNode(children, key, label) {
+      const nodeKey = String(key || "-");
+      if (!children.has(nodeKey)) children.set(nodeKey, { key: nodeKey, label: String(label || nodeKey), children: new Map(), entries: [] });
+      return children.get(nodeKey);
+    }
+
+    function buildEntryTree(entries) {
+      const root = new Map();
+      for (const entry of entries) {
+        const scopeKey = String(entry.scope || "unknown");
+        const scope = ensureTreeNode(root, scopeKey, entryScopeLabel(scopeKey));
+        let parent = scope;
+        if (scopeKey === "project") {
+          parent = ensureTreeNode(scope.children, entry.project_key || "-", entry.project_key || "-");
+        }
+        const typeKey = entry.type === "solution" ? "solution" : String(entry.type || "unknown");
+        const type = ensureTreeNode(parent.children, typeKey, entryTypeLabel(typeKey));
+        const category = ensureTreeNode(type.children, entryCategoryLabel(entry), entryCategoryLabel(entry));
+        category.entries.push(entry);
+      }
+      return root;
+    }
+
+    function treeNodeCount(node) {
+      let count = node.entries.length;
+      for (const child of node.children.values()) count += treeNodeCount(child);
+      return count;
+    }
+
+    function treeNodeHasEntry(node, entryId) {
+      if (!entryId) return false;
+      if (node.entries.some((entry) => entryIdentity(entry) === entryId)) return true;
+      return [...node.children.values()].some((child) => treeNodeHasEntry(child, entryId));
+    }
+
+    function compareTreeNodes(a, b) {
+      const scopeOrder = { project: 0, general: 1, personal: 2 };
+      const typeOrder = { solution: 0, solutions: 0, wiki: 1 };
+      const aOrder = Object.prototype.hasOwnProperty.call(scopeOrder, a.key) ? scopeOrder[a.key] : typeOrder[a.key];
+      const bOrder = Object.prototype.hasOwnProperty.call(scopeOrder, b.key) ? scopeOrder[b.key] : typeOrder[b.key];
+      if (Number.isFinite(aOrder) && Number.isFinite(bOrder) && aOrder !== bOrder) return aOrder - bOrder;
+      if (Number.isFinite(aOrder) && !Number.isFinite(bOrder)) return -1;
+      if (!Number.isFinite(aOrder) && Number.isFinite(bOrder)) return 1;
+      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+    }
+
+    function renderTreeNode(node, level) {
+      const childHtml = [...node.children.values()].sort(compareTreeNodes).map((child) => renderTreeNode(child, level + 1)).join("");
+      const entryHtml = sortEntriesByTitle(node.entries).map((entry) => renderEntryItem(entry, { tree: true })).join("");
+      const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
+      const open = level <= 2 || treeNodeHasEntry(node, activeId) ? " open" : "";
+      return `<details class="kb-tree-group kb-tree-level-${level}"${open}>
+        <summary><span>${esc(node.label)}</span><span class="kb-tree-count">${treeNodeCount(node)}</span></summary>
+        <div class="kb-tree-children">${childHtml}${entryHtml}</div>
+      </details>`;
+    }
+
+    function renderEntryTree() {
+      if (!state.entries.length) return state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
+      const tree = buildEntryTree(state.entries);
+      return `<div class="kb-entry-tree">${[...tree.values()].sort(compareTreeNodes).map((node) => renderTreeNode(node, 1)).join("")}</div>`;
+    }
+
+    function renderFlatEntries() {
+      return state.entries.length
+        ? state.entries.map((entry) => renderEntryItem(entry)).join("")
         : (state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`);
+    }
+
+    function renderEntries() {
+      const hasSearch = Boolean($("#f-search").value.trim());
+      const entryHtml = hasSearch ? renderFlatEntries() : renderEntryTree();
       $("#entries-list").innerHTML = entryHtml + renderEntryCaptureResults();
       renderEntryMarkdown();
     }

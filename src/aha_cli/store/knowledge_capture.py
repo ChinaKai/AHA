@@ -2,14 +2,14 @@
 
 This is the first stage of the third knowledge ingestion channel:
 
-    raw note (.capture/) --[agent distill]--> pending candidate --[approve]--> entry
+    raw note (capture/) --[agent distill]--> pending candidate --[approve]--> entry
 
 A capture note is unstructured raw material the user dumps in to deal with
 later (pasted logs, half-formed ideas, screenshots). It is neither a candidate
-nor a tracked entry. Notes live under ``.capture/`` (one JSON each) and, like
-``.pending/``, are git-ignored: raw, unreviewed, possibly sensitive content
-must not be committed/pushed. Only once a note is distilled into a candidate,
-approved, and written as an entry does the knowledge enter the synced tree.
+nor a tracked entry. Notes live under ``capture/`` (one JSON each) with
+attachments under ``capture/assets/``. These are user materials and stay
+syncable across machines; only generated distill logs under
+``capture/distill/`` are ignored.
 
 Phase 2 owns storage + CRUD only; the distill trigger is wired in Phase 3.
 """
@@ -29,7 +29,8 @@ from aha_cli.store.knowledge import (
     knowledge_root,
 )
 
-CAPTURE_DIR = ".capture"
+CAPTURE_DIR = "capture"
+LEGACY_CAPTURE_DIR = ".capture"
 CAPTURE_ASSETS_DIR = "assets"
 CAPTURE_DISTILL_DIR = "distill"
 CAPTURE_SCOPES = ("personal", "project", "general")
@@ -64,19 +65,46 @@ def _safe_asset_name(filename: str, mime: str) -> str:
     return f"{stem}{ext}"
 
 
+def _legacy_capture_dir(root: Path, config: dict | None = None) -> Path:
+    return knowledge_root(root, config) / LEGACY_CAPTURE_DIR
+
+
 def capture_dir(root: Path, config: dict | None = None) -> Path:
-    return knowledge_root(root, config) / CAPTURE_DIR
+    kb_root = knowledge_root(root, config)
+    current = kb_root / CAPTURE_DIR
+    legacy = kb_root / LEGACY_CAPTURE_DIR
+    if legacy.is_dir() and not current.exists():
+        shutil.move(str(legacy), str(current))
+    return current
+
+
+def _capture_dirs(root: Path, config: dict | None = None) -> list[Path]:
+    current = capture_dir(root, config)
+    dirs = [current]
+    legacy = _legacy_capture_dir(root, config)
+    if legacy.exists():
+        dirs.append(legacy)
+    return dirs
 
 
 def _ensure_capture_gitignored(kb_root: Path) -> None:
-    """Make sure the KB .gitignore excludes the capture inbox (and pending)."""
+    """Make sure .gitignore excludes process state, not raw capture material."""
     gitignore = kb_root / KNOWLEDGE_GITIGNORE_FILE
-    wanted = {f"{PENDING_DIR}/", f"{CAPTURE_DIR}/"}
+    wanted = {
+        f"{PENDING_DIR}/",
+        f"{CAPTURE_DIR}/{CAPTURE_DISTILL_DIR}/",
+        f"{LEGACY_CAPTURE_DIR}/{CAPTURE_DISTILL_DIR}/",
+    }
+    obsolete = {f"{CAPTURE_DIR}/", f"{LEGACY_CAPTURE_DIR}/"}
     existing: set[str] = set()
     lines: list[str] = []
     if gitignore.exists():
         try:
-            lines = gitignore.read_text(encoding="utf-8").splitlines()
+            lines = [
+                line
+                for line in gitignore.read_text(encoding="utf-8").splitlines()
+                if line.strip() not in obsolete
+            ]
             existing = {line.strip() for line in lines}
         except OSError:
             lines = []
@@ -90,8 +118,27 @@ def _note_path(root: Path, config: dict | None, note_id: str) -> Path:
     return capture_dir(root, config) / f"{note_id}.json"
 
 
+def _note_paths(root: Path, config: dict | None, note_id: str) -> list[Path]:
+    return [base / f"{note_id}.json" for base in _capture_dirs(root, config)]
+
+
+def _existing_note_path(root: Path, config: dict | None, note_id: str) -> Path | None:
+    return next((path for path in _note_paths(root, config, note_id) if path.exists()), None)
+
+
+def _write_note_record(root: Path, config: dict | None, note_id: str, record: dict) -> None:
+    raw_path = record.pop("_path", None)
+    path = Path(str(raw_path)) if raw_path else _note_path(root, config, note_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, record)
+
+
 def _distill_log_dir(root: Path, config: dict | None, note_id: str) -> Path:
     return capture_dir(root, config) / CAPTURE_DISTILL_DIR / note_id
+
+
+def _distill_log_dirs(root: Path, config: dict | None, note_id: str) -> list[Path]:
+    return [base / CAPTURE_DISTILL_DIR / note_id for base in _capture_dirs(root, config)]
 
 
 def _safe_log_id(log_id: str) -> str:
@@ -103,6 +150,15 @@ def _safe_log_id(log_id: str) -> str:
 
 def _distill_log_path(root: Path, config: dict | None, note_id: str, log_id: str) -> Path:
     return _distill_log_dir(root, config, note_id) / f"{_safe_log_id(log_id)}.json"
+
+
+def _distill_log_paths(root: Path, config: dict | None, note_id: str, log_id: str) -> list[Path]:
+    filename = f"{_safe_log_id(log_id)}.json"
+    return [base / filename for base in _distill_log_dirs(root, config, note_id)]
+
+
+def _existing_distill_log_path(root: Path, config: dict | None, note_id: str, log_id: str) -> Path | None:
+    return next((path for path in _distill_log_paths(root, config, note_id, log_id) if path.exists()), None)
 
 
 def create_note(
@@ -137,24 +193,29 @@ def create_note(
 
 
 def list_notes(root: Path, config: dict | None = None) -> list[dict]:
-    target = capture_dir(root, config)
-    if not target.is_dir():
-        return []
     notes: list[dict] = []
-    for path in target.glob("*.json"):
-        try:
-            record = read_json(path)
-            record["_path"] = str(path)
-            notes.append(record)
-        except (OSError, ValueError):
+    seen: set[str] = set()
+    for target in _capture_dirs(root, config):
+        if not target.is_dir():
             continue
+        for path in target.glob("*.json"):
+            try:
+                record = read_json(path)
+                note_id = str(record.get("id") or path.stem)
+                if note_id in seen:
+                    continue
+                seen.add(note_id)
+                record["_path"] = str(path)
+                notes.append(record)
+            except (OSError, ValueError):
+                continue
     notes.sort(key=lambda r: str(r.get("created_at") or ""))
     return notes
 
 
 def read_note(root: Path, config: dict | None, note_id: str) -> dict | None:
-    path = _note_path(root, config, note_id)
-    if not path.exists():
+    path = _existing_note_path(root, config, note_id)
+    if path is None:
         return None
     try:
         record = read_json(path)
@@ -193,27 +254,29 @@ def update_note(
     if last_error is not None:
         record["last_error"] = last_error
     record["updated_at"] = utc_now()
-    record.pop("_path", None)
-    write_json(_note_path(root, config, note_id), record)
+    _write_note_record(root, config, note_id, record)
     return record
 
 
 def delete_note(root: Path, config: dict | None, note_id: str) -> bool:
-    path = _note_path(root, config, note_id)
-    if path.exists():
+    deleted = False
+    for path in _note_paths(root, config, note_id):
+        if not path.exists():
+            continue
         path.unlink()
-        assets = _note_assets_dir(root, config, note_id)
-        if assets.is_dir():
-            shutil.rmtree(assets, ignore_errors=True)
-        logs = _distill_log_dir(root, config, note_id)
-        if logs.is_dir():
-            shutil.rmtree(logs, ignore_errors=True)
-        return True
-    return False
+        deleted = True
+    if deleted:
+        for assets in _note_asset_dirs(root, config, note_id):
+            if assets.is_dir():
+                shutil.rmtree(assets, ignore_errors=True)
+        for logs in _distill_log_dirs(root, config, note_id):
+            if logs.is_dir():
+                shutil.rmtree(logs, ignore_errors=True)
+    return deleted
 
 
 # --------------------------------------------------------------------------- #
-# Distill agent logs: debug-only sidecars under .capture/distill/<note-id>/.
+# Distill agent logs: debug-only sidecars under capture/distill/<note-id>/.
 # They intentionally stay out of approved knowledge entries.
 # --------------------------------------------------------------------------- #
 def create_distill_log(root: Path, config: dict | None, note_id: str, data: dict) -> dict:
@@ -235,8 +298,8 @@ def create_distill_log(root: Path, config: dict | None, note_id: str, data: dict
 
 
 def update_distill_log(root: Path, config: dict | None, note_id: str, log_id: str, **updates) -> dict:
-    path = _distill_log_path(root, config, note_id, log_id)
-    if not path.exists():
+    path = _existing_distill_log_path(root, config, note_id, log_id)
+    if not path:
         raise FileNotFoundError(f"distill log not found: {log_id}")
     record = read_json(path)
     record.update(updates)
@@ -246,17 +309,22 @@ def update_distill_log(root: Path, config: dict | None, note_id: str, log_id: st
 
 
 def list_distill_logs(root: Path, config: dict | None, note_id: str) -> list[dict]:
-    target = _distill_log_dir(root, config, note_id)
-    if not target.is_dir():
-        return []
     logs: list[dict] = []
-    for path in target.glob("*.json"):
-        try:
-            record = read_json(path)
-            record["_path"] = str(path)
-            logs.append(record)
-        except (OSError, ValueError):
+    seen: set[str] = set()
+    for target in _distill_log_dirs(root, config, note_id):
+        if not target.is_dir():
             continue
+        for path in target.glob("*.json"):
+            try:
+                record = read_json(path)
+                log_id = str(record.get("id") or path.stem)
+                if log_id in seen:
+                    continue
+                seen.add(log_id)
+                record["_path"] = str(path)
+                logs.append(record)
+            except (OSError, ValueError):
+                continue
     logs.sort(key=lambda r: str(r.get("started_at") or r.get("created_at") or ""))
     return logs
 
@@ -264,10 +332,10 @@ def list_distill_logs(root: Path, config: dict | None, note_id: str) -> list[dic
 def read_distill_log(root: Path, config: dict | None, note_id: str, log_id: str | None = None) -> dict | None:
     if log_id:
         try:
-            path = _distill_log_path(root, config, note_id, log_id)
+            path = _existing_distill_log_path(root, config, note_id, log_id)
         except ValueError:
             return None
-        if not path.exists():
+        if not path:
             return None
         try:
             record = read_json(path)
@@ -280,12 +348,40 @@ def read_distill_log(root: Path, config: dict | None, note_id: str, log_id: str 
 
 
 # --------------------------------------------------------------------------- #
-# Image assets (Phase 5a): stored as files under .capture/assets/<note-id>/,
-# never committed (covered by the .capture/ gitignore). The note keeps only
-# lightweight metadata, never base64.
+# Image assets (Phase 5a): stored as files under capture/assets/<note-id>/.
+# The note keeps only lightweight metadata, never base64.
 # --------------------------------------------------------------------------- #
 def _note_assets_dir(root: Path, config: dict | None, note_id: str) -> Path:
     return capture_dir(root, config) / CAPTURE_ASSETS_DIR / note_id
+
+
+def _note_asset_dirs(root: Path, config: dict | None, note_id: str) -> list[Path]:
+    return [base / CAPTURE_ASSETS_DIR / note_id for base in _capture_dirs(root, config)]
+
+
+def _asset_path_for_image(root: Path, config: dict | None, note_id: str, image: dict) -> Path | None:
+    name = str(image.get("name") or "").strip()
+    path_text = str(image.get("path") or "").strip()
+    kb_root = knowledge_root(root, config)
+    candidates: list[Path] = []
+    if path_text:
+        candidates.append(kb_root / path_text)
+        legacy_prefix = f"{LEGACY_CAPTURE_DIR}/"
+        current_prefix = f"{CAPTURE_DIR}/"
+        if path_text.startswith(legacy_prefix):
+            candidates.append(kb_root / CAPTURE_DIR / path_text[len(legacy_prefix):])
+        if path_text.startswith(current_prefix):
+            candidates.append(kb_root / LEGACY_CAPTURE_DIR / path_text[len(current_prefix):])
+    if name:
+        candidates.extend(assets / name for assets in _note_asset_dirs(root, config, note_id))
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def add_note_image(
@@ -334,9 +430,8 @@ def add_note_image(
     # and approve-time promotion.
     ref = f"![{original or name}](/api/kb/capture/image?id={note_id}&name={name})"
     record["text"] = (str(record.get("text") or "").rstrip() + f"\n\n{ref}\n").lstrip("\n")
-    record.pop("_path", None)
     record["updated_at"] = utc_now()
-    write_json(_note_path(root, config, note_id), record)
+    _write_note_record(root, config, note_id, record)
     return image
 
 
@@ -348,13 +443,12 @@ def remove_note_image(root: Path, config: dict | None, note_id: str, name: str) 
     kept = [img for img in images if img.get("name") != name]
     if len(kept) == len(images):
         return False
-    asset = _note_assets_dir(root, config, note_id) / name
-    if asset.exists():
+    asset = _asset_path_for_image(root, config, note_id, {"name": name})
+    if asset and asset.exists():
         asset.unlink()
     record["images"] = kept
-    record.pop("_path", None)
     record["updated_at"] = utc_now()
-    write_json(_note_path(root, config, note_id), record)
+    _write_note_record(root, config, note_id, record)
     return True
 
 
@@ -383,7 +477,7 @@ def promote_assets_for_entry(
 
     Phase 5b: called from ``approve_candidate``. Copy-only (no git), idempotent
     (skips files that already exist, never overwrites), and the raw
-    ``.capture/assets`` is left intact. Returns ``{source_note_id, assets,
+    ``capture/assets`` is left intact. Returns ``{source_note_id, assets,
     body_suffix}`` to splice into the entry, or ``None`` when there is nothing to
     promote.
     """
@@ -408,8 +502,8 @@ def promote_assets_for_entry(
     refs: list[str] = []
     for img in note["images"]:
         name = img.get("name")
-        src = kb_root / str(img.get("path") or "")
-        if not name or not src.is_file():
+        src = _asset_path_for_image(root, config, note_id, img)
+        if not name or src is None or not src.is_file():
             continue
         target = dest / name
         if not target.exists():  # idempotent: never overwrite an existing asset
@@ -431,8 +525,8 @@ def read_note_image(root: Path, config: dict | None, note_id: str, name: str) ->
     image = next((img for img in (record.get("images") or []) if img.get("name") == name), None)
     if image is None:
         return None
-    asset = _note_assets_dir(root, config, note_id) / name
-    if not asset.is_file():
+    asset = _asset_path_for_image(root, config, note_id, image)
+    if asset is None or not asset.is_file():
         return None
     try:
         return asset.read_bytes(), str(image.get("mime") or "application/octet-stream")

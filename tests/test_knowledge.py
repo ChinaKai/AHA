@@ -5,6 +5,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from aha_cli.cli import main
 from aha_cli.domain.models import default_config
 from aha_cli.store.config import load_config
@@ -146,12 +148,19 @@ def test_init_is_idempotent_and_builds_layout(tmp_path: Path):
     kb_root = knowledge_root(root, cfg)
     assert (kb_root / "general" / "wiki").is_dir()
     assert (kb_root / "general" / "solutions").is_dir()
+    assert not (kb_root / "general" / "navigation").exists()
+    assert (kb_root / "personal" / "wiki").is_dir()
+    assert (kb_root / "personal" / "solutions").is_dir()
+    assert not (kb_root / "personal" / "navigation").exists()
     assert (kb_root / "projects").is_dir()
     assert (kb_root / "aha-knowledge.json").is_file()
     assert (kb_root / "README.md").is_file()
-    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8")
+    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".pending/" in gitignore
-    assert ".capture/" in gitignore
+    assert "capture/distill/" in gitignore
+    assert ".capture/distill/" in gitignore
+    assert ".capture/" not in gitignore
+    assert "capture/" not in gitignore
     assert ".nav_drafts/" in gitignore
 
     index_before = json.loads((kb_root / "aha-knowledge.json").read_text())
@@ -166,14 +175,40 @@ def test_init_updates_existing_knowledge_gitignore(tmp_path: Path):
     cfg = load_config(root)
     kb_root = knowledge_root(root, cfg)
     kb_root.mkdir(parents=True)
-    (kb_root / ".gitignore").write_text(".pending/\n", encoding="utf-8")
+    (kb_root / ".gitignore").write_text(".pending/\n.capture/\ncapture/\n", encoding="utf-8")
 
     init_knowledge_base(root, cfg)
 
-    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8")
+    gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".pending/" in gitignore
-    assert ".capture/" in gitignore
+    assert "capture/distill/" in gitignore
+    assert ".capture/distill/" in gitignore
+    assert ".capture/" not in gitignore
+    assert "capture/" not in gitignore
     assert ".nav_drafts/" in gitignore
+
+
+def test_navigation_entries_are_project_scoped(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = load_config(root)
+    init_knowledge_base(root, cfg)
+
+    assert list_entries(root, config=cfg, scope="general", kind="navigation") == []
+    assert list_entries(root, config=cfg, scope="personal", kind="navigation") == []
+    with pytest.raises(ValueError):
+        write_entry(root, config=cfg, scope="personal", kind="navigation", title="Nav", body="x")
+
+    path = write_entry(
+        root,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="git-abc",
+        title="Project nav",
+        body="x",
+        slug="index",
+    )
+    assert path.exists()
 
 
 def test_write_read_list_entry(tmp_path: Path):
