@@ -10,6 +10,7 @@ from aha_cli.cli import main
 from aha_cli.web.task_command_format import (
     finalization_prompt,
     format_agent_command,
+    format_aha_kb_command,
     format_aha_command,
     format_task_journal_for_prompt,
 )
@@ -43,6 +44,7 @@ class TaskCommandFormatTests(unittest.TestCase):
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
         self.assertIn("/aha final", help_text)
+        self.assertIn("/aha kb <message>", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)
@@ -55,6 +57,21 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertIn("without asking task-main", complete_text)
         for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, done_text, unknown_text):
             self.assertIn("Unsupported AHA command", text)
+
+    def test_format_aha_kb_command_forwards_minimal_knowledge_prompt(self) -> None:
+        handled, forwarded, reply = format_aha_kb_command("/aha kb 将刚才整理的蓝牙配网流程输出到知识库")
+        empty_handled, empty_forwarded, empty_reply = format_aha_kb_command("/aha kb")
+
+        self.assertFalse(handled)
+        self.assertIsNotNone(forwarded)
+        self.assertIsNone(reply)
+        self.assertIn("AHA knowledge-base feedback request.", forwarded or "")
+        self.assertIn("Use only your existing backend session context", forwarded or "")
+        self.assertIn("Do not generate project navigation entries here", forwarded or "")
+        self.assertIn("将刚才整理的蓝牙配网流程输出到知识库", forwarded or "")
+        self.assertTrue(empty_handled)
+        self.assertIsNone(empty_forwarded)
+        self.assertIn("Usage: /aha kb <message>", empty_reply or "")
 
     def test_format_aha_without_task_and_missing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

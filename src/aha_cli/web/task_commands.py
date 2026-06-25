@@ -13,6 +13,7 @@ from aha_cli.web.task_command_actions import (
 from aha_cli.web.task_command_format import (
     finalization_prompt,
     format_agent_command,
+    format_aha_kb_command,
     format_aha_command,
     format_task_journal_for_prompt,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "complete_selected_task",
     "finalization_prompt",
     "format_agent_command",
+    "format_aha_kb_command",
     "format_aha_command",
     "format_task_journal_for_prompt",
     "handle_slash_command",

@@ -48,6 +48,7 @@ class TaskCommandTests(unittest.TestCase):
                 empty_handled, empty_forwarded, empty_reply = format_agent_command(aha_root, run_id, "task-001", "main", "/agent")
 
         self.assertIn("/aha final", help_text)
+        self.assertIn("/aha kb <message>", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)

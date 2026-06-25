@@ -6,7 +6,7 @@ from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import task_snapshot
 
 
-SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha final, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
+SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha final, /aha kb <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
 
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
@@ -23,6 +23,8 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
         return f"Task not found: {task_id}"
     if name == "final":
         return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
+    if name == "kb":
+        return "Use `/aha kb <message>` from the selected task conversation to ask the current agent to emit knowledge-base candidates from its sticky session context."
     if name == "complete":
         return "Use `/aha complete` from the selected task conversation to mark the task completed without asking task-main to generate a Final."
     if name == "reopen":
@@ -38,6 +40,15 @@ def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id:
     if not suffix:
         return True, None, "Usage: /agent <command> routes /<command> to the selected agent. Example: /agent status -> /status"
     return False, suffix if suffix.startswith("/") else f"/{suffix}", None
+
+
+def format_aha_kb_command(command: str) -> tuple[bool, str | None, str | None]:
+    parts = command.split(maxsplit=2)
+    suffix = parts[2].strip() if len(parts) > 2 and parts[0] == "/aha" and parts[1] == "kb" else ""
+    if not suffix:
+        return True, None, "Usage: /aha kb <message> asks the current agent to generate knowledge-base candidates from its sticky session context."
+    prompt = render_prompt_template("knowledge_command.md", instruction=suffix).rstrip()
+    return False, prompt, None
 
 
 def format_task_journal_for_prompt(rounds: list[dict]) -> str:
@@ -132,6 +143,7 @@ __all__ = [
     "finalization_prompt",
     "format_finalization_context_for_prompt",
     "format_agent_command",
+    "format_aha_kb_command",
     "format_aha_command",
     "format_knowledge_feedback_context_for_prompt",
     "format_task_journal_for_prompt",

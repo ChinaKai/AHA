@@ -48,6 +48,32 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertEqual(payload, {"command_namespace": "agent", "original_command": "/agent status"})
         self.assertEqual(calls, [])
 
+    def test_aha_kb_command_is_forwarded_with_plain_sticky_metadata(self) -> None:
+        handlers, calls = self.make_handlers()
+
+        handled, forwarded, payload = handle_slash_command(
+            Path("/tmp/root"),
+            "run-1",
+            {"sender": "browser", "target": "main"},
+            "/aha kb 将刚才整理的蓝牙配网流程输出到知识库",
+            "task-001",
+            handlers=handlers,
+        )
+
+        self.assertFalse(handled)
+        self.assertIsNotNone(forwarded)
+        self.assertIn("AHA knowledge-base feedback request.", forwarded or "")
+        self.assertIn("蓝牙配网流程", forwarded or "")
+        self.assertEqual(
+            payload,
+            {
+                "command_namespace": "aha_kb",
+                "original_command": "/aha kb 将刚才整理的蓝牙配网流程输出到知识库",
+                "plain_sticky": True,
+            },
+        )
+        self.assertEqual(calls, [])
+
     def test_default_handlers_use_format_and_action_candidates(self) -> None:
         from aha_cli.web import task_command_actions
 
@@ -55,6 +81,8 @@ class TaskCommandRouterTests(unittest.TestCase):
 
         self.assertEqual(handlers.format_aha_command.__module__, "aha_cli.web.task_command_format")
         self.assertEqual(handlers.format_agent_command.__module__, "aha_cli.web.task_command_format")
+        self.assertIsNotNone(handlers.format_aha_kb_command)
+        self.assertEqual((handlers.format_aha_kb_command).__module__, "aha_cli.web.task_command_format")
         self.assertIs(handlers.request_task_finalization, task_command_actions.request_task_finalization)
 
     def test_aha_final_records_command_and_returns_backend_autostart(self) -> None:

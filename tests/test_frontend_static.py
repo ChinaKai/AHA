@@ -3393,6 +3393,8 @@ class FrontendStaticTests(unittest.TestCase):
         script = (root / "src" / "aha_cli" / "web" / "static" / "app_controller_factory.js").read_text(encoding="utf-8")
 
         self.assertIn('name: "/aha final"', script)
+        self.assertIn('name: "/aha kb"', script)
+        self.assertIn('insert: "/aha kb "', script)
         self.assertIn('name: "/aha complete"', script)
         self.assertIn('name: "/aha reopen"', script)
         self.assertIn('name: "/aha interrupt"', script)

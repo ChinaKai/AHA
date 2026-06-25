@@ -10,6 +10,7 @@ from aha_cli.domain.models import default_knowledge_config
 from aha_cli.services.knowledge_distill import (
     build_distill_context,
     distill_and_enqueue,
+    distill_after_kb_command,
     heuristic_solution_candidate,
     normalize_sidecar_candidates,
 )
@@ -301,9 +302,9 @@ def test_pluggable_distiller_overrides_heuristic(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
-# Integration: a real finalize triggers distillation when enabled.
+# Integration: finalize only feeds back navigation.
 # --------------------------------------------------------------------------- #
-def test_finalize_triggers_distill_when_final_has_reusable_section(tmp_path: Path):
+def test_finalize_does_not_distill_non_navigation_without_sidecar(tmp_path: Path):
     home = tmp_path / ".aha"
     rc = main(["--home", str(home), "init"])
     assert rc == 0
@@ -337,9 +338,7 @@ def test_finalize_triggers_distill_when_final_has_reusable_section(tmp_path: Pat
     )
 
     pending = list_pending(home, load_config(home))
-    assert len(pending) == 1
-    assert pending[0]["meta"]["distilled_by"] == "heuristic"
-    assert pending[0]["title"].startswith("Bundle submodule")
+    assert pending == []
 
 
 def test_finalize_plain_bug_fix_does_not_create_heuristic_candidate(tmp_path: Path):
@@ -400,7 +399,7 @@ def test_memo_report_triggers_distill_when_enabled(tmp_path: Path):
     assert pending[0]["source"]["memo_id"] == memo["id"]
 
 
-def test_final_sidecar_is_stripped_and_enqueued(tmp_path: Path):
+def test_final_non_navigation_sidecar_is_stripped_without_enqueue(tmp_path: Path):
     home = tmp_path / ".aha"
     main(["--home", str(home), "init"])
     out = io.StringIO()
@@ -425,10 +424,47 @@ def test_final_sidecar_is_stripped_and_enqueued(tmp_path: Path):
     output = home / "runs" / run_id / plan["tasks"][0]["output_file"]
     assert "<aha_knowledge_candidates>" not in output.read_text(encoding="utf-8")
     pending = list_pending(home, load_config(home))
+    assert pending == []
+
+
+def test_kb_command_sidecar_is_enqueued(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "KB command flow", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    plan = require_plan(home, run_id)
+    task = plan["tasks"][0]
+
+    result = distill_after_kb_command(
+        home,
+        run_id,
+        "task-001",
+        "已整理。",
+        task_title=task["title"],
+        workspace_path=task.get("workspace_path"),
+        goal=plan.get("goal"),
+        sidecar_candidates=[
+            {
+                "kind": "solutions",
+                "scope": "project",
+                "title": "蓝牙配网流程整理",
+                "body": "## 适用场景\n整理蓝牙配网流程时只保留用户确认过的步骤。",
+                "tags": ["bluetooth"],
+            }
+        ],
+    )
+
+    pending = list_pending(home, load_config(home))
+    assert result["candidates"] == 1
     assert len(pending) == 1
-    assert pending[0]["title"] == "Use sidecar"
-    assert pending[0]["meta"]["distilled_by"] == "sidecar"
-    assert pending[0]["body"].startswith("## When")
+    assert pending[0]["title"] == "蓝牙配网流程整理"
+    assert pending[0]["source"]["source_type"] == "kb_command"
+    assert pending[0]["kind"] == "solutions"
 
 
 def test_final_navigation_sidecar_emits_nav_delta_event(tmp_path: Path):
@@ -525,7 +561,8 @@ def test_linked_final_and_memo_sidecars_merge_pending_candidate(tmp_path: Path):
     assert pending[0]["title"] == "Same reusable rule"
     assert pending[0]["body"] == "Memo-enriched version\n"
     assert pending[0]["source_group"].endswith("/task/task-001")
-    assert len(pending[0]["sources"]) == 2
+    assert len(pending[0]["sources"]) == 1
+    assert pending[0]["sources"][0]["source_type"] == "memo_report"
 
 
 def test_finalize_distill_is_noop_when_disabled(tmp_path: Path):

@@ -840,6 +840,20 @@ def chat_prompt(
             )
             if not is_result_request:
                 context_fingerprint_updates = _prompt_context_fingerprints(root, detail["task"])
+            if sticky_delta and item.get("plain_sticky") and not components["recovery_context"].strip():
+                prompt = str(item.get("message") or "")
+                _fill_prompt_metrics(
+                    metrics,
+                    prompt,
+                    target=target,
+                    item=item,
+                    components={"user_message": prompt},
+                    is_finalization=is_finalization,
+                    is_agent_command=is_agent_command,
+                    event_limit=0,
+                    prompt_mode="sticky_delta",
+                )
+                return prompt
             if is_agent_command:
                 command = str(item.get("message", "") or "")
                 original_command = str(item.get("original_command", "") or "")

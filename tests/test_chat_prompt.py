@@ -1208,6 +1208,47 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(next_prompt, "next")
         self.assertEqual(set(next_metrics["components"]), {"user_message"})
 
+    def test_plain_sticky_message_skips_runtime_context_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Plain sticky queued", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "disabled",
+                }
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                cfg_path = config_path(root)
+                cfg = read_json(cfg_path)
+                cfg["knowledge"]["enabled"] = True
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "继续刚才的问题",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertEqual(prompt, "继续刚才的问题")
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertEqual(set(metrics["components"]), {"user_message"})
+        self.assertNotIn("AHA runtime context update", prompt)
+        self.assertNotIn("context_delta", metrics["components"])
+        self.assertNotIn("context_fingerprint_updates", metrics)
+
     def test_sticky_delta_expands_commit_policy_on_commit_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

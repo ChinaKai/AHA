@@ -62,6 +62,7 @@ SAMPLE_VALUES = {
     "index": "1",
     "inbox_file": "inbox.jsonl",
     "inbox_preview": "(empty)",
+    "instruction": "Save the Bluetooth provisioning flow to the knowledge base.",
     "items": "1. Round summary",
     "jsonl_exists": "True",
     "jsonl_path": "session.jsonl",

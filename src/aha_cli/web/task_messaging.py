@@ -87,6 +87,20 @@ def message_backend_autostart_config(root: Path, run_id: str, task_id: str | Non
     }
 
 
+def message_should_use_plain_sticky(root: Path, run_id: str, task_id: str | None, target_id: str, command_payload: dict) -> bool:
+    if command_payload.get("plain_sticky"):
+        return True
+    if command_payload.get("command_namespace"):
+        return False
+    if not task_id or not target_id:
+        return False
+    try:
+        state = backend_status(root, run_id, target_id, task_id=task_id)
+    except Exception:  # noqa: BLE001 - status polling should not block message storage.
+        return False
+    return str(state.get("status") or "").lower() in {"running", "busy"}
+
+
 def save_chat_offset_after_message(root: Path, run_id: str, task_id: str, target_id: str) -> None:
     inbox = inbox_path(root, run_id, target_id)
     offset_file = chat_offset_path(run_dir(root, run_id), target_id, task_id)
@@ -263,6 +277,7 @@ def handle_send_payload(
 
     message = agent_message or message
     recovery_context = consume_agent_recovery_context(root, run_id, task_id, target_id)
+    plain_sticky = message_should_use_plain_sticky(root, run_id, task_id, target_id, command_payload)
     sent = append_message(
         root,
         run_id,
@@ -277,6 +292,7 @@ def handle_send_payload(
         original_command=str(command_payload.get("original_command", "") or "") or None,
         result_policy=str(command_payload.get("result_policy", "") or "") or None,
         recovery_context=recovery_context or None,
+        plain_sticky=plain_sticky,
     )
     response = {"ok": True, "message": sent}
     if supervision_host_message and task_id:
@@ -313,6 +329,7 @@ __all__ = [
     "is_supervision_host_message",
     "is_task_supervision_host_target",
     "message_backend_autostart_config",
+    "message_should_use_plain_sticky",
     "realtime_debug_log",
     "save_chat_offset_after_message",
     "task_host_review_message_blocker",

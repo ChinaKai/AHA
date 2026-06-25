@@ -18,6 +18,7 @@ class SlashCommandHandlers:
     prepare_task_main_autostart: Callable[[Path, str, str | None], dict | None]
     append_message: Callable[..., dict]
     append_event: Callable[..., dict]
+    format_aha_kb_command: Callable[[str], tuple[bool, str | None, str | None]] | None = None
 
 
 def default_slash_command_handlers() -> SlashCommandHandlers:
@@ -28,7 +29,7 @@ def default_slash_command_handlers() -> SlashCommandHandlers:
         reopen_selected_task,
     )
     from aha_cli.web.task_command_actions import prepare_task_main_autostart
-    from aha_cli.web.task_command_format import format_agent_command, format_aha_command
+    from aha_cli.web.task_command_format import format_agent_command, format_aha_command, format_aha_kb_command
 
     return SlashCommandHandlers(
         format_aha_command=format_aha_command,
@@ -40,6 +41,7 @@ def default_slash_command_handlers() -> SlashCommandHandlers:
         prepare_task_main_autostart=prepare_task_main_autostart,
         append_message=append_message,
         append_event=append_event,
+        format_aha_kb_command=format_aha_kb_command,
     )
 
 
@@ -75,6 +77,15 @@ def handle_slash_command(
                 return False, agent_message, {"command_namespace": "agent", "original_command": stripped}
             reply = reply or "Usage: /agent send <message>"
     elif stripped == "/aha" or stripped.startswith("/aha "):
+        parts = stripped.split()
+        name = parts[1] if len(parts) > 1 else ""
+        if name == "kb":
+            formatter = handlers.format_aha_kb_command
+            if formatter is None:
+                from aha_cli.web.task_command_format import format_aha_kb_command as formatter
+            handled, agent_message, reply = formatter(stripped)
+            if not handled and agent_message:
+                return False, agent_message, {"command_namespace": "aha_kb", "original_command": stripped, "plain_sticky": True}
         handlers.append_message(
             root,
             run_id,
@@ -87,11 +98,11 @@ def handle_slash_command(
             to_agent="aha",
             agent_id=target,
         )
-        parts = stripped.split()
-        name = parts[1] if len(parts) > 1 else ""
         if name == "final":
             backend_autostart = handlers.prepare_task_main_autostart(root, run_id, task_id)
             reply = handlers.request_task_finalization(root, run_id, task_id, stripped)
+        elif name == "kb":
+            reply = reply or handlers.format_aha_command(root, run_id, task_id, stripped, target)
         elif name == "complete":
             reply, completion_payload = handlers.complete_selected_task(root, run_id, task_id)
         elif name == "reopen":
@@ -101,7 +112,7 @@ def handle_slash_command(
         else:
             reply = handlers.format_aha_command(root, run_id, task_id, stripped, target)
     else:
-        reply = f"Unknown command: {stripped.split()[0]}. Supported slash commands: /aha final, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
+        reply = f"Unknown command: {stripped.split()[0]}. Supported slash commands: /aha final, /aha kb <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
     handlers.append_event(root, run_id, "aha_command_handled", {"task_id": task_id, "command": stripped})
     response = handlers.append_message(
