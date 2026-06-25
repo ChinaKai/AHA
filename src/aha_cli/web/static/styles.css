@@ -1112,6 +1112,9 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   stroke: #e4e7ec;
   stroke-width: 1;
 }
+.token-usage-chart-grid.axis {
+  stroke: #cbd5e1;
+}
 .token-usage-chart-line {
   fill: none;
   stroke: #2563eb;
@@ -1127,6 +1130,9 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
 .token-usage-chart-label {
   fill: #667085;
   font-size: 11px;
+}
+.token-usage-chart-label.y {
+  text-anchor: end;
 }
 .token-usage-chart-label.end {
   text-anchor: end;

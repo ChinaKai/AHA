@@ -155,14 +155,27 @@
     if (!points.length) return "";
     const width = 720;
     const height = 180;
-    const pad = 30;
+    const padLeft = 64;
+    const padRight = 18;
+    const padTop = 18;
+    const padBottom = 30;
+    const chartWidth = width - padLeft - padRight;
+    const chartHeight = height - padTop - padBottom;
     const maxTotal = Math.max(1, ...points.map(point => point.total));
-    const xStep = points.length > 1 ? (width - pad * 2) / (points.length - 1) : 0;
+    const xStep = points.length > 1 ? chartWidth / (points.length - 1) : 0;
     const coords = points.map((point, index) => {
-      const x = points.length > 1 ? pad + index * xStep : width / 2;
-      const y = height - pad - (point.total / maxTotal) * (height - pad * 2);
+      const x = points.length > 1 ? padLeft + index * xStep : padLeft + chartWidth / 2;
+      const y = padTop + chartHeight - (point.total / maxTotal) * chartHeight;
       return { ...point, x, y };
     });
+    const gridTicks = [1, 0.75, 0.5, 0.25, 0];
+    const gridHtml = gridTicks.map(ratio => {
+      const y = padTop + chartHeight - ratio * chartHeight;
+      return `<g>
+        <line class="token-usage-chart-grid" x1="${padLeft}" y1="${y.toFixed(2)}" x2="${width - padRight}" y2="${y.toFixed(2)}"></line>
+        <text class="token-usage-chart-label y" x="${padLeft - 8}" y="${(y + 4).toFixed(2)}">${escapeHtml(numberText(Math.round(maxTotal * ratio)))}</text>
+      </g>`;
+    }).join("");
     const polyline = coords.map(point => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
     const last = coords[coords.length - 1];
     return `<div class="token-usage-chart">
@@ -171,13 +184,12 @@
         <strong>${escapeHtml(numberText(last.total))}</strong>
       </div>
       <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(t("token_usage.all_total_trend", "All total trend"))}">
-        <line class="token-usage-chart-grid" x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}"></line>
-        <line class="token-usage-chart-grid" x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}"></line>
+        ${gridHtml}
+        <line class="token-usage-chart-grid axis" x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${height - padBottom}"></line>
         <polyline class="token-usage-chart-line" points="${polyline}"></polyline>
         ${coords.map(point => `<circle class="token-usage-chart-point" cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3"><title>${escapeHtml(point.date)} ${escapeHtml(numberText(point.total))}</title></circle>`).join("")}
-        <text class="token-usage-chart-label" x="${pad}" y="${height - 8}">${escapeHtml(points[0].date)}</text>
-        <text class="token-usage-chart-label end" x="${width - pad}" y="${height - 8}">${escapeHtml(points[points.length - 1].date)}</text>
-        <text class="token-usage-chart-label" x="${pad + 4}" y="${pad - 8}">${escapeHtml(numberText(maxTotal))}</text>
+        <text class="token-usage-chart-label" x="${padLeft}" y="${height - 8}">${escapeHtml(points[0].date)}</text>
+        <text class="token-usage-chart-label end" x="${width - padRight}" y="${height - 8}">${escapeHtml(points[points.length - 1].date)}</text>
       </svg>
     </div>`;
   }
@@ -316,7 +328,7 @@
           </div>
         </div>
         <div class="token-usage-metrics">${usageSummaryCells(totals)}</div>
-        ${loading || error ? "" : unavailable ? unavailableHtml(unavailableReason) : cacheMissing ? noCacheHtml() : `${dailyRowsHtml(data?.days || [], totals)}${totalTrendHtml(data?.days || [])}`}
+        ${loading || error ? "" : unavailable ? unavailableHtml(unavailableReason) : cacheMissing ? noCacheHtml() : `${totalTrendHtml(data?.days || [])}${dailyRowsHtml(data?.days || [], totals)}`}
       </section>`;
       schedulePoll();
     }
