@@ -107,7 +107,7 @@ from aha_cli.store.knowledge import (
     write_entry as knowledge_write_entry,
 )
 from aha_cli.services.knowledge_git import auto_commit_after_change as knowledge_auto_commit
-from aha_cli.web.server import request_task_finalization_with_backend, run_ui_server
+from aha_cli.web.server import run_ui_server
 from aha_cli.web.task_command_actions import complete_selected_task
 from aha_cli.websocket.server import run_ws_server
 
@@ -1240,18 +1240,6 @@ def cmd_task(args: argparse.Namespace) -> int:
             print(f"{task['id']} [{task['status']}] agents={len(task.get('agents', []))} {task['title']}")
     elif args.task_cmd == "show":
         print(json.dumps(task_snapshot(root, run_id, args.task_id), indent=2, ensure_ascii=False))
-    elif args.task_cmd == "final":
-        payload = request_task_finalization_with_backend(
-            root,
-            run_id,
-            args.task_id,
-            f"aha task final {run_id} {args.task_id}",
-            autostart_backend=not args.no_autostart,
-        )
-        print(payload["message"])
-        backend = payload.get("backend")
-        if backend:
-            print(f"Backend: {backend.get('status')} pid={backend.get('pid') or '-'}")
     elif args.task_cmd == "complete":
         message, payload = complete_selected_task(root, run_id, args.task_id)
         print(message)

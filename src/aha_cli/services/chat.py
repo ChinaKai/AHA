@@ -536,6 +536,36 @@ def _distill_kb_command_safe(
         append_event(root, run_id, "knowledge_kb_command_distill_failed", {"task_id": task_id, "error": str(exc)})
 
 
+def _distill_nav_command_safe(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    task: dict,
+    visible_reply: str,
+    sidecar_candidates: list[dict] | None,
+) -> None:
+    """Best-effort `/aha nav` sidecar hook. Never breaks the chat response."""
+    try:
+        from aha_cli.services.knowledge_distill import distill_after_nav_command, navigation_delta_event_payload
+
+        result = distill_after_nav_command(
+            root,
+            run_id,
+            task_id,
+            visible_reply,
+            task_title=str(task.get("title") or ""),
+            workspace_path=task.get("workspace_path"),
+            goal=require_plan(root, run_id).get("goal"),
+            sidecar_candidates=sidecar_candidates,
+        )
+        append_event(root, run_id, "knowledge_nav_command_distilled", {"task_id": task_id, "result": result})
+        navigation_event = navigation_delta_event_payload(result, source_type="nav_command", task_id=task_id)
+        if navigation_event:
+            append_event(root, run_id, "knowledge_navigation_delta", navigation_event)
+    except Exception as exc:  # noqa: BLE001 - nav feedback must not affect the agent turn
+        append_event(root, run_id, "knowledge_nav_command_distill_failed", {"task_id": task_id, "error": str(exc)})
+
+
 def auto_reply(root: Path, run_id: str, args) -> int:
     require_plan(root, run_id)
     inbox = inbox_path(root, run_id, args.target)
@@ -626,10 +656,11 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 task = detail["task"] if detail else {}
                 is_agent_command = item.get("command_namespace") == "agent"
                 is_kb_command = item.get("command_namespace") == "aha_kb"
+                is_nav_command = item.get("command_namespace") == "aha_nav"
                 result_policy = str(item.get("result_policy") or "")
                 is_finalization = result_policy == "finalize"
                 is_memo_report = result_policy == "memo_report"
-                manages_task_status = bool(item_task_id and not is_agent_command and not is_kb_command and not is_memo_report)
+                manages_task_status = bool(item_task_id and not is_agent_command and not is_kb_command and not is_nav_command and not is_memo_report)
                 writes_task_final = bool(item_task_id and is_finalization)
                 agent = next((entry for entry in task.get("agents", []) if entry.get("id") == agent_id), None)
                 if args.target == "main" and original_sender.startswith("sub-") and item_task_id:
@@ -1068,12 +1099,15 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 supervision_waiting_for_host = False
                 if exit_code == 0 and reply.strip():
                     executed = execute_actions(root, run_id, item_task_id, reply)
-                    if is_kb_command:
+                    if is_kb_command or is_nav_command:
                         display_source, sidecar_candidates, sidecar_error = split_knowledge_sidecar(reply)
                         if sidecar_error:
-                            append_event(root, run_id, "knowledge_kb_command_sidecar_invalid", {"task_id": item_task_id, "error": sidecar_error})
-                        if item_task_id:
+                            event_type = "knowledge_kb_command_sidecar_invalid" if is_kb_command else "knowledge_nav_command_sidecar_invalid"
+                            append_event(root, run_id, event_type, {"task_id": item_task_id, "error": sidecar_error})
+                        if item_task_id and is_kb_command:
                             _distill_kb_command_safe(root, run_id, item_task_id, task, display_source, sidecar_candidates)
+                        elif item_task_id and is_nav_command:
+                            _distill_nav_command_safe(root, run_id, item_task_id, task, display_source, sidecar_candidates)
                     else:
                         display_source = split_knowledge_sidecar(reply)[0] if writes_task_final else reply
                     display_reply = action_response_text(display_source)

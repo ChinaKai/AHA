@@ -1247,8 +1247,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('setDisabled(elements.taskMemoConvertEl, editorMode !== "edit");', memo_controller)
         self.assertIn('elements.taskMemoConvertEl.classList.toggle("task-memo-action-blocked", blockTaskAction);', memo_controller)
         self.assertIn("async function showTaskActionSaveFirstDialog", memo_controller)
-        self.assertIn("async function confirmLinkedTaskFinalization", memo_controller)
-        self.assertIn("payload.request_task_final = await confirmLinkedTaskFinalization(payload.created_task_id);", memo_controller)
+        self.assertIn("async function confirmLinkedTaskCompletion", memo_controller)
+        self.assertIn("payload.complete_linked_task = await confirmLinkedTaskCompletion(payload.created_task_id);", memo_controller)
         self.assertIn('t("memo.task_action_save_first"', memo_controller)
         self.assertIn('"memo.task_action_save_first": "Save memo changes before using task actions."', i18n)
         self.assertIn('"memo.task_action_save_first": "请先保存修改，再操作任务。"', i18n)
@@ -1258,8 +1258,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('"memo.task_final_confirm_title": "同步完成关联任务？"', i18n)
         self.assertIn('"memo.task_final_confirm": "Complete task"', i18n)
         self.assertIn('"memo.task_final_confirm": "完成任务"', i18n)
-        self.assertIn('"memo.task_final_queued": "Linked task finalization started."', i18n)
-        self.assertIn('"memo.task_final_queued": "关联任务 Final 已开始生成。"', i18n)
+        self.assertIn('"memo.task_final_queued": "Linked task completed."', i18n)
+        self.assertIn('"memo.task_final_queued": "关联任务已完成。"', i18n)
         self.assertNotIn('"memo.report_generating"', i18n)
         self.assertNotIn(".task-memo-markdown-editor.is-report .task-memo-description-editor", styles)
         self.assertIn(".task-memo-description-editor table", styles)
@@ -2146,7 +2146,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(b"Content-Type: image/svg+xml", logo_response)
         self.assertIn(b"Content-Type: image/svg+xml", favicon_response)
 
-    def test_frontend_confirms_task_final_and_hide(self) -> None:
+    def test_frontend_confirms_task_complete_and_hide(self) -> None:
         root = Path(__file__).resolve().parents[1]
         static = root / "src" / "aha_cli" / "web" / "static"
         html = (static / "index.html").read_text(encoding="utf-8")
@@ -2163,9 +2163,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('return await controllers.appActions?.()?.dispatch("task-visibility"', app_bridge_script)
         self.assertIn("confirmDialogAction(confirmPayloads[action])", update_task_block)
         self.assertIn('title: "Hide task?"', update_task_block)
-        self.assertIn('title: "Generate Final?"', update_task_block)
+        self.assertNotIn('title: "Generate Final?"', update_task_block)
         self.assertIn('title: "Complete task?"', update_task_block)
-        self.assertIn('message: "Mark this task completed without generating a Final."', update_task_block)
+        self.assertIn('message: "Mark this task completed."', update_task_block)
         self.assertNotIn("confirm(`Hide", update_task_block)
         self.assertNotIn("confirm(`Ask task-main", update_task_block)
 
@@ -2464,7 +2464,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('class="task-list-controls"', html)
         self.assertIn('id="task-settings-panel"', html)
         self.assertIn('id="task-settings-actions"', html)
-        self.assertIn('data-task-settings-role="direct-complete"', html)
+        self.assertNotIn('data-task-settings-role="direct-complete"', html)
         self.assertIn('id="task-visibility-filter"', html)
         self.assertIn('class="task-create-row"', html)
         self.assertIn('class="task-create-trigger"', html)
@@ -3030,7 +3030,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn('details class="task-more"', task_list_script)
         self.assertIn("data-task-settings-trigger", task_list_script)
         self.assertIn("data-task-settings-action", task_controller_script)
-        self.assertIn('taskSettingsButton("direct-complete")', task_controller_script)
+        self.assertNotIn('taskSettingsButton("direct-complete")', task_controller_script)
         self.assertIn('t("task.complete", "Complete")', task_controller_script)
         self.assertIn("let taskSettingsTaskId", task_controller_script)
         self.assertIn("function taskSettingsTask()", task_controller_script)
@@ -3394,9 +3394,11 @@ class FrontendStaticTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         script = (root / "src" / "aha_cli" / "web" / "static" / "app_controller_factory.js").read_text(encoding="utf-8")
 
-        self.assertIn('name: "/aha final"', script)
+        self.assertNotIn('name: "/aha final"', script)
         self.assertIn('name: "/aha kb"', script)
         self.assertIn('insert: "/aha kb "', script)
+        self.assertIn('name: "/aha nav"', script)
+        self.assertIn('insert: "/aha nav "', script)
         self.assertIn('name: "/aha complete"', script)
         self.assertIn('name: "/aha reopen"', script)
         self.assertIn('name: "/aha interrupt"', script)

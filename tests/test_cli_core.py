@@ -1361,7 +1361,7 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("pending-messages", html)
                 self.assertIn("command-menu", html)
                 self.assertIn("conversation-filters", html)
-                self.assertIn('data-mobile-action="final"', html)
+                self.assertNotIn('data-mobile-action="final"', html)
 
     def test_package_onebin_builds_executable_with_ui_static(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1488,8 +1488,8 @@ class CliCoreTests(unittest.TestCase):
                 )
                 self.assertTrue(handled)
                 self.assertIsNone(agent_message)
-                self.assertIn("/aha final", payload["message"]["message"])
                 self.assertIn("/aha kb <message>", payload["message"]["message"])
+                self.assertIn("/aha nav <message>", payload["message"]["message"])
                 self.assertIn("/aha complete", payload["message"]["message"])
                 self.assertIn("/aha reopen", payload["message"]["message"])
                 self.assertIn("/aha interrupt", payload["message"]["message"])
@@ -1507,10 +1507,8 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIsNone(agent_message)
                 self.assertIn("message", payload)
                 main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
-                self.assertEqual(main_messages[-1]["sender"], "aha")
-                self.assertEqual(main_messages[-1]["result_policy"], "finalize")
-                self.assertEqual(main_messages[-1]["original_command"], "/aha final")
-                self.assertIn("Generate or update the task Final", main_messages[-1]["message"])
+                self.assertEqual(main_messages, [])
+                self.assertIn("Unsupported AHA command", payload["message"]["message"])
 
                 handled, agent_message, reply = format_agent_command(root, run_id, "task-001", "main", "/agent help")
                 self.assertFalse(handled)

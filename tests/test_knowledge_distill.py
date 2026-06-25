@@ -11,6 +11,7 @@ from aha_cli.services.knowledge_distill import (
     build_distill_context,
     distill_and_enqueue,
     distill_after_kb_command,
+    distill_after_nav_command,
     heuristic_solution_candidate,
     normalize_sidecar_candidates,
 )
@@ -465,6 +466,61 @@ def test_kb_command_sidecar_is_enqueued(tmp_path: Path):
     assert pending[0]["title"] == "蓝牙配网流程整理"
     assert pending[0]["source"]["source_type"] == "kb_command"
     assert pending[0]["kind"] == "solutions"
+
+
+def test_nav_command_sidecar_is_enqueued_as_navigation(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "Nav command flow", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    plan = require_plan(home, run_id)
+    task = plan["tasks"][0]
+    key = project_key(Path(task.get("workspace_path")), goal=plan.get("goal"))
+    write_entry(
+        home,
+        config=load_config(home),
+        scope="project",
+        kind="navigation",
+        project_key_value=key,
+        title="项目导航",
+        body="## 模块索引\n",
+        slug="index",
+        meta={"type": "navigation"},
+    )
+
+    result = distill_after_nav_command(
+        home,
+        run_id,
+        "task-001",
+        "已整理导航。",
+        task_title=task["title"],
+        workspace_path=task.get("workspace_path"),
+        goal=plan.get("goal"),
+        sidecar_candidates=[
+            {
+                "kind": "navigation",
+                "scope": "project",
+                "slug": "modules/knowledge",
+                "title": "知识库模块导航",
+                "responsibility": "负责 /aha kb 和 /aha nav 产生的知识候选入库。",
+                "related_files": ["src/aha_cli/services/knowledge_distill.py"],
+                "navigation_reason": "显式 nav 命令更新项目导航。",
+            }
+        ],
+    )
+
+    pending = list_pending(home, load_config(home))
+    assert result["candidates"] == 2
+    assert len(pending) == 2
+    knowledge = next(item for item in pending if item["slug"] == "modules/knowledge")
+    assert knowledge["title"] == "知识库模块导航"
+    assert knowledge["source"]["source_type"] == "nav_command"
+    assert knowledge["kind"] == "navigation"
 
 
 def test_final_navigation_sidecar_emits_nav_delta_event(tmp_path: Path):

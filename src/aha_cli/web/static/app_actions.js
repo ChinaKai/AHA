@@ -61,15 +61,9 @@
           confirmLabel: "Hide",
           details: [["Task", taskId]]
         },
-        final: {
-          title: "Generate Final?",
-          message: "Ask task-main to produce the final answer for this task.",
-          confirmLabel: "Ask Final",
-          details: [["Task", taskId]]
-        },
         complete: {
           title: "Complete task?",
-          message: "Mark this task completed without generating a Final.",
+          message: "Mark this task completed.",
           confirmLabel: "Complete",
           details: [["Task", taskId]]
         }

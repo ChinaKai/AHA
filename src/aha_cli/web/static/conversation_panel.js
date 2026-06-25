@@ -57,7 +57,7 @@
 
     function renderFinalPanelHtml(detail) {
       if (!detail) return '<div class="empty">Loading final...</div>';
-      return `<pre>${escapeHtml(detail.result || "No Final yet. Use /aha final to generate it.")}</pre>`;
+      return `<pre>${escapeHtml(detail.result || "No saved result.")}</pre>`;
     }
 
     function renderLogsPanelHtml(state = {}) {

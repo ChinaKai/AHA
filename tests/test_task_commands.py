@@ -47,8 +47,9 @@ class TaskCommandTests(unittest.TestCase):
                 handled, forwarded, reply = format_agent_command(aha_root, run_id, "task-001", "main", "/agent status")
                 empty_handled, empty_forwarded, empty_reply = format_agent_command(aha_root, run_id, "task-001", "main", "/agent")
 
-        self.assertIn("/aha final", help_text)
+        self.assertNotIn("/aha final", help_text)
         self.assertIn("/aha kb <message>", help_text)
+        self.assertIn("/aha nav <message>", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)
@@ -63,7 +64,7 @@ class TaskCommandTests(unittest.TestCase):
         self.assertIsNone(empty_forwarded)
         self.assertIn("Usage: /agent <command>", empty_reply or "")
 
-    def test_task_commands_finalization_and_removed_checkpoint(self) -> None:
+    def test_task_commands_removed_final_and_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -97,12 +98,10 @@ class TaskCommandTests(unittest.TestCase):
         self.assertEqual(rounds, [])
         self.assertTrue(final_handled)
         self.assertIsNone(final_forwarded)
-        self.assertIn("Finalization requested", final_payload["message"]["message"])
-        self.assertIn("AHA finalization request.", main_messages[-1]["message"])
-        self.assertNotIn("Task journal", main_messages[-1]["message"])
-        self.assertNotIn("完成第一轮", main_messages[-1]["message"])
-        self.assertIn("task_final_requested", event_types)
-        self.assertEqual(task["status"], "running")
+        self.assertIn("Unsupported AHA command", final_payload["message"]["message"])
+        self.assertEqual(main_messages, [])
+        self.assertNotIn("task_final_requested", event_types)
+        self.assertEqual(task["status"], "pending")
 
     def test_task_commands_direct_complete_does_not_request_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,7 +149,7 @@ class TaskCommandTests(unittest.TestCase):
                 main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
 
         self.assertEqual(code, 0)
-        self.assertIn("completed without generating a Final", output)
+        self.assertIn("completed.", output)
         self.assertEqual(task["status"], "completed")
         self.assertEqual(task["agents"][0]["status"], "completed")
         self.assertEqual(main_messages, [])

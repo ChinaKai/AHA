@@ -6,7 +6,7 @@ from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import task_snapshot
 
 
-SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha final, /aha kb <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
+SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha nav <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
 
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
@@ -21,12 +21,12 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
         task_snapshot(root, run_id, task_id)
     except KeyError:
         return f"Task not found: {task_id}"
-    if name == "final":
-        return "Use `/aha final` from the selected task conversation to ask task-main to generate the Final and complete the task."
     if name == "kb":
         return "Use `/aha kb <message>` from the selected task conversation to ask the current agent to emit knowledge-base candidates from its sticky session context."
+    if name == "nav":
+        return "Use `/aha nav <message>` from the selected task conversation to ask the current agent to emit project navigation candidates from its sticky session context."
     if name == "complete":
-        return "Use `/aha complete` from the selected task conversation to mark the task completed without asking task-main to generate a Final."
+        return "Use `/aha complete` from the selected task conversation to mark the task completed."
     if name == "reopen":
         return "Use `/aha reopen` from the selected task conversation to unlock the task for follow-up."
     if name == "interrupt":
@@ -48,6 +48,15 @@ def format_aha_kb_command(command: str) -> tuple[bool, str | None, str | None]:
     if not suffix:
         return True, None, "Usage: /aha kb <message> asks the current agent to generate knowledge-base candidates from its sticky session context."
     prompt = render_prompt_template("knowledge_command.md", instruction=suffix).rstrip()
+    return False, prompt, None
+
+
+def format_aha_nav_command(command: str) -> tuple[bool, str | None, str | None]:
+    parts = command.split(maxsplit=2)
+    suffix = parts[2].strip() if len(parts) > 2 and parts[0] == "/aha" and parts[1] == "nav" else ""
+    if not suffix:
+        return True, None, "Usage: /aha nav <message> asks the current agent to generate project navigation candidates from its sticky session context."
+    prompt = render_prompt_template("navigation_command.md", instruction=suffix).rstrip()
     return False, prompt, None
 
 
@@ -144,6 +153,7 @@ __all__ = [
     "format_finalization_context_for_prompt",
     "format_agent_command",
     "format_aha_kb_command",
+    "format_aha_nav_command",
     "format_aha_command",
     "format_knowledge_feedback_context_for_prompt",
     "format_task_journal_for_prompt",

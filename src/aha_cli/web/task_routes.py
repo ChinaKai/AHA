@@ -96,7 +96,6 @@ from aha_cli.web.task_actions import (
     parse_task_proxy_fields,
     parse_task_skills_fields,
     parse_task_supervision_fields,
-    request_task_finalization_with_backend,
     prepare_task_main_autostart,
     start_prepared_backend,
     start_dispatched_task_backend,
@@ -214,9 +213,7 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
         elif action == "restore":
             task = set_task_hidden(root, run_id, task_id, False)
         elif action == "final":
-            final_payload = request_task_finalization_with_backend(root, run_id, task_id, f"/api/task/{task_id}/{action}")
-            task = task_snapshot(root, run_id, task_id)["task"]
-            return route_result({"ok": True, "task": task, **final_payload})
+            return route_result({"ok": False, "error": "task final has been removed; use complete"}, "400 Bad Request")
         elif action == "complete":
             _message, completion_payload = complete_selected_task(root, run_id, task_id)
             status = "200 OK" if completion_payload.get("ok") else "404 Not Found"
@@ -468,7 +465,7 @@ def find_task_memo_record(root: Path, run_id: str, memo_id: str) -> dict | None:
     return next((item for item in read_task_memos(root, run_id) if item.get("id") == memo_id), None)
 
 
-def memo_request_task_final_value(value: object) -> bool:
+def memo_complete_linked_task_value(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -476,17 +473,19 @@ def memo_request_task_final_value(value: object) -> bool:
 
 def parse_task_memo_update_payload(body: bytes) -> tuple[dict, bool]:
     payload = parse_json_body(body)
-    request_task_final = False
+    complete_linked_task = False
     if isinstance(payload, dict):
-        request_task_final = memo_request_task_final_value(payload.pop("request_task_final", False))
+        complete_linked_task = memo_complete_linked_task_value(payload.pop("complete_linked_task", False))
+        complete_linked_task = complete_linked_task or memo_complete_linked_task_value(payload.pop("request_task_final", False))
         memo_payload = payload.get("memo")
         if isinstance(memo_payload, dict):
-            request_task_final = request_task_final or memo_request_task_final_value(memo_payload.pop("request_task_final", False))
-    return payload, request_task_final
+            complete_linked_task = complete_linked_task or memo_complete_linked_task_value(memo_payload.pop("complete_linked_task", False))
+            complete_linked_task = complete_linked_task or memo_complete_linked_task_value(memo_payload.pop("request_task_final", False))
+    return payload, complete_linked_task
 
 
-def memo_completion_finalization_payload(root: Path, run_id: str, before: dict | None, updated: dict, *, request_task_final: bool) -> dict:
-    if not request_task_final:
+def memo_completion_linked_task_payload(root: Path, run_id: str, before: dict | None, updated: dict, *, complete_linked_task: bool) -> dict:
+    if not complete_linked_task:
         return {}
     if not before:
         return {}
@@ -501,17 +500,14 @@ def memo_completion_finalization_payload(root: Path, run_id: str, before: dict |
     try:
         task = task_snapshot(root, run_id, task_id)["task"]
     except KeyError:
-        append_event(root, run_id, "task_memo_final_skipped", {"memo_id": memo_id, "task_id": task_id, "reason": "task not found"})
-        return {"task_finalization": {"requested": False, "task_id": task_id, "skipped": "task not found"}}
+        append_event(root, run_id, "task_memo_linked_task_complete_skipped", {"memo_id": memo_id, "task_id": task_id, "reason": "task not found"})
+        return {"linked_task_completion": {"completed": False, "task_id": task_id, "skipped": "task not found"}}
     if _task_is_terminal(task):
-        append_event(root, run_id, "task_memo_final_skipped", {"memo_id": memo_id, "task_id": task_id, "reason": "task already terminal"})
-        return {"task_finalization": {"requested": False, "task_id": task_id, "skipped": "task already terminal"}}
-    result = request_task_finalization_with_backend(root, run_id, task_id, "/aha final")
-    append_event(root, run_id, "task_memo_final_requested", {"memo_id": memo_id, "task_id": task_id})
-    payload: dict = {"task_finalization": {"requested": True, "task_id": task_id, "message": result.get("message") or ""}}
-    if result.get("backend"):
-        payload["backend"] = result["backend"]
-    return payload
+        append_event(root, run_id, "task_memo_linked_task_complete_skipped", {"memo_id": memo_id, "task_id": task_id, "reason": "task already terminal"})
+        return {"linked_task_completion": {"completed": False, "task_id": task_id, "skipped": "task already terminal"}}
+    message, result = complete_selected_task(root, run_id, task_id)
+    append_event(root, run_id, "task_memo_linked_task_completed", {"memo_id": memo_id, "task_id": task_id, "ok": bool(result.get("ok"))})
+    return {"linked_task_completion": {"completed": bool(result.get("ok")), "task_id": task_id, "message": message, "result": result}}
 
 
 def task_memo_query_value(query: dict[str, list[str]], key: str) -> str:
@@ -585,10 +581,10 @@ def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, que
                 return route_not_handled()
             if method in {"PATCH", "POST"}:
                 before = find_task_memo_record(root, run_id, memo_id)
-                update_payload, request_task_final = parse_task_memo_update_payload(body)
+                update_payload, complete_linked_task = parse_task_memo_update_payload(body)
                 updated = update_task_memo(root, run_id, memo_id, update_payload)
                 payload = {"ok": True, "memo": enrich_task_memo(root, run_id, updated)}
-                payload.update(memo_completion_finalization_payload(root, run_id, before, updated, request_task_final=request_task_final))
+                payload.update(memo_completion_linked_task_payload(root, run_id, before, updated, complete_linked_task=complete_linked_task))
                 return route_result(payload)
             if method == "DELETE":
                 return route_result({"ok": True, "memo": delete_task_memo(root, run_id, memo_id)})

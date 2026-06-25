@@ -103,7 +103,7 @@ class TaskCommandActionTests(unittest.TestCase):
             main_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")
             sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == sub["id"])
 
-        self.assertIn("without generating a Final", message)
+        self.assertIn("completed.", message)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["mode"], "direct")
         self.assertEqual(detail["task"]["status"], "completed")

@@ -1183,6 +1183,44 @@ def distill_after_kb_command(
         return {"ok": False, "error": f"distill failed: {exc}"}
 
 
+def distill_after_nav_command(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    visible_reply: str,
+    *,
+    task_title: str = "",
+    workspace_path: str | None = None,
+    goal: str | None = None,
+    sidecar_candidates: list[dict] | None = None,
+) -> dict:
+    """Route explicit `/aha nav` sidecar candidates through the manual gate."""
+    try:
+        config = config_for(root)
+        if not knowledge_config(config).get("enabled"):
+            return {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
+        key = project_key(Path(workspace_path), goal=goal) if workspace_path else None
+        if not key:
+            return {"ok": True, "skipped": "no workspace for project key", "candidates": 0}
+        context = build_distill_context(
+            final_body=visible_reply,
+            final_context=None,
+            task_title=task_title or "AHA nav command",
+            project_key_value=key,
+            source={"source_type": "nav_command", "run_id": run_id, "task_id": task_id},
+            workspace_path=workspace_path,
+            prior_entries=[],
+        )
+        candidates = [
+            candidate
+            for candidate in normalize_sidecar_candidates(context, sidecar_candidates or [])
+            if candidate.get("kind") == "navigation"
+        ]
+        return distill_and_enqueue(root, config, context, candidates=candidates)
+    except Exception as exc:  # noqa: BLE001 - nav feedback must not break chat flow
+        return {"ok": False, "error": f"distill failed: {exc}"}
+
+
 def distill_after_memo_report(
     root: Path,
     run_id: str,

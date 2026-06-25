@@ -11,6 +11,7 @@ from aha_cli.web.task_command_format import (
     finalization_prompt,
     format_agent_command,
     format_aha_kb_command,
+    format_aha_nav_command,
     format_aha_command,
     format_task_journal_for_prompt,
 )
@@ -43,8 +44,9 @@ class TaskCommandFormatTests(unittest.TestCase):
                 done_text = format_aha_command(root, run_id, "task-001", "/aha done")
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
-        self.assertIn("/aha final", help_text)
+        self.assertNotIn("/aha final", help_text)
         self.assertIn("/aha kb <message>", help_text)
+        self.assertIn("/aha nav <message>", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)
@@ -54,7 +56,7 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertNotIn("/aha agents", help_text)
         self.assertNotIn("/aha done", help_text)
         self.assertNotIn("/aha finalize", help_text)
-        self.assertIn("without asking task-main", complete_text)
+        self.assertIn("mark the task completed", complete_text)
         for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, done_text, unknown_text):
             self.assertIn("Unsupported AHA command", text)
 
@@ -72,6 +74,21 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertTrue(empty_handled)
         self.assertIsNone(empty_forwarded)
         self.assertIn("Usage: /aha kb <message>", empty_reply or "")
+
+    def test_format_aha_nav_command_forwards_minimal_navigation_prompt(self) -> None:
+        handled, forwarded, reply = format_aha_nav_command("/aha nav 根据刚才修改的知识库命令流程更新项目导航")
+        empty_handled, empty_forwarded, empty_reply = format_aha_nav_command("/aha nav")
+
+        self.assertFalse(handled)
+        self.assertIsNotNone(forwarded)
+        self.assertIsNone(reply)
+        self.assertIn("AHA project navigation feedback request.", forwarded or "")
+        self.assertIn("Do not run commands, inspect files, scan the workspace", forwarded or "")
+        self.assertIn("Do not generate `solutions` or `wiki` candidates here", forwarded or "")
+        self.assertIn("根据刚才修改的知识库命令流程更新项目导航", forwarded or "")
+        self.assertTrue(empty_handled)
+        self.assertIsNone(empty_forwarded)
+        self.assertIn("Usage: /aha nav <message>", empty_reply or "")
 
     def test_format_aha_without_task_and_missing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

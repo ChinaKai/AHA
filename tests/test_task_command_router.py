@@ -74,6 +74,32 @@ class TaskCommandRouterTests(unittest.TestCase):
         )
         self.assertEqual(calls, [])
 
+    def test_aha_nav_command_is_forwarded_with_plain_sticky_metadata(self) -> None:
+        handlers, calls = self.make_handlers()
+
+        handled, forwarded, payload = handle_slash_command(
+            Path("/tmp/root"),
+            "run-1",
+            {"sender": "browser", "target": "main"},
+            "/aha nav 根据刚才修改的知识库命令流程更新项目导航",
+            "task-001",
+            handlers=handlers,
+        )
+
+        self.assertFalse(handled)
+        self.assertIsNotNone(forwarded)
+        self.assertIn("AHA project navigation feedback request.", forwarded or "")
+        self.assertIn("项目导航", forwarded or "")
+        self.assertEqual(
+            payload,
+            {
+                "command_namespace": "aha_nav",
+                "original_command": "/aha nav 根据刚才修改的知识库命令流程更新项目导航",
+                "plain_sticky": True,
+            },
+        )
+        self.assertEqual(calls, [])
+
     def test_default_handlers_use_format_and_action_candidates(self) -> None:
         from aha_cli.web import task_command_actions
 
@@ -83,9 +109,11 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertEqual(handlers.format_agent_command.__module__, "aha_cli.web.task_command_format")
         self.assertIsNotNone(handlers.format_aha_kb_command)
         self.assertEqual((handlers.format_aha_kb_command).__module__, "aha_cli.web.task_command_format")
+        self.assertIsNotNone(handlers.format_aha_nav_command)
+        self.assertEqual((handlers.format_aha_nav_command).__module__, "aha_cli.web.task_command_format")
         self.assertIs(handlers.request_task_finalization, task_command_actions.request_task_finalization)
 
-    def test_aha_final_records_command_and_returns_backend_autostart(self) -> None:
+    def test_aha_final_is_no_longer_supported(self) -> None:
         handlers, calls = self.make_handlers()
 
         handled, forwarded, payload = handle_slash_command(
@@ -99,8 +127,8 @@ class TaskCommandRouterTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertIsNone(forwarded)
-        self.assertEqual(payload["backend_autostart"]["backend"], "codex")
-        self.assertEqual(payload["message"]["message"], "final requested by /aha final")
+        self.assertNotIn("backend_autostart", payload)
+        self.assertEqual(payload["message"]["message"], "formatted /aha final for main")
         self.assertEqual(calls[0][0], "append_message")
         self.assertEqual(calls[0][1][2], "aha")
         self.assertEqual(calls[1][0], "append_event")

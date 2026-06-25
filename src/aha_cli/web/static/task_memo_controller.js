@@ -1191,13 +1191,13 @@
       }
     }
 
-    async function confirmLinkedTaskFinalization(taskId) {
+    async function confirmLinkedTaskCompletion(taskId) {
       const id = String(taskId || "").trim();
       if (!id) return false;
       if (deps.confirmDialogAction) {
         return await deps.confirmDialogAction({
           title: t("memo.task_final_confirm_title", "Complete linked task?"),
-          message: t("memo.task_final_confirm_message", "This memo is linked to a task. Also request task Final and complete it when the Final is written?"),
+          message: t("memo.task_final_confirm_message", "This memo is linked to a task. Also mark the linked task completed?"),
           details: [[t("task.id", "Task"), id]],
           actions: [
             {
@@ -1212,7 +1212,7 @@
           ]
         });
       }
-      return Promise.resolve(windowRef.confirm(t("memo.task_final_confirm_message", "This memo is linked to a task. Also request task Final and complete it when the Final is written?")));
+      return Promise.resolve(windowRef.confirm(t("memo.task_final_confirm_message", "This memo is linked to a task. Also mark the linked task completed?")));
     }
 
     function isCompactMemoViewport() {
@@ -1454,14 +1454,14 @@
       }
       const baseline = creating ? null : editorFieldsFromMemo(memo);
       const payload = readEditorPayload();
-      const shouldOfferTaskFinal = Boolean(
+      const shouldOfferTaskCompletion = Boolean(
         !creating
         && payload.status === "done"
         && baseline?.status !== "done"
         && String(payload.created_task_id || "").trim()
       );
-      if (shouldOfferTaskFinal) {
-        payload.request_task_final = await confirmLinkedTaskFinalization(payload.created_task_id);
+      if (shouldOfferTaskCompletion) {
+        payload.complete_linked_task = await confirmLinkedTaskCompletion(payload.created_task_id);
       }
       const url = creating ? deps.apiUrl("/api/task-memos") : deps.apiUrl(`/api/task-memos/${encodeURIComponent(memo.id)}`);
       const method = creating ? "POST" : "PATCH";
@@ -1482,9 +1482,9 @@
         draftTaskLinkId = String(response?.memo?.created_task_id || "").trim();
         draftTaskLinkDirty = false;
         writePersistedSelectedMemoId(selectedMemoId);
-        const finalization = response?.task_finalization || null;
-        setState(finalization?.requested
-          ? t("memo.task_final_queued", "Linked task finalization started.")
+        const linkedTaskCompletion = response?.linked_task_completion || null;
+        setState(linkedTaskCompletion?.completed
+          ? t("memo.task_final_queued", "Linked task completed.")
           : t("memo.saved", "Memo saved."));
       }
       await loadMemos();

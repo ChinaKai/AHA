@@ -217,7 +217,6 @@
   function taskViewSwitcherHtml(activeTab = "conversation", task = null) {
     const items = [
       ["conversation", t("conversation.chat", "Chat"), t("conversation.chat", "Chat")],
-      ["final", t("conversation.final", "Final"), t("conversation.final", "Final")],
       ["logs", t("conversation.logs", "Logs"), t("conversation.logs", "Logs")],
       ...(taskHardwareDebugEnabled(task)
         ? [["hardware", t("conversation.hardware", "Hardware"), t("conversation.hardware", "Hardware")]]

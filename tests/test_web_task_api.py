@@ -719,7 +719,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertIn(asset_dir, task["description"])
         self.assertIn("do not search for them relative to the workspace", context["prompt"])
 
-    def test_task_memo_completion_requests_linked_task_final(self) -> None:
+    def test_task_memo_completion_can_complete_linked_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -805,25 +805,17 @@ class WebTaskApiTests(unittest.TestCase):
                     )
                 )
                 sync_task = json_response_body(sync_task_response)["task"]
-                with (
-                    mock.patch("aha_cli.web.task_runtime.backend_status", return_value={"status": "stopped"}),
-                    mock.patch("aha_cli.web.task_runtime.start_backend", return_value={"status": "started", "target": "main"}),
-                ):
-                    done_response = asyncio.run(
-                        fetch_ui_response(
-                            root,
-                            run_id,
-                            f"/api/task-memos/{sync_memo['id']}",
-                            method="PATCH",
-                            payload={"status": "done", "request_task_final": True},
-                        )
+                done_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memos/{sync_memo['id']}",
+                        method="PATCH",
+                        payload={"status": "done", "complete_linked_task": True},
                     )
+                )
                 done_body = json_response_body(done_response)
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
-                final_message = messages[-1]
-
-                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "## Final\n已完成。", None)):
-                    chat_code, chat_output = self.run_cli("codex-chat", run_id, "main", "--task-id", sync_task["id"], "--from-start", "--once")
 
                 memos_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task-memos?status=all&limit=20"))
                 memos = json_response_body(memos_response)["memos"]
@@ -832,21 +824,17 @@ class WebTaskApiTests(unittest.TestCase):
                 task_detail = task_snapshot(root, run_id, sync_task["id"])
 
         self.assertTrue(json_response_body(unlinked_done_response)["ok"])
-        self.assertNotIn("task_finalization", json_response_body(unlinked_done_response))
+        self.assertNotIn("linked_task_completion", json_response_body(unlinked_done_response))
         self.assertTrue(json_response_body(no_sync_response)["ok"])
-        self.assertNotIn("task_finalization", json_response_body(no_sync_response))
+        self.assertNotIn("linked_task_completion", json_response_body(no_sync_response))
         self.assertEqual(no_sync_task_detail["task"]["status"], "pending")
         self.assertEqual(done_body["memo"]["status"], "done")
-        self.assertEqual(done_body["task_finalization"]["requested"], True)
-        self.assertEqual(done_body["task_finalization"]["task_id"], sync_task["id"])
-        self.assertEqual(final_message["result_policy"], "finalize")
-        self.assertEqual(final_message["original_command"], "/aha final")
-        self.assertIn("AHA finalization request.", final_message["message"])
-        self.assertEqual(chat_code, 0)
-        self.assertIn("## Final", chat_output)
+        self.assertEqual(done_body["linked_task_completion"]["completed"], True)
+        self.assertEqual(done_body["linked_task_completion"]["task_id"], sync_task["id"])
+        self.assertEqual(messages, [])
         self.assertEqual(completed_memo["status"], "done")
         self.assertEqual(task_detail["task"]["status"], "completed")
-        self.assertIn("## Final", task_detail["result"])
+        self.assertEqual(task_detail["result"], "")
 
     def test_ui_state_persists_selected_memo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

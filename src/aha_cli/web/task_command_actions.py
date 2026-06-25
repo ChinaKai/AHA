@@ -242,7 +242,7 @@ def complete_selected_task(root: Path, run_id: str, task_id: str | None) -> tupl
     except SystemExit:
         return f"Task not found: {task_id}", {"ok": False, "reason": "task_not_found"}
     return (
-        f"{task_id} completed without generating a Final. Reopen it to continue follow-up.",
+        f"{task_id} completed. Reopen it to continue follow-up.",
         {
             "ok": True,
             "task": task,
