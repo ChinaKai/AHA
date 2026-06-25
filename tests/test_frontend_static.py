@@ -29,7 +29,9 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('id="web-upgrade"', html)
         self.assertIn('data-i18n="run.upgrade_web"', html)
+        self.assertIn('id="web-restart-state" class="meta" aria-live="polite"', html)
         self.assertLess(html.index('id="web-restart"'), html.index('id="web-upgrade"'))
+        self.assertIn("header > div:first-child #web-restart-state.meta", (root / "styles.css").read_text(encoding="utf-8"))
         self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
         self.assertIn('"run.upgrade_web": "升级"', i18n)
 

@@ -589,6 +589,8 @@ const realtimeStatusRefreshEventTypes = new Set([
   "agent_finished",
   "agent_started",
   "agent_status_changed",
+  "backend_start_failed",
+  "backend_start_queued",
   "backend_session_compact_reset",
   "backend_session_reset",
   "backend_started",

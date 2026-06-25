@@ -38,6 +38,17 @@ def task_memos_path(root: Path, run_id: str) -> Path:
     return run_dir(root, run_id) / "task_memos.json"
 
 
+def task_memos_summary_path(root: Path, run_id: str) -> Path:
+    return run_dir(root, run_id) / "task_memos.summary.json"
+
+
+def task_memos_source_mtime_ns(root: Path, run_id: str) -> int | None:
+    try:
+        return task_memos_path(root, run_id).stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def normalize_memo_status(value: object) -> str:
     status = str(value or "todo").strip().lower().replace("-", "_")
     status = MEMO_STATUS_ALIASES.get(status, status)
@@ -82,6 +93,77 @@ def default_memo_terminal_timestamp(scheduled_date: str, now: str) -> str:
     if scheduled_date and now_date and now_date < scheduled_date:
         return scheduled_date
     return now
+
+
+def memo_range_end_date(memo: dict) -> str:
+    scheduled_date = normalize_memo_date(memo.get("scheduled_date"))
+    end_date = normalize_memo_date(memo.get("end_date"))
+    if end_date and scheduled_date and end_date >= scheduled_date:
+        return end_date
+    return scheduled_date
+
+
+def task_memo_counts(memos: list[dict], *, today: str | None = None) -> dict:
+    today_value = normalize_memo_date(today) or date.today().isoformat()
+    counts = {
+        "total": len(memos),
+        "active": 0,
+        "todo": 0,
+        "doing": 0,
+        "done": 0,
+        "closed": 0,
+        "today": 0,
+        "overdue": 0,
+    }
+    for memo in memos:
+        status = normalize_memo_status(memo.get("status"))
+        counts[status] = counts.get(status, 0) + 1
+        active = status not in {"done", "closed"}
+        if active:
+            counts["active"] += 1
+        scheduled_date = normalize_memo_date(memo.get("scheduled_date"))
+        end_date = memo_range_end_date(memo)
+        if scheduled_date and end_date and scheduled_date <= today_value <= end_date:
+            counts["today"] += 1
+        if active and end_date and end_date < today_value:
+            counts["overdue"] += 1
+    return counts
+
+
+def write_task_memo_summary_cache(root: Path, run_id: str, memos: list[dict], *, source_updated_at: str) -> dict:
+    summary = {
+        "source_updated_at": source_updated_at,
+        "source_mtime_ns": task_memos_source_mtime_ns(root, run_id),
+        "summary_date": date.today().isoformat(),
+        "counts": task_memo_counts(memos),
+    }
+    write_json(task_memos_summary_path(root, run_id), summary)
+    return summary
+
+
+def read_task_memo_summary_cache(root: Path, run_id: str, *, source_updated_at: str | None = None, today: str | None = None) -> dict | None:
+    path = task_memos_summary_path(root, run_id)
+    if not path.exists():
+        return None
+    try:
+        summary = read_json(path)
+    except (OSError, ValueError):
+        return None
+    summary_date = normalize_memo_date(today) or date.today().isoformat()
+    if str(summary.get("summary_date") or "") != summary_date:
+        return None
+    source_mtime_ns = task_memos_source_mtime_ns(root, run_id)
+    if source_mtime_ns is not None:
+        try:
+            cached_mtime_ns = int(summary.get("source_mtime_ns") or 0)
+        except (TypeError, ValueError):
+            return None
+        if cached_mtime_ns != source_mtime_ns:
+            return None
+    if source_updated_at is not None and str(summary.get("source_updated_at") or "") != str(source_updated_at or ""):
+        return None
+    counts = summary.get("counts")
+    return counts if isinstance(counts, dict) else None
 
 
 def normalize_memo_max_sub_agents(value: object) -> int | None:
@@ -148,7 +230,9 @@ def write_task_memos(root: Path, run_id: str, memos: list[dict]) -> list[dict]:
     require_plan(root, run_id)
     normalized = [normalize_memo(memo) for memo in memos if memo.get("id")]
     normalized.sort(key=lambda item: (item.get("scheduled_date") or "9999-99-99", item.get("updated_at") or ""), reverse=True)
-    write_json(task_memos_path(root, run_id), {"memos": normalized, "updated_at": utc_now()})
+    updated_at = utc_now()
+    write_json(task_memos_path(root, run_id), {"memos": normalized, "updated_at": updated_at})
+    write_task_memo_summary_cache(root, run_id, normalized, source_updated_at=updated_at)
     return normalized
 
 

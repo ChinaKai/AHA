@@ -5877,6 +5877,11 @@ body.empty-run .panel {
   header > div:first-child .meta {
     display: none;
   }
+  header > div:first-child #web-restart-state.meta {
+    display: block;
+    min-height: 18px;
+    overflow-wrap: anywhere;
+  }
   .brand-title {
     max-width: none;
     gap: 7px;

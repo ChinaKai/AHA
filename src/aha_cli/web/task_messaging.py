@@ -22,6 +22,7 @@ from aha_cli.web.realtime_debug import realtime_debug_log
 
 CommandHandler = Callable[[Path, str, dict, str, str | None], tuple[bool, str | None, dict]]
 PreparedBackendStarter = Callable[[Path, str, dict | None], dict | None]
+QueuedBackendStarter = Callable[[Path, str, dict | None], dict | None]
 DebugLogger = Callable[..., None]
 
 
@@ -35,6 +36,12 @@ def _default_start_prepared_backend(root: Path, run_id: str, autostart: dict | N
     from aha_cli.web.task_actions import start_prepared_backend
 
     return start_prepared_backend(root, run_id, autostart)
+
+
+def _default_queue_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> dict | None:
+    from aha_cli.web.task_runtime import queue_backend_start
+
+    return queue_backend_start(root, run_id, autostart)
 
 
 def is_task_supervision_host_target(task: dict, target_id: str | None) -> bool:
@@ -196,6 +203,8 @@ def handle_send_payload(
     *,
     command_handler: CommandHandler | None = None,
     prepared_backend_starter: PreparedBackendStarter | None = None,
+    queued_backend_starter: QueuedBackendStarter | None = None,
+    background_backend_start: bool = False,
     debug_logger: DebugLogger = realtime_debug_log,
 ) -> dict:
     message = str(payload.get("message", "")).strip()
@@ -225,17 +234,25 @@ def handle_send_payload(
     handled, agent_message, command_payload = handle_command(root, run_id, payload, message, task_id)
     if handled:
         backend_autostart = command_payload.pop("backend_autostart", None)
-        start_prepared = prepared_backend_starter or _default_start_prepared_backend
-        backend = start_prepared(root, run_id, backend_autostart)
-        if backend:
-            if backend_autostart:
-                invalidate_backend_status_cache(
-                    root,
-                    run_id,
-                    str(backend_autostart.get("target") or target_id),
-                    str(backend_autostart.get("task_id") or task_id or "") or None,
-                )
-            command_payload["backend"] = backend
+        backend = None
+        backend_start = None
+        if background_backend_start:
+            queue_prepared = queued_backend_starter or _default_queue_prepared_backend
+            backend_start = queue_prepared(root, run_id, backend_autostart)
+            if backend_start:
+                command_payload["backend_start"] = backend_start
+        else:
+            start_prepared = prepared_backend_starter or _default_start_prepared_backend
+            backend = start_prepared(root, run_id, backend_autostart)
+            if backend:
+                if backend_autostart:
+                    invalidate_backend_status_cache(
+                        root,
+                        run_id,
+                        str(backend_autostart.get("target") or target_id),
+                        str(backend_autostart.get("task_id") or task_id or "") or None,
+                    )
+                command_payload["backend"] = backend
         debug_logger(
             "api.send",
             _root=root,
@@ -244,6 +261,7 @@ def handle_send_payload(
             task_id=task_id or "",
             target=target_id,
             backend_started=bool(backend),
+            backend_start_queued=bool(backend_start),
             reply_keys=sorted(command_payload.keys()),
         )
         return {"ok": True, "handled_by": "aha", **command_payload}
@@ -298,18 +316,24 @@ def handle_send_payload(
     if supervision_host_message and task_id:
         save_chat_offset_after_message(root, run_id, task_id, target_id)
     if autostart:
-        response["backend"] = start_backend(
-            root,
-            run_id,
-            autostart["target"],
-            backend=autostart["backend"],
-            model=autostart["model"],
-            sandbox=autostart["sandbox"],
-            approval=autostart["approval"],
-            from_start=False,
-            task_id=autostart["task_id"],
-        )
-        invalidate_backend_status_cache(root, run_id, autostart["target"], autostart["task_id"])
+        if background_backend_start:
+            queue_prepared = queued_backend_starter or _default_queue_prepared_backend
+            backend_start = queue_prepared(root, run_id, autostart)
+            if backend_start:
+                response["backend_start"] = backend_start
+        else:
+            response["backend"] = start_backend(
+                root,
+                run_id,
+                autostart["target"],
+                backend=autostart["backend"],
+                model=autostart["model"],
+                sandbox=autostart["sandbox"],
+                approval=autostart["approval"],
+                from_start=False,
+                task_id=autostart["task_id"],
+            )
+            invalidate_backend_status_cache(root, run_id, autostart["target"], autostart["task_id"])
     debug_logger(
         "api.send",
         _root=root,
@@ -318,6 +342,7 @@ def handle_send_payload(
         task_id=task_id or "",
         target=target_id,
         backend_started=bool(response.get("backend")),
+        backend_start_queued=bool(response.get("backend_start")),
         response_keys=sorted(response.keys()),
     )
     return response

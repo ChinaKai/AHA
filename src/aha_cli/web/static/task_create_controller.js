@@ -737,7 +737,11 @@
           body: JSON.stringify(deps.runScopedPayload?.(payload))
         }, "Failed to create task");
         const createdTaskId = String(response?.task?.id || "").trim();
-        realtimeDebug("task_create.response", { ok: Boolean(response?.ok), task_id: createdTaskId });
+        realtimeDebug("task_create.response", {
+          ok: Boolean(response?.ok),
+          task_id: createdTaskId,
+          backend_start_queued: Boolean(response?.backend_start)
+        });
         if (createdTaskId) {
           const previousTaskId = deps.selectedTaskId?.();
           deps.setSelectedTaskId?.(createdTaskId);

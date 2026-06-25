@@ -339,7 +339,7 @@ def validate_runtime_options(sandbox: str | None, approval: str | None) -> str |
     return None
 
 
-def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
+def handle_create_task_route(root: Path, run_id: str, payload: dict, *, background_backend_start: bool = False) -> dict:
     title = str(payload.get("title", "")).strip()
     description = str(payload.get("description", "") or "").strip()
     source_memo_id = str(payload.get("source_memo_id") or "").strip()
@@ -421,7 +421,7 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
         )
     except ValueError as exc:
         return route_result({"error": str(exc)}, "400 Bad Request")
-    backend_state = start_dispatched_task_backend(root, run_id, task, dispatch)
+    backend_state = start_dispatched_task_backend(root, run_id, task, dispatch, background=background_backend_start)
     memo = None
     if source_memo_id:
         try:
@@ -432,26 +432,36 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict) -> dict:
     if memo:
         response["memo"] = memo
     if backend_state:
-        response["backend"] = backend_state
+        response["backend_start" if backend_state.get("queued") else "backend"] = backend_state
     return route_result(response)
 
 
-def enrich_task_memo(root: Path, run_id: str, memo: dict) -> dict:
+def task_lookup_for_memos(root: Path, run_id: str) -> dict[str, dict]:
+    plan = require_plan(root, run_id)
+    return {
+        str(task.get("id") or ""): task
+        for task in plan.get("tasks", [])
+        if str(task.get("id") or "")
+    }
+
+
+def enrich_task_memo(root: Path, run_id: str, memo: dict, task_lookup: dict[str, dict] | None = None) -> dict:
     enriched = dict(memo)
     task_id = str(enriched.get("created_task_id") or "").strip()
     if not task_id:
         enriched["created_task_status"] = ""
         enriched["created_task_title"] = ""
         return enriched
-    plan = require_plan(root, run_id)
-    task = next((item for item in plan.get("tasks", []) if item.get("id") == task_id), None)
+    lookup = task_lookup if task_lookup is not None else task_lookup_for_memos(root, run_id)
+    task = lookup.get(task_id)
     enriched["created_task_status"] = str((task or {}).get("status") or "missing")
     enriched["created_task_title"] = str((task or {}).get("title") or "")
     return enriched
 
 
 def enrich_task_memos(root: Path, run_id: str, memos: list[dict]) -> list[dict]:
-    return [enrich_task_memo(root, run_id, memo) for memo in memos]
+    task_lookup = task_lookup_for_memos(root, run_id)
+    return [enrich_task_memo(root, run_id, memo, task_lookup) for memo in memos]
 
 
 def find_task_memo_record(root: Path, run_id: str, memo_id: str) -> dict | None:
@@ -527,7 +537,7 @@ def task_memo_matches_query(memo: dict, query_text: str) -> bool:
 
 
 def filter_task_memos_for_query(root: Path, run_id: str, query: dict[str, list[str]]) -> tuple[list[dict], int]:
-    memos = enrich_task_memos(root, run_id, read_task_memos(root, run_id))
+    memos = read_task_memos(root, run_id)
     query_text = task_memo_query_value(query, "q")
     status = task_memo_query_value(query, "status").lower()
     linked = task_memo_query_value(query, "linked").lower()
@@ -551,8 +561,11 @@ def filter_task_memos_for_query(root: Path, run_id: str, query: dict[str, list[s
             return False
         return task_memo_matches_query(memo, query_text)
 
+    if query_text:
+        filtered = [memo for memo in enrich_task_memos(root, run_id, memos) if matches(memo)]
+        return filtered[:limit], len(filtered)
     filtered = [memo for memo in memos if matches(memo)]
-    return filtered[:limit], len(filtered)
+    return enrich_task_memos(root, run_id, filtered[:limit]), len(filtered)
 
 
 def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, query: dict[str, list[str]], body: bytes) -> dict:
@@ -724,9 +737,9 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
         return route_result({"error": str(exc)}, "404 Not Found")
 
 
-def handle_send_route(root: Path, run_id: str, payload: dict) -> dict:
+def handle_send_route(root: Path, run_id: str, payload: dict, *, background_backend_start: bool = False) -> dict:
     try:
-        return route_result(handle_send_payload(root, run_id, payload))
+        return route_result(handle_send_payload(root, run_id, payload, background_backend_start=background_backend_start))
     except ValueError as exc:
         return route_result({"error": str(exc)}, "400 Bad Request")
 
@@ -750,7 +763,7 @@ def route_task_agent_request(
         return handle_task_action_route(root, require_api_run_id(root, default_run_id, query), path, body)
     if method == "POST" and path == "/api/tasks":
         payload = parse_json_body(body)
-        return handle_create_task_route(root, require_api_run_id(root, default_run_id, query, payload), payload)
+        return handle_create_task_route(root, require_api_run_id(root, default_run_id, query, payload), payload, background_backend_start=True)
     if method == "POST" and path == "/api/agents":
         payload = parse_json_body(body)
         return handle_create_agent_route(root, require_api_run_id(root, default_run_id, query, payload), payload)
@@ -762,7 +775,7 @@ def route_task_agent_request(
         return handle_task_config_route(root, require_api_run_id(root, default_run_id, query, payload), payload)
     if method == "POST" and path == "/api/send":
         payload = parse_json_body(body)
-        return handle_send_route(root, require_api_run_id(root, default_run_id, query, payload), payload)
+        return handle_send_route(root, require_api_run_id(root, default_run_id, query, payload), payload, background_backend_start=True)
     return route_not_handled()
 
 

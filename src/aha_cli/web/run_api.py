@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backends
@@ -15,7 +14,12 @@ from aha_cli.store.filesystem import (
     run_exists,
     run_summary,
 )
-from aha_cli.store.task_memos import normalize_memo_status, read_task_memos
+from aha_cli.store.task_memos import (
+    read_task_memo_summary_cache,
+    read_task_memos,
+    task_memo_counts,
+    write_task_memo_summary_cache,
+)
 from aha_cli.store.ui_state import read_global_ui_state, read_ui_state
 
 
@@ -125,35 +129,8 @@ def runs_payload(root: Path, default_run_id: str) -> dict:
     }
 
 
-def _memo_date(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    try:
-        return date.fromisoformat(text[:10]).isoformat()
-    except ValueError:
-        return ""
-
-
-def _memo_end_date(memo: dict) -> str:
-    scheduled_date = _memo_date(memo.get("scheduled_date"))
-    end_date = _memo_date(memo.get("end_date"))
-    if end_date and scheduled_date and end_date >= scheduled_date:
-        return end_date
-    return scheduled_date
-
-
 def task_memo_summary(root: Path, run_id: str) -> dict:
-    base_counts = {
-        "total": 0,
-        "active": 0,
-        "todo": 0,
-        "doing": 0,
-        "done": 0,
-        "closed": 0,
-        "today": 0,
-        "overdue": 0,
-    }
+    base_counts = task_memo_counts([])
     if not run_id or not run_exists(root, run_id):
         return {
             "available": False,
@@ -162,22 +139,16 @@ def task_memo_summary(root: Path, run_id: str) -> dict:
             "counts": base_counts,
         }
 
-    today = date.today().isoformat()
-    memos = read_task_memos(root, run_id)
-    counts = dict(base_counts)
-    counts["total"] = len(memos)
-    for memo in memos:
-        status = normalize_memo_status(memo.get("status"))
-        counts[status] = counts.get(status, 0) + 1
-        active = status not in {"done", "closed"}
-        if active:
-            counts["active"] += 1
-        scheduled_date = _memo_date(memo.get("scheduled_date"))
-        end_date = _memo_end_date(memo)
-        if scheduled_date and end_date and scheduled_date <= today <= end_date:
-            counts["today"] += 1
-        if active and end_date and end_date < today:
-            counts["overdue"] += 1
+    cached_counts = read_task_memo_summary_cache(root, run_id)
+    if cached_counts is not None:
+        counts = {**base_counts, **cached_counts}
+    else:
+        memos = read_task_memos(root, run_id)
+        counts = task_memo_counts(memos)
+        try:
+            write_task_memo_summary_cache(root, run_id, memos, source_updated_at="bootstrap")
+        except OSError:
+            pass
 
     return {
         "available": True,

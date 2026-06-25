@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
@@ -94,6 +95,20 @@ def prepare_task_main_autostart(root: Path, run_id: str, task_id: str | None) ->
 def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> dict | None:
     if not autostart:
         return None
+    return _start_backend_from_autostart(root, run_id, autostart, from_start=False)
+
+
+def _backend_start_event_payload(autostart: dict, *, from_start: bool) -> dict:
+    return {
+        "target": str(autostart.get("target") or "main"),
+        "task_id": str(autostart.get("task_id") or "") or None,
+        "backend": str(autostart.get("backend") or ""),
+        "model": autostart.get("model"),
+        "from_start": bool(from_start),
+    }
+
+
+def _start_backend_from_autostart(root: Path, run_id: str, autostart: dict, *, from_start: bool) -> dict:
     backend = start_backend(
         root,
         run_id,
@@ -102,11 +117,32 @@ def start_prepared_backend(root: Path, run_id: str, autostart: dict | None) -> d
         model=autostart["model"],
         sandbox=autostart["sandbox"],
         approval=autostart["approval"],
-        from_start=False,
+        from_start=from_start,
         task_id=autostart["task_id"],
     )
     invalidate_backend_status_cache(root, run_id, autostart["target"], autostart["task_id"])
     return backend
+
+
+def queue_backend_start(root: Path, run_id: str, autostart: dict | None, *, from_start: bool = False) -> dict | None:
+    if not autostart:
+        return None
+    payload = _backend_start_event_payload(autostart, from_start=from_start) | {"queued": True}
+    append_event(root, run_id, "backend_start_queued", payload)
+
+    def run() -> None:
+        try:
+            _start_backend_from_autostart(root, run_id, autostart, from_start=from_start)
+        except (Exception, SystemExit) as exc:
+            append_event(root, run_id, "backend_start_failed", payload | {"error": str(exc)})
+
+    thread = threading.Thread(
+        target=run,
+        name=f"aha-backend-start-{run_id}-{payload['task_id'] or 'run'}-{payload['target']}",
+        daemon=True,
+    )
+    thread.start()
+    return payload
 
 
 def finalization_context_for_task(task: dict, rounds: list[dict], requested_at: str) -> dict:
@@ -202,33 +238,36 @@ def request_task_finalization_with_backend(
     command: str,
     *,
     autostart_backend: bool = True,
+    background_backend_start: bool = False,
 ) -> dict:
     autostart = prepare_task_main_autostart(root, run_id, task_id) if autostart_backend else None
     message = request_task_finalization(root, run_id, task_id, command)
     payload: dict = {"message": message}
-    backend = start_prepared_backend(root, run_id, autostart)
-    if backend:
-        payload["backend"] = backend
+    if background_backend_start:
+        backend_start = queue_backend_start(root, run_id, autostart)
+        if backend_start:
+            payload["backend_start"] = backend_start
+    else:
+        backend = start_prepared_backend(root, run_id, autostart)
+        if backend:
+            payload["backend"] = backend
     return payload
 
 
-def start_dispatched_task_backend(root: Path, run_id: str, task: dict, dispatch: bool) -> dict | None:
+def start_dispatched_task_backend(
+    root: Path,
+    run_id: str,
+    task: dict,
+    dispatch: bool,
+    *,
+    background: bool = False,
+) -> dict | None:
     if not dispatch:
         return None
     task_id = str(task.get("id") or "")
     autostart = message_backend_autostart_config(root, run_id, task_id, "main")
     if not autostart:
         return None
-    backend = start_backend(
-        root,
-        run_id,
-        "main",
-        backend=autostart["backend"],
-        model=autostart["model"],
-        sandbox=autostart["sandbox"],
-        approval=autostart["approval"],
-        from_start=True,
-        task_id=task_id,
-    )
-    invalidate_backend_status_cache(root, run_id, "main", task_id)
-    return backend
+    if background:
+        return queue_backend_start(root, run_id, autostart, from_start=True)
+    return _start_backend_from_autostart(root, run_id, autostart, from_start=True)

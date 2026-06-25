@@ -29,6 +29,7 @@ from aha_cli.store.filesystem import (
     write_task_result,
 )
 from aha_cli.store.sessions import ensure_session, save_session
+from aha_cli.store.task_memos import create_task_memo
 from aha_cli.web.server import handle_send_payload, workspace_options
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -873,6 +874,38 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(update_body["last_selected_memo_id"], "memo-123")
         self.assertEqual(read_body["last_selected_memo_id"], "memo-123")
 
+    def test_task_memo_list_enriches_only_returned_page_without_search(self) -> None:
+        from aha_cli.web import task_routes as task_routes_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Memo list page", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for index in range(12):
+                    create_task_memo(
+                        root,
+                        run_id,
+                        {
+                            "title": f"Memo {index}",
+                            "scheduled_date": f"2026-06-{index + 1:02d}",
+                            "status": "todo",
+                            "created_task_id": "task-001",
+                        },
+                    )
+
+                with mock.patch.object(task_routes_module, "enrich_task_memo", wraps=task_routes_module.enrich_task_memo) as enrich:
+                    response = asyncio.run(fetch_ui_response(root, run_id, "/api/task-memos?limit=5"))
+                    body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(body["total"], 12)
+        self.assertEqual(len(body["memos"]), 5)
+        self.assertEqual(enrich.call_count, 5)
+        self.assertTrue(all(item["created_task_status"] for item in body["memos"]))
+
     def test_api_task_create_rejects_unknown_execution_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1286,7 +1319,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(host_messages[-1]["message"], "后续收到测试消息后再决定是否让 main 继续。")
         self.assertEqual(offset["offset"], host_inbox_size)
 
-    def test_web_task_creation_autostarts_dispatched_main_backend(self) -> None:
+    def test_web_task_creation_queues_dispatched_main_backend_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -1295,7 +1328,16 @@ class WebTaskApiTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
-                with mock.patch("aha_cli.web.task_runtime.start_backend", return_value={"status": "running", "started": True}) as start_backend:
+                def fake_queue(_root: Path, _run_id: str, autostart: dict, *, from_start: bool = False) -> dict:
+                    return {
+                        "queued": True,
+                        "target": autostart["target"],
+                        "task_id": autostart["task_id"],
+                        "backend": autostart["backend"],
+                        "from_start": from_start,
+                    }
+
+                with mock.patch("aha_cli.web.task_runtime.queue_backend_start", side_effect=fake_queue) as queue_backend_start:
                     response = asyncio.run(
                         fetch_ui_response(
                             root,
@@ -1315,11 +1357,69 @@ class WebTaskApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
-        self.assertEqual(body["backend"]["status"], "running")
-        start_backend.assert_called_once()
-        self.assertEqual(start_backend.call_args.args[:3], (root, run_id, "main"))
-        self.assertEqual(start_backend.call_args.kwargs["task_id"], body["task"]["id"])
-        self.assertTrue(start_backend.call_args.kwargs["from_start"])
+        self.assertNotIn("backend", body)
+        self.assertTrue(body["backend_start"]["queued"])
+        self.assertEqual(body["backend_start"]["target"], "main")
+        self.assertEqual(body["backend_start"]["task_id"], body["task"]["id"])
+        self.assertTrue(body["backend_start"]["from_start"])
+        queue_backend_start.assert_called_once()
+        self.assertEqual(queue_backend_start.call_args.args[:2], (root, run_id))
+        self.assertTrue(queue_backend_start.call_args.kwargs["from_start"])
+
+    def test_web_send_queues_stopped_backend_start_after_storing_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task send autostart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+
+                def fake_queue(_root: Path, _run_id: str, autostart: dict, *, from_start: bool = False) -> dict:
+                    return {
+                        "queued": True,
+                        "target": autostart["target"],
+                        "task_id": autostart["task_id"],
+                        "backend": autostart["backend"],
+                        "from_start": from_start,
+                    }
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_runtime.queue_backend_start", side_effect=fake_queue) as queue_backend_start,
+                    mock.patch("aha_cli.web.task_messaging.start_backend") as start_backend,
+                ):
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/send",
+                            method="POST",
+                            payload={
+                                "target": "main",
+                                "task_id": "task-001",
+                                "role": "main",
+                                "sender": "browser",
+                                "from_agent": "browser",
+                                "to_agent": "main",
+                                "message": "continue",
+                            },
+                        )
+                    )
+                    body = json_response_body(response)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertNotIn("backend", body)
+        self.assertTrue(body["backend_start"]["queued"])
+        self.assertEqual(body["backend_start"]["task_id"], "task-001")
+        self.assertFalse(body["backend_start"]["from_start"])
+        self.assertEqual(messages[-1]["message"], "continue")
+        queue_backend_start.assert_called_once()
+        start_backend.assert_not_called()
 
     def test_task_action_resume_alias_reopens_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
