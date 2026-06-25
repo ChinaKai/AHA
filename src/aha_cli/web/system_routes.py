@@ -7,7 +7,7 @@ from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
-from aha_cli.services.token_usage import daily_token_usage_report
+from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
 from aha_cli.services.weixin import (
     WeixinError,
     fetch_updates,
@@ -354,7 +354,7 @@ def token_usage_daily_response(
     except ValueError:
         return json_response({"error": "limit_days must be a valid integer"}, "400 Bad Request")
     try:
-        payload = daily_token_usage_report(
+        payload = daily_token_usage_cached(
             root,
             run_id,
             timezone=str(query.get("timezone", query.get("tz", ["UTC"]))[0] or "UTC"),
@@ -368,9 +368,63 @@ def token_usage_daily_response(
         )
     except ValueError as exc:
         return json_response({"error": str(exc)}, "400 Bad Request")
-    except RuntimeError as exc:
-        return json_response({"error": str(exc)}, "502 Bad Gateway")
     return head_or_json(method, payload, request_headers=headers)
+
+
+def token_usage_daily_refresh_response(
+    root: Path,
+    run_id: str,
+    query: dict[str, list[str]],
+) -> bytes:
+    limit_days_text = str(query.get("limit_days", [""])[0] or "").strip()
+    try:
+        limit_days = int(limit_days_text) if limit_days_text else None
+    except ValueError:
+        return json_response({"error": "limit_days must be a valid integer"}, "400 Bad Request")
+    try:
+        payload = start_daily_token_usage_refresh(
+            root,
+            run_id,
+            timezone=str(query.get("timezone", query.get("tz", ["UTC"]))[0] or "UTC"),
+            since=str(query.get("since", [""])[0] or ""),
+            until=str(query.get("until", [""])[0] or ""),
+            task_id=str(query.get("task_id", [""])[0] or ""),
+            target=str(query.get("target", [""])[0] or ""),
+            backend=str(query.get("backend", [""])[0] or ""),
+            limit_days=limit_days,
+            offline=query_bool(query, "offline"),
+        )
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    return json_response({"ok": True, **payload})
+
+
+def token_usage_daily_stop_response(
+    root: Path,
+    run_id: str,
+    query: dict[str, list[str]],
+) -> bytes:
+    limit_days_text = str(query.get("limit_days", [""])[0] or "").strip()
+    try:
+        limit_days = int(limit_days_text) if limit_days_text else None
+    except ValueError:
+        return json_response({"error": "limit_days must be a valid integer"}, "400 Bad Request")
+    try:
+        payload = stop_daily_token_usage_refresh(
+            root,
+            run_id,
+            timezone=str(query.get("timezone", query.get("tz", ["UTC"]))[0] or "UTC"),
+            since=str(query.get("since", [""])[0] or ""),
+            until=str(query.get("until", [""])[0] or ""),
+            task_id=str(query.get("task_id", [""])[0] or ""),
+            target=str(query.get("target", [""])[0] or ""),
+            backend=str(query.get("backend", [""])[0] or ""),
+            limit_days=limit_days,
+            offline=query_bool(query, "offline"),
+        )
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "400 Bad Request")
+    return json_response({"ok": True, **payload})
 
 
 def system_route_response(
@@ -458,6 +512,12 @@ def system_route_response(
         target = query.get("target", ["main"])[0] or "main"
         task_id = query.get("task_id", [""])[0] or None
         return head_or_json(method, cached_backend_status(root, run_id, target, task_id=task_id))
+    if method == "POST" and path == "/api/usage/daily/refresh":
+        run_id = require_api_run_id(root, default_run_id, query)
+        return token_usage_daily_refresh_response(root, run_id, query)
+    if method == "POST" and path == "/api/usage/daily/stop":
+        run_id = require_api_run_id(root, default_run_id, query)
+        return token_usage_daily_stop_response(root, run_id, query)
     if method in {"GET", "HEAD"} and path == "/api/usage/daily":
         run_id = require_api_run_id(root, default_run_id, query)
         return token_usage_daily_response(root, run_id, method, query, headers)

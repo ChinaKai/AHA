@@ -469,6 +469,8 @@
       apiUrl: deps.apiUrl,
       currentRunId: deps.currentRunId,
       fetchJson: deps.fetchJson,
+      fetchWithTimeout: deps.fetchWithTimeout,
+      readJsonResponse: deps.readJsonResponse,
       windowRef: deps.windowRef
     });
 
