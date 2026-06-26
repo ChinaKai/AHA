@@ -681,8 +681,33 @@ def _source_group(source: dict | None) -> str:
     return json.dumps(source, ensure_ascii=False, sort_keys=True)
 
 
+def _candidate_title_identity_key(title: object) -> str:
+    text = " ".join(str(title or "").split()).strip()
+    slug = slugify(text)
+    if not text:
+        return slug
+    if any(ord(char) > 127 for char in text):
+        digest = hashlib.sha1(text.casefold().encode("utf-8")).hexdigest()[:8]
+        return f"{slug or 'title'}-{digest}"
+    return slug
+
+
 def candidate_identity(candidate: dict) -> str:
     """Stable review identity for final/report re-runs and source-order merge."""
+    source_group = str(candidate.get("source_group") or _source_group(candidate.get("source")))
+    basis = "/".join(
+        [
+            str(candidate.get("scope") or "project"),
+            str(candidate.get("kind") or "solutions"),
+            str(candidate.get("project_key") or ""),
+            _candidate_title_identity_key(candidate.get("title")),
+            source_group,
+        ]
+    )
+    return "cand_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+
+
+def _legacy_candidate_identity(candidate: dict) -> str:
     source_group = str(candidate.get("source_group") or _source_group(candidate.get("source")))
     basis = "/".join(
         [
@@ -741,11 +766,8 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
     record.setdefault("scope", "project")
     record.setdefault("meta", {})
     record["source_group"] = str(record.get("source_group") or _source_group(record.get("source")))
-    cid = record.get("id") or candidate_identity(record)
-    record["id"] = cid
-    record["identity"] = cid
-    record["fingerprint"] = _candidate_fingerprint(record)
-    record["status"] = "pending"
+    explicit_cid = str(record.get("id") or "").strip()
+    cid = explicit_cid or candidate_identity(record)
     now = utc_now()
     # Honor an explicit slug (e.g. navigation/index or modules/<name>) so an
     # update is matched against the right on-disk entry, not a title-derived slug.
@@ -766,6 +788,21 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
         except (OSError, ValueError):
             pass
     path = target / f"{cid}.json"
+    if not explicit_cid and not path.exists():
+        legacy_cid = _legacy_candidate_identity(record)
+        legacy_path = target / f"{legacy_cid}.json"
+        if legacy_cid != cid and legacy_path.exists():
+            try:
+                legacy_record = read_json(legacy_path)
+                if str(legacy_record.get("title") or "") == str(record.get("title") or ""):
+                    cid = legacy_cid
+                    path = legacy_path
+            except (OSError, ValueError):
+                pass
+    record["id"] = cid
+    record["identity"] = cid
+    record["fingerprint"] = _candidate_fingerprint(record)
+    record["status"] = "pending"
     previous: dict | None = None
     if path.exists():
         try:

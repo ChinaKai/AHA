@@ -9,6 +9,7 @@ from aha_cli.cli import main
 from aha_cli.domain.models import default_knowledge_config
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import (
+    _legacy_candidate_identity,
     enqueue_candidate,
     init_knowledge_base,
     list_pending,
@@ -170,3 +171,39 @@ def test_kb_approve_dedup_updates_existing(tmp_path: Path):
     rc, out = _run(home, "approve", json.loads(second.read_text())["id"], "--json")
     assert rc == 0
     assert json.loads(out)["action"] == "updated"
+
+
+def test_pending_identity_keeps_legacy_same_title_without_chinese_slug_collision(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    source = {"run_id": "r1", "task_id": "t1"}
+    existing = {
+        "kind": "solutions",
+        "scope": "project",
+        "project_key": "git-abc",
+        "title": "Wyze 云存业务层时间戳对齐逻辑",
+        "body": "old",
+        "source": source,
+    }
+    legacy_id = _legacy_candidate_identity(existing)
+    legacy_path = enqueue_candidate(home, cfg, {**existing, "id": legacy_id})
+
+    updated_path = enqueue_candidate(home, cfg, {**existing, "body": "new"})
+    other_path = enqueue_candidate(home, cfg, {
+        "kind": "solutions",
+        "scope": "project",
+        "project_key": "git-abc",
+        "title": "Wyze 云存上传双路视频排查要点",
+        "body": "other",
+        "source": source,
+    })
+
+    assert updated_path == legacy_path
+    assert other_path != legacy_path
+    pending = list_pending(home, cfg)
+    assert len(pending) == 2
+    assert {item["title"] for item in pending} == {
+        "Wyze 云存业务层时间戳对齐逻辑",
+        "Wyze 云存上传双路视频排查要点",
+    }
+    assert next(item for item in pending if item["title"] == existing["title"])["body"] == "new"

@@ -468,6 +468,55 @@ def test_kb_command_sidecar_is_enqueued(tmp_path: Path):
     assert pending[0]["kind"] == "solutions"
 
 
+def test_kb_command_sidecar_keeps_distinct_chinese_titles_with_same_ascii_slug(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "KB command cjk title collision", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    plan = require_plan(home, run_id)
+    task = plan["tasks"][0]
+
+    result = distill_after_kb_command(
+        home,
+        run_id,
+        "task-001",
+        "已整理两条。",
+        task_title=task["title"],
+        workspace_path=task.get("workspace_path"),
+        goal=plan.get("goal"),
+        sidecar_candidates=[
+            {
+                "kind": "solutions",
+                "scope": "project",
+                "title": "Wyze 云存上传双路视频排查要点",
+                "body": "正常链路生成 V1V2A1，长事件优先检查 MC 分片长度。",
+                "tags": ["wyze", "cloud-upload"],
+            },
+            {
+                "kind": "solutions",
+                "scope": "project",
+                "title": "Wyze 云存业务层时间戳对齐逻辑",
+                "body": "业务层维护公共时间基准，不直接透传 localsdk PTS。",
+                "tags": ["wyze", "timestamp"],
+            },
+        ],
+    )
+
+    pending = list_pending(home, load_config(home))
+    assert result["candidates"] == 2
+    assert len(pending) == 2
+    assert {item["title"] for item in pending} == {
+        "Wyze 云存上传双路视频排查要点",
+        "Wyze 云存业务层时间戳对齐逻辑",
+    }
+    assert len({item["id"] for item in pending}) == 2
+
+
 def test_nav_command_sidecar_is_enqueued_as_navigation(tmp_path: Path):
     home = tmp_path / ".aha"
     main(["--home", str(home), "init"])
