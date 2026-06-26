@@ -29,6 +29,17 @@ from aha_cli.store.filesystem import (
 from tests.helpers import fetch_ui_response, json_response_body
 
 
+def response_headers(response: bytes) -> dict[str, str]:
+    header_text = response.split(b"\r\n\r\n", 1)[0].decode("utf-8")
+    headers: dict[str, str] = {}
+    for line in header_text.split("\r\n")[1:]:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        headers[key.lower()] = value.strip()
+    return headers
+
+
 class WebEventsApiTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
@@ -83,6 +94,36 @@ class WebEventsApiTests(unittest.TestCase):
         status_body = json.loads(gzip.decompress(status_response.split(b"\r\n\r\n", 1)[1]).decode("utf-8"))
         self.assertIn("conversationPageLimit", script_body)
         self.assertEqual(status_body["run_id"], run_id)
+
+    def test_static_assets_emit_cache_validators_and_support_304(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Cached static UI", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                first = asyncio.run(fetch_ui_response(root, run_id, "/static/app_runtime_setup.js"))
+                first_headers = response_headers(first)
+                cached = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/static/app_runtime_setup.js",
+                        headers={"If-None-Match": first_headers["etag"]},
+                    )
+                )
+                versioned = asyncio.run(fetch_ui_response(root, run_id, "/static/styles.css?v=usage-v8"))
+                shell = asyncio.run(fetch_ui_response(root, run_id, "/"))
+
+        self.assertTrue(first.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn("etag", first_headers)
+        self.assertEqual(first_headers["cache-control"], "public, max-age=0, must-revalidate")
+        self.assertTrue(cached.startswith(b"HTTP/1.1 304 Not Modified"))
+        self.assertEqual(cached.split(b"\r\n\r\n", 1)[1], b"")
+        self.assertEqual(response_headers(versioned)["cache-control"], "public, max-age=31536000, immutable")
+        self.assertEqual(response_headers(shell)["cache-control"], "no-store")
 
     def test_prompt_artifact_api_reads_raw_prompt_by_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

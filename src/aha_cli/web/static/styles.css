@@ -17,6 +17,7 @@
   --color-primary: #1f6feb;
   --color-primary-strong: #1d4ed8;
   --color-primary-surface: #eff6ff;
+  --color-focus: rgba(31, 111, 235, 0.28);
   --color-success: #166534;
   --color-success-surface: #f0fdf4;
   --color-warning: #92400e;
@@ -33,11 +34,24 @@
   --control-height-md: 38px;
   --control-padding-x-sm: 10px;
   --control-padding-x-md: 12px;
+  --control-border: var(--color-border);
+  --control-radius: var(--radius-sm);
+  --control-bg: var(--color-surface);
+  --control-hover-bg: var(--color-surface-muted);
+  --surface-border: var(--color-border);
+  --surface-radius: var(--radius-md);
+  --surface-bg: var(--color-surface);
+  --surface-muted-bg: var(--color-surface-muted);
+  --dialog-shadow: 0 24px 56px rgba(15, 23, 42, 0.22);
+  --editor-bg: var(--color-surface);
+  --editor-min-height: 160px;
+  --toggle-size: 18px;
+  --toggle-checked-bg: var(--color-primary);
   --card-gap: 6px;
   --card-padding: 10px;
   --shadow-popover: 0 16px 36px rgba(15, 23, 42, 0.16);
-  --button-bg: var(--color-surface);
-  --button-border: #cbd5e1;
+  --button-bg: var(--control-bg);
+  --button-border: var(--control-border);
   --button-text: var(--color-text-muted);
   --button-primary-bg: var(--color-primary);
   --button-primary-border: var(--color-primary);
@@ -874,6 +888,18 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
+.session-menu,
+.settings-popover,
+.weixin-console-popover,
+.play-console-popover,
+.skills-console-popover,
+.token-usage-popover,
+.run-maintenance-popover {
+  border-color: var(--surface-border);
+  border-radius: var(--surface-radius);
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-popover);
 }
 .session-menu.weixin-open .weixin-console-popover {
   position: absolute;
@@ -2283,6 +2309,13 @@ body.auth-required .login-view:not(.hidden) {
   background: var(--color-surface);
   box-shadow: var(--shadow-popover);
 }
+.task-settings-panel,
+.run-settings-panel,
+.agent-settings-panel {
+  border-color: var(--surface-border);
+  border-radius: var(--surface-radius);
+  background: var(--surface-bg);
+}
 .task-settings-panel.hidden,
 .run-settings-panel.hidden {
   display: none;
@@ -2390,7 +2423,13 @@ body.auth-required .login-view:not(.hidden) {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--control-padding-x-sm);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-bg);
   color: #344054;
+  cursor: pointer;
   font-size: 12px;
 }
 .supervision-gate-list input {
@@ -3732,6 +3771,20 @@ body.auth-required.knowledge-home .knowledge-home-page {
 .filter-chip code {
   color: var(--color-text-subtle);
 }
+.skill-option-chip:has(input:checked),
+.supervision-gate-list label:has(input:checked),
+.filter-chip:has(input:checked),
+.filter-chip.active {
+  border-color: #bfdbfe;
+  background: var(--color-primary-surface);
+  color: var(--color-primary-strong);
+}
+.skill-option-chip:has(input:focus-visible),
+.supervision-gate-list label:has(input:focus-visible),
+.filter-chip:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
 .activity-dot {
   width: 8px;
   height: 8px;
@@ -4011,10 +4064,11 @@ pre {
 input, select, textarea {
   min-width: 0;
   min-height: var(--control-height-md);
-  border: 1px solid var(--button-border);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
   padding: 0 10px;
-  background: var(--color-surface);
+  background: var(--control-bg);
+  color: var(--color-text-strong);
 }
 textarea {
   min-height: 108px;
@@ -4022,10 +4076,11 @@ textarea {
   resize: vertical;
   line-height: 1.45;
 }
-button {
+button,
+.button-ghost {
   min-height: var(--control-height-md);
-  border: 1px solid var(--button-border);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
   background: var(--button-bg);
   color: var(--button-text);
   cursor: pointer;
@@ -4037,7 +4092,116 @@ button {
 }
 button:hover {
   border-color: #98a2b3;
+  background: var(--control-hover-bg);
+}
+button:disabled,
+.button-ghost:disabled {
+  border-color: var(--color-border-subtle);
   background: var(--color-surface-muted);
+  color: var(--color-text-subtle);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+input:disabled,
+select:disabled,
+textarea:disabled {
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-muted);
+  color: var(--color-text-subtle);
+  cursor: not-allowed;
+  opacity: 1;
+}
+input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: var(--toggle-size);
+  min-width: var(--toggle-size);
+  height: var(--toggle-size);
+  min-height: var(--toggle-size);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: var(--control-bg);
+  color: var(--button-primary-text);
+  vertical-align: middle;
+}
+input[type="checkbox"]::after {
+  content: "";
+  width: 5px;
+  height: 9px;
+  margin-top: -1px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  opacity: 0;
+  transform: rotate(45deg);
+}
+input[type="checkbox"]:checked {
+  border-color: var(--toggle-checked-bg);
+  background: var(--toggle-checked-bg);
+}
+input[type="checkbox"]:checked::after {
+  opacity: 1;
+}
+input[type="checkbox"]:disabled {
+  background: var(--color-surface-muted);
+}
+input[type="checkbox"]:checked:disabled {
+  border-color: #93c5fd;
+  background: #93c5fd;
+}
+.checkbox-line > input[type="checkbox"]:not([data-hardware-permission]) {
+  justify-content: start;
+  width: 34px;
+  min-width: 34px;
+  height: 20px;
+  min-height: 20px;
+  padding: 2px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.checkbox-line > input[type="checkbox"]:not([data-hardware-permission])::after {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+  opacity: 1;
+  transform: none;
+  transition: transform 0.16s ease;
+}
+.checkbox-line > input[type="checkbox"]:not([data-hardware-permission]):checked {
+  border-color: var(--toggle-checked-bg);
+  background: var(--toggle-checked-bg);
+}
+.checkbox-line > input[type="checkbox"]:not([data-hardware-permission]):checked::after {
+  transform: translateX(14px);
+}
+.skill-option-chip input,
+.supervision-gate-list input,
+.filter-chip input {
+  position: absolute;
+  width: 1px;
+  min-width: 1px;
+  height: 1px;
+  min-height: 1px;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  pointer-events: none;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 .send,
 .stack-form button,
@@ -4083,7 +4247,7 @@ button.entity-picker-item.active {
 .button-ghost:hover,
 .button-ghost:focus-visible {
   border-color: #cbd5e1;
-  background: var(--color-surface-muted);
+  background: var(--control-hover-bg);
   color: var(--color-text-muted);
 }
 :where(
@@ -4117,10 +4281,10 @@ button.entity-picker-item.active {
   max-height: inherit;
   overflow: auto;
   padding: 18px;
-  border: 1px solid #d8dde4;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.22);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
+  background: var(--surface-bg);
+  box-shadow: var(--dialog-shadow);
 }
 .task-dialog-head {
   display: flex;
@@ -4147,11 +4311,18 @@ button.entity-picker-item.active {
   font-size: 18px;
   line-height: 1;
 }
-.task-dialog-actions {
+.task-dialog-actions,
+.confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding-top: 4px;
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
+  margin: 0 -18px -18px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--surface-bg);
 }
 .task-dialog-actions button {
   min-height: 36px;
@@ -4629,10 +4800,18 @@ body.task-memo-home .task-memo-page .task-memo-panel {
 }
 .task-memo-date-fields {
   display: grid;
-  grid-template-columns: minmax(7.5rem, 8.5rem) auto minmax(7.5rem, 8.5rem) minmax(7.5rem, 8.5rem) minmax(7.5rem, 8.5rem);
+  grid-template-columns: minmax(8.5rem, 1fr) auto minmax(8.5rem, 1fr);
   justify-content: start;
   gap: 8px;
   align-items: end;
+}
+.task-memo-date-fields:has(#task-memo-completed-date-field:not([hidden])),
+.task-memo-date-fields:has(#task-memo-closed-date-field:not([hidden])) {
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+}
+.task-memo-date-fields:has(#task-memo-completed-date-field:not([hidden])) .task-memo-date-separator,
+.task-memo-date-fields:has(#task-memo-closed-date-field:not([hidden])) .task-memo-date-separator {
+  display: none;
 }
 .task-memo-date-fields .field-label[hidden] {
   display: none;
@@ -4700,9 +4879,9 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   min-height: 260px;
   height: 100%;
   overflow: hidden;
-  border: 1px solid #d0d5dd;
-  border-radius: 6px;
-  background: #ffffff;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--control-radius);
+  background: var(--editor-bg);
 }
 .task-memo-description-source,
 .task-memo-description-editor {
@@ -4715,10 +4894,15 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   overflow: auto;
   padding: 10px 12px;
   border: 0;
-  background: #ffffff;
+  background: var(--editor-bg);
   color: #101828;
   line-height: 1.5;
   word-break: break-word;
+}
+.task-memo-markdown-editor,
+.task-memo-description-source,
+.task-memo-description-editor {
+  background: var(--editor-bg);
 }
 .task-memo-description-source {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -4913,8 +5097,12 @@ body.task-memo-home .task-memo-page .task-memo-panel {
     gap: 8px;
   }
   .task-memo-date-fields {
-    grid-template-columns: minmax(6.25rem, 6.5rem) auto minmax(6.25rem, 6.5rem) minmax(6.25rem, 6.5rem) minmax(6.25rem, 6.5rem);
+    grid-template-columns: minmax(8.5rem, 1fr) auto minmax(8.5rem, 1fr);
     gap: 6px;
+  }
+  .task-memo-date-fields:has(#task-memo-completed-date-field:not([hidden])),
+  .task-memo-date-fields:has(#task-memo-closed-date-field:not([hidden])) {
+    grid-template-columns: 1fr;
   }
   .task-memo-description-mode button {
     padding: 4px 6px;
@@ -4948,7 +5136,7 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   .task-memo-markdown-editor,
   .task-memo-description-source,
   .task-memo-description-editor {
-    min-height: 160px;
+    min-height: var(--editor-min-height);
   }
   .task-memo-description-source,
   .task-memo-description-editor {
@@ -5157,10 +5345,14 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   max-height: inherit;
   overflow: auto;
   padding: 18px;
-  border: 1px solid #d8dde4;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.22);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
+  background: var(--surface-bg);
+  box-shadow: var(--dialog-shadow);
+}
+.task-dialog-panel,
+.confirm-dialog-panel {
+  box-shadow: var(--dialog-shadow);
 }
 .confirm-dialog-head {
   display: grid;
@@ -5199,11 +5391,6 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   color: #344054;
   font-size: 13px;
   overflow-wrap: anywhere;
-}
-.confirm-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 .confirm-dialog-actions button {
   min-height: 36px;
@@ -6382,13 +6569,22 @@ body.empty-run .panel {
   body.mobile-keyboard-active.task-memo-home .task-memo-description-editor {
     max-height: min(34vh, 220px);
   }
-  .task-dialog-actions {
+  .task-dialog-actions,
+  .confirm-dialog-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    gap: 8px;
     position: sticky;
     bottom: 0;
     margin: 0 -14px -14px;
     padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
     border-top: 1px solid #e4e7ec;
     background: #ffffff;
+  }
+  .task-dialog-actions button,
+  .confirm-dialog-actions button {
+    width: 100%;
+    min-width: 0;
   }
   body.mobile-keyboard-active .task-dialog-actions {
     bottom: var(--mobile-keyboard-inset);
@@ -6798,7 +6994,7 @@ body.empty-run .panel {
     font-size: 13px;
     font-weight: 700;
   }
-  input,
+  input:not([type="checkbox"]),
   select,
   button:not(.mobile-task-summary) {
     min-height: 42px;

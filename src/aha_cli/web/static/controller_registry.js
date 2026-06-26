@@ -369,6 +369,9 @@
       loadStatus: deps.loadStatus,
       maybeAutoFlushPending: deps.maybeAutoFlushPending,
       maybeRefreshConversationBackendSessionFallback: deps.maybeRefreshConversationBackendSessionFallback,
+      documentHidden: deps.documentHidden,
+      hiddenPollInterval: deps.hiddenPollInterval,
+      idlePollInterval: deps.idlePollInterval,
       pollInterval: deps.pollInterval,
       renderError: deps.renderError,
       renderFirstRunState: deps.renderFirstRunState,
@@ -384,6 +387,27 @@
       taskActivityStatus: deps.taskActivityStatus
     });
     deps.setRenderScheduler?.(renderScheduler);
+    let pollTimer = 0;
+    let pollLoopStarted = false;
+
+    function queueNextTick(delayMs) {
+      if (pollTimer) clearTimeout(pollTimer);
+      const fallback = renderScheduler.tickIntervalMs?.() || deps.pollInterval;
+      const waitMs = Math.max(250, Number(delayMs ?? fallback) || deps.pollInterval);
+      pollTimer = setTimeout(scheduleNextTick, waitMs);
+    }
+
+    async function scheduleNextTick() {
+      pollTimer = 0;
+      await renderScheduler.tick();
+      queueNextTick(renderScheduler.tickIntervalMs?.() || deps.pollInterval);
+    }
+
+    function startPollLoop() {
+      if (pollLoopStarted) return;
+      pollLoopStarted = true;
+      queueNextTick(renderScheduler.tickIntervalMs?.() || deps.pollInterval);
+    }
 
     deps.loadBootstrap?.().then(async () => {
       void deps.loadAccessControlStatus?.();
@@ -400,10 +424,15 @@
       }
       deps.setBootstrapError?.(err?.message || String(err));
       deps.renderBootstrapError?.(deps.bootstrapError?.());
+    }).finally(() => {
+      startPollLoop();
     });
 
-    setInterval(() => renderScheduler.tick(), deps.pollInterval);
+    document.addEventListener("visibilitychange", () => {
+      if (!deps.documentHidden?.()) queueNextTick(250);
+    });
     setInterval(() => {
+      if (deps.documentHidden?.()) return;
       const task = deps.selectedTask?.();
       const turn = task ? deps.latestTurnTiming?.(task.id) : null;
       if ((task && deps.taskActivityStatus?.(task) !== "idle") || turn?.running) {

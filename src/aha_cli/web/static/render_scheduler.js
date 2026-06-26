@@ -3,6 +3,17 @@
     let tickInFlight = false;
     let failureCount = 0;
     let backoffUntil = 0;
+    const documentHidden = options.documentHidden || (() => false);
+
+    function activeTurnState() {
+      const task = options.selectedTask?.();
+      const turn = task ? options.latestTurnTiming?.(task.id) : null;
+      return {
+        task,
+        turn,
+        active: Boolean((task && options.taskActivityStatus?.(task) !== "idle") || turn?.running)
+      };
+    }
 
     function resetFailures() {
       failureCount = 0;
@@ -56,19 +67,29 @@
     }
 
     function renderActiveTurn() {
-      const task = options.selectedTask?.();
-      const turn = task ? options.latestTurnTiming?.(task.id) : null;
-      if ((task && options.taskActivityStatus?.(task) !== "idle") || turn?.running) {
+      const state = activeTurnState();
+      if (state.active) {
         options.renderTaskList?.();
         options.renderSelectedHeader?.();
         options.renderPanelForRealtime?.();
       }
     }
 
+    function tickIntervalMs() {
+      const baseInterval = Math.max(250, Number(options.pollInterval || 1000));
+      const idleInterval = Math.max(baseInterval, Number(options.idlePollInterval || baseInterval * 4));
+      const hiddenInterval = Math.max(idleInterval, Number(options.hiddenPollInterval || idleInterval * 3));
+      if (documentHidden()) return hiddenInterval;
+      if (activeTurnState().active || options.selectedTaskRealtimeActive?.()) return baseInterval;
+      if (options.realtimeConnected?.()) return idleInterval;
+      return baseInterval;
+    }
+
     return Object.freeze({
       renderActiveTurn,
       resetFailures,
-      tick
+      tick,
+      tickIntervalMs
     });
   }
 

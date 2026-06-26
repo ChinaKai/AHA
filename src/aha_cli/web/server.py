@@ -132,7 +132,7 @@ async def handle_ui_client(
             if "/" in static_name or static_name.startswith("."):
                 response = http_response("404 Not Found", b"not found\n")
             else:
-                response = static_response(static_name, method, headers)
+                response = static_response(static_name, method, headers, versioned=bool(parsed.query))
             writer.write(
                 append_response_headers(response, auth_cookie_header(auth_token))
                 if set_auth_cookie

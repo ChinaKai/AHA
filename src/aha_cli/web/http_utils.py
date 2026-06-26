@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio
 from email.parser import BytesParser
 from email.policy import default as email_policy
+from email.utils import formatdate
 import gzip
+import hashlib
 from importlib import resources
 import json
 from pathlib import Path
 
 STATIC_PACKAGE = "aha_cli.web"
 GZIP_MIN_BYTES = 1024
+STATIC_REVALIDATE_CACHE_CONTROL = "public, max-age=0, must-revalidate"
+STATIC_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_STATIC_BODY_CACHE: dict[str, tuple[tuple[int | None, int | None], bytes, str, str]] = {}
 
 
 def parse_optional_bool(value: object, field_name: str) -> bool:
@@ -76,12 +81,66 @@ def json_response(
     )
 
 
-def static_response(name: str, method: str, request_headers: dict[str, str] | None = None) -> bytes:
+def _header_value(headers: dict[str, str] | None, name: str) -> str:
+    target = name.lower()
+    for key, value in (headers or {}).items():
+        if str(key).lower() == target:
+            return str(value)
+    return ""
+
+
+def _static_resource_cache_key(resource: object) -> tuple[int | None, int | None]:
+    try:
+        stat = resource.stat()  # type: ignore[attr-defined]
+    except (AttributeError, FileNotFoundError, OSError):
+        return (None, None)
+    mtime_ns = getattr(stat, "st_mtime_ns", None)
+    if mtime_ns is None:
+        mtime_ns = int(float(getattr(stat, "st_mtime", 0.0)) * 1_000_000_000)
+    return (int(mtime_ns), int(getattr(stat, "st_size", 0)))
+
+
+def _static_body(name: str, resource: object) -> tuple[bytes, str, str]:
+    cache_key = _static_resource_cache_key(resource)
+    cached = _STATIC_BODY_CACHE.get(name)
+    if cached and cached[0] == cache_key:
+        return cached[1], cached[2], cached[3]
+    body = resource.read_bytes()  # type: ignore[attr-defined]
+    digest = hashlib.sha256(body).hexdigest()[:16]
+    etag = f'"aha-{len(body):x}-{digest}"'
+    last_modified = ""
+    if cache_key[0] is not None:
+        last_modified = formatdate(cache_key[0] / 1_000_000_000, usegmt=True)
+    _STATIC_BODY_CACHE[name] = (cache_key, body, etag, last_modified)
+    return body, etag, last_modified
+
+
+def _etag_matches(request_headers: dict[str, str] | None, etag: str) -> bool:
+    raw = _header_value(request_headers, "if-none-match")
+    if not raw:
+        return False
+    values = {item.strip() for item in raw.split(",") if item.strip()}
+    return "*" in values or etag in values or f"W/{etag}" in values
+
+
+def _static_cache_control(name: str, versioned: bool = False) -> str:
+    if Path(name).suffix == ".html":
+        return "no-store"
+    return STATIC_IMMUTABLE_CACHE_CONTROL if versioned else STATIC_REVALIDATE_CACHE_CONTROL
+
+
+def static_response(
+    name: str,
+    method: str,
+    request_headers: dict[str, str] | None = None,
+    *,
+    versioned: bool = False,
+) -> bytes:
     try:
         resource = resources.files(STATIC_PACKAGE).joinpath("static", name)
         if not resource.is_file():
             return http_response("404 Not Found", b"not found\n")
-        body = resource.read_bytes()
+        body, etag, last_modified = _static_body(name, resource)
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return http_response("404 Not Found", b"not found\n")
     suffix = Path(name).suffix
@@ -91,7 +150,26 @@ def static_response(name: str, method: str, request_headers: dict[str, str] | No
         ".js": "application/javascript; charset=utf-8",
         ".svg": "image/svg+xml",
     }.get(suffix, "application/octet-stream")
-    return http_response("200 OK", b"" if method == "HEAD" else body, content_type, request_headers=request_headers)
+    headers = {"ETag": etag}
+    if last_modified:
+        headers["Last-Modified"] = last_modified
+    cache_control = _static_cache_control(name, versioned=versioned)
+    if _etag_matches(request_headers, etag):
+        return http_response(
+            "304 Not Modified",
+            b"",
+            content_type,
+            headers=headers,
+            cache_control=cache_control,
+        )
+    return http_response(
+        "200 OK",
+        b"" if method == "HEAD" else body,
+        content_type,
+        headers=headers,
+        request_headers=request_headers,
+        cache_control=cache_control,
+    )
 
 
 async def read_http_request(reader: asyncio.StreamReader) -> tuple[str, str, dict[str, str], bytes]:

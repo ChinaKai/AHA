@@ -29,6 +29,21 @@
     }
     .kb-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
     .kb-row > * { min-width: 0; }
+    .kb-entry-toolbar {
+      display: block; max-width: 720px;
+    }
+    .kb-entry-search {
+      display: grid; grid-template-columns: minmax(0, 1fr) var(--control-height-md);
+      gap: 6px; min-width: 0;
+    }
+    .kb-entry-search-button {
+      width: var(--control-height-md); min-width: var(--control-height-md);
+      padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .kb-entry-search-button svg {
+      width: 17px; height: 17px; stroke: currentColor; stroke-width: 2;
+      fill: none; stroke-linecap: round; stroke-linejoin: round;
+    }
     .kb-card {
       display: grid; gap: 6px; min-width: 0; padding: 12px; margin: 10px 0;
       border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
@@ -45,45 +60,68 @@
     .kb-inline-actions { display: flex; flex-wrap: nowrap; overflow-x: auto; }
     .kb-inline-actions button { flex: 0 0 auto; white-space: nowrap; }
     .kb-entry-actions button { min-width: 0; }
-    .kb-entry-tree {
-      display: grid; gap: 2px; margin: 10px 0; padding: 6px;
-      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
-      background: var(--color-surface);
+    .kb-entry-index { display: grid; gap: 12px; margin: 12px 0; min-width: 0; }
+    .kb-entry-index-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; min-width: 0; padding: 2px 2px 4px;
+      border: 0; background: transparent;
     }
-    .kb-tree-group {
-      min-width: 0; border: 0; border-radius: var(--radius-sm); background: transparent;
+    .kb-entry-index-title {
+      margin: 0; color: var(--color-text-strong); font-size: 14px; line-height: 1.35;
     }
-    .kb-tree-group > summary {
-      display: flex; align-items: center; gap: 8px; min-height: 30px;
-      cursor: pointer; list-style-position: inside; padding: 5px 8px;
+    .kb-entry-index-count {
+      flex: 0 0 auto; color: var(--color-text-subtle); font-size: 12px;
+    }
+    .kb-entry-index-groups { display: grid; gap: 10px; min-width: 0; }
+    .kb-entry-index-group { display: grid; gap: 6px; min-width: 0; }
+    .kb-entry-index-group-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      min-width: 0; padding: 8px 2px 0; border-top: 1px solid var(--color-border-subtle);
+    }
+    .kb-entry-index-group-head h3 {
+      margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: var(--color-text-strong); font-size: 13px; line-height: 1.35;
+    }
+    .kb-entry-index-group-count {
+      flex: 0 0 auto; padding: 1px 7px; border-radius: 999px;
+      background: var(--status-bg); color: var(--color-text-subtle);
+      font-size: 11px; font-weight: 500;
+    }
+    .kb-entry-index-list { display: grid; gap: 8px; min-width: 0; }
+    .kb-entry-result {
+      display: grid; grid-template-columns: minmax(0, 1fr); align-items: center;
+      gap: 8px; min-width: 0; padding: 9px 2px 10px;
+      border: 0; border-bottom: 1px solid var(--color-border-subtle); border-radius: 0;
+      background: transparent; overflow-wrap: anywhere; cursor: pointer;
+    }
+    .kb-entry-result:hover { background: var(--color-surface-muted); }
+    .kb-entry-result.active {
+      border-color: #bfdbfe; background: var(--color-primary-surface);
+      box-shadow: inset 3px 0 0 var(--color-primary); padding-left: 10px; padding-right: 10px;
       border-radius: var(--radius-sm);
-      color: var(--color-text-strong); font-size: 13px; font-weight: 650;
+      grid-template-columns: minmax(0, 1fr) auto;
     }
-    .kb-tree-group > summary:hover { background: var(--color-surface-muted); }
-    .kb-tree-count {
-      flex: 0 0 auto; margin-left: auto; padding: 1px 7px;
-      border-radius: 999px; background: var(--status-bg);
-      color: var(--color-text-subtle); font-size: 11px; font-weight: 500;
+    .kb-entry-result-main { min-width: 0; display: grid; gap: 4px; }
+    .kb-entry-result h4 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--color-text-strong); }
+    .kb-entry-result:not(.active) h4 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kb-entry-result-meta { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+    .kb-entry-result-meta span {
+      min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      padding: 1px 7px; border: 1px solid var(--color-border-subtle); border-radius: 999px;
+      background: var(--color-surface-muted); color: var(--color-text-subtle); font-size: 11px;
     }
-    .kb-tree-children {
-      display: grid; gap: 2px; margin-left: 14px; padding: 2px 0 4px 12px;
-      border-left: 1px solid var(--color-border-subtle);
+    .kb-entry-result-meta .kb-entry-status {
+      border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; font-weight: 650;
     }
-    .kb-tree-level-2, .kb-tree-level-3, .kb-tree-level-4 { margin-top: 0; }
-    .kb-tree-entry {
-      display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
-      gap: 8px; min-width: 0; padding: 7px 8px; border-radius: var(--radius-sm);
-      overflow-wrap: anywhere;
+    .kb-entry-result-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }
+    .kb-entry-result-actions {
+      display: none; justify-content: flex-end; flex-wrap: nowrap; margin: 0;
     }
-    .kb-tree-entry:hover { background: var(--color-surface-muted); }
-    .kb-tree-entry-main { min-width: 0; display: grid; gap: 2px; }
-    .kb-tree-entry h4 { margin: 0; font-size: 13px; color: var(--color-text-strong); }
-    .kb-tree-entry-tags { min-height: 0; }
-    .kb-tree-entry-actions { justify-content: flex-end; flex-wrap: nowrap; margin: 0; }
-    .kb-tree-entry-actions button { min-height: 24px; padding: 0 8px; font-size: 11px; }
-    .kb-tree-entry > .kb-muted,
-    .kb-tree-entry > .kb-body,
-    .kb-tree-entry > .kb-edit-form { grid-column: 1 / -1; }
+    .kb-entry-result.active .kb-entry-result-actions { display: flex; }
+    .kb-entry-result-actions button { min-height: 24px; padding: 0 8px; font-size: 11px; }
+    .kb-entry-result > .kb-muted,
+    .kb-entry-result > .kb-body,
+    .kb-entry-result > .kb-edit-form { grid-column: 1 / -1; cursor: auto; }
     .kb-pending-actions { margin: 0 0 2px; }
     button.kb-approve { border-color: #bbf7d0; background: var(--color-success-surface); color: var(--color-success); font-weight: 650; }
     button.kb-reject { border-color: #fecaca; background: var(--color-danger-surface); color: var(--color-danger); }
@@ -227,12 +265,18 @@
       .kb-entry-actions.kb-inline-actions button {
         width: auto; flex: 0 0 auto;
       }
-      .kb-tree-entry { grid-template-columns: 1fr; gap: 6px; padding: 7px 6px; }
-      .kb-tree-children { margin-left: 8px; padding-left: 8px; }
-      .kb-tree-entry-actions {
+      .kb-entry-toolbar { max-width: none; }
+      .kb-entry-index { gap: 10px; margin-top: 10px; }
+      .kb-entry-index-head { padding: 10px; }
+      .kb-entry-index-group-head h3 { white-space: normal; }
+      .kb-entry-result { grid-template-columns: 1fr; gap: 6px; padding: 10px; }
+      .kb-entry-result.active { grid-template-columns: 1fr; }
+      .kb-entry-result-meta span { max-width: 100%; }
+      .kb-entry-result.active .kb-entry-result-actions {
         display: flex; grid-template-columns: none; overflow-x: auto; justify-content: flex-start;
       }
-      .kb-tree-entry-actions button {
+      .kb-entry-result:not(.active) .kb-entry-result-actions { display: none; }
+      .kb-entry-result-actions button {
         width: auto; flex: 0 0 auto; min-height: 28px;
       }
       .kb-cap-actions {
@@ -271,12 +315,13 @@
   </nav>
 
   <section id="tab-entries">
-    <div class="kb-row">
-      <select id="f-scope" aria-label="Scope filter" data-i18n-aria-label="knowledge.scope_filter"><option value="" data-i18n="knowledge.scope_all">All scopes</option><option value="project" data-i18n="knowledge.scope_project">Project</option><option value="general" data-i18n="knowledge.scope_general">General</option><option value="personal" data-i18n="knowledge.scope_personal">Personal</option></select>
-      <select id="f-kind" aria-label="Type filter" data-i18n-aria-label="knowledge.type_filter"><option value="" data-i18n="knowledge.type_all">All types</option><option value="solutions" data-i18n="knowledge.type_solutions">Solutions</option><option value="wiki" data-i18n="knowledge.type_wiki">Wiki</option></select>
-      <input id="f-project" type="text" placeholder="Filter by project key" data-i18n-placeholder="knowledge.project_filter" />
-      <input id="f-search" type="search" placeholder="Search title, tags, or body" data-i18n-placeholder="knowledge.search_filter" />
-      <button class="button-ghost" id="f-refresh" type="button" data-i18n="common.refresh">Refresh</button>
+    <div class="kb-row kb-entry-toolbar">
+      <div class="kb-entry-search">
+        <input id="f-search" type="search" placeholder="Search title, tags, or body" data-i18n-placeholder="knowledge.search_filter" />
+        <button class="button-ghost kb-entry-search-button" id="f-search-submit" type="button" aria-label="Search" title="Search" data-i18n-aria-label="knowledge.search" data-i18n-title="knowledge.search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
+        </button>
+      </div>
     </div>
     <div id="entries-list"></div>
   </section>
@@ -1138,7 +1183,12 @@
         : "";
       const metaLine = `${entryScopeLabel(e.scope)}/${entryTypeLabel(e.type)} · ${e.project_key || "-"} · ${entryId} · ${status}`;
       const tagHtml = (e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("");
-      const actions = `<div class="kb-card-actions kb-entry-actions${options.tree ? " kb-tree-entry-actions" : ""}">
+      const compactMetaHtml = `<div class="kb-entry-result-meta">
+        <span>${esc(entryTypeLabel(e.type))}</span>
+        <span>${esc(e.project_key || e.scope || "-")}</span>
+        <span class="kb-entry-status">${esc(status)}</span>
+      </div>`;
+      const actions = `<div class="kb-card-actions kb-entry-actions${options.feed ? " kb-entry-result-actions" : ""}"${options.feed ? ' onclick="event.stopPropagation()"' : ""}>
         <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(isActive && !isEditing ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
         <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
         <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
@@ -1146,14 +1196,13 @@
         ${sourceNoteButton}
         <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>
       </div>`;
-      const expanded = `${isActive && !isEditing ? `<div class="kb-muted">${esc(state.activeEntry.path)}</div><div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
+      const expanded = `${isActive && !isEditing ? `<div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
         ${isEditing ? renderEditForm(state.activeEntry) : ""}`;
-      if (options.tree) {
-        return `<div class="kb-tree-entry">
-          <div class="kb-tree-entry-main">
+      if (options.feed) {
+        return `<div class="kb-entry-index-row kb-entry-result${isActive ? " active" : ""}" data-entry-id="${esc(entryId)}" tabindex="0" role="button" aria-expanded="${isActive ? "true" : "false"}" onclick="toggleEntryRow(event, '${encodedId}')" onkeydown="entryRowKeydown(event, '${encodedId}')">
+          <div class="kb-entry-result-main">
             <h4>${esc(entryTitle(e))}</h4>
-            <div class="kb-muted">${esc(metaLine)}</div>
-            <div class="kb-tree-entry-tags">${tagHtml}</div>
+            ${isActive ? `${compactMetaHtml}<div class="kb-entry-result-tags">${tagHtml}</div>` : ""}
           </div>
           ${actions}
           ${expanded}
@@ -1172,81 +1221,59 @@
       return [...entries].sort((a, b) => entryTitle(a).localeCompare(entryTitle(b), undefined, { sensitivity: "base" }));
     }
 
-    function ensureTreeNode(children, key, label) {
-      const nodeKey = String(key || "-");
-      if (!children.has(nodeKey)) children.set(nodeKey, { key: nodeKey, label: String(label || nodeKey), children: new Map(), entries: [] });
-      return children.get(nodeKey);
+    function entryGroupLabel(entry) {
+      const owner = entry.project_key || entryScopeLabel(entry.scope);
+      return `${owner || "-"} / ${entryTypeLabel(entry.type)}`;
     }
 
-    function buildEntryTree(entries) {
-      const root = new Map();
-      for (const entry of entries) {
-        const scopeKey = String(entry.scope || "unknown");
-        const scope = ensureTreeNode(root, scopeKey, entryScopeLabel(scopeKey));
-        let parent = scope;
-        if (scopeKey === "project") {
-          parent = ensureTreeNode(scope.children, entry.project_key || "-", entry.project_key || "-");
-        }
-        const typeKey = entry.type === "solution" ? "solution" : String(entry.type || "unknown");
-        const type = ensureTreeNode(parent.children, typeKey, entryTypeLabel(typeKey));
-        const category = ensureTreeNode(type.children, entryCategoryLabel(entry), entryCategoryLabel(entry));
-        category.entries.push(entry);
+    function groupEntries(entries) {
+      const groups = new Map();
+      for (const entry of sortEntriesByTitle(entries)) {
+        const label = entryGroupLabel(entry);
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(entry);
       }
-      return root;
+      return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
     }
 
-    function treeNodeCount(node) {
-      let count = node.entries.length;
-      for (const child of node.children.values()) count += treeNodeCount(child);
-      return count;
-    }
-
-    function treeNodeHasEntry(node, entryId) {
-      if (!entryId) return false;
-      if (node.entries.some((entry) => entryIdentity(entry) === entryId)) return true;
-      return [...node.children.values()].some((child) => treeNodeHasEntry(child, entryId));
-    }
-
-    function compareTreeNodes(a, b) {
-      const scopeOrder = { project: 0, general: 1, personal: 2 };
-      const typeOrder = { solution: 0, solutions: 0, wiki: 1 };
-      const aOrder = Object.prototype.hasOwnProperty.call(scopeOrder, a.key) ? scopeOrder[a.key] : typeOrder[a.key];
-      const bOrder = Object.prototype.hasOwnProperty.call(scopeOrder, b.key) ? scopeOrder[b.key] : typeOrder[b.key];
-      if (Number.isFinite(aOrder) && Number.isFinite(bOrder) && aOrder !== bOrder) return aOrder - bOrder;
-      if (Number.isFinite(aOrder) && !Number.isFinite(bOrder)) return -1;
-      if (!Number.isFinite(aOrder) && Number.isFinite(bOrder)) return 1;
-      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
-    }
-
-    function renderTreeNode(node, level) {
-      const childHtml = [...node.children.values()].sort(compareTreeNodes).map((child) => renderTreeNode(child, level + 1)).join("");
-      const entryHtml = sortEntriesByTitle(node.entries).map((entry) => renderEntryItem(entry, { tree: true })).join("");
-      const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
-      const open = level <= 2 || treeNodeHasEntry(node, activeId) ? " open" : "";
-      return `<details class="kb-tree-group kb-tree-level-${level}"${open}>
-        <summary><span>${esc(node.label)}</span><span class="kb-tree-count">${treeNodeCount(node)}</span></summary>
-        <div class="kb-tree-children">${childHtml}${entryHtml}</div>
-      </details>`;
-    }
-
-    function renderEntryTree() {
+    function renderEntryIndex() {
       if (!state.entries.length) return state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
-      const tree = buildEntryTree(state.entries);
-      return `<div class="kb-entry-tree">${[...tree.values()].sort(compareTreeNodes).map((node) => renderTreeNode(node, 1)).join("")}</div>`;
-    }
-
-    function renderFlatEntries() {
-      return state.entries.length
-        ? state.entries.map((entry) => renderEntryItem(entry)).join("")
-        : (state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`);
+      const groups = groupEntries(state.entries);
+      const groupHtml = groups.length
+        ? groups.map(([label, entries]) => `<section class="kb-entry-index-group">
+            <div class="kb-entry-index-group-head"><h3>${esc(label)}</h3><span class="kb-entry-index-group-count">${entries.length}</span></div>
+            <div class="kb-entry-index-list">${entries.map((entry) => renderEntryItem(entry, { feed: true })).join("")}</div>
+          </section>`).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
+      return `<div class="kb-entry-index">
+        <div class="kb-entry-index-head">
+          <div>
+            <h3 class="kb-entry-index-title">${esc(t("knowledge.entries_index", "Index"))}</h3>
+            <div class="kb-muted">${esc(formatText("knowledge.entries_showing", { count: state.entries.length }, "Showing " + state.entries.length + " entries"))}</div>
+          </div>
+          <span class="kb-entry-index-count">${esc(String(state.entries.length))}</span>
+        </div>
+        <div class="kb-entry-index-groups">${groupHtml}</div>
+      </div>`;
     }
 
     function renderEntries() {
-      const hasSearch = Boolean($("#f-search").value.trim());
-      const entryHtml = hasSearch ? renderFlatEntries() : renderEntryTree();
+      const entryHtml = renderEntryIndex();
       $("#entries-list").innerHTML = entryHtml + renderEntryCaptureResults();
       renderEntryMarkdown();
     }
+
+    window.toggleEntryRow = (event, encodedId) => {
+      const interactive = event?.target?.closest?.("button,a,input,select,textarea,label,[data-entry-edit-form],.kb-body,.kb-entry-result-actions");
+      if (interactive) return;
+      window.toggleEntry(encodedId);
+    };
+
+    window.entryRowKeydown = (event, encodedId) => {
+      if (!["Enter", " "].includes(event.key) || event.target !== event.currentTarget) return;
+      event.preventDefault();
+      window.toggleEntry(encodedId);
+    };
 
     function renderEntryBodyEditor(entry) {
       const meta = entry?.meta || {};
@@ -1444,9 +1471,6 @@
 
     async function loadEntries() {
       const q = new URLSearchParams();
-      if ($("#f-scope").value) q.set("scope", $("#f-scope").value);
-      if ($("#f-kind").value) q.set("kind", $("#f-kind").value);
-      if ($("#f-project").value.trim()) q.set("project", $("#f-project").value.trim());
       if ($("#f-search").value.trim()) q.set("q", $("#f-search").value.trim());
       const data = await api("/api/kb/entries?" + q.toString());
       state.entries = data.entries;
@@ -2384,9 +2408,8 @@
       event.preventDefault();
     });
     for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
-    $("#f-refresh").addEventListener("click", loadEntries);
-    for (const id of ["#f-scope", "#f-kind"]) $(id).addEventListener("change", loadEntries);
-    for (const id of ["#f-project", "#f-search"]) $(id).addEventListener("keydown", (event) => {
+    $("#f-search-submit").addEventListener("click", loadEntries);
+    $("#f-search").addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadEntries();
     });
     window.addEventListener("aha:languagechange", () => {
