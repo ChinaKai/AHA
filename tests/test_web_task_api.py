@@ -459,6 +459,17 @@ class WebTaskApiTests(unittest.TestCase):
                     fetch_ui_response(root, run_id, f"/api/task-memo-assets/{asset['filename']}?run_id={run_id}")
                 )
                 asset_fetch_headers, asset_fetch_body = asset_fetch_response.split(b"\r\n\r\n", 1)
+                semantic_svg_path = run_dir(root, run_id) / "task_memo_assets" / "vega_pipeline" / "current_pipeline.svg"
+                semantic_svg_path.parent.mkdir(parents=True, exist_ok=True)
+                semantic_svg_path.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+                semantic_svg_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task-memo-assets/vega_pipeline%2Fcurrent_pipeline.svg?run_id={run_id}",
+                    )
+                )
+                semantic_svg_headers, semantic_svg_body = semantic_svg_response.split(b"\r\n\r\n", 1)
                 create_response = asyncio.run(
                     fetch_ui_response(
                         root,
@@ -604,6 +615,9 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(asset_fetch_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertIn(b"Content-Type: image/png", asset_fetch_headers)
         self.assertEqual(asset_fetch_body, b"\x89PNG\r\n\x1a\n")
+        self.assertTrue(semantic_svg_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b"Content-Type: image/svg+xml", semantic_svg_headers)
+        self.assertEqual(semantic_svg_body, b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')
         self.assertTrue(heic_asset_response.startswith(b"HTTP/1.1 201 Created"))
         self.assertEqual(heic_asset["content_type"], "image/heic")
         self.assertTrue(heic_asset["filename"].endswith(".heic"))

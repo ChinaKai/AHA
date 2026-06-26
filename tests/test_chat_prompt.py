@@ -1012,6 +1012,31 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(metrics["components"]["coordination_policy"]["chars"], 0)
         self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
 
+    def test_full_prompt_includes_input_image_guidance_for_image_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Image input prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "看这张图",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    images=[{"path": "task_memo_assets/ab/shot.png", "mime": "image/png", "size": 12}],
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertIn("AHA input image handling:", prompt)
+        self.assertIn("task_memo_assets/ab/shot.png", prompt)
+        self.assertIn("inspect the resolved local image", prompt)
+        self.assertIn("input_image_guidance", metrics["components"])
+
     def test_full_prompt_expands_coordination_policy_on_delegation_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1255,6 +1280,44 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("AHA runtime context update", prompt)
         self.assertNotIn("context_delta", metrics["components"])
         self.assertNotIn("context_fingerprint_updates", metrics)
+
+    def test_plain_sticky_with_image_field_includes_input_image_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Plain sticky image queued", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "disabled",
+                }
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "继续看图",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                    images=[{"path": "task_memo_assets/cd/diagram.png", "mime": "image/png"}],
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertNotEqual(prompt, "继续看图")
+        self.assertIn("AHA input image handling:", prompt)
+        self.assertIn("task_memo_assets/cd/diagram.png", prompt)
+        self.assertIn("User message from browser", prompt)
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("input_image_guidance", metrics["components"])
 
     def test_sticky_delta_expands_commit_policy_on_commit_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

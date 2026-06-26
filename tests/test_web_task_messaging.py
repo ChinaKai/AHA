@@ -186,6 +186,35 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertIn("do not search for them relative to the workspace", messages[0]["message"])
         self.assertEqual(messages[1]["message"].count("AHA memo attachment resolution:"), 1)
 
+    def test_send_message_preserves_image_fields_for_prompt_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Image payload", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "busy"}):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "message": "看图",
+                            "images": [{"path": "task_memo_assets/ab/shot.png", "mime": "image/png"}],
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(messages[0]["images"], [{"path": "task_memo_assets/ab/shot.png", "mime": "image/png"}])
+
     def test_send_while_backend_busy_marks_message_plain_sticky(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

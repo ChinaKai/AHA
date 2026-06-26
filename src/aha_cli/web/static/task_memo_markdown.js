@@ -478,6 +478,86 @@
     return container.innerHTML;
   }
 
+  const imageViewerStateByDocument = new WeakMap();
+
+  function viewerState(documentRef) {
+    if (!documentRef) return null;
+    let state = imageViewerStateByDocument.get(documentRef);
+    if (!state) {
+      state = { dialog: null, image: null };
+      imageViewerStateByDocument.set(documentRef, state);
+    }
+    return state;
+  }
+
+  function closeImageViewer(documentRef) {
+    const state = viewerState(documentRef);
+    if (!state?.dialog) return;
+    if (typeof state.dialog.close === "function" && state.dialog.open) {
+      state.dialog.close();
+    } else {
+      state.dialog.removeAttribute("open");
+    }
+    state.image?.removeAttribute("src");
+  }
+
+  function ensureImageViewer(documentRef, t = (_key, fallback = "") => fallback) {
+    const state = viewerState(documentRef);
+    if (!state || state.dialog || !documentRef?.body) return state?.dialog || null;
+    const dialog = documentRef.createElement("dialog");
+    dialog.className = "task-memo-image-viewer";
+    dialog.setAttribute("aria-label", t("memo.image_viewer", "Memo image"));
+    const frame = documentRef.createElement("div");
+    frame.className = "task-memo-image-viewer-frame";
+    const closeButton = documentRef.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "task-memo-image-viewer-close";
+    closeButton.textContent = t("common.close", "Close");
+    const image = documentRef.createElement("img");
+    image.className = "task-memo-image-viewer-img";
+    frame.appendChild(closeButton);
+    frame.appendChild(image);
+    dialog.appendChild(frame);
+    dialog.addEventListener("click", event => {
+      if (event.target === dialog) closeImageViewer(documentRef);
+    });
+    closeButton.addEventListener("click", () => closeImageViewer(documentRef));
+    documentRef.body.appendChild(dialog);
+    state.dialog = dialog;
+    state.image = image;
+    return dialog;
+  }
+
+  function openImageViewer(image, options = {}) {
+    const documentRef = options.documentRef || image?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const t = options.t || ((_key, fallback = "") => fallback);
+    const src = image?.currentSrc || image?.src || "";
+    if (!src || !documentRef) return false;
+    const viewer = ensureImageViewer(documentRef, t);
+    const state = viewerState(documentRef);
+    if (!viewer || !state?.image) return false;
+    state.image.src = src;
+    state.image.alt = image.alt || t("memo.pasted_image_alt", "pasted image");
+    if (typeof viewer.showModal === "function") {
+      if (!viewer.open) viewer.showModal();
+    } else {
+      viewer.setAttribute("open", "");
+    }
+    return true;
+  }
+
+  function clickedInlineImage(target, root = null) {
+    if (!target || typeof target.closest !== "function") return null;
+    const wrapper = target.closest(".task-memo-inline-image");
+    if (!wrapper || (root && !root.contains(wrapper))) return null;
+    return wrapper.querySelector("img");
+  }
+
+  function openClickedImage(target, options = {}) {
+    const image = clickedInlineImage(target, options.root || null);
+    return image ? openImageViewer(image, options) : false;
+  }
+
   function createTaskMemoMarkdownTools(options = {}) {
     const windowRef = options.windowRef || window;
     const documentRef = options.documentRef || windowRef.document;
@@ -485,8 +565,6 @@
     const t = options.t || ((_key, fallback = "") => fallback);
     const apiUrl = options.apiUrl || (value => value);
     const imagePaste = options.textareaImagePaste || windowRef.AHATextareaImagePaste;
-    let memoImageViewerEl = null;
-    let memoImageViewerImgEl = null;
     let detachImagePaste = null;
     let detachModeControls = null;
     let markdownMode = "preview";
@@ -552,67 +630,13 @@
       syncMarkdownMode();
     }
 
-    function closeMemoImageViewer() {
-      if (!memoImageViewerEl) return;
-      if (typeof memoImageViewerEl.close === "function" && memoImageViewerEl.open) {
-        memoImageViewerEl.close();
-      } else {
-        memoImageViewerEl.removeAttribute("open");
-      }
-      memoImageViewerImgEl?.removeAttribute("src");
-    }
-
-    function ensureMemoImageViewer() {
-      if (memoImageViewerEl || !documentRef?.body) return memoImageViewerEl;
-      const dialog = documentRef.createElement("dialog");
-      dialog.className = "task-memo-image-viewer";
-      dialog.setAttribute("aria-label", t("memo.image_viewer", "Memo image"));
-      const frame = documentRef.createElement("div");
-      frame.className = "task-memo-image-viewer-frame";
-      const closeButton = documentRef.createElement("button");
-      closeButton.type = "button";
-      closeButton.className = "task-memo-image-viewer-close";
-      closeButton.textContent = t("common.close", "Close");
-      const image = documentRef.createElement("img");
-      image.className = "task-memo-image-viewer-img";
-      frame.appendChild(closeButton);
-      frame.appendChild(image);
-      dialog.appendChild(frame);
-      dialog.addEventListener("click", event => {
-        if (event.target === dialog) closeMemoImageViewer();
-      });
-      closeButton.addEventListener("click", closeMemoImageViewer);
-      documentRef.body.appendChild(dialog);
-      memoImageViewerEl = dialog;
-      memoImageViewerImgEl = image;
-      return memoImageViewerEl;
-    }
-
-    function openMemoImageViewer(image) {
-      const src = image?.currentSrc || image?.src || "";
-      if (!src) return false;
-      const viewer = ensureMemoImageViewer();
-      if (!viewer || !memoImageViewerImgEl) return false;
-      memoImageViewerImgEl.src = src;
-      memoImageViewerImgEl.alt = image.alt || t("memo.pasted_image_alt", "pasted image");
-      if (typeof viewer.showModal === "function") {
-        if (!viewer.open) viewer.showModal();
-      } else {
-        viewer.setAttribute("open", "");
-      }
-      return true;
-    }
-
     function clickedMemoImage(target) {
-      if (!target || typeof target.closest !== "function") return null;
-      const wrapper = target.closest(".task-memo-inline-image");
-      if (!wrapper || !elements.taskMemoDescriptionEditorEl?.contains(wrapper)) return null;
-      return wrapper.querySelector("img");
+      return clickedInlineImage(target, elements.taskMemoDescriptionEditorEl || null);
     }
 
-    function openClickedImage(target) {
+    function openMemoClickedImage(target) {
       const image = clickedMemoImage(target);
-      return image ? openMemoImageViewer(image) : false;
+      return image ? openImageViewer(image, { documentRef, t }) : false;
     }
 
     function insertDescriptionImageMarkdown(markdown) {
@@ -719,7 +743,7 @@
     return Object.freeze({
       bind,
       insertMemoImageFiles,
-      openClickedImage,
+      openClickedImage: openMemoClickedImage,
       renderDescriptionEditor,
       renderMemoAttachmentList,
       setDisabled,
@@ -731,6 +755,8 @@
     appendInlineMarkdown,
     collectMemoAttachments,
     createTaskMemoMarkdownTools,
+    openClickedImage,
+    openImageViewer,
     memoImageFilenameFromPath,
     memoImageSrc,
     memoAssetContentType,

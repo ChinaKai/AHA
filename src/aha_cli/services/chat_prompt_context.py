@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 
 from aha_cli.services.chat_supervision import (
     agents_visible_to_prompt,
@@ -108,6 +109,8 @@ ATTACHMENT_OUTPUT_INTENT_TERMS = (
     "显示图片",
 )
 CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY = "context_fingerprint_updates"
+MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
+IMAGE_FIELD_KEYS = ("image", "images")
 
 
 def model_family_for_guidance(backend: str | None, *model_values: object) -> str | None:
@@ -243,7 +246,11 @@ def _prompt_needs_coordination_policy(
 
 
 def _prompt_needs_attachment_output_guidance(item: dict, *, sticky_delta: bool) -> bool:
-    return not sticky_delta or _has_intent_term(_intent_text_for_prompt(item), ATTACHMENT_OUTPUT_INTENT_TERMS)
+    return (
+        not sticky_delta
+        or _item_has_image_input(item)
+        or _has_intent_term(_intent_text_for_prompt(item), ATTACHMENT_OUTPUT_INTENT_TERMS)
+    )
 
 
 def _coordination_policy_for_prompt(needed: bool) -> str:
@@ -323,6 +330,68 @@ def _attachment_output_guidance_for_prompt(root: Path, run_id: str) -> str:
         "backend_attachment_output_guidance.md",
         attachment_dir=str(task_memo_assets_dir(root, run_id).resolve()),
         asset_dir=TASK_MEMO_ASSET_DIR,
+    ).rstrip()
+
+
+def _message_has_image_markdown_or_data_url(message: object) -> bool:
+    text = str(message or "")
+    return bool(MARKDOWN_IMAGE_RE.search(text) or "data:image/" in text.lower())
+
+
+def _item_has_image_input(item: dict) -> bool:
+    if any(item.get(key) for key in IMAGE_FIELD_KEYS):
+        return True
+    return _message_has_image_markdown_or_data_url(item.get("message"))
+
+
+def _compact_image_ref(value: object, *, label: str = "image") -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        refs: list[str] = []
+        for index, entry in enumerate(value, 1):
+            refs.extend(_compact_image_ref(entry, label=f"{label}[{index}]"))
+        return refs
+    if isinstance(value, dict):
+        parts = []
+        for key in ("path", "url", "filename", "name", "content_type", "mime", "size", "bytes"):
+            if value.get(key) is not None:
+                parts.append(f"{key}={value.get(key)}")
+        text = ", ".join(parts) if parts else "metadata present"
+    else:
+        text = str(value).strip()
+    if not text:
+        return []
+    if text.lower().startswith("data:image/"):
+        text = text.split(",", 1)[0] + ",...base64 omitted"
+    if len(text) > 240:
+        text = text[:237].rstrip() + "..."
+    return [f"- {label}: {text}"]
+
+
+def _input_image_refs_for_prompt(item: dict) -> str:
+    refs: list[str] = []
+    for key in IMAGE_FIELD_KEYS:
+        refs.extend(_compact_image_ref(item.get(key), label=key))
+    message = str(item.get("message") or "")
+    for index, match in enumerate(MARKDOWN_IMAGE_RE.finditer(message), 1):
+        path = match.group(1)
+        refs.append(f"- markdown[{index}]: {path}")
+    if "data:image/" in message.lower():
+        refs.append("- message: inline data:image URL present")
+    if not refs:
+        return "- Image input was detected, but no path metadata was available."
+    return "\n".join(refs[:8])
+
+
+def _input_image_guidance_for_prompt(root: Path, run_id: str, item: dict) -> str:
+    if not _item_has_image_input(item):
+        return ""
+    return render_prompt_template(
+        "backend_input_image_guidance.md",
+        attachment_dir=str(task_memo_assets_dir(root, run_id).resolve()),
+        asset_dir=TASK_MEMO_ASSET_DIR,
+        image_refs=_input_image_refs_for_prompt(item),
     ).rstrip()
 
 
@@ -846,6 +915,9 @@ def chat_prompt(
     is_result_request = is_finalization or is_memo_report
     is_agent_command = item.get("command_namespace") == "agent"
     attachment_output_guidance = _attachment_output_guidance_for_prompt(root, run_id)
+    input_image_guidance = _input_image_guidance_for_prompt(root, run_id, item)
+    if input_image_guidance:
+        attachment_output_guidance = f"{attachment_output_guidance}\n\n{input_image_guidance}"
     task = None
     agent = None
     session = None
@@ -857,6 +929,8 @@ def chat_prompt(
         "recovery_context": _recovery_context_for_prompt(item),
         "attachment_output_guidance": attachment_output_guidance,
     }
+    if input_image_guidance:
+        components["input_image_guidance"] = input_image_guidance
     task_context = ""
     context_fingerprint_updates: dict[str, str] = {}
     if task_id:
@@ -883,7 +957,7 @@ def chat_prompt(
                     detail["task"],
                     include_attachment_output=_prompt_needs_attachment_output_guidance(item, sticky_delta=sticky_delta),
                 )
-            if sticky_delta and item.get("plain_sticky") and not components["recovery_context"].strip():
+            if sticky_delta and item.get("plain_sticky") and not components["recovery_context"].strip() and not input_image_guidance:
                 prompt = str(item.get("message") or "")
                 _fill_prompt_metrics(
                     metrics,
@@ -1119,6 +1193,9 @@ def chat_prompt(
         if context_delta:
             sticky_context_parts.append(context_delta)
             components["context_delta"] = context_delta
+        if input_image_guidance:
+            sticky_context_parts.append(input_image_guidance)
+            components["input_image_guidance"] = input_image_guidance
         if is_supervision_host and task:
             host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
             supervision_context = supervision_host_delta_context(

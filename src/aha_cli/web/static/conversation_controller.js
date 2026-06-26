@@ -1030,6 +1030,25 @@
       closeConversationFilters();
     });
 
+    function openConversationImage(target) {
+      return Boolean(window.AHATaskMemoMarkdown?.openClickedImage?.(target, {
+        root: panelEl,
+        documentRef,
+        t: deps.t || window.AHAI18n?.t
+      }));
+    }
+
+    panelEl?.addEventListener?.("click", event => {
+      if (!openConversationImage(event.target)) return;
+      event.preventDefault();
+    });
+
+    panelEl?.addEventListener?.("keydown", event => {
+      if (!["Enter", " "].includes(event.key)) return;
+      if (!openConversationImage(event.target)) return;
+      event.preventDefault();
+    });
+
     function renderConversation(taskId) {
       copyTextByKey.clear();
       const stateValue = deps.conversationState(taskId);

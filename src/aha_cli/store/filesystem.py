@@ -199,6 +199,8 @@ def append_message(
     memo_report_context: dict | None = None,
     recovery_context: str | None = None,
     plain_sticky: bool = False,
+    image: object | None = None,
+    images: object | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -239,6 +241,10 @@ def append_message(
         payload["recovery_context"] = recovery_context
     if plain_sticky:
         payload["plain_sticky"] = True
+    if image:
+        payload["image"] = image
+    if images:
+        payload["images"] = images
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)

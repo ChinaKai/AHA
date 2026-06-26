@@ -2367,6 +2367,22 @@
         await loadProjectNavDrafts(); await loadNavigation();
       }
     });
+    function openKnowledgeImage(target) {
+      return Boolean(window.AHATaskMemoMarkdown?.openClickedImage?.(target, {
+        root: document.querySelector(".kb-wrap"),
+        documentRef: document,
+        t,
+      }));
+    }
+    document.addEventListener("click", (event) => {
+      if (!openKnowledgeImage(event.target)) return;
+      event.preventDefault();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (!["Enter", " "].includes(event.key)) return;
+      if (!openKnowledgeImage(event.target)) return;
+      event.preventDefault();
+    });
     for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
     $("#f-refresh").addEventListener("click", loadEntries);
     for (const id of ["#f-scope", "#f-kind"]) $(id).addEventListener("change", loadEntries);

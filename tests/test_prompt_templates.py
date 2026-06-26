@@ -60,6 +60,7 @@ SAMPLE_VALUES = {
     "goal": "Build AHA",
     "hardware_debug_context": "Hardware debug context.",
     "image_manifest": "",
+    "image_refs": "- image: task_memo_assets/ab/shot.png",
     "images": "- a.png (image/png, 10 bytes, path: a.png)",
     "index": "1",
     "inbox_file": "inbox.jsonl",

@@ -330,6 +330,8 @@ def handle_send_payload(
         result_policy=str(command_payload.get("result_policy", "") or "") or None,
         recovery_context=recovery_context or None,
         plain_sticky=plain_sticky,
+        image=payload.get("image"),
+        images=payload.get("images"),
     )
     response = {"ok": True, "message": sent}
     if supervision_host_message and task_id:

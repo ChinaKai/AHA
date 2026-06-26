@@ -161,22 +161,14 @@ def validate_asset_filename(filename: object) -> str:
     if not name or "\\" in name:
         raise ValueError("invalid memo image asset filename")
     parts = name.split("/")
-    if len(parts) == 1:
-        if not parts[0] or parts[0] in {".", ".."} or not SAFE_ASSET_RE.match(parts[0]):
+    if len(parts) > 8:
+        raise ValueError("invalid memo image asset filename")
+    safe_parts = []
+    for part in parts:
+        if not part or part in {".", ".."} or not SAFE_ASSET_RE.match(part):
             raise ValueError("invalid memo image asset filename")
-        return parts[0]
-    if len(parts) == 2:
-        prefix, asset_name = parts
-        if (
-            len(prefix) != 2
-            or not SAFE_SUFFIX_RE.match(prefix)
-            or not asset_name
-            or asset_name in {".", ".."}
-            or not SAFE_ASSET_RE.match(asset_name)
-        ):
-            raise ValueError("invalid memo image asset filename")
-        return f"{prefix}/{asset_name}"
-    raise ValueError("invalid memo image asset filename")
+        safe_parts.append(part)
+    return "/".join(safe_parts)
 
 
 def create_task_memo_asset_from_bytes(root: Path, run_id: str, *, filename: object, content_type: object, data: bytes) -> dict:
