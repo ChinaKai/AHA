@@ -572,6 +572,58 @@ def test_nav_command_sidecar_is_enqueued_as_navigation(tmp_path: Path):
     assert knowledge["kind"] == "navigation"
 
 
+def test_nav_command_normalizes_sidecar_slug_before_validation(tmp_path: Path):
+    home = tmp_path / ".aha"
+    main(["--home", str(home), "init"])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--home", str(home), "plan", "Nav normalized slug flow", "--agents", "1"])
+    run_id = out.getvalue().splitlines()[0].split(": ", 1)[1].strip()
+    cfg = load_config(home)
+    cfg["knowledge"]["enabled"] = True
+    write_json(config_path(home), cfg)
+    plan = require_plan(home, run_id)
+    task = plan["tasks"][0]
+    key = project_key(Path(task.get("workspace_path")), goal=plan.get("goal"))
+    write_entry(
+        home,
+        config=load_config(home),
+        scope="project",
+        kind="navigation",
+        project_key_value=key,
+        title="项目导航",
+        body="## 模块索引\n",
+        slug="index",
+        meta={"type": "navigation"},
+    )
+
+    result = distill_after_nav_command(
+        home,
+        run_id,
+        "task-001",
+        "已整理导航。",
+        task_title=task["title"],
+        workspace_path=task.get("workspace_path"),
+        goal=plan.get("goal"),
+        sidecar_candidates=[
+            {
+                "kind": "navigation",
+                "scope": "project",
+                "slug": "modules/fw_localsdk-media",
+                "title": "fw_localsdk SSC306DE 媒体链路",
+                "responsibility": "负责 SSC306DE/VEGA 的底层媒体建图和生命周期管理。",
+                "related_files": ["app_source/fw_localsdk/SSC306DE/src/localsdk/sdkvideo.c"],
+                "navigation_reason": "显式 nav 命令更新项目导航。",
+            }
+        ],
+    )
+
+    pending = list_pending(home, load_config(home))
+    assert result["ok"] is True
+    assert result["candidates"] == 2
+    assert {item["slug"] for item in pending} == {"index", "modules/fw-localsdk-media"}
+
+
 def test_final_navigation_sidecar_emits_nav_delta_event(tmp_path: Path):
     home = tmp_path / ".aha"
     main(["--home", str(home), "init"])

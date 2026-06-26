@@ -285,7 +285,7 @@ def _sidecar_kind(candidate: dict) -> str:
 def _navigation_slug(candidate: dict) -> str:
     raw_slug = str(candidate.get("slug") or candidate.get("nav_path") or candidate.get("doc_path") or "").strip()
     if raw_slug:
-        return raw_slug
+        return normalize_entry_slug(raw_slug)
     module = str(candidate.get("module") or "").strip()
     if module:
         return f"{NAVIGATION_MODULES_DIR}/{slugify(module)}"
