@@ -40,10 +40,28 @@
       });
     }
 
-    function renderMessageBody(body, key = "") {
+    function renderMarkdownBodyHtml(text) {
+      const renderer = deps.renderMarkdownHtml || window.AHATaskMemoMarkdown?.renderMarkdownHtml;
+      if (typeof renderer !== "function") return deps.escapeHtml?.(text);
+      try {
+        const html = renderer(text, {
+          apiUrl: deps.apiUrl,
+          documentRef: deps.documentRef || (typeof document !== "undefined" ? document : null),
+          t: deps.t || window.AHAI18n?.t
+        });
+        return html || deps.escapeHtml?.(text);
+      } catch (_err) {
+        return deps.escapeHtml?.(text);
+      }
+    }
+
+    function renderMessageBody(body, key = "", options = {}) {
       const text = String(body || "");
+      const markdown = options.markdown !== false;
+      const bodyHtml = markdown ? renderMarkdownBodyHtml(text) : deps.escapeHtml?.(text);
+      const bodyClass = markdown ? " message-markdown" : "";
       if (!shouldCollapseMessage(text)) {
-        return `<div class="message-body">${deps.escapeHtml?.(text)}</div>`;
+        return `<div class="message-body${bodyClass}">${bodyHtml}</div>`;
       }
       const lines = text.split("\n").length;
       const summary = compactText(text, 220);
@@ -55,12 +73,12 @@
             <span>${deps.escapeHtml?.(summary || "(empty message)")}</span>
             <em>${deps.escapeHtml?.(`${text.length} chars | ${lines} lines`)}</em>
           </summary>
-          <div class="message-body-full">${deps.escapeHtml?.(text)}</div>
+          <div class="message-body-full${bodyClass}">${bodyHtml}</div>
         </details>
       `;
     }
 
-    function renderTimelineCard(title, body, ts, cls, key = "") {
+    function renderTimelineCard(title, body, ts, cls, key = "", options = {}) {
       const copyKey = String(key || "");
       if (copyKey) state.copyTextByKey?.set(copyKey, String(body || ""));
       const copyButton = copyKey
@@ -75,7 +93,7 @@
               ${copyButton}
             </span>
           </div>
-          ${renderMessageBody(body, key)}
+          ${renderMessageBody(body, key, options)}
         </div>
       `;
     }
@@ -97,16 +115,16 @@
         return renderTimelineCard(`${displaySender} -> ${displayTarget}`, data.message || "", eventTimeLabel(event), className, event._uiKey);
       }
       if (event.type === "agent_message") return renderTimelineCard(deps.agentUpdateTitle?.(data), deps.agentUpdateBody?.(data), eventTimeLabel(event), "agent-update", event._uiKey);
-      if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey);
+      if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey, { markdown: false });
       if (event.type === "agent_command_finished") {
         const output = data.output_tail
           ? `\n\nOutput tail:\n${data.output_tail}`
           : data.output_tail_omitted
             ? `\n\nOutput tail omitted (${data.output_tail_chars || 0} chars).`
             : "";
-        return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey);
+        return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey, { markdown: false });
       }
-      if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey);
+      if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey, { markdown: false });
       if (event.type === "agent_usage") {
         const usage = data.usage || {};
         return renderTimelineStatus("usage", `input=${usage.input_tokens ?? "-"} cached=${usage.cached_input_tokens ?? "-"} output=${usage.output_tokens ?? "-"} reasoning=${usage.reasoning_output_tokens ?? "-"}`, "usage", eventTimeLabel(event));

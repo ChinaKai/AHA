@@ -102,6 +102,39 @@
       min-height: 220px; resize: vertical; width: 100%;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
+    .kb-entry-markdown-editor {
+      display: grid; gap: 8px; min-width: 0;
+    }
+    .kb-entry-edit-toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; flex-wrap: wrap;
+    }
+    .kb-entry-edit-modes {
+      display: inline-flex; gap: 4px; padding: 2px;
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm);
+      background: var(--color-surface-muted);
+    }
+    .kb-entry-edit-modes button {
+      min-height: 28px; padding: 0 10px; font-size: 12px;
+      border-color: transparent; background: transparent;
+    }
+    .kb-entry-edit-modes button.active {
+      border-color: var(--color-primary); background: var(--color-primary-surface);
+      color: var(--color-primary-strong); font-weight: 650;
+    }
+    .kb-entry-image-upload {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 28px; padding: 0 10px; cursor: pointer;
+      border: 1px dashed var(--color-border, #ccc); border-radius: var(--radius-sm);
+      color: var(--color-text); font-size: 12px;
+    }
+    .kb-entry-markdown-editor[data-mode="preview"] .kb-entry-edit-source,
+    .kb-entry-markdown-editor[data-mode="edit"] .kb-entry-edit-preview {
+      display: none;
+    }
+    .kb-entry-edit-preview {
+      min-height: 220px; white-space: normal;
+    }
     .kb-pending-body { max-height: min(420px, 55vh); overflow: auto; }
     #capture-list .kb-card { padding: 8px 10px; margin: 6px 0; gap: 4px; }
     #capture-list .kb-card h3 { font-size: 14px; }
@@ -213,6 +246,9 @@
       .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
       .kb-settings-card { padding: 12px; }
       .kb-project-nav-controls { overflow-x: visible; }
+      .kb-entry-edit-toolbar { display: grid; grid-template-columns: 1fr; }
+      .kb-entry-edit-modes, .kb-entry-image-upload { width: 100%; }
+      .kb-entry-edit-modes button { flex: 1 1 0; }
     }
   </style>
 </head>
@@ -415,6 +451,7 @@
   <div id="toast" class="kb-toast"></div>
  </div>
 
+  <script src="/static/textarea_image_paste.js"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/i18n.js"></script>
   <script>
@@ -463,6 +500,20 @@
       if (/^www\./i.test(raw)) return `https://${raw}`;
       if (/^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(raw)) return `https://${raw}`;
       return /^(https?:|mailto:|\/|#|\.)/i.test(raw) ? raw : "";
+    }
+    function entryRenderId(entry) {
+      const meta = entry?.meta || entry || {};
+      return String(meta.id || meta.slug || entry?.id || entry?.slug || "");
+    }
+    function entryImageSrc(path, entry) {
+      const raw = String(path || "").trim();
+      if (!raw) return "";
+      if (/^(data:image\/|https?:\/\/|\/api\/kb\/capture\/image|\/api\/kb\/entry\/image)/i.test(raw)) return raw;
+      const rel = raw.replace(/^\.\//, "");
+      if (!rel.startsWith("assets/")) return "";
+      const id = entryRenderId(entry || state.activeEntry || state.referenceEntry);
+      if (!id) return "";
+      return `/api/kb/entry/image?id=${encodeURIComponent(id)}&path=${encodeURIComponent(rel)}`;
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
@@ -982,8 +1033,14 @@
       const activeBody = document.querySelector('[data-entry-body="active"]');
       if (activeBody && state.activeEntry) {
         activeBody.innerHTML = "";
-        window.AHATaskMemoMarkdown.renderMarkdownPreview(activeBody, state.activeEntry.body || "", { documentRef: document, t, linkHref: knowledgeLinkHref });
+        window.AHATaskMemoMarkdown.renderMarkdownPreview(activeBody, state.activeEntry.body || "", {
+          documentRef: document,
+          t,
+          linkHref: knowledgeLinkHref,
+          imageSrc: (path) => entryImageSrc(path, state.activeEntry),
+        });
       }
+      renderEntryEditMarkdown();
     }
 
     function renderEntryReferenceModal() {
@@ -1003,11 +1060,17 @@
       if (state.editingReference) {
         body.innerHTML = renderReferenceEditForm(ref);
       } else if (window.AHATaskMemoMarkdown) {
-        window.AHATaskMemoMarkdown.renderMarkdownPreview(body, ref.body || "", { documentRef: document, t, linkHref: knowledgeLinkHref });
+        window.AHATaskMemoMarkdown.renderMarkdownPreview(body, ref.body || "", {
+          documentRef: document,
+          t,
+          linkHref: knowledgeLinkHref,
+          imageSrc: (path) => entryImageSrc(path, ref),
+        });
       } else {
         body.textContent = ref.body || "";
       }
       modal.hidden = false;
+      renderEntryEditMarkdown();
     }
 
     function closeEntryReferenceModal() {
@@ -1185,9 +1248,28 @@
       renderEntryMarkdown();
     }
 
+    function renderEntryBodyEditor(entry) {
+      const meta = entry?.meta || {};
+      const id = meta.id || meta.slug || "";
+      return `<div class="kb-entry-markdown-editor" data-mode="preview">
+        <div class="kb-entry-edit-toolbar">
+          <div class="kb-entry-edit-modes" role="group" aria-label="${esc(t("memo.markdown_mode", "Markdown mode"))}">
+            <button class="button-ghost active" type="button" data-entry-edit-mode="preview" onclick="setEntryEditMode(this, 'preview')">${esc(t("memo.preview_mode", "Preview"))}</button>
+            <button class="button-ghost" type="button" data-entry-edit-mode="edit" onclick="setEntryEditMode(this, 'edit')">${esc(t("knowledge.edit", "Edit"))}</button>
+          </div>
+          <label class="kb-entry-image-upload">${esc(t("knowledge.capture_add_image", "+ image"))}
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onchange="uploadEntryEditImage(this)" />
+          </label>
+        </div>
+        <textarea class="kb-entry-edit-source" name="body" oninput="renderEntryEditMarkdown(this.closest('[data-entry-edit-form]'))" onpaste="pasteEntryEditImage(event)">${esc(entry?.body || "")}</textarea>
+        <div class="kb-body kb-entry-body kb-entry-edit-preview" data-entry-edit-preview tabindex="0" onpaste="pasteEntryEditImage(event)" aria-label="${esc(t("memo.preview_mode", "Preview"))}"></div>
+        <input name="entry_id" type="hidden" value="${esc(id)}" />
+      </div>`;
+    }
+
     function renderEditForm(entry) {
       const meta = entry?.meta || {};
-      return `<form class="kb-edit-form" onsubmit="saveEntry(event, '${encodeURIComponent(meta.id || meta.slug || "")}')">
+      return `<form class="kb-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntry(event, '${encodeURIComponent(meta.id || meta.slug || "")}')">
         <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
         <input name="title" type="text" value="${esc(meta.title || "")}" />
         <label class="kb-field">${esc(t("knowledge.edit_tags", "Tags"))}</label>
@@ -1199,7 +1281,7 @@
         <label class="kb-field">${esc(t("knowledge.edit_review_after", "Review after"))}</label>
         <input name="review_after" type="text" value="${esc(meta.review_after || "")}" />
         <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
-        <textarea name="body">${esc(entry?.body || "")}</textarea>
+        ${renderEntryBodyEditor(entry)}
         <div class="kb-card-actions">
           <button class="primary" type="submit">${esc(t("knowledge.save_entry", "Save entry"))}</button>
           <button class="button-ghost" type="button" onclick="cancelEdit()">${esc(t("common.cancel", "Cancel"))}</button>
@@ -1209,7 +1291,7 @@
 
     function renderReferenceEditForm(entry) {
       const meta = entry?.meta || {};
-      return `<form class="kb-edit-form" onsubmit="saveEntryReference(event)">
+      return `<form class="kb-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntryReference(event)">
         <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
         <input name="title" type="text" value="${esc(meta.title || "")}" />
         <label class="kb-field">${esc(t("knowledge.edit_tags", "Tags"))}</label>
@@ -1221,13 +1303,144 @@
         <label class="kb-field">${esc(t("knowledge.edit_review_after", "Review after"))}</label>
         <input name="review_after" type="text" value="${esc(meta.review_after || "")}" />
         <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
-        <textarea name="body">${esc(entry?.body || "")}</textarea>
+        ${renderEntryBodyEditor(entry)}
         <div class="kb-card-actions">
           <button class="primary" type="submit">${esc(t("knowledge.save_entry", "Save entry"))}</button>
           <button class="button-ghost" type="button" onclick="cancelEntryReferenceEdit()">${esc(t("common.cancel", "Cancel"))}</button>
         </div>
       </form>`;
     }
+
+    function entryForEditForm(form) {
+      const id = String(form?.dataset?.entryId || "");
+      if (id && entryRenderId(state.activeEntry) === id) return state.activeEntry;
+      if (id && entryRenderId(state.referenceEntry) === id) return state.referenceEntry;
+      return { meta: { id } };
+    }
+
+    function syncEntryEditMode(form) {
+      const editor = form?.querySelector?.(".kb-entry-markdown-editor");
+      if (!editor) return;
+      const mode = editor.dataset.mode === "edit" ? "edit" : "preview";
+      editor.dataset.mode = mode;
+      for (const button of form.querySelectorAll("[data-entry-edit-mode]")) {
+        const active = button.dataset.entryEditMode === mode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      }
+    }
+
+    function renderEntryEditMarkdown(target) {
+      const forms = target
+        ? [target.closest?.("[data-entry-edit-form]") || target].filter(Boolean)
+        : Array.from(document.querySelectorAll("[data-entry-edit-form]"));
+      for (const form of forms) {
+        const textarea = form.elements?.body;
+        const preview = form.querySelector?.("[data-entry-edit-preview]");
+        if (!textarea || !preview) continue;
+        preview.innerHTML = "";
+        if (window.AHATaskMemoMarkdown) {
+          const entry = entryForEditForm(form);
+          window.AHATaskMemoMarkdown.renderMarkdownPreview(preview, textarea.value || "", {
+            documentRef: document,
+            t,
+            linkHref: knowledgeLinkHref,
+            imageSrc: (path) => entryImageSrc(path, entry),
+          });
+        } else {
+          preview.textContent = textarea.value || "";
+        }
+        if (!preview.childNodes.length) preview.appendChild(document.createElement("br"));
+        syncEntryEditMode(form);
+      }
+    }
+
+    window.setEntryEditMode = (button, mode) => {
+      const form = button.closest("[data-entry-edit-form]");
+      const editor = form?.querySelector(".kb-entry-markdown-editor");
+      if (!form || !editor) return;
+      editor.dataset.mode = mode === "edit" ? "edit" : "preview";
+      renderEntryEditMarkdown(form);
+      if (editor.dataset.mode === "edit") form.elements.body?.focus();
+    };
+
+    function insertEntryEditImageMarkdown(textarea, markdown, appendToEnd = false) {
+      if (!textarea || !markdown) return;
+      if (appendToEnd && typeof textarea.setSelectionRange === "function") {
+        const end = String(textarea.value || "").length;
+        textarea.setSelectionRange(end, end);
+      }
+      if (window.AHATextareaImagePaste?.insertTextareaImageMarkdown) {
+        window.AHATextareaImagePaste.insertTextareaImageMarkdown(textarea, markdown, { windowRef: window });
+        return;
+      }
+      const value = String(textarea.value || "");
+      const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : value.length;
+      const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start;
+      const before = value.slice(0, start);
+      const after = value.slice(end);
+      const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
+      const suffix = after && !after.startsWith("\n") ? "\n\n" : "\n";
+      const snippet = `${prefix}${markdown}${suffix}`;
+      textarea.value = `${before}${snippet}${after}`;
+      textarea.setSelectionRange?.(start + snippet.length, start + snippet.length);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    function updateEntryEditState(entry) {
+      const id = entryRenderId(entry);
+      if (!id) return;
+      if (entryRenderId(state.activeEntry) === id) state.activeEntry = entry;
+      if (entryRenderId(state.referenceEntry) === id) state.referenceEntry = entry;
+    }
+
+    async function insertEntryEditImageFiles(form, files, options = {}) {
+      const selectedFiles = Array.from(files || []).filter(Boolean);
+      if (!selectedFiles.length || !form) return;
+      const textarea = form.elements?.body;
+      const id = String(form.dataset.entryId || form.elements?.entry_id?.value || "");
+      if (!textarea || !id) throw new Error("Entry image upload is unavailable.");
+      toast(t("memo.image_uploading", "Saving attachment..."));
+      let inserted = 0;
+      const appendToEnd = document.activeElement !== textarea;
+      for (const file of selectedFiles) {
+        const dataUrl = await readFileAsDataUrl(file);
+        const result = await api("/api/kb/entry/image", {
+          method: "POST",
+          body: JSON.stringify({ id, filename: file.name, data_url: dataUrl }),
+        });
+        updateEntryEditState(result.entry);
+        const markdown = result.image?.markdown || (result.image?.path ? `![${file.name || result.image.name}](${result.image.path})` : "");
+        if (!markdown) continue;
+        insertEntryEditImageMarkdown(textarea, markdown, appendToEnd);
+        inserted += 1;
+      }
+      renderEntryEditMarkdown(form);
+      if (inserted) {
+        toast(options.pasted ? t("memo.image_pasted", "Image pasted.") : t("memo.image_added", "Attachment added."));
+      }
+    }
+
+    window.uploadEntryEditImage = async (input) => {
+      const form = input.closest("[data-entry-edit-form]");
+      try {
+        await insertEntryEditImageFiles(form, input.files || []);
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      } finally {
+        input.value = "";
+      }
+    };
+
+    window.pasteEntryEditImage = (event) => {
+      const files = window.AHATextareaImagePaste?.clipboardImageFiles?.(event) || [];
+      if (!files.length) return;
+      event.preventDefault();
+      const form = event.currentTarget.closest("[data-entry-edit-form]");
+      insertEntryEditImageFiles(form, files, { pasted: true }).catch((e) => {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, t("memo.image_paste_failed", "Failed to paste image.")));
+      });
+    };
 
     async function loadEntries() {
       const q = new URLSearchParams();
@@ -1594,7 +1807,7 @@
               </div>`;
             const body = editing
               ? `<input class="kb-cap-edit-title" data-id="${esc(n.id)}" type="text" value="${esc(n.title || "")}" placeholder="${esc(t("knowledge.capture_title_placeholder", "Optional title"))}" />
-                 <textarea class="kb-cap-edit" data-id="${esc(n.id)}" rows="4">${esc(full)}</textarea>
+                 <textarea class="kb-cap-edit" data-id="${esc(n.id)}" rows="4" onpaste="pasteNoteEditImage(event, '${esc(n.id)}')">${esc(full)}</textarea>
                  <div class="kb-row kb-cap-edit-tools">${uploadLabel}
                  <select class="kb-cap-edit-scope" data-id="${esc(n.id)}">${captureScopeOptions(n.scope_hint)}</select>
                  <button class="primary" type="button" onclick="saveNote('${esc(n.id)}')">${esc(t("knowledge.save_entry", "Save"))}</button>
@@ -1819,23 +2032,81 @@
         reader.readAsDataURL(file);
       });
     }
+
+    function captureImageMarkdown(noteId, image, fallbackName = "") {
+      const name = String(image?.name || "").trim();
+      if (!noteId || !name) return "";
+      const alt = String(image?.original || fallbackName || name || "image").replace(/[\r\n\[\]]+/g, " ").trim() || "image";
+      return `![${alt}](/api/kb/capture/image?id=${encodeURIComponent(noteId)}&name=${encodeURIComponent(name)})`;
+    }
+
+    async function uploadCaptureImage(id, file, append = false) {
+      const dataUrl = await readFileAsDataUrl(file);
+      const result = await api("/api/kb/capture/image", {
+        method: "POST",
+        body: JSON.stringify({ id, filename: file?.name || "image", data_url: dataUrl, append }),
+      });
+      return result.image;
+    }
+
+    function updateCaptureNoteState(id, updates = {}) {
+      const note = state.capture.find((item) => item.id === id);
+      if (note) Object.assign(note, updates);
+    }
+
+    async function insertNoteEditImageFiles(id, files, options = {}) {
+      const selectedFiles = Array.from(files || []).filter(Boolean);
+      if (!selectedFiles.length) return;
+      const editTitle = document.querySelector(`.kb-cap-edit-title[data-id="${id}"]`);
+      const editText = document.querySelector(`.kb-cap-edit[data-id="${id}"]`);
+      const editScope = document.querySelector(`.kb-cap-edit-scope[data-id="${id}"]`);
+      if (!editText) return;
+      toast(t("memo.image_uploading", "Saving attachment..."));
+      const appendToEnd = document.activeElement !== editText;
+      const insertedImages = [];
+      for (const file of selectedFiles) {
+        const image = await uploadCaptureImage(id, file, false);
+        const markdown = captureImageMarkdown(id, image, file?.name || "");
+        if (!markdown) continue;
+        insertEntryEditImageMarkdown(editText, markdown, appendToEnd);
+        insertedImages.push(image);
+      }
+      if (insertedImages.length) {
+        await api("/api/kb/capture", {
+          method: "PATCH",
+          body: JSON.stringify({
+            id,
+            title: editTitle?.value.trim(),
+            text: editText.value,
+            scope_hint: editScope?.value,
+          }),
+        });
+        const note = state.capture.find((item) => item.id === id);
+        updateCaptureNoteState(id, {
+          title: editTitle?.value.trim(),
+          text: editText.value,
+          scope_hint: editScope?.value,
+          images: [...(note?.images || []), ...insertedImages],
+        });
+        toast(options.pasted ? t("memo.image_pasted", "Image pasted.") : t("memo.image_added", "Attachment added."));
+      }
+    }
+
     window.uploadNoteImage = async (id, input) => {
-      const file = input.files && input.files[0];
-      if (!file) return;
       try {
-        const dataUrl = await readFileAsDataUrl(file);
-        const editTitle = document.querySelector(`.kb-cap-edit-title[data-id="${id}"]`);
-        const editText = document.querySelector(`.kb-cap-edit[data-id="${id}"]`);
-        const editScope = document.querySelector(`.kb-cap-edit-scope[data-id="${id}"]`);
-        if (editText) {
-          await api("/api/kb/capture", { method: "PATCH", body: JSON.stringify({ id, title: editTitle?.value.trim(), text: editText.value, scope_hint: editScope?.value }) });
-        }
-        await api("/api/kb/capture/image", { method: "POST", body: JSON.stringify({ id, filename: file.name, data_url: dataUrl }) });
-        await loadCapture();
+        await insertNoteEditImageFiles(id, input.files || []);
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
       finally {
         input.value = "";
       }
+    };
+    window.pasteNoteEditImage = (event, id) => {
+      const files = window.AHATextareaImagePaste?.clipboardImageFiles?.(event) || [];
+      if (!files.length) return;
+      event.preventDefault();
+      insertNoteEditImageFiles(id, files, { pasted: true }).catch((e) => {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, t("memo.image_paste_failed", "Failed to paste image.")));
+      });
     };
     window.deleteNoteImage = async (id, name) => {
       try { await api("/api/kb/capture/image", { method: "DELETE", body: JSON.stringify({ id, name }) }); await loadCapture(); }
@@ -1896,6 +2167,23 @@
     function newNoteDraft() {
       return { text: $("#cap-text").value, title: $("#cap-title").value, scope: $("#cap-scope").value };
     }
+    function pendingCaptureImageId() {
+      return `pending-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+    }
+    function pendingCaptureImageToken(image) {
+      return `capture-pending:${image.id}`;
+    }
+    function pendingCaptureImageMarkdown(image) {
+      const alt = String(image.filename || "image").replace(/[\r\n\[\]]+/g, " ").trim() || "image";
+      return `![${alt}](${pendingCaptureImageToken(image)})`;
+    }
+    function stripPendingCaptureImages(text) {
+      return String(text || "").replace(/!\[[^\]]*\]\(capture-pending:[^)]+\)\n*/g, "").trimStart();
+    }
+    function appendMarkdownRefs(text, refs) {
+      if (!refs.length) return String(text || "");
+      return (String(text || "").trimEnd() + "\n\n" + refs.join("\n") + "\n").trimStart();
+    }
     function saveNewNoteDraft() {
       try { localStorage.setItem(CAPTURE_DRAFT_KEY, JSON.stringify(newNoteDraft())); }
       catch (e) { /* Draft cache is best-effort. */ }
@@ -1904,7 +2192,7 @@
       let draft = null;
       try { draft = JSON.parse(localStorage.getItem(CAPTURE_DRAFT_KEY) || "null"); }
       catch (e) { draft = null; }
-      $("#cap-text").value = draft?.text || "";
+      $("#cap-text").value = state.newNoteImages.length ? (draft?.text || "") : stripPendingCaptureImages(draft?.text || "");
       $("#cap-title").value = draft?.title || "";
       $("#cap-scope").value = draft?.scope || "personal";
       renderNewNoteImageCount();
@@ -1925,14 +2213,28 @@
       $("#cap-new-modal").hidden = true;
       if (clearDraft) clearNewNoteDraft();
     }
-    async function queueNewNoteImage(input) {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      try {
+    async function queueNewNoteImageFiles(files, options = {}) {
+      const selectedFiles = Array.from(files || []).filter(Boolean);
+      if (!selectedFiles.length) return 0;
+      const textarea = $("#cap-text");
+      const appendToEnd = document.activeElement !== textarea;
+      let queued = 0;
+      for (const file of selectedFiles) {
         const dataUrl = await readFileAsDataUrl(file);
-        state.newNoteImages.push({ filename: file.name, data_url: dataUrl });
-        saveNewNoteDraft();
-        renderNewNoteImageCount();
+        const image = { id: pendingCaptureImageId(), filename: file.name, data_url: dataUrl };
+        state.newNoteImages.push(image);
+        queued += 1;
+        if (options.insertMarkdown) {
+          insertEntryEditImageMarkdown(textarea, pendingCaptureImageMarkdown(image), appendToEnd);
+        }
+      }
+      saveNewNoteDraft();
+      renderNewNoteImageCount();
+      return queued;
+    }
+    async function queueNewNoteImage(input) {
+      try {
+        await queueNewNoteImageFiles(input.files || []);
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
       finally { input.value = ""; }
     }
@@ -1940,6 +2242,15 @@
     $("#cap-new-cancel").addEventListener("click", () => closeNewNoteModal(false));
     $("#cap-new-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-new-modal") closeNewNoteModal(false); });
     $("#cap-new-image").addEventListener("change", (ev) => queueNewNoteImage(ev.currentTarget));
+    $("#cap-text").addEventListener("paste", (event) => {
+      const files = window.AHATextareaImagePaste?.clipboardImageFiles?.(event) || [];
+      if (!files.length) return;
+      event.preventDefault();
+      queueNewNoteImageFiles(files, { insertMarkdown: true }).then(
+        (count) => { if (count) toast(t("memo.image_pasted", "Image pasted.")); },
+        (e) => toast(formatText("knowledge.failed_with_error", { error: e.message }, t("memo.image_paste_failed", "Failed to paste image.")))
+      );
+    });
     for (const id of ["#cap-text", "#cap-title"]) $(id).addEventListener("input", saveNewNoteDraft);
     $("#cap-scope").addEventListener("change", saveNewNoteDraft);
 
@@ -1951,8 +2262,21 @@
       try {
         const created = await api("/api/kb/capture", { method: "POST", body: JSON.stringify({ text, scope_hint: $("#cap-scope").value, title: $("#cap-title").value.trim() || null }) });
         noteId = created.note?.id || "";
+        let nextText = text;
+        const refsToAppend = [];
         for (const image of state.newNoteImages) {
-          await api("/api/kb/capture/image", { method: "POST", body: JSON.stringify({ id: noteId, filename: image.filename, data_url: image.data_url }) });
+          const uploaded = await api("/api/kb/capture/image", { method: "POST", body: JSON.stringify({ id: noteId, filename: image.filename, data_url: image.data_url, append: false }) });
+          const ref = captureImageMarkdown(noteId, uploaded.image, image.filename);
+          const token = image.id ? pendingCaptureImageToken(image) : "";
+          if (token && nextText.includes(token)) {
+            nextText = nextText.split(token).join(`/api/kb/capture/image?id=${encodeURIComponent(noteId)}&name=${encodeURIComponent(uploaded.image?.name || "")}`);
+          } else if (ref) {
+            refsToAppend.push(ref);
+          }
+        }
+        nextText = appendMarkdownRefs(nextText, refsToAppend);
+        if (nextText !== text) {
+          await api("/api/kb/capture", { method: "PATCH", body: JSON.stringify({ id: noteId, title: $("#cap-title").value.trim(), text: nextText, scope_hint: $("#cap-scope").value }) });
         }
         closeNewNoteModal(true);
         await loadCapture(); await loadStatus(); toast(t("knowledge.saved", "Saved"));

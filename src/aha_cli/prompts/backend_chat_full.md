@@ -6,6 +6,8 @@ Do not modify files unless the user explicitly asks for a repository change.
 
 $task_context
 
+$attachment_output_guidance
+
 $recovery_context
 
 Recent conversation:

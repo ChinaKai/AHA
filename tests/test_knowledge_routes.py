@@ -286,6 +286,18 @@ def test_capture_image_upload_serve_and_delete(tmp_path: Path):
     assert deleted["ok"] is True
     assert _get(home, "/api/kb/capture", {"id": [nid]})["images"] == []
 
+    created = json_response_body(_post(home, "/api/kb/capture", {"text": "insert here"}))
+    nid = created["note"]["id"]
+    json_response_body(_post(home, "/api/kb/capture/image", {
+        "id": nid,
+        "filename": "manual.png",
+        "data_url": data_url,
+        "append": False,
+    }))
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert note["text"] == "insert here"
+    assert len(note["images"]) == 1
+
 
 def test_capture_image_rejects_non_image(tmp_path: Path):
     import base64
@@ -295,6 +307,50 @@ def test_capture_image_rejects_non_image(tmp_path: Path):
     bad = "data:image/png;base64," + base64.b64encode(b"not an image").decode()
     body = json_response_body(_post(home, "/api/kb/capture/image", {"id": nid, "data_url": bad}))
     assert "unsupported image type" in body["error"]
+
+
+def test_entry_image_upload_and_serve(tmp_path: Path):
+    import base64
+
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    path = write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="git-abc",
+        title="With image",
+        body="before",
+    )
+    entry = _get(home, "/api/kb/entry", {"id": ["with-image"]})
+    png = b"\x89PNG\r\n\x1a\n" + b"entry"
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode()
+
+    up = json_response_body(_post(home, "/api/kb/entry/image", {
+        "id": entry["meta"]["id"],
+        "filename": "shot.png",
+        "data_url": data_url,
+    }))
+
+    image = up["image"]
+    assert image["mime"] == "image/png"
+    assert image["path"].startswith("assets/with-image/")
+    assert image["markdown"] == f"![shot.png]({image['path']})"
+    assert up["entry"]["body"] == "before"
+    assert up["entry"]["meta"]["assets"][0]["path"] == image["path"]
+    assert path.exists()
+
+    raw = knowledge_route_response(
+        home,
+        "GET",
+        "/api/kb/entry/image",
+        {"id": [entry["meta"]["id"]], "path": [image["path"]]},
+        b"",
+        {},
+    )
+    assert b"Content-Type: image/png" in raw.split(b"\r\n\r\n", 1)[0]
+    assert raw.split(b"\r\n\r\n", 1)[1] == png
 
 
 def test_capture_distill_forwards_backend_model_and_proxy(tmp_path: Path, monkeypatch):

@@ -623,6 +623,7 @@ const appActions = window.AHAAppActions.createAppActions({
   writeStoredSelectedTaskId
 });
 const featureControllers = window.AHAAppControllerFactory.createFeatureControllers(domRefs, {
+  activeTab: () => activeTab,
   addBootstrapConfigRow,
   agentBackendProcessStatus,
   agentBackendModelChanged,

@@ -13,6 +13,7 @@ from aha_cli.store.filesystem import (
     run_dir,
     task_snapshot,
 )
+from aha_cli.store.task_memo_assets import TASK_MEMO_ASSET_DIR, task_memo_assets_dir
 from aha_cli.web.status import (
     TERMINAL_TASK_STATUSES,
     consume_agent_recovery_context,
@@ -131,6 +132,24 @@ def task_locked_for_messages(root: Path, run_id: str, task_id: str | None) -> st
         return None
     status = str(task.get("status") or "")
     return status if status in TERMINAL_TASK_STATUSES else None
+
+
+def message_with_memo_attachment_context(root: Path, run_id: str, message: str) -> str:
+    if f"{TASK_MEMO_ASSET_DIR}/" not in message:
+        return message
+    if "AHA memo attachment resolution:" in message:
+        return message
+    attachment_dir = task_memo_assets_dir(root, run_id).resolve()
+    note = "\n".join(
+        [
+            "AHA memo attachment resolution:",
+            f"- Markdown links beginning with `{TASK_MEMO_ASSET_DIR}/` refer to files under this run attachment directory:",
+            f"  `{attachment_dir}`",
+            f"- Example: `{TASK_MEMO_ASSET_DIR}/ab/file.png` should be opened as `{attachment_dir}/ab/file.png`.",
+            "- These files are outside the task workspace; do not search for them relative to the workspace.",
+        ]
+    )
+    return f"{message.rstrip()}\n\n{note}"
 
 
 def _active_supervision_host_review(root: Path, run_id: str, task_id: str, host_agent_id: str, host: dict | None) -> bool:
@@ -293,7 +312,7 @@ def handle_send_payload(
     if autostart and task_id:
         ensure_chat_offset_before_message(root, run_id, task_id, target_id)
 
-    message = agent_message or message
+    message = message_with_memo_attachment_context(root, run_id, agent_message or message)
     recovery_context = consume_agent_recovery_context(root, run_id, task_id, target_id)
     plain_sticky = message_should_use_plain_sticky(root, run_id, task_id, target_id, command_payload)
     sent = append_message(
@@ -353,6 +372,7 @@ __all__ = [
     "handle_send_payload",
     "is_supervision_host_message",
     "is_task_supervision_host_target",
+    "message_with_memo_attachment_context",
     "message_backend_autostart_config",
     "message_should_use_plain_sticky",
     "realtime_debug_log",

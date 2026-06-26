@@ -1559,6 +1559,7 @@ class CliCoreTests(unittest.TestCase):
             mode_instruction="reply",
             run_goal="goal",
             sticky_context="context",
+            attachment_output_guidance="AHA conversation image output.",
             recovery_context="",
             recent_conversation="conversation",
             sender="browser",

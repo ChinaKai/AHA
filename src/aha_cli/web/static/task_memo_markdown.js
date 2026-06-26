@@ -39,6 +39,89 @@
       .trim() || "attachment";
   }
 
+  function memoAssetContentType(file = {}) {
+    const type = String(file?.type || "").trim().toLowerCase();
+    if (type === "image/jpg") return "image/jpeg";
+    if (type) return type;
+    const name = String(file?.name || "").trim().toLowerCase();
+    if (/\.(jpe?g)$/.test(name)) return "image/jpeg";
+    if (/\.png$/.test(name)) return "image/png";
+    if (/\.gif$/.test(name)) return "image/gif";
+    if (/\.webp$/.test(name)) return "image/webp";
+    if (/\.avif$/.test(name)) return "image/avif";
+    if (/\.bmp$/.test(name)) return "image/bmp";
+    if (/\.heic$/.test(name)) return "image/heic";
+    if (/\.heif$/.test(name)) return "image/heif";
+    if (/\.pdf$/.test(name)) return "application/pdf";
+    if (/\.txt$/.test(name)) return "text/plain";
+    if (/\.md$/.test(name)) return "text/markdown";
+    if (/\.csv$/.test(name)) return "text/csv";
+    if (/\.json$/.test(name)) return "application/json";
+    if (/\.zip$/.test(name)) return "application/zip";
+    if (/\.docx$/.test(name)) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if (/\.xlsx$/.test(name)) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (/\.pptx$/.test(name)) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    if (/\.doc$/.test(name)) return "application/msword";
+    if (/\.xls$/.test(name)) return "application/vnd.ms-excel";
+    if (/\.ppt$/.test(name)) return "application/vnd.ms-powerpoint";
+    return "application/octet-stream";
+  }
+
+  function normalizeMemoImageDataUrl(dataUrl, file) {
+    const text = String(dataUrl || "");
+    const type = memoAssetContentType(file);
+    if (!type || !text.startsWith("data:")) return text;
+    return text.replace(/^data:[^;,]*;base64,/i, `data:${type};base64,`);
+  }
+
+  async function uploadMemoImageJsonMarkdown({ dataUrl, file } = {}, options = {}) {
+    const apiUrl = options.apiUrl || (value => value);
+    const fetchJson = options.fetchJson;
+    if (typeof fetchJson !== "function") throw new Error("Memo image upload is unavailable.");
+    const contentType = memoAssetContentType(file);
+    const payload = {
+      filename: file?.name || "",
+      content_type: contentType,
+      data_url: normalizeMemoImageDataUrl(dataUrl, file)
+    };
+    const response = await fetchJson(apiUrl("/api/task-memo-assets"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }, "Failed to upload memo image");
+    return response?.asset?.markdown || "";
+  }
+
+  async function uploadMemoImageFormDataMarkdown({ file } = {}, options = {}) {
+    const windowRef = options.windowRef || window;
+    const apiUrl = options.apiUrl || (value => value);
+    const fetchJson = options.fetchJson;
+    if (typeof fetchJson !== "function" || !windowRef.FormData || !file) {
+      throw new Error("Memo image upload is unavailable.");
+    }
+    const contentType = memoAssetContentType(file);
+    const form = new windowRef.FormData();
+    form.append("image", file, file?.name || "memo-image");
+    form.append("filename", file?.name || "");
+    form.append("content_type", contentType);
+    const response = await fetchJson(apiUrl("/api/task-memo-assets"), {
+      method: "POST",
+      body: form
+    }, "Failed to upload memo image");
+    return response?.asset?.markdown || "";
+  }
+
+  async function uploadMemoImageMarkdown({ file, dataUrl } = {}, options = {}) {
+    const windowRef = options.windowRef || window;
+    const imagePaste = options.imagePaste || windowRef.AHATextareaImagePaste;
+    if (windowRef.FormData && file) {
+      return uploadMemoImageFormDataMarkdown({ file }, options);
+    }
+    const sourceDataUrl = dataUrl || await imagePaste?.readAsDataUrl?.(file, { windowRef });
+    if (!sourceDataUrl) throw new Error("Memo image upload is unavailable.");
+    return uploadMemoImageJsonMarkdown({ dataUrl: sourceDataUrl, file }, options);
+  }
+
   function collectMemoAttachments(markdown, options = {}) {
     const source = String(markdown || "");
     const attachments = [];
@@ -387,6 +470,14 @@
     if (inCodeBlock) appendMarkdownCodeBlock(parent, codeLines, documentRef, codeLanguage);
   }
 
+  function renderMarkdownHtml(markdown, options = {}) {
+    const documentRef = options.documentRef || (typeof document !== "undefined" ? document : null);
+    if (!documentRef?.createElement) return "";
+    const container = documentRef.createElement("div");
+    renderMarkdownPreview(container, markdown, { ...options, documentRef });
+    return container.innerHTML;
+  }
+
   function createTaskMemoMarkdownTools(options = {}) {
     const windowRef = options.windowRef || window;
     const documentRef = options.documentRef || windowRef.document;
@@ -546,44 +637,9 @@
       options.updateSaveState?.();
     }
 
-    function memoAssetContentType(file = {}) {
-      const type = String(file?.type || "").trim().toLowerCase();
-      if (type === "image/jpg") return "image/jpeg";
-      if (type) return type;
-      const name = String(file?.name || "").trim().toLowerCase();
-      if (/\.(jpe?g)$/.test(name)) return "image/jpeg";
-      if (/\.png$/.test(name)) return "image/png";
-      if (/\.gif$/.test(name)) return "image/gif";
-      if (/\.webp$/.test(name)) return "image/webp";
-      if (/\.avif$/.test(name)) return "image/avif";
-      if (/\.bmp$/.test(name)) return "image/bmp";
-      if (/\.heic$/.test(name)) return "image/heic";
-      if (/\.heif$/.test(name)) return "image/heif";
-      if (/\.pdf$/.test(name)) return "application/pdf";
-      if (/\.txt$/.test(name)) return "text/plain";
-      if (/\.md$/.test(name)) return "text/markdown";
-      if (/\.csv$/.test(name)) return "text/csv";
-      if (/\.json$/.test(name)) return "application/json";
-      if (/\.zip$/.test(name)) return "application/zip";
-      if (/\.docx$/.test(name)) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      if (/\.xlsx$/.test(name)) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-      if (/\.pptx$/.test(name)) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-      if (/\.doc$/.test(name)) return "application/msword";
-      if (/\.xls$/.test(name)) return "application/vnd.ms-excel";
-      if (/\.ppt$/.test(name)) return "application/vnd.ms-powerpoint";
-      return "application/octet-stream";
-    }
-
     function memoImageFileType(file = {}) {
       const type = memoAssetContentType(file);
       return type.startsWith("image/") ? type : "";
-    }
-
-    function normalizeMemoImageDataUrl(dataUrl, file) {
-      const text = String(dataUrl || "");
-      const type = memoAssetContentType(file);
-      if (!type || !text.startsWith("data:")) return text;
-      return text.replace(/^data:[^;,]*;base64,/i, `data:${type};base64,`);
     }
 
     function memoImageFailureMessage(prefix, err) {
@@ -592,50 +648,11 @@
       return detail ? `${prefix}: ${detail}` : prefix;
     }
 
-    async function uploadMemoImageJsonMarkdown({ dataUrl, file }) {
-      const contentType = memoAssetContentType(file);
-      const payload = {
-        filename: file?.name || "",
-        content_type: contentType,
-        data_url: normalizeMemoImageDataUrl(dataUrl, file)
-      };
-      const response = await options.fetchJson(apiUrl("/api/task-memo-assets"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      }, "Failed to upload memo image");
-      return response?.asset?.markdown || "";
-    }
-
-    async function uploadMemoImageFormDataMarkdown({ file }) {
-      const contentType = memoAssetContentType(file);
-      const form = new windowRef.FormData();
-      form.append("image", file, file?.name || "memo-image");
-      form.append("filename", file?.name || "");
-      form.append("content_type", contentType);
-      const response = await options.fetchJson(apiUrl("/api/task-memo-assets"), {
-        method: "POST",
-        body: form
-      }, "Failed to upload memo image");
-      return response?.asset?.markdown || "";
-    }
-
-    async function uploadMemoImageMarkdown({ file }) {
-      if (windowRef.FormData && file) {
-        return uploadMemoImageFormDataMarkdown({ file });
-      }
-      if (!imagePaste?.readAsDataUrl) {
-        throw new Error("Memo image upload is unavailable.");
-      }
-      const dataUrl = await imagePaste.readAsDataUrl(file, { windowRef });
-      return uploadMemoImageJsonMarkdown({ dataUrl, file });
-    }
-
     async function insertMemoImageFile(file, index = 0) {
       if (!elements.taskMemoEditDescriptionEl || !elements.taskMemoDescriptionEditorEl) {
         throw new Error("Memo image upload is unavailable.");
       }
-      const markdown = await uploadMemoImageMarkdown({ file, index });
+      const markdown = await uploadMemoImageMarkdown({ file, index }, { fetchJson: options.fetchJson, apiUrl, windowRef, imagePaste });
       insertDescriptionImageMarkdown(markdown);
       return Boolean(markdown);
     }
@@ -716,8 +733,14 @@
     createTaskMemoMarkdownTools,
     memoImageFilenameFromPath,
     memoImageSrc,
+    memoAssetContentType,
+    normalizeMemoImageDataUrl,
+    renderMarkdownHtml,
     renderMarkdownPreview,
     renderMemoAttachmentList,
-    safeMarkdownLinkHref
+    safeMarkdownLinkHref,
+    uploadMemoImageFormDataMarkdown,
+    uploadMemoImageJsonMarkdown,
+    uploadMemoImageMarkdown
   });
 })();

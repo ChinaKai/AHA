@@ -152,6 +152,40 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertEqual(result["handled_by"], "aha")
         self.assertEqual(messages, [])
 
+    def test_send_message_adds_memo_attachment_resolution_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Image chat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                message = "Please inspect this image.\n\n![shot](task_memo_assets/ab/file.png)"
+
+                with mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "busy"}):
+                    handle_send_payload(
+                        root,
+                        run_id,
+                        {"target": "main", "task_id": "task-001", "role": "main", "sender": "browser", "message": message},
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                    first_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                    handle_send_payload(
+                        root,
+                        run_id,
+                        {"target": "main", "task_id": "task-001", "role": "main", "sender": "browser", "message": first_messages[0]["message"]},
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        asset_dir = str((run_dir(root, run_id) / "task_memo_assets").resolve())
+        self.assertIn("AHA memo attachment resolution:", messages[0]["message"])
+        self.assertIn(asset_dir, messages[0]["message"])
+        self.assertIn("do not search for them relative to the workspace", messages[0]["message"])
+        self.assertEqual(messages[1]["message"].count("AHA memo attachment resolution:"), 1)
+
     def test_send_while_backend_busy_marks_message_plain_sticky(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

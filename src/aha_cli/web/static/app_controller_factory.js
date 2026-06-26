@@ -370,6 +370,7 @@
     const {
       agentRuntimeConfirmDialogEl, agentRuntimeConfirmMessageEl, agentTargetEl, agentsEl,
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
+      messageImageFileEl, messageImageUploadEl,
       closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
       playConsolePopoverEl, selectedAgentInfoEl, sendFormEl, sessionMenuEl, settingsContentEl,
       skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
@@ -657,10 +658,26 @@
     const messageComposer = window.AHAMessageComposer.createMessageComposer({
       sendFormEl,
       messageEl,
+      messageImageFileEl,
+      messageImageUploadEl,
       mobileActionsToggleEl,
       commandMenuEl
     }, {
+      apiUrl: deps.apiUrl,
       escapeHtml: deps.escapeHtml,
+      fetchJson: deps.fetchJson,
+      imageUploadsEnabled: () => deps.activeTab?.() !== "hardware",
+      markdownForImage: async ({ dataUrl, file, index }) => {
+        if (window.AHATaskMemoMarkdown?.uploadMemoImageMarkdown) {
+          return await window.AHATaskMemoMarkdown.uploadMemoImageMarkdown({ dataUrl, file, index }, {
+            apiUrl: deps.apiUrl,
+            fetchJson: deps.fetchJson,
+            imagePaste: window.AHATextareaImagePaste,
+            windowRef: deps.windowRef
+          });
+        }
+        return window.AHATextareaImagePaste?.imageMarkdown?.(dataUrl, file) || "";
+      },
       selectedTask: deps.selectedTask,
       closeMobileActionPanel: deps.closeMobileActionPanel,
       syncMobileComposerToggle: deps.syncMobileComposerToggle,
@@ -676,6 +693,8 @@
       onSubmit: deps.handleComposerSubmit,
       handleRawKey: deps.handleHardwareRawKey,
       onInput: deps.onComposerInput,
+      textareaImagePaste: window.AHATextareaImagePaste,
+      windowRef: deps.windowRef,
       onError: err => {
         deps.realtimeDebug?.("composer.error", { error: err?.message || String(err) });
         deps.alert?.(err.message || String(err));

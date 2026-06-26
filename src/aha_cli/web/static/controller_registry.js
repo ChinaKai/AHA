@@ -150,6 +150,8 @@
     panelEl: "panel",
     sendFormEl: "send-form",
     messageEl: "message",
+    messageImageFileEl: "message-image-file",
+    messageImageUploadEl: "message-image-upload",
     taskFormEl: "task-form",
     newTaskTitleEl: "new-task-title",
     newTaskDescriptionEl: "new-task-description",

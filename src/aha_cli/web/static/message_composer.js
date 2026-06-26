@@ -1,12 +1,19 @@
 (() => {
   function createMessageComposer(elements = {}, options = {}) {
     let submitInFlight = false;
+    let imageUploadInFlight = false;
     let pointerSubmitUntil = 0;
     let commandSelection = 0;
     const escapeHtml = options.escapeHtml || (value => String(value ?? ""));
+    const windowRef = options.windowRef || window;
+    const imagePaste = options.textareaImagePaste || windowRef.AHATextareaImagePaste;
 
     function hasMessage() {
       return Boolean(elements.messageEl?.value.trim());
+    }
+
+    function imageUploadsEnabled() {
+      return Boolean(elements.messageEl && (!options.imageUploadsEnabled || options.imageUploadsEnabled()));
     }
 
     function requestSubmit() {
@@ -35,6 +42,20 @@
       if (elements.mobileActionsToggleEl) elements.mobileActionsToggleEl.disabled = busy;
     }
 
+    function syncImageUploadState() {
+      const disabled = imageUploadInFlight || !imageUploadsEnabled();
+      if (elements.messageImageFileEl) elements.messageImageFileEl.disabled = disabled;
+      if (elements.messageImageUploadEl) {
+        elements.messageImageUploadEl.classList.toggle("is-disabled", disabled);
+        elements.messageImageUploadEl.setAttribute("aria-disabled", String(disabled));
+      }
+    }
+
+    function setImageUploadBusy(busy) {
+      imageUploadInFlight = Boolean(busy);
+      syncImageUploadState();
+    }
+
     function syncInputHeight() {
       if (!(elements.messageEl instanceof HTMLTextAreaElement)) return;
       elements.messageEl.style.height = "auto";
@@ -45,6 +66,7 @@
       const hasText = hasMessage();
       options.syncMobileComposerToggle?.(hasText);
       if (hasText) options.closeMobileActionPanel?.();
+      syncImageUploadState();
     }
 
     function mobileViewportMatches() {
@@ -89,6 +111,51 @@
       syncMobileAction();
     }
 
+    async function markdownForImage(file, index = 0) {
+      if (typeof options.markdownForImage === "function") {
+        const markdown = await options.markdownForImage({ file, index });
+        if (markdown) return markdown;
+      }
+      const dataUrl = await imagePaste?.readAsDataUrl?.(file, { windowRef });
+      if (!dataUrl) return "";
+      if (typeof options.markdownForImage === "function") {
+        return await options.markdownForImage({ dataUrl, file, index });
+      }
+      return imagePaste?.imageMarkdown?.(dataUrl, file) || "";
+    }
+
+    async function insertImageFiles(files) {
+      const selectedFiles = Array.from(files || []).filter(Boolean);
+      if (!selectedFiles.length || !elements.messageEl || !imageUploadsEnabled()) return;
+      setImageUploadBusy(true);
+      try {
+        for (const [index, file] of selectedFiles.entries()) {
+          const markdown = await markdownForImage(file, index);
+          if (!markdown) continue;
+          if (imagePaste?.insertTextareaImageMarkdown) {
+            imagePaste.insertTextareaImageMarkdown(elements.messageEl, markdown, { windowRef });
+          }
+        }
+        syncInputHeight();
+        syncMobileAction();
+        renderCommandMenu();
+        options.onInput?.();
+      } catch (err) {
+        options.onError?.(err);
+      } finally {
+        setImageUploadBusy(false);
+        if (elements.messageImageFileEl) elements.messageImageFileEl.value = "";
+      }
+    }
+
+    function handleImagePaste(event) {
+      if (!imageUploadsEnabled()) return;
+      const files = imagePaste?.clipboardImageFiles?.(event) || [];
+      if (!files.length) return;
+      event.preventDefault();
+      void insertImageFiles(files);
+    }
+
     async function submitForm(event) {
       event.preventDefault();
       if (submitInFlight) return;
@@ -121,6 +188,10 @@
     function bind() {
       elements.sendFormEl?.addEventListener("submit", submitForm);
       elements.sendFormEl?.querySelector("button.send")?.addEventListener("pointerdown", requestSubmitFromPointer);
+      elements.messageEl?.addEventListener("paste", handleImagePaste);
+      elements.messageImageFileEl?.addEventListener("change", event => {
+        void insertImageFiles(event.target?.files);
+      });
       elements.messageEl?.addEventListener("input", () => {
         commandSelection = 0;
         syncInputHeight();
@@ -170,10 +241,12 @@
         event.preventDefault();
         applySlashCommand(Number(target.dataset.commandIndex || "0"));
       });
+      syncImageUploadState();
     }
 
     return Object.freeze({
       bind,
+      insertImageFiles,
       requestSubmit,
       requestSubmitFromPointer,
       pointerSubmitActive,

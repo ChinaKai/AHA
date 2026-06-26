@@ -391,6 +391,7 @@ def add_note_image(
     *,
     data: bytes,
     filename: str,
+    append_ref: bool = True,
 ) -> dict:
     """Validate and persist an image for a note; return its metadata record.
 
@@ -425,11 +426,12 @@ def add_note_image(
         "path": f"{CAPTURE_DIR}/{CAPTURE_ASSETS_DIR}/{note_id}/{name}",
     }
     record["images"] = images + [image]
-    # Level B: embed the image inline in the note body (memo-style), so it
-    # renders in place. note.images stays as the asset registry for guardrails
-    # and approve-time promotion.
-    ref = f"![{original or name}](/api/kb/capture/image?id={note_id}&name={name})"
-    record["text"] = (str(record.get("text") or "").rstrip() + f"\n\n{ref}\n").lstrip("\n")
+    if append_ref:
+        # Level B: embed the image inline in the note body (memo-style), so it
+        # renders in place. note.images stays as the asset registry for
+        # guardrails and approve-time promotion.
+        ref = f"![{original or name}](/api/kb/capture/image?id={note_id}&name={name})"
+        record["text"] = (str(record.get("text") or "").rstrip() + f"\n\n{ref}\n").lstrip("\n")
     record["updated_at"] = utc_now()
     _write_note_record(root, config, note_id, record)
     return image

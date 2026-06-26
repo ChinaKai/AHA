@@ -757,6 +757,8 @@ timelineView = window.AHATimelineView.createTimelineView({
   componentMetricRows,
   conversationKey,
   defaultTaskContextThresholdPercent: () => defaultTaskContextThresholdPercent,
+  apiUrl,
+  documentRef: document,
   escapeHtml,
   eventData,
   formatClock,
@@ -764,6 +766,8 @@ timelineView = window.AHATimelineView.createTimelineView({
   formatLocalTimestamp,
   latestTurnTiming,
   messageTimelineDisplay,
+  renderMarkdownHtml: window.AHATaskMemoMarkdown?.renderMarkdownHtml,
   renderPromptMetricsPopover,
+  t: window.AHAI18n?.t,
   tasks: () => statusData?.tasks || []
 });

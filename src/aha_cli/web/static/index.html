@@ -517,6 +517,15 @@
           <div id="conversation-filters" class="conversation-filters"></div>
         </div>
         <textarea id="message" rows="1" placeholder="Message in the selected task context" data-i18n-placeholder="conversation.message_placeholder" autocomplete="off" enterkeyhint="enter"></textarea>
+        <label id="message-image-upload" class="composer-image-upload" aria-label="Attach image" title="Attach image" data-i18n-aria-label="conversation.image_add" data-i18n-title="conversation.image_add">
+          <svg class="composer-image-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 17l4.5-4.5 3 3L16 11l4 4"></path>
+            <path d="M5 5h14v14H5z"></path>
+            <circle cx="9" cy="9" r="1.5"></circle>
+          </svg>
+          <span class="sr-only" data-i18n="conversation.image_add">Attach image</span>
+          <input id="message-image-file" class="composer-image-file-input" type="file" accept="image/*" multiple aria-hidden="true" tabindex="-1">
+        </label>
         <button id="mobile-actions-toggle" class="mobile-actions-toggle" type="button" aria-controls="mobile-action-panel" aria-expanded="false">+</button>
         <button class="send" type="submit" data-i18n="conversation.send">Send</button>
       </form>

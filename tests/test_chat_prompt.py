@@ -174,6 +174,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertTrue(delivered["hardware_debug"])
         self.assertTrue(delivered["task_skills"])
         self.assertEqual(delivered["knowledge_enabled"], "disabled")
+        self.assertTrue(delivered["attachment_output_guidance"])
 
     def test_codex_chat_surfaces_backend_error_to_browser_chat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -991,6 +992,9 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(metrics["prompt_mode"], "full")
         self.assertIn("Repository guard:", prompt)
+        self.assertIn("AHA conversation image output:", prompt)
+        self.assertIn("task_memo_assets/example.png", prompt)
+        self.assertIn("Do not use local absolute paths", prompt)
         self.assertNotIn("AHA action contract reminder:", prompt)
         self.assertNotIn("AHA action output:", prompt)
         self.assertNotIn('"type": "spawn_sub"', prompt)
@@ -1153,7 +1157,7 @@ class ChatPromptTests(unittest.TestCase):
                     enabled_paths=["/repo/.aha/skills/board-debug/SKILL.md"],
                 )
 
-                item = append_message(root, run_id, "main", "continue", sender="browser", task_id="task-001", role="main")
+                item = append_message(root, run_id, "main", "continue with image output", sender="browser", task_id="task-001", role="main")
                 prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
                 session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
                 session_file.write_text(json.dumps(session), encoding="utf-8")
@@ -1163,12 +1167,15 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("AHA runtime context update", prompt)
         self.assertIn("Hardware debug context:", prompt)
         self.assertIn("Task skills context:", prompt)
+        self.assertIn("AHA conversation image output:", prompt)
+        self.assertIn("task_memo_assets/example.png", prompt)
         self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", prompt)
         self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", prompt)
-        self.assertIn("continue", prompt)
+        self.assertIn("continue with image output", prompt)
         self.assertIn("context_delta", metrics["components"])
         self.assertTrue(metrics["context_fingerprint_updates"]["hardware_debug"])
         self.assertTrue(metrics["context_fingerprint_updates"]["task_skills"])
+        self.assertTrue(metrics["context_fingerprint_updates"]["attachment_output_guidance"])
         self.assertEqual(next_prompt, "next")
         self.assertEqual(set(next_metrics["components"]), {"user_message"})
 

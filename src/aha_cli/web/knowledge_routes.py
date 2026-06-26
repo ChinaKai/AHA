@@ -47,6 +47,7 @@ from aha_cli.store.knowledge import (
     update_entry,
     write_entry,
 )
+from aha_cli.store.knowledge_assets import EntryImageRejected, add_entry_image, read_entry_image
 from aha_cli.store import knowledge_capture as capture
 from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
@@ -722,6 +723,37 @@ def knowledge_route_response(
             return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
         return _ok(method, entry)
 
+    if method in {"GET", "HEAD"} and path == "/api/kb/entry/image":
+        identifier = str(query.get("id", [""])[0] or query.get("slug", [""])[0] or "").strip()
+        asset_path = str(query.get("path", [""])[0] or query.get("name", [""])[0] or "").strip()
+        if not identifier or not asset_path:
+            return json_response({"error": "id and path required"}, "400 Bad Request")
+        found = read_entry_image(root, cfg, identifier, asset_path)
+        if found is None:
+            return json_response({"error": "image not found"}, "404 Not Found")
+        data, mime = found
+        return http_response("200 OK", data if method == "GET" else b"", content_type=mime)
+
+    if method == "POST" and path == "/api/kb/entry/image":
+        payload = parse_json_body(body) if body.strip() else {}
+        identifier = str(payload.get("id") or payload.get("slug") or "").strip()
+        if not identifier:
+            return json_response({"error": "id or slug required"}, "400 Bad Request")
+        raw = str(payload.get("data") or payload.get("data_url") or "")
+        if "," in raw and raw.strip().lower().startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        try:
+            data = base64.b64decode(raw, validate=False)
+        except (ValueError, binascii.Error):
+            return json_response({"error": "invalid base64 image data"}, "400 Bad Request")
+        try:
+            entry, image = add_entry_image(root, cfg, identifier, data=data, filename=str(payload.get("filename") or "image"))
+        except FileNotFoundError:
+            return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        except EntryImageRejected as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        return json_response({"ok": True, "entry": entry, "image": image})
+
     if method == "PATCH" and path == "/api/kb/entry":
         payload = parse_json_body(body) if body.strip() else {}
         identifier = str(payload.get("id") or payload.get("slug") or "").strip()
@@ -1279,7 +1311,14 @@ def knowledge_route_response(
         except (ValueError, binascii.Error):
             return json_response({"error": "invalid base64 image data"}, "400 Bad Request")
         try:
-            image = capture.add_note_image(root, cfg, note_id, data=data, filename=str(payload.get("filename") or "image"))
+            image = capture.add_note_image(
+                root,
+                cfg,
+                note_id,
+                data=data,
+                filename=str(payload.get("filename") or "image"),
+                append_ref=payload.get("append") is not False,
+            )
         except FileNotFoundError:
             return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
         except capture.ImageRejected as exc:
