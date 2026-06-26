@@ -889,6 +889,13 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
         title = str(raw.get("title") or "").strip()
         kind = _sidecar_kind(raw)
         raw_scope = str(raw.get("scope") or "").strip().lower()
+        if kind == "navigation" and not any(raw.get(key) for key in ("slug", "nav_path", "doc_path")):
+            possible_slug = raw_scope.strip("/")
+            if possible_slug == NAVIGATION_SLUG or possible_slug.startswith(
+                (f"{NAVIGATION_MODULES_DIR}/", f"{NAVIGATION_FLOWS_DIR}/")
+            ):
+                raw["slug"] = possible_slug
+                raw_scope = "project"
         if kind == "wiki":
             if raw_scope == "project":
                 if context.get("project_key"):
