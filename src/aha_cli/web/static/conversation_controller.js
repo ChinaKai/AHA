@@ -224,35 +224,16 @@
 
     function captureContextScrollState() {
       const rawPrompt = panelEl.querySelector(".raw-prompt-body");
-      const metricsDetails = panelEl.querySelector(".compact-metrics-details");
-      const breakdownOpen = {};
-      panelEl.querySelectorAll("[data-metrics-breakdown]").forEach(details => {
-        if (details instanceof HTMLDetailsElement) breakdownOpen[details.dataset.metricsBreakdown || ""] = details.open;
-      });
       return {
-        breakdownOpen,
         hasContextView: Boolean(panelEl.querySelector(".context-view")),
         panelTop: panelEl.scrollTop,
-        rawPromptTop: rawPrompt ? rawPrompt.scrollTop : 0,
-        metricsOpen: metricsDetails instanceof HTMLDetailsElement ? metricsDetails.open : false
+        rawPromptTop: rawPrompt ? rawPrompt.scrollTop : 0
       };
     }
 
     function restoreContextScrollState(scrollState) {
       if (!scrollState?.hasContextView) return;
       const rawPrompt = panelEl.querySelector(".raw-prompt-body");
-      const metricsDetails = panelEl.querySelector(".compact-metrics-details");
-      const breakdownOpen = scrollState.breakdownOpen || {};
-      const restoredBreakdowns = new Set();
-      Object.entries(breakdownOpen).forEach(([key, open]) => {
-        const breakdown = Array.from(panelEl.querySelectorAll("[data-metrics-breakdown]"))
-          .find(item => item instanceof HTMLDetailsElement && item.dataset.metricsBreakdown === key);
-        if (breakdown instanceof HTMLDetailsElement) {
-          breakdown.open = Boolean(open);
-          restoredBreakdowns.add(key);
-        }
-      });
-      if (!restoredBreakdowns.has("compact") && metricsDetails instanceof HTMLDetailsElement) metricsDetails.open = scrollState.metricsOpen;
       panelEl.scrollTop = scrollState.panelTop;
       if (rawPrompt) rawPrompt.scrollTop = scrollState.rawPromptTop;
     }
@@ -276,9 +257,30 @@
       return { ahaInputStatus, backendSession, contextPressure, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus };
     }
 
-    function renderPromptMetricsPanel(taskId) {
+    function renderTokenSummaryItem(label, value, detail = "", className = "") {
+      return `
+        <div class="token-summary-item ${deps.escapeHtml(className)}">
+          <span>${deps.escapeHtml(label)}</span>
+          <strong>${deps.escapeHtml(value || "--")}</strong>
+          <code>${deps.escapeHtml(detail || "")}</code>
+        </div>
+      `;
+    }
+
+    function renderTokenSummaryDetails(cards) {
+      const rows = (cards || []).filter(card => card?.value);
+      if (!rows.length) return "";
+      return `
+        <div class="token-summary-line token-summary-extra-line">
+          ${rows.map(card => renderTokenSummaryItem(card.label, card.value, card.detail)).join("")}
+        </div>
+      `;
+    }
+
+    function renderPromptMetricsPanel(taskId, options = {}) {
+      const includeDetails = options.includeDetails !== false;
       const metrics = promptMetricsState(taskId);
-      const { backendSession, contextPressure, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus } = metrics;
+      const { backendSession, contextPressure, data, metricsEvent, overflow, overflowEvent, sessionStatus, total, totalChars, usageEvent } = metrics;
       const resetState = compactResetState(taskId);
       const displayedSessionStatus = resetState
         ? { label: resetState.label, className: resetState.className }
@@ -299,134 +301,77 @@
 
       const source = data.source || deps.eventData(overflowEvent || {}).source || "backend";
       const usage = deps.eventData(usageEvent || {}).usage || {};
+      const ledger = deps.tokenLedgerFromMetrics?.({ usage, contextPressure, total, backendSession }) || {};
+      const ledgerVerdict = deps.tokenLedgerVerdict?.(ledger) || { label: "Token summary", detail: "", className: "unknown" };
       const contextStatus = deps.contextPressureStatus(contextPressure);
       const contextPercent = deps.contextPressurePercent(contextPressure);
-      const contextHeadline = contextPercent ? `${contextPercent} context` : "context unknown";
       const contextInputTokens = contextPressure?.input_tokens ?? contextPressure?.prompt_tokens;
       const contextWindowTokens = contextPressure?.context_window;
-      const contextWindowUsedLabel = contextInputTokens != null ? `window used ${deps.formatMetricCompact(contextInputTokens)}` : "";
-      const contextWindowTotalLabel = contextWindowTokens != null ? `window total ${deps.formatMetricCompact(contextWindowTokens)}` : "";
       const contextWindowUsedTotalLabel = contextInputTokens != null && contextWindowTokens != null
-        ? `window used ${deps.formatMetricCompact(contextInputTokens)} / total ${deps.formatMetricCompact(contextWindowTokens)}`
+        ? `${deps.formatMetricCompact(contextInputTokens)} / ${deps.formatMetricCompact(contextWindowTokens)}`
         : contextInputTokens != null
-          ? contextWindowUsedLabel
-          : contextWindowTotalLabel;
+          ? deps.formatMetricCompact(contextInputTokens)
+          : contextWindowTokens != null
+            ? `window ${deps.formatMetricCompact(contextWindowTokens)}`
+            : "";
       const sessionSize = Number(backendSession?.size_bytes);
-      const sessionAnalysis = backendSession?.analysis || {};
-      const sessionAhaCounts = sessionAnalysis.aha_prompt_counts || {};
-      const sessionAhaChars = sessionAnalysis.aha_prompt_chars || {};
-      const sessionFullCount = Number(sessionAhaCounts.full || 0);
-      const sessionFullChars = Number(sessionAhaChars.full || 0);
-      const sessionDeltaCount = Number(sessionAhaCounts.sticky_delta || 0);
-      const sessionDeltaChars = Number(sessionAhaChars.sticky_delta || 0);
-      const sessionMirrorChars = Number(sessionAnalysis.event_msg_prompt_mirror_total_chars || 0);
-      const sessionToolChars = Number(sessionAnalysis.tool_output_chars || 0);
-      const sessionLineCount = Number(sessionAnalysis.line_count || 0);
       const compactAdviceText = compactResetAdvice(displayedSessionStatus);
-      const contextLabel = contextPressure
-        ? [
-            contextWindowUsedTotalLabel,
-            contextPressure.model ? `model ${contextPressure.model}` : "",
-            contextPressure.context_window_source ? `window source ${contextPressure.context_window_source}` : ""
-          ].filter(Boolean).join(" · ")
-        : "waiting for context pressure";
-      const contextParts = [
-        `level ${contextStatus.label}`,
-        contextWindowUsedLabel,
-        contextWindowTotalLabel,
-        contextPressure?.pressure_source ? `source ${contextPressure.pressure_source}` : "",
-        backendSession?.exists && Number.isFinite(sessionSize) ? `session ${deps.formatMetricBytes(sessionSize)}` : "",
-        compactAdviceText
-      ].filter(Boolean);
       const sessionActionButton = backendSession?.id
-        ? `<button type="button" class="compact-reset-primary" data-session-action="compact-reset"${resetState ? " disabled" : ""}>${deps.escapeHtml(resetState?.buttonLabel || "Compact & Reset")}</button>`
+        ? `<button type="button" class="compact-reset-primary" data-session-action="compact-reset"${resetState ? " disabled" : ""}>${deps.escapeHtml(resetState?.buttonLabel || "Compact")}</button>`
         : "";
-      const ahaParts = [
-        `${deps.formatMetricNumber(totalChars)} chars`,
-        `${deps.formatMetricBytes(total.bytes)} bytes`,
-        `${deps.formatMetricNumber(total.lines)} lines`,
-        data.event_limit ? `${deps.formatMetricNumber(data.event_limit)} events` : ""
+      const mainSource = ledger?.largest?.label || (ledger.backendInputTokens ? "Backend input" : "Waiting");
+      const mainValue = ledger?.largest?.value ? deps.formatMetricCompact(ledger.largest.value) : "--";
+      const mainDetail = ledgerVerdict.detail || "waiting for usage";
+      const contextValue = contextPercent || (contextInputTokens != null ? deps.formatMetricCompact(contextInputTokens) : "--");
+      const contextDetail = contextWindowUsedTotalLabel || contextStatus.label || "context unknown";
+      const outputValue = ledger.outputTokens ? deps.formatMetricCompact(ledger.outputTokens) : "--";
+      const outputDetail = ledger.reasoningOutputTokens
+        ? `reasoning ${deps.formatMetricCompact(ledger.reasoningOutputTokens)}`
+        : "model output";
+      const ahaValue = ledger.ahaPromptTokens ? deps.formatMetricCompact(ledger.ahaPromptTokens) : "--";
+      const ahaDetail = totalChars ? `${deps.formatMetricCompact(totalChars)} chars` : "AHA prompt";
+      const actionText = resetState?.label || compactAdviceText || (
+        ledgerVerdict.className === "history"
+          ? "Compact when the history gets in the way."
+          : ledgerVerdict.className === "output"
+            ? "Watch next turn; output becomes history."
+            : "No action needed."
+      );
+      const rawDetails = [
+        contextInputTokens == null && ledger.backendInputTokens
+          ? { label: "Backend input", value: deps.formatMetricCompact(ledger.backendInputTokens), detail: "tokens" }
+          : null,
+        ledger.cacheReadTokens ? { label: "Cache read", value: deps.formatMetricCompact(ledger.cacheReadTokens), detail: "tokens" } : null,
+        ledger.cacheCreationTokens ? { label: "Cache write", value: deps.formatMetricCompact(ledger.cacheCreationTokens), detail: "tokens" } : null,
+        backendSession?.exists && Number.isFinite(sessionSize) ? { label: "Session", value: deps.formatMetricBytes(sessionSize), detail: "backend session file" } : null,
+        contextPressure?.model ? { label: "Model", value: String(contextPressure.model), detail: "context window" } : null,
+        source ? { label: "Source", value: String(source), detail: "usage event" } : null
       ].filter(Boolean);
-      const usageParts = [
-        usage.input_tokens != null ? `input ${deps.formatMetricNumber(usage.input_tokens)}` : "",
-        (usage.cached_input_tokens != null || usage.cache_read_input_tokens != null) ? `cached ${deps.formatMetricNumber(deps.usageCacheReadTokens(usage))}` : "",
-        usage.cache_creation_input_tokens != null ? `created ${deps.formatMetricNumber(deps.usageCacheCreationTokens(usage))}` : "",
-        usage.output_tokens != null ? `output ${deps.formatMetricNumber(usage.output_tokens)}` : "",
-        usage.reasoning_output_tokens != null ? `reasoning ${deps.formatMetricNumber(usage.reasoning_output_tokens)}` : "",
-        usage.total_cost_usd != null ? `$${Number(usage.total_cost_usd || 0).toFixed(4)}` : "",
-        usage.num_turns != null ? `${deps.formatMetricNumber(usage.num_turns)} turns` : "",
-        deps.contextPressureSummary(contextPressure)
-      ].filter(Boolean);
-      const backendSummary = deps.contextPressurePercent(contextPressure)
-        ? `${deps.formatMetricNumber(contextPressure.input_tokens ?? contextPressure.prompt_tokens ?? 0)} input tokens · ${deps.contextPressurePercent(contextPressure)} ctx`
-        : usage.input_tokens != null ? `${deps.formatMetricNumber(usage.input_tokens)} input` : usageStatus.label;
+      const detailsHtml = includeDetails ? renderTokenSummaryDetails(rawDetails) : "";
       return `
-        <section class="prompt-metrics session-compact-metrics ${overflow ? "has-overflow" : ""}">
-          <div class="prompt-metrics-section session-metrics-section context-metrics-section session-compact-summary">
-            <div class="prompt-metrics-head">
-              <div>
-                <span>Context Pressure</span>
-                <strong>${deps.escapeHtml(contextHeadline)}</strong>
-                <code>${deps.escapeHtml(contextLabel || "waiting for context pressure")}</code>
-              </div>
-              <div class="prompt-metrics-head-actions">
-                <span class="status ${contextStatus.className}">${deps.escapeHtml(contextStatus.label)}</span>
-                ${sessionActionButton}
-              </div>
+        <section class="prompt-metrics session-compact-metrics token-ledger-section token-ledger-${deps.escapeHtml(ledgerVerdict.className || "unknown")} ${overflow ? "has-overflow" : ""}">
+          <div class="prompt-metrics-head">
+            <div>
+              <span>Token Summary</span>
+              <strong>${deps.escapeHtml(ledgerVerdict.label)}</strong>
+              <code>${deps.escapeHtml(mainDetail)}</code>
             </div>
-            <div class="prompt-metric-kpis">
-              ${(contextParts.length ? contextParts : ["context unknown"]).map(part => `<code>${deps.escapeHtml(part)}</code>`).join("")}
+            <div class="prompt-metrics-head-actions">
+              <span class="status ${contextStatus.className}">${deps.escapeHtml(contextStatus.label)}</span>
+              ${sessionActionButton}
             </div>
           </div>
-          <details class="metrics-breakdown compact-metrics-details" data-metrics-breakdown="compact">
-            <summary>Metrics details</summary>
-            <div class="compact-metrics-detail-grid">
-              <div class="session-breakdown-group">
-                <strong>AHA Input</strong>
-                <div class="prompt-metric-kpis">
-                  ${ahaParts.map(part => `<code>${deps.escapeHtml(part)}</code>`).join("")}
-                </div>
-                <div class="prompt-component-bars">
-                  ${rows.map(row => `
-                    <div class="prompt-component-row">
-                      <span>${deps.escapeHtml(row.name)}</span>
-                      <div class="prompt-component-track" aria-hidden="true">
-                        <i style="width: ${row.percent.toFixed(2)}%"></i>
-                      </div>
-                      <code>${deps.escapeHtml(deps.formatMetricNumber(row.chars))}</code>
-                    </div>
-                  `).join("")}
-                </div>
-                ${deps.renderAhaInputBreakdown(data, rows)}
-              </div>
-              <div class="session-breakdown-group">
-                <strong>Backend Usage</strong>
-                <div class="prompt-metric-kpis">
-                  ${(usageParts.length ? usageParts : [`usage ${usageStatus.label}`]).map(part => `<code>${deps.escapeHtml(part)}</code>`).join("")}
-                </div>
-                <div class="prompt-metric-kpis">
-                  <code>${deps.escapeHtml(backendSummary)}</code>
-                  <code>${deps.escapeHtml(source || "waiting for backend usage")}</code>
-                  <code>${deps.escapeHtml(`ctx ${contextStatus.label}`)}</code>
-                </div>
-                ${deps.renderUsageBreakdown(usage, usageStatus, source, contextPressure)}
-              </div>
-              <div class="session-breakdown-group">
-                <strong>Backend Session</strong>
-                <div class="prompt-metric-kpis">
-                  ${[
-                    sessionLineCount ? `${deps.formatMetricNumber(sessionLineCount)} lines` : "",
-                    deps.formatMetricCountChars(sessionFullCount, sessionFullChars, "full"),
-                    deps.formatMetricCountChars(sessionDeltaCount, sessionDeltaChars, "delta"),
-                    `mirrors ${deps.formatMetricNumber(sessionMirrorChars)} chars`,
-                    `tools ${deps.formatMetricNumber(sessionToolChars)} chars`,
-                    sessionAnalysis.parse_errors ? `${deps.formatMetricNumber(sessionAnalysis.parse_errors)} parse errors` : ""
-                  ].filter(Boolean).map(part => `<code>${deps.escapeHtml(part)}</code>`).join("")}
-                </div>
-                ${backendSession?.exists ? deps.renderSessionBreakdown(sessionAnalysis) : ""}
-              </div>
-            </div>
-          </details>
+          <div class="token-summary-line">
+            ${renderTokenSummaryItem("Main cost", mainValue, mainSource, "token-summary-primary")}
+            ${renderTokenSummaryItem("Context", contextValue, contextDetail)}
+            ${renderTokenSummaryItem("Output", outputValue, outputDetail)}
+            ${renderTokenSummaryItem("AHA", ahaValue, ahaDetail)}
+          </div>
+          ${detailsHtml}
+          <div class="token-summary-action">
+            <strong>Action</strong>
+            <span>${deps.escapeHtml(actionText)}</span>
+          </div>
         </section>
       `;
     }
@@ -435,6 +380,14 @@
       const metrics = promptMetricsState(taskId);
       const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
       const hasMetrics = Boolean(metrics.metricsEvent || metrics.usageEvent || metrics.contextPressure || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
+      const usage = deps.eventData(metrics.usageEvent || {}).usage || {};
+      const ledger = deps.tokenLedgerFromMetrics?.({
+        usage,
+        contextPressure: metrics.contextPressure,
+        total: metrics.total,
+        backendSession: metrics.backendSession
+      }) || {};
+      const ledgerVerdict = deps.tokenLedgerVerdict?.(ledger) || { label: "Prompt metrics unavailable" };
       const sessionSize = Number(metrics.backendSession?.size_bytes);
       const contextPercent = deps.contextPressurePercent(metrics.contextPressure);
       const contextSummary = contextPercent || (metrics.contextPressure ? "ctx ?" : "");
@@ -449,7 +402,7 @@
       const classes = ["turn-metrics", metrics.overflow ? "has-overflow" : "", triggerContextStatus.className || "", hasMetrics ? "" : "is-empty"].filter(Boolean).join(" ");
       const sessionLabel = metrics.sessionStatus?.label || "none";
       const label = hasMetrics
-        ? `Context ${summary}; Session ${sessionLabel}: ${sessionSummary}; AHA input ${deps.formatMetricNumber(metrics.totalChars)} chars, top ${top}`
+        ? `${ledgerVerdict.label}; Context ${contextSummary || "unknown"}; Session ${sessionLabel}: ${sessionSummary}; AHA input ${deps.formatMetricNumber(metrics.totalChars)} chars, top ${top}`
         : "Prompt metrics unavailable";
       return `
         <details class="${classes}" data-turn-metrics-key="${deps.escapeHtml(key)}"${open}>
@@ -458,7 +411,7 @@
             <code>${deps.escapeHtml(summary)}</code>
           </summary>
           <div class="turn-metrics-popover">
-            ${renderPromptMetricsPanel(taskId)}
+            ${renderPromptMetricsPanel(taskId, { includeDetails: false })}
           </div>
         </details>
       `;

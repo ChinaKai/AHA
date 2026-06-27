@@ -87,6 +87,108 @@
     return Number(usage.cache_creation_input_tokens ?? 0);
   }
 
+  function metricNumberValue(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  }
+
+  function tokenLedgerFromMetrics({ usage = {}, contextPressure = null, total = {}, backendSession = null } = {}) {
+    const ahaPromptTokens = metricNumberValue(
+      contextPressure?.aha_prompt_tokens ??
+      contextPressure?.prompt_estimate_tokens ??
+      total?.tokens
+    );
+    const backendInputTokens = metricNumberValue(
+      contextPressure?.backend_input_tokens ??
+      contextPressure?.runtime_effective_input_tokens ??
+      contextPressure?.runtime_input_tokens ??
+      contextPressure?.input_tokens ??
+      usage?.input_tokens
+    );
+    const estimatedHistoryTokens = metricNumberValue(
+      contextPressure?.estimated_backend_history_tokens ??
+      (backendInputTokens && ahaPromptTokens ? Math.max(0, backendInputTokens - ahaPromptTokens) : 0)
+    );
+    const outputTokens = metricNumberValue(usage?.output_tokens);
+    const reasoningOutputTokens = metricNumberValue(usage?.reasoning_output_tokens);
+    const cacheReadTokens = usageCacheReadTokens(usage);
+    const cacheCreationTokens = usageCacheCreationTokens(usage);
+    const sessionBytes = metricNumberValue(backendSession?.size_bytes);
+    const contextPercent = contextPressurePercent(contextPressure);
+    const trackedTokens = backendInputTokens + outputTokens;
+    const rows = [
+      { key: "backend_input", label: "Backend input", value: backendInputTokens, unit: "tok", className: "input" },
+      { key: "history", label: "History", value: estimatedHistoryTokens, unit: "tok", className: estimatedHistoryTokens > ahaPromptTokens ? "dominant" : "neutral" },
+      { key: "aha_prompt", label: "AHA prompt", value: ahaPromptTokens, unit: "tok", className: "neutral" },
+      { key: "output", label: "Output", value: outputTokens, unit: "tok", className: outputTokens > backendInputTokens ? "dominant" : "neutral" },
+      { key: "cache", label: "Cache", value: cacheReadTokens + cacheCreationTokens, unit: "tok", className: "cache" }
+    ];
+    const comparable = rows.filter(row => row.key !== "backend_input" && row.value > 0);
+    const largest = comparable.sort((left, right) => right.value - left.value)[0] || null;
+    return {
+      ahaPromptTokens,
+      backendInputTokens,
+      cacheCreationTokens,
+      cacheReadTokens,
+      contextPercent,
+      estimatedHistoryTokens,
+      hasData: Boolean(backendInputTokens || outputTokens || ahaPromptTokens || sessionBytes),
+      largest,
+      outputTokens,
+      reasoningOutputTokens,
+      rows,
+      sessionBytes,
+      trackedTokens
+    };
+  }
+
+  function tokenLedgerVerdict(ledger) {
+    if (!ledger?.hasData) {
+      return {
+        label: "Waiting for usage",
+        detail: "No backend token data has arrived for this turn.",
+        className: "unknown"
+      };
+    }
+    const history = ledger.estimatedHistoryTokens || 0;
+    const aha = ledger.ahaPromptTokens || 0;
+    const output = ledger.outputTokens || 0;
+    const input = ledger.backendInputTokens || 0;
+    if (history > Math.max(aha * 2, output, 2000)) {
+      return {
+        label: "Backend history dominates",
+        detail: `${formatMetricCompact(history)} history tokens vs ${formatMetricCompact(aha)} AHA prompt`,
+        className: "history"
+      };
+    }
+    if (output > Math.max(input * 0.75, aha * 2, 2000)) {
+      return {
+        label: "Output dominates",
+        detail: `${formatMetricCompact(output)} output tokens will become future history`,
+        className: "output"
+      };
+    }
+    if (aha > Math.max(history, output, 2000)) {
+      return {
+        label: "AHA prompt dominates",
+        detail: `${formatMetricCompact(aha)} AHA prompt tokens are the largest visible source`,
+        className: "aha"
+      };
+    }
+    if (input > 0) {
+      return {
+        label: "Input tracked",
+        detail: `${formatMetricCompact(input)} backend input · ${ledger.contextPercent || "context unknown"}`,
+        className: "input"
+      };
+    }
+    return {
+      label: "Prompt tracked",
+      detail: `${formatMetricCompact(aha)} AHA prompt tokens`,
+      className: "aha"
+    };
+  }
+
   function componentMetricRows(components, totalChars) {
     return Object.entries(components || {})
       .map(([name, metric]) => ({
@@ -131,6 +233,8 @@
     metricMapRows,
     usageCacheReadTokens,
     usageCacheCreationTokens,
+    tokenLedgerFromMetrics,
+    tokenLedgerVerdict,
     componentMetricRows,
     promptRefPath,
     promptArtifactMeta

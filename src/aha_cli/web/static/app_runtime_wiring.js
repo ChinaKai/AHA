@@ -232,6 +232,8 @@ conversationController = window.AHAConversationController.createConversationCont
   contextPressurePercent,
   contextPressureStatus,
   contextPressureSummary,
+  tokenLedgerFromMetrics,
+  tokenLedgerVerdict,
   conversationEventCategory,
   conversationEventOrder,
   conversationFilterCounts,

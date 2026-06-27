@@ -302,6 +302,8 @@ const {
   metricMapRows,
   usageCacheReadTokens,
   usageCacheCreationTokens,
+  tokenLedgerFromMetrics,
+  tokenLedgerVerdict,
   componentMetricRows,
   promptRefPath,
   promptArtifactMeta

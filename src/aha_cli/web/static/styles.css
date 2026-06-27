@@ -2777,6 +2777,98 @@ body.auth-required.knowledge-home .knowledge-home-page {
   border-left-color: #2563eb;
   background: #f8fbff;
 }
+.token-ledger-section {
+  border-left-width: 3px;
+  border-left-color: #475467;
+  background: #ffffff;
+}
+.token-ledger-section.token-ledger-history {
+  border-left-color: #c2410c;
+  background: #ffffff;
+}
+.token-ledger-section.token-ledger-output {
+  border-left-color: #9333ea;
+  background: #ffffff;
+}
+.token-ledger-section.token-ledger-aha {
+  border-left-color: #2563eb;
+  background: #ffffff;
+}
+.token-ledger-section.token-ledger-input {
+  border-left-color: #0f766e;
+  background: #ffffff;
+}
+.token-ledger-notes {
+  padding-top: 2px;
+}
+.token-summary-line {
+  display: grid;
+  grid-template-columns: 1.25fr repeat(3, minmax(90px, 1fr));
+  gap: 0;
+  padding-top: 8px;
+  border-top: 1px solid #eef2f6;
+  background: transparent;
+}
+.token-summary-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 12px 0 0;
+  border-right: 1px solid #eef2f6;
+}
+.token-summary-item:last-child {
+  border-right: 0;
+}
+.token-summary-item span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.token-summary-item strong {
+  overflow: hidden;
+  color: #101828;
+  font-size: 18px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-summary-item code {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-summary-primary {
+  background: transparent;
+}
+.token-summary-extra-line {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+.token-summary-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid #eef2f6;
+  color: #475467;
+  font-size: 12px;
+}
+.token-summary-action strong {
+  color: #344054;
+  font-size: 12px;
+}
+.token-summary-action span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .context-view {
   display: grid;
   gap: 12px;
@@ -2802,12 +2894,6 @@ body.auth-required.knowledge-home .knowledge-home-page {
 }
 .session-compact-summary {
   border-left-width: 4px;
-}
-.compact-metrics-details {
-  border: 1px solid #e4e7ec;
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: #ffffff;
 }
 .compact-metrics-detail-grid {
   display: grid;
@@ -2836,6 +2922,11 @@ body.auth-required.knowledge-home .knowledge-home-page {
 }
 .context-metrics-section .prompt-metrics-head > div:first-child > strong {
   font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.token-ledger-section .prompt-metrics-head > div:first-child > strong {
+  font-size: 16px;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -2887,6 +2978,10 @@ body.auth-required.knowledge-home .knowledge-home-page {
   white-space: nowrap;
 }
 .context-metrics-section .prompt-metrics-head > div:first-child > code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.token-ledger-section .prompt-metrics-head > div:first-child > code {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -6800,9 +6895,41 @@ body.empty-run .panel {
   .prompt-metrics-section {
     padding: 9px;
   }
+  .token-summary-line {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 8px;
+  }
+  .token-summary-item {
+    padding: 0 8px 0 0;
+  }
+  .token-summary-item strong {
+    font-size: 15px;
+  }
+  .token-summary-item:nth-child(odd) {
+    border-right: 1px solid #eef2f6;
+  }
+  .token-summary-item:nth-child(even) {
+    padding-left: 8px;
+    border-right: 0;
+  }
+  .token-summary-item:nth-child(n + 3) {
+    padding-top: 8px;
+    border-top: 1px solid #eef2f6;
+  }
   .prompt-metrics-head {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
+  }
+  .token-ledger-section .prompt-metrics-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .token-ledger-section .prompt-metrics-head > div:first-child > strong {
+    font-size: 14px;
+    line-height: 1.25;
+  }
+  .token-ledger-section .prompt-metrics-head-actions {
+    justify-content: flex-start;
+    max-width: none;
   }
   .prompt-metrics-head-actions {
     max-width: 112px;
