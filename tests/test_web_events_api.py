@@ -535,6 +535,8 @@ class WebEventsApiTests(unittest.TestCase):
                     + "\n",
                     encoding="utf-8",
                 )
+                append_event(root, run_id, "backend_start_queued", {"task_id": "task-001", "target": "main", "backend": "codex"})
+                append_event(root, run_id, "backend_started", {"task_id": "task-001", "target": "main", "pid": 123})
                 append_event(root, run_id, "agent_started", {"task_id": "task-001", "target": "main", "sender": "browser"})
                 append_event(
                     root,
@@ -580,6 +582,23 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertEqual(pressure["prompt_tokens"], 180600)
         self.assertEqual(body["backend_session"]["runtime_context_usage"]["input_tokens"], 226853)
         self.assertEqual(body["backend_session"]["latest_usage"]["input_tokens"], 99999999)
+
+    def test_conversation_events_api_includes_backend_start_turn_before_agent_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Waiting backend start", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_event(root, run_id, "backend_start_queued", {"task_id": "task-001", "target": "main", "backend": "codex"})
+                append_event(root, run_id, "backend_started", {"task_id": "task-001", "target": "main", "pid": 123})
+
+                response = asyncio.run(fetch_ui_response(root, run_id, "/api/conversation-events?task_id=task-001&target=main&limit=5"))
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual([event["type"] for event in body["turn_events"]], ["backend_start_queued", "backend_started"])
 
     def test_conversation_events_api_filters_categories_server_side(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

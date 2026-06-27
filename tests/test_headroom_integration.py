@@ -13,9 +13,13 @@ from aha_cli.services.headroom_integration import (
     codex_upstream_base_url,
     headroom_should_wrap_codex,
     headroom_status,
+    headroom_usage_summary,
     merge_no_proxy_values,
     prepare_headroom_codex_runtime,
 )
+from aha_cli.store.filesystem import append_event
+from aha_cli.store.io import write_json
+from aha_cli.store.paths import plan_path
 
 
 class HeadroomIntegrationTests(unittest.TestCase):
@@ -43,6 +47,59 @@ class HeadroomIntegrationTests(unittest.TestCase):
         self.assertTrue(status["installed"])
         self.assertTrue(status["running"])
         self.assertEqual(status["command_path"], "/usr/bin/headroom")
+
+    def test_usage_summary_counts_ready_and_skipped_turns_by_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            append_event(root, run_id, "headroom_integration_ready", {"task_id": "task-001", "agent_id": "main", "ready": True})
+            append_event(root, run_id, "headroom_integration_ready", {"task_id": "task-002", "agent_id": "main", "ready": True})
+            append_event(root, run_id, "headroom_integration_skipped", {"task_id": "task-002", "agent_id": "sub-001", "reason": "not_ready"})
+
+            summary = headroom_usage_summary(root, run_id)
+
+        self.assertEqual(summary["ready_turns"], 2)
+        self.assertEqual(summary["skipped_turns"], 1)
+        self.assertEqual(summary["task_count"], 2)
+        task_002 = next(task for task in summary["tasks"] if task["task_id"] == "task-002")
+        self.assertEqual(task_002["ready_turns"], 1)
+        self.assertEqual(task_002["skipped_turns"], 1)
+        self.assertEqual([agent["agent_id"] for agent in task_002["agents"]], ["main", "sub-001"])
+        self.assertEqual(task_002["agents"][1]["last_reason"], "not_ready")
+
+    def test_usage_summary_includes_enabled_tasks_without_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            path = plan_path(root, run_id)
+            path.parent.mkdir(parents=True)
+            write_json(
+                path,
+                {
+                    "id": run_id,
+                    "tasks": [
+                        {
+                            "id": "task-001",
+                            "token_saving": {"enabled": True, "provider": "headroom"},
+                            "agents": [{"id": "main", "role": "main"}],
+                        },
+                        {
+                            "id": "task-002",
+                            "token_saving": {"enabled": True, "provider": "headroom"},
+                            "agents": [{"id": "main", "role": "main"}],
+                        },
+                    ],
+                },
+            )
+
+            summary = headroom_usage_summary(root, run_id)
+
+        self.assertEqual(summary["enabled_tasks"], 2)
+        self.assertEqual(summary["ready_turns"], 0)
+        self.assertEqual(summary["skipped_turns"], 0)
+        self.assertEqual(summary["task_count"], 2)
+        self.assertEqual([task["task_id"] for task in summary["tasks"]], ["task-001", "task-002"])
+        self.assertTrue(all(task["enabled"] for task in summary["tasks"]))
 
     def test_codex_upstream_base_url_reads_process_env(self) -> None:
         with mock.patch.dict(os.environ, {"OPENAI_BASE_URL": "https://openai.example/v1"}, clear=True):

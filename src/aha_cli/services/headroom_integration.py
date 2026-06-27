@@ -25,8 +25,8 @@ from aha_cli.domain.models import (
     utc_now,
 )
 from aha_cli.services.proxy import DEFAULT_NO_PROXY, apply_proxy_environment
-from aha_cli.store.io import read_json, write_json
-from aha_cli.store.paths import aha_home_path
+from aha_cli.store.io import iter_jsonl_from, read_json, write_json
+from aha_cli.store.paths import aha_home_path, event_path, plan_path
 
 HEADROOM_HOST = "127.0.0.1"
 HEADROOM_HEALTH_TIMEOUT_SECONDS = 1.0
@@ -292,6 +292,142 @@ def headroom_status(root: Path, config: dict | None, *, scope: dict | None = Non
     }
 
 
+def _headroom_usage_agent_row(agent_id: str) -> dict:
+    return {
+        "agent_id": agent_id,
+        "ready_turns": 0,
+        "skipped_turns": 0,
+        "last_ready_at": "",
+        "last_skipped_at": "",
+        "last_reason": "",
+    }
+
+
+def _headroom_usage_task_row(task_id: str) -> dict:
+    return {
+        "task_id": task_id,
+        "enabled": False,
+        "ready_turns": 0,
+        "skipped_turns": 0,
+        "last_ready_at": "",
+        "last_skipped_at": "",
+        "agents": {},
+    }
+
+
+def _headroom_usage_public_task(row: dict) -> dict:
+    agents = sorted(
+        row["agents"].values(),
+        key=lambda item: (-int(item["ready_turns"]), -int(item["skipped_turns"]), str(item["agent_id"])),
+    )
+    return {
+        "task_id": row["task_id"],
+        "enabled": bool(row.get("enabled")),
+        "ready_turns": row["ready_turns"],
+        "skipped_turns": row["skipped_turns"],
+        "last_ready_at": row["last_ready_at"],
+        "last_skipped_at": row["last_skipped_at"],
+        "agents": agents,
+    }
+
+
+def _headroom_enabled_plan_tasks(root: Path, run_id: str | None) -> list[dict]:
+    if not run_id:
+        return []
+    try:
+        plan = read_json(plan_path(root, run_id))
+    except (OSError, ValueError):
+        return []
+    tasks = plan.get("tasks")
+    if not isinstance(tasks, list):
+        return []
+    enabled: list[dict] = []
+    for task in tasks:
+        if not isinstance(task, dict) or task.get("deleted_at"):
+            continue
+        policy = normalize_task_token_saving(task.get("token_saving"), task.get("context_management"))
+        if policy.get("enabled") and policy.get("provider") == "headroom":
+            enabled.append(task)
+    return enabled
+
+
+def _headroom_usage_task_agents(task: dict) -> list[str]:
+    raw_agents = task.get("agents")
+    if not isinstance(raw_agents, list):
+        return ["main"]
+    agents = [
+        str(agent.get("id") or "").strip()
+        for agent in raw_agents
+        if isinstance(agent, dict) and str(agent.get("role") or "").strip() not in {"host", "supervision-host"}
+    ]
+    return [agent_id for agent_id in agents if agent_id] or ["main"]
+
+
+def headroom_usage_summary(root: Path, run_id: str | None, *, task_limit: int = 8) -> dict:
+    summary = {
+        "run_id": str(run_id or ""),
+        "enabled_tasks": 0,
+        "ready_turns": 0,
+        "skipped_turns": 0,
+        "tasks": [],
+        "task_count": 0,
+    }
+    if not run_id:
+        return summary
+    tasks: dict[str, dict] = {}
+    for task in _headroom_enabled_plan_tasks(root, run_id):
+        task_id = str(task.get("id") or "").strip()
+        if not task_id:
+            continue
+        summary["enabled_tasks"] += 1
+        task_row = tasks.setdefault(task_id, _headroom_usage_task_row(task_id))
+        task_row["enabled"] = True
+        for agent_id in _headroom_usage_task_agents(task):
+            task_row["agents"].setdefault(agent_id, _headroom_usage_agent_row(agent_id))
+    events_file = event_path(root, run_id)
+    if not events_file.exists():
+        task_rows = sorted(
+            (_headroom_usage_public_task(row) for row in tasks.values()),
+            key=lambda item: (-int(item["ready_turns"]), not bool(item.get("enabled")), -int(item["skipped_turns"]), str(item["task_id"])),
+        )
+        summary["task_count"] = len(task_rows)
+        summary["tasks"] = task_rows[: max(0, int(task_limit))]
+        return summary
+    events, _ = iter_jsonl_from(events_file, 0)
+    for event in events:
+        event_type = str(event.get("type") or "")
+        if event_type not in {"headroom_integration_ready", "headroom_integration_skipped"}:
+            continue
+        raw_data = event.get("data")
+        data = raw_data if isinstance(raw_data, dict) else {}
+        task_id = str(data.get("task_id") or "").strip() or "run"
+        agent_id = str(data.get("agent_id") or data.get("target") or "").strip() or "main"
+        timestamp = str(event.get("ts") or data.get("ts") or "")
+        reason = str(data.get("reason") or "")
+        task_row = tasks.setdefault(task_id, _headroom_usage_task_row(task_id))
+        agent_row = task_row["agents"].setdefault(agent_id, _headroom_usage_agent_row(agent_id))
+        if event_type == "headroom_integration_ready" and bool(data.get("ready", True)):
+            summary["ready_turns"] += 1
+            task_row["ready_turns"] += 1
+            agent_row["ready_turns"] += 1
+            task_row["last_ready_at"] = timestamp
+            agent_row["last_ready_at"] = timestamp
+        else:
+            summary["skipped_turns"] += 1
+            task_row["skipped_turns"] += 1
+            agent_row["skipped_turns"] += 1
+            task_row["last_skipped_at"] = timestamp
+            agent_row["last_skipped_at"] = timestamp
+            agent_row["last_reason"] = reason
+    task_rows = sorted(
+        (_headroom_usage_public_task(row) for row in tasks.values()),
+        key=lambda item: (-int(item["ready_turns"]), not bool(item.get("enabled")), -int(item["skipped_turns"]), str(item["task_id"])),
+    )
+    summary["task_count"] = len(task_rows)
+    summary["tasks"] = task_rows[: max(0, int(task_limit))]
+    return summary
+
+
 def ensure_headroom_proxy(
     root: Path,
     config: dict,
@@ -493,6 +629,7 @@ __all__ = [
     "headroom_scope",
     "headroom_should_wrap_codex",
     "headroom_status",
+    "headroom_usage_summary",
     "merge_no_proxy_values",
     "prepare_headroom_codex_runtime",
 ]

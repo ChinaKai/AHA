@@ -29,6 +29,8 @@ def conversation_turn_events(root: Path, run_id: str, task_id: str, target: str,
     for offset, event in iter_jsonl_reverse(events_file) or ():
         if (
             str(event.get("type") or "") in {
+                "backend_start_queued",
+                "backend_started",
                 "agent_started",
                 "agent_error",
                 "agent_prompt_metrics",

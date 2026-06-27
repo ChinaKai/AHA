@@ -154,10 +154,41 @@
       : () => true;
     const events = contextConversationEvents(context, taskId).filter(matcher);
     let startIndex = -1;
+    let backendStartedIndex = -1;
+    let backendStartQueuedIndex = -1;
     for (let index = events.length - 1; index >= 0; index -= 1) {
-      if (events[index].type === "agent_started") {
+      const type = events[index].type;
+      if (type === "agent_started" && startIndex < 0) {
         startIndex = index;
+      } else if (type === "backend_started" && backendStartedIndex < 0) {
+        backendStartedIndex = index;
+      } else if (type === "backend_start_queued" && backendStartQueuedIndex < 0) {
+        backendStartQueuedIndex = index;
+      }
+      if (startIndex >= 0 && backendStartedIndex >= 0 && backendStartQueuedIndex >= 0) {
         break;
+      }
+    }
+    if (backendStartQueuedIndex >= 0) {
+      const priorStartIndex = Math.max(startIndex, backendStartedIndex);
+      if (backendStartQueuedIndex > priorStartIndex) {
+        const queuedEvent = events[backendStartQueuedIndex];
+        const queuedAt = eventTimestamp(queuedEvent);
+        if (queuedAt) {
+          const data = eventData(queuedEvent);
+          return {
+            startedAt: queuedAt,
+            finishedAt: null,
+            elapsedMs: contextNow(context) - queuedAt,
+            running: true,
+            status: "waiting_start",
+            waitingReason: "",
+            target: data.target || contextTarget(context),
+            sender: data.sender || "-"
+          };
+        }
+      } else if (backendStartedIndex > backendStartQueuedIndex) {
+        startIndex = backendStartedIndex;
       }
     }
     if (startIndex < 0) return null;

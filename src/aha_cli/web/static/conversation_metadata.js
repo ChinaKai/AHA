@@ -31,6 +31,8 @@
     "task_completed",
     "task_waiting_for_subagents",
     "task_status_changed",
+    "backend_start_queued",
+    "backend_started",
     "agent_started",
     "agent_status_changed",
     "agent_thread",

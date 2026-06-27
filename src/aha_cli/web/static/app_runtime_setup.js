@@ -697,6 +697,8 @@ const conversationFilters = {
 };
 let taskVisibilityFilter = "active";
 const turnEventTypes = new Set([
+  "backend_start_queued",
+  "backend_started",
   "agent_started",
   "agent_error",
   "agent_prompt_metrics",

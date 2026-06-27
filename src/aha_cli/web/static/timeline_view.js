@@ -149,6 +149,8 @@
       if (event.type === "task_reopened") return renderTimelineStatus("task reopened", data.task_id || "-", "awaiting_user", ts);
       if (event.type === "task_completed") return renderTimelineStatus("task completed", `exit=${data.exit_code ?? "-"}`, "completed", ts);
       if (event.type === "task_waiting_for_subagents") return renderTimelineStatus("waiting for sub-agents", `pending=${(data.pending || []).join(", ") || "-"}`, "running", ts);
+      if (event.type === "backend_start_queued") return renderTimelineStatus("waiting for agent start", `${data.target || "main"} backend=${data.backend || "-"} model=${data.model || "-"}`, "waiting_start", ts);
+      if (event.type === "backend_started") return renderTimelineStatus("backend started", `${data.target || "main"} pid=${data.pid ?? "-"} model=${data.resolved_model || data.requested_model || "-"}`, "running", ts);
       if (event.type === "agent_started") return renderTimelineStatus("agent started", `${data.target || "main"} from ${data.sender || "-"} sandbox=${data.sandbox || "-"} approval=${data.approval || "-"} proxy=${data.proxy_enabled ? "on" : "off"}`, "running", ts);
       if (event.type === "agent_interrupted") return renderTimelineStatus("agent interrupted", data.agent_id || data.target || "main", "interrupted", ts);
       if (event.type === "agent_status_changed") {
@@ -198,13 +200,15 @@
         sender: "-"
       };
       const title = timing.running
-        ? (timing.status === "waiting"
-          ? (timing.waitingReason === "host" ? "Agent is waiting for host" : "Agent is waiting")
-          : "Agent is working")
+        ? (timing.status === "waiting_start"
+          ? "Waiting for agent start"
+          : timing.status === "waiting"
+            ? (timing.waitingReason === "host" ? "Agent is waiting for host" : "Agent is waiting")
+            : "Agent is working")
         : timing.status === "idle"
           ? "Agent is idle"
           : `Agent turn ${timing.status}`;
-      const label = timing.status === "idle" ? "" : (timing.running ? "elapsed" : "duration");
+      const label = timing.status === "idle" ? "" : (timing.status === "waiting_start" ? "waiting" : (timing.running ? "elapsed" : "duration"));
       const details = timing.status === "idle" && !timing.running
         ? ""
         : [
@@ -213,7 +217,7 @@
           timing.startedAt ? `started ${deps.formatClock?.(timing.startedAt)}` : "",
           timing.finishedAt ? `finished ${deps.formatClock?.(timing.finishedAt)}` : ""
         ].filter(Boolean).join(" | ");
-      const visualStatus = timing.running && !["waiting", "busy"].includes(timing.status) ? "running" : timing.status;
+      const visualStatus = timing.running && !["waiting", "waiting_start", "busy"].includes(timing.status) ? "running" : timing.status;
       return `
         <div class="turn-timer ${deps.escapeHtml?.(visualStatus)}">
           <span class="activity-dot"></span>

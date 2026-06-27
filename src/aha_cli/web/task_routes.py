@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import unquote
 
-from aha_cli.backends.registry import agent_backend_names
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names
 from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
 from aha_cli.services.hardware_io import append_hardware_io_record
@@ -107,6 +107,17 @@ from aha_cli.web.task_actions import (
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 TOKEN_SAVING_REQUIRES_HEADROOM_MESSAGE = "Headroom integration must be enabled before token saving can be enabled."
+
+
+def create_task_model_from_payload(backend: str, payload: dict) -> str | None:
+    if "model" not in payload:
+        return None
+    model = str(payload.get("model", "") or "").strip()
+    if model and model.lower() != "default":
+        return model
+    if backend == "codex":
+        return CODEX_DEFAULT_MODEL
+    return None
 
 
 def route_result(payload: dict, status: str = "200 OK") -> dict:
@@ -423,7 +434,7 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             run_id,
             title,
             backend=backend,
-            model=str(payload.get("model", "") or "") or None,
+            model=create_task_model_from_payload(backend, payload),
             workspace_path=workspace_path,
             workspace_id=workspace_id,
             sandbox=sandbox,

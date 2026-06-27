@@ -12,6 +12,12 @@
       .replaceAll("'", "&#039;");
   }
 
+  function numberText(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return new Intl.NumberFormat("en-US").format(number);
+  }
+
   function configString(value, fallback = "") {
     if (value === null || value === undefined) return fallback;
     const text = String(value);
@@ -70,23 +76,68 @@
       return t("headroom.ready", "Configured");
     }
 
-    function statusGridHtml() {
+  function statusGridHtml() {
       const configuredCommand = currentHeadroomConfig().command || "headroom";
       const commandDisplay = status?.command_path || (status && !status.installed ? `${configuredCommand} (${t("headroom.not_found_short", "not found")})` : configuredCommand);
       const rows = [
         ["Enabled", currentHeadroomConfig().enabled ? "on" : "off"],
         ["Installed", status?.installed ? "yes" : "no"],
-        ["Runtime", status?.running ? "running" : "stopped"],
-        ["Port", status?.port || currentHeadroomConfig().port || "-"],
-        ["Mode", status?.mode || currentHeadroomConfig().mode || "-"],
-        ["Command", commandDisplay || "-"]
-      ];
-      return `<div class="headroom-status-grid">${rows.map(([label, value]) => `
-        <div><span>${escapeHtml(label)}</span><code>${escapeHtml(value)}</code></div>
-      `).join("")}</div>`;
-    }
+      ["Runtime", status?.running ? "running" : "stopped"],
+      ["Port", status?.port || currentHeadroomConfig().port || "-"],
+      ["Mode", status?.mode || currentHeadroomConfig().mode || "-"],
+      ["Enabled tasks", numberText(status?.usage?.enabled_tasks)],
+      ["Ready turns", numberText(status?.usage?.ready_turns)],
+      ["Skipped turns", numberText(status?.usage?.skipped_turns)],
+      ["Command", commandDisplay || "-"]
+    ];
+    return `<div class="headroom-status-grid">${rows.map(([label, value]) => `
+      <div><span>${escapeHtml(label)}</span><code>${escapeHtml(value)}</code></div>
+    `).join("")}</div>`;
+  }
 
-    function renderPopover() {
+  function usageByTaskHtml() {
+    const usage = status?.usage || {};
+    const tasks = Array.isArray(usage.tasks) ? usage.tasks : [];
+    if (!tasks.length) {
+      return `<div class="headroom-usage-empty">${escapeHtml(t("headroom.usage_empty", "No Headroom turns recorded for this run."))}</div>`;
+    }
+    const hiddenCount = Math.max(0, Number(usage.task_count || 0) - tasks.length);
+    const rows = tasks.map(task => {
+      const agents = Array.isArray(task.agents) ? task.agents : [];
+      const hasTurns = Number(task.ready_turns || 0) > 0 || Number(task.skipped_turns || 0) > 0;
+      const agentSummary = hasTurns
+        ? agents.map(agent => {
+          const skipped = Number(agent.skipped_turns || 0);
+          const suffix = skipped ? `, ${numberText(skipped)} skipped` : "";
+          return `${agent.agent_id || "main"} ${numberText(agent.ready_turns)}${suffix}`;
+        }).join(" · ")
+        : task.enabled
+          ? t("headroom.usage_enabled_no_turns", "enabled, no turns yet")
+          : "";
+      const skippedTaskTurns = Number(task.skipped_turns || 0);
+      return `
+        <div class="headroom-usage-row">
+          <div>
+            <strong>${escapeHtml(task.task_id || "run")}</strong>
+            <span>${escapeHtml(agentSummary || "-")}</span>
+          </div>
+          <code>${escapeHtml(numberText(task.ready_turns))}${skippedTaskTurns ? ` / ${escapeHtml(numberText(skippedTaskTurns))} skipped` : ""}</code>
+        </div>
+      `;
+    }).join("");
+    return `
+      <section class="headroom-usage">
+        <div class="headroom-usage-head">
+          <span>${escapeHtml(t("headroom.usage_by_task", "By task"))}</span>
+          <code>${escapeHtml(t("headroom.usage_turns", "ready turns"))}</code>
+        </div>
+        ${rows}
+        ${hiddenCount ? `<div class="headroom-usage-more">${escapeHtml(t("headroom.usage_more", "{count} more task(s)").replace("{count}", numberText(hiddenCount)))}</div>` : ""}
+      </section>
+    `;
+  }
+
+  function renderPopover() {
       if (!popover || !open) return;
       const headroom = currentHeadroomConfig();
       const stateClass = error || (status && !status.installed) ? "error" : notice ? "success" : "";
@@ -98,9 +149,10 @@
             <div class="meta ${stateClass}">${escapeHtml(statusLine())}</div>
           </div>
           <button type="button" data-headroom-refresh ${loading || saving ? "disabled" : ""}>${escapeHtml(t("common.refresh", "Refresh"))}</button>
-        </div>
-        ${statusGridHtml()}
-        <form class="headroom-config-form" data-headroom-form>
+      </div>
+      ${statusGridHtml()}
+      ${usageByTaskHtml()}
+      <form class="headroom-config-form" data-headroom-form>
           <label class="field-label checkbox-field">
             <span>${escapeHtml(t("headroom.title", "Headroom"))}</span>
             <span class="checkbox-line">

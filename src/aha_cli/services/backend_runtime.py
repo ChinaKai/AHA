@@ -12,7 +12,7 @@ import zipfile
 
 from aha_cli.backends.claude import apply_claude_environment, claude_cli_model, claude_config_for_model, claude_resolved_model
 from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
-from aha_cli.backends.registry import normalize_model_selector, resolve_model
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_model_selector, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.commit_policy import generated_by_for_backend_model
@@ -591,7 +591,7 @@ def start_backend(
         raise ValueError(f"backend {backend} does not have a chat process")
     cfg = load_config(root)
     if backend == "codex" and not model:
-        model = (cfg.get("codex", {}) or {}).get("model")
+        model = CODEX_DEFAULT_MODEL if task_id else (cfg.get("codex", {}) or {}).get("model")
     if backend == "claude" and not model:
         model = (cfg.get("claude", {}) or {}).get("model")
     requested_model = model

@@ -8,7 +8,8 @@
         const target = deps.messageDisplayTarget?.(data) || data.target || "";
         return `message:${taskId}:${sender}:${target}:${String(data.message || "").trim()}`;
       }
-      if (event.type === "agent_started") return `agent_started:${taskId}:${data.target || "main"}`;
+    if (event.type === "backend_start_queued") return `backend_start_queued:${taskId}:${data.target || "main"}`;
+    if (event.type === "agent_started") return `agent_started:${taskId}:${data.target || "main"}`;
       if (event.type === "agent_status_changed") return `agent_status_changed:${taskId}:${data.agent_id || data.target || "main"}:${data.status || ""}`;
       if (event.type === "task_status_changed") return `task_status_changed:${taskId}:${data.status || ""}`;
       return "";
@@ -67,14 +68,20 @@
       return removed;
     }
 
-    function updateOptimisticAgentState(task, target, timestamp) {
+    function selectedBackendProcessActive(target) {
+      const agent = deps.selectedAgent?.();
+      const status = String(agent?.backend_process_status || deps.backendStatusData?.()?.status || "stopped").toLowerCase();
+      return status === "running" || status === "busy";
+    }
+
+    function updateOptimisticAgentState(task, target, timestamp, waitingForBackendStart = false) {
       if (!task) return;
       task.current_status = "running";
       task.activity_status = "busy";
       const agent = (task.agents || []).find(item => item.id === target);
       if (agent) {
-        agent.status = "running";
-        agent.waiting_reason = "";
+        agent.status = waitingForBackendStart ? "waiting" : "running";
+        agent.waiting_reason = waitingForBackendStart ? "agent_start" : "";
         agent.status_started_at = timestamp;
         agent.backend_process_status = "busy";
         agent.backend_process_last_reply_at = "";
@@ -95,6 +102,7 @@
       clearOptimisticEventsForContext(task.id, target);
       const ts = new Date().toISOString();
       const role = target === "main" ? "main" : "sub";
+      const waitingForBackendStart = !selectedBackendProcessActive(target);
       const eventBase = () => {
         const seq = deps.nextOptimisticEventSeq?.() || 0;
         return {
@@ -116,7 +124,17 @@
           type: "task_status_changed",
           data: { task_id: task.id, target, status: "running", exit_code: null }
         },
-        {
+        waitingForBackendStart ? {
+          ...eventBase(),
+          type: "backend_start_queued",
+          data: {
+            task_id: task.id,
+            target,
+            backend: deps.selectedAgent?.()?.backend || task.preferred_backend || "-",
+            model: deps.selectedAgent?.()?.model || task.preferred_model || "",
+            queued: true
+          }
+        } : {
           ...eventBase(),
           type: "agent_started",
           data: {
@@ -131,12 +149,18 @@
         {
           ...eventBase(),
           type: "agent_status_changed",
-          data: { task_id: task.id, agent_id: target, status: "running", waiting_reason: "", exit_code: null }
+          data: {
+            task_id: task.id,
+            agent_id: target,
+            status: waitingForBackendStart ? "waiting" : "running",
+            waiting_reason: waitingForBackendStart ? "agent_start" : "",
+            exit_code: null
+          }
         }
       ];
       state.allEvents.push(...events);
       deps.appendRealtimeConversationEvents?.(events);
-      updateOptimisticAgentState(task, target, ts);
+      updateOptimisticAgentState(task, target, ts, waitingForBackendStart);
       deps.setConversationAutoFollow?.(true);
       deps.renderTaskList?.();
       deps.renderSelectedHeader?.();

@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
 from aha_cli.domain.models import default_config, normalize_integrations_config
-from aha_cli.services.headroom_integration import headroom_status
+from aha_cli.services.headroom_integration import headroom_status, headroom_usage_summary
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
@@ -29,6 +29,7 @@ from aha_cli.store.filesystem import (
     load_config,
     rename_run,
     resolve_workspace_path,
+    run_exists,
     run_summary,
     update_run_proxy_config,
 )
@@ -45,7 +46,9 @@ from aha_cli.web.http_utils import (
 from aha_cli.web.run_api import (
     archive_upload_suffix,
     bootstrap_payload,
+    default_api_run_id,
     require_api_run_id,
+    request_run_id,
     run_export_headers,
     run_import_success_payload,
     runs_payload,
@@ -612,8 +615,11 @@ def handle_save_bootstrap(root: Path, default_run_id: str, body: bytes) -> bytes
     return json_response(bootstrap_payload(root, default_run_id), "201 Created")
 
 
-def handle_headroom_integration_status(root: Path, method: str) -> bytes:
-    response = json_response({"headroom": headroom_status(root, load_config(root))})
+def handle_headroom_integration_status(root: Path, default_run_id: str, method: str, query: dict[str, list[str]]) -> bytes:
+    requested_run_id = request_run_id(default_run_id, query)
+    run_id = requested_run_id if requested_run_id and run_exists(root, requested_run_id) else default_api_run_id(root, default_run_id)
+    status = headroom_status(root, load_config(root))
+    response = json_response({"headroom": {**status, "usage": headroom_usage_summary(root, run_id)}})
     return head_or_response(method, response)
 
 
@@ -799,7 +805,7 @@ def handle_run_workspace_route(
     if method == "POST" and path == "/api/bootstrap":
         return handle_save_bootstrap(root, default_run_id, body)
     if method in {"GET", "HEAD"} and path == "/api/integrations/headroom":
-        return handle_headroom_integration_status(root, method)
+        return handle_headroom_integration_status(root, default_run_id, method, query)
     if method == "POST" and path == "/api/runs":
         return handle_create_run(root, body)
     if method in {"GET", "HEAD"} and path.startswith("/api/runs/"):

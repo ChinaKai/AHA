@@ -105,11 +105,46 @@ class BackendRuntimeTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertIn("--model", command)
         self.assertEqual(command[command.index("--model") + 1], CODEX_DEFAULT_MODEL)
-        self.assertIn("--requested-model", command)
-        self.assertEqual(command[command.index("--requested-model") + 1], "")
-        self.assertIsNone(status["requested_model"])
+        self.assertNotIn("--requested-model", command)
+        self.assertEqual(status["requested_model"], CODEX_DEFAULT_MODEL)
         self.assertEqual(status["resolved_model"], CODEX_DEFAULT_MODEL)
         self.assertEqual(status["model"], CODEX_DEFAULT_MODEL)
+
+    def test_task_codex_backend_default_ignores_configured_env_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg["codex"]["model"] = "env:kimi-k2.6"
+                cfg["codex"]["env"] = [
+                    {
+                        "name": "kimi-k2.6",
+                        "OPENAI_API_KEY": "work-key",
+                        "OPENAI_BASE_URL": "https://kimi.test/v1",
+                        "OPENAI_MODEL": "kimi-k2.6",
+                    }
+                ]
+                cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+                code, plan_output = self.run_cli("plan", "Codex task default ignores env model", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                ):
+                    status = start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        command = popen.call_args.args[0]
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], CODEX_DEFAULT_MODEL)
+        self.assertEqual(status["requested_model"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(status["resolved_model"], CODEX_DEFAULT_MODEL)
 
     def test_start_backend_uses_selected_codex_env_model_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

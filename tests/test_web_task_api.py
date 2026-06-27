@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
@@ -137,6 +138,56 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["task"]["token_saving"]["enabled"])
         self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
         self.assertEqual(status["tasks"][-1]["token_saving"], body["task"]["token_saving"])
+
+    def test_api_task_create_persists_codex_default_model_for_empty_ui_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg = read_json(config_path(root))
+                cfg.setdefault("codex", {})["model"] = "env:kimi-k2.6"
+                cfg["codex"]["env"] = [
+                    {
+                        "name": "kimi-k2.6",
+                        "OPENAI_API_KEY": "test-key",
+                        "OPENAI_BASE_URL": "https://kimi.test/v1",
+                        "OPENAI_MODEL": "kimi-k2.6",
+                    }
+                ]
+                write_json(config_path(root), cfg)
+                code, plan_output = self.run_cli("plan", "Task default model create config", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Default model task",
+                            "backend": "codex",
+                            "model": None,
+                            "dispatch": False,
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                status = status_snapshot(root, run_id)
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+                task_created = next(
+                    event
+                    for event in events
+                    if event["type"] == "task_created" and event["data"]["task_id"] == body["task"]["id"]
+                )
+                main_agent = next(agent for agent in body["task"]["agents"] if agent["id"] == "main")
+
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["preferred_model"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(body["task"]["preferred_sub_model"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(main_agent["model"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(status["tasks"][-1]["preferred_model"], CODEX_DEFAULT_MODEL)
+        self.assertEqual(task_created["data"]["preferred_model"], CODEX_DEFAULT_MODEL)
 
     def test_api_task_create_rejects_token_saving_when_headroom_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

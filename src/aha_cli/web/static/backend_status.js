@@ -22,7 +22,7 @@
     function agentInputWaitBlocked(agent) {
       if (deps.agentLifecycleStatus?.(agent) !== "waiting") return false;
       const reason = deps.agentWaitingReason?.(agent);
-      return !reason || reason === "subagents" || reason === "host";
+      return !reason || reason === "subagents" || reason === "host" || reason === "agent_start";
     }
 
     function supervisionHostReviewActive(host) {

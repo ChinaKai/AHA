@@ -9,7 +9,7 @@ import uuid
 
 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
 from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
-from aha_cli.backends.registry import resolve_model
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import mark_backend_stopped, start_backend, stop_task_backends
@@ -737,7 +737,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 requested_approval = (agent or {}).get("approval") or task.get("preferred_approval") or args.approval
                 configured_model = args.model or (agent or {}).get("model") or task.get("preferred_model")
                 if backend_name == "codex" and not configured_model:
-                    configured_model = (cfg.get("codex", {}) or {}).get("model")
+                    configured_model = CODEX_DEFAULT_MODEL if item_task_id else (cfg.get("codex", {}) or {}).get("model")
                 if backend_name == "claude" and not configured_model:
                     configured_model = (cfg.get("claude", {}) or {}).get("model")
                 model = configured_model or session.get("model")
