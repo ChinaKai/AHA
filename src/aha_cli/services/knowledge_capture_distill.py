@@ -137,10 +137,11 @@ def default_capture_agent(context: dict) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             output_file = Path(tmp) / "capture_reply.txt"
             if backend == "codex":
-                from aha_cli.backends.codex import run_codex_exec
+                from aha_cli.backends.codex import codex_config_for_model, run_codex_exec
 
-                codex_config = (config.get("codex") or {}) if isinstance(config, dict) else {}
-                codex_bin = str(codex_config.get("bin") or "codex")
+                raw_codex_config = (config.get("codex") or {}) if isinstance(config, dict) else {}
+                codex_config = codex_config_for_model(raw_codex_config, model)
+                codex_bin = str(raw_codex_config.get("bin") or "codex")
                 _, reply, _ = run_codex_exec(
                     prompt, cwd=cwd, output_file=output_file,
                     codex_bin=codex_bin, model=model, sandbox="read-only",

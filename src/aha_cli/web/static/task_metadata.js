@@ -151,16 +151,33 @@
   }
 
   function taskContextManagementPolicy(task) {
-    const policy = task?.context_management && typeof task.context_management === "object" ? task.context_management : {};
+    const tokenPolicy = taskTokenSavingPolicy(task);
     return {
-      auto_compact_enabled: Boolean(policy.auto_compact_enabled),
-      auto_compact_threshold_percent: normalizeTaskContextThreshold(policy.auto_compact_threshold_percent)
+      auto_compact_enabled: tokenPolicy.enabled,
+      auto_compact_threshold_percent: defaultTaskContextThresholdPercent,
+      enabled: tokenPolicy.enabled,
+      provider: tokenPolicy.provider
+    };
+  }
+
+  function taskTokenSavingPolicy(task) {
+    const policy = task?.token_saving && typeof task.token_saving === "object" ? task.token_saving : {};
+    const legacyPolicy = task?.context_management && typeof task.context_management === "object" ? task.context_management : {};
+    const hasTokenPolicy = Boolean(task?.token_saving && typeof task.token_saving === "object");
+    const provider = String(policy.provider || "headroom").trim().toLowerCase() || "headroom";
+    return {
+      enabled: typeof policy.enabled === "boolean" ? policy.enabled : (!hasTokenPolicy && legacyPolicy.auto_compact_enabled === true),
+      provider
     };
   }
 
   function taskContextSummary(task) {
-    const policy = taskContextManagementPolicy(task);
-    return policy.auto_compact_enabled ? `auto at ${policy.auto_compact_threshold_percent}%` : "auto off";
+    return taskTokenSavingSummary(task);
+  }
+
+  function taskTokenSavingSummary(task) {
+    const policy = taskTokenSavingPolicy(task);
+    return policy.enabled ? `${policy.provider} on` : "off";
   }
 
   function defaultHardwareDebugPermissions() {
@@ -292,6 +309,8 @@
     normalizeTaskContextThreshold,
     taskContextManagementPolicy,
     taskContextSummary,
+    taskTokenSavingPolicy,
+    taskTokenSavingSummary,
     defaultHardwareDebugPermissions,
     normalizeHardwareDebugPermissions,
     normalizeHardwareDebugChannel,

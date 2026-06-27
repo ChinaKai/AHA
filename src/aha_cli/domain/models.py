@@ -12,6 +12,8 @@ from aha_cli.domain.workflow_templates import (
 from aha_cli.services.prompt_templates import render_prompt_template
 
 DEFAULT_RETENTION_POLICY_REPORT_INTERVAL_SECONDS = 6 * 60 * 60
+HEADROOM_INTEGRATION_MODES = {"token", "cache"}
+TOKEN_SAVING_PROVIDERS = {"headroom"}
 
 
 def utc_now() -> str:
@@ -65,6 +67,23 @@ def default_knowledge_config() -> dict:
     }
 
 
+def default_headroom_integration_config() -> dict:
+    return {
+        "enabled": False,
+        "package": "headroom-ai[proxy]",
+        "command": "headroom",
+        "port": 8787,
+        "mode": "token",
+        "ccr_enabled": False,
+    }
+
+
+def default_integrations_config() -> dict:
+    return {
+        "headroom": default_headroom_integration_config(),
+    }
+
+
 def default_config() -> dict:
     return {
         "backend": "stub",
@@ -80,6 +99,7 @@ def default_config() -> dict:
             "no_proxy": None,
         },
         "context_windows": {},
+        "integrations": default_integrations_config(),
         "retention_policy": default_retention_policy_config(),
         "knowledge": default_knowledge_config(),
         "codex": {
@@ -173,6 +193,38 @@ def non_negative_int(value: object, default: int = 0) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return max(0, default)
+
+
+def _optional_clean_string(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def normalize_headroom_integration_config(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_headroom_integration_config()
+    if "enabled" in raw:
+        config["enabled"] = normalize_bool(raw.get("enabled"))
+    if _optional_clean_string(raw.get("package")):
+        config["package"] = _optional_clean_string(raw.get("package"))
+    if _optional_clean_string(raw.get("command")):
+        config["command"] = _optional_clean_string(raw.get("command"))
+    try:
+        config["port"] = max(1, min(65535, int(raw.get("port") or config["port"])))
+    except (TypeError, ValueError):
+        pass
+    mode = str(raw.get("mode") or config["mode"]).strip().lower()
+    config["mode"] = mode if mode in HEADROOM_INTEGRATION_MODES else "token"
+    if "ccr_enabled" in raw:
+        config["ccr_enabled"] = normalize_bool(raw.get("ccr_enabled"))
+    return config
+
+
+def normalize_integrations_config(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_integrations_config()
+    config["headroom"] = normalize_headroom_integration_config(raw.get("headroom"))
+    return config
 
 
 def infer_collaboration_mode(delegation_policy: object, max_sub_agents: object) -> str:
@@ -271,6 +323,13 @@ def default_task_context_management() -> dict:
     }
 
 
+def default_task_token_saving() -> dict:
+    return {
+        "enabled": False,
+        "provider": "headroom",
+    }
+
+
 def normalize_task_context_management(value: object | None = None, *, default_enabled: bool = False) -> dict:
     raw = value if isinstance(value, dict) else {}
     context = default_task_context_management()
@@ -287,6 +346,20 @@ def normalize_task_context_management(value: object | None = None, *, default_en
         except (TypeError, ValueError):
             pass
     return context
+
+
+def normalize_task_token_saving(value: object | None = None, legacy_context: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    token_saving = default_task_token_saving()
+    if "enabled" in raw:
+        token_saving["enabled"] = normalize_bool(raw.get("enabled"))
+    elif "token_saving_enabled" in raw:
+        token_saving["enabled"] = normalize_bool(raw.get("token_saving_enabled"))
+    elif value is None and legacy_context is not None:
+        token_saving["enabled"] = bool(normalize_task_context_management(legacy_context).get("auto_compact_enabled"))
+    provider = str(raw.get("provider") or token_saving["provider"]).strip().lower()
+    token_saving["provider"] = provider if provider in TOKEN_SAVING_PROVIDERS else "headroom"
+    return token_saving
 
 
 def default_task_hardware_debug_permissions() -> dict:
@@ -492,6 +565,7 @@ def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict
         "max_sub_agents": max_sub_agents,
         "supervision": normalize_task_supervision(task.get("supervision")),
         "context_management": normalize_task_context_management(task.get("context_management")),
+        "token_saving": normalize_task_token_saving(task.get("token_saving"), task.get("context_management")),
         "task_skills": normalize_task_skills(task.get("task_skills")),
         "hardware_debug": normalize_task_hardware_debug(task.get("hardware_debug")),
     }
@@ -578,6 +652,7 @@ def make_task(
     description: str | None = None,
     supervision: dict | None = None,
     context_management: dict | None = None,
+    token_saving: dict | None = None,
     task_skills: dict | None = None,
     hardware_debug: dict | None = None,
 ) -> dict:
@@ -608,6 +683,7 @@ def make_task(
         "max_sub_agents": resolved_max_sub_agents,
         "supervision": normalize_task_supervision(supervision),
         "context_management": normalize_task_context_management(context_management),
+        "token_saving": normalize_task_token_saving(token_saving, context_management),
         "task_skills": normalize_task_skills(task_skills),
         "hardware_debug": normalize_task_hardware_debug(hardware_debug),
         "status": "pending",

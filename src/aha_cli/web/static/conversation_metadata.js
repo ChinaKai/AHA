@@ -22,6 +22,7 @@
     "task_round_summary_requested",
     "task_proxy_config_updated",
     "task_supervision_config_updated",
+    "task_token_saving_config_updated",
     "task_context_management_config_updated",
     "main_reported_to_host",
     "host_decision",

@@ -36,6 +36,19 @@
       return getSelectedTask();
     }
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
+    function headroomIntegrationEnabled() {
+      const config = getConfigData?.() || {};
+      return config?.integrations?.headroom?.enabled === true;
+    }
+
+    function tokenSavingRequiresHeadroomMessage() {
+      return t("task.token_saving_requires_headroom", "Enable Headroom in Integrations before using token saving.");
+    }
+
     function setTaskSettingsEditorTaskId(taskId) {
       taskSettingsEditorTaskId = String(taskId || "");
     }
@@ -285,9 +298,8 @@
     }
 
     function syncTaskContextFields() {
-      const enabled = Boolean(els.selectedTaskContextAutoCompactEnabledEl?.checked);
-      els.selectedTaskContextThresholdFieldEl?.classList.toggle("hidden", !enabled);
-      if (els.selectedTaskContextThresholdFieldEl) els.selectedTaskContextThresholdFieldEl.hidden = !enabled;
+      els.selectedTaskContextThresholdFieldEl?.classList.add("hidden");
+      if (els.selectedTaskContextThresholdFieldEl) els.selectedTaskContextThresholdFieldEl.hidden = true;
     }
 
     function renderTaskContextEditor(taskArg) {
@@ -299,16 +311,14 @@
       });
       if (!task) {
         if (els.selectedTaskContextAutoCompactEnabledEl) els.selectedTaskContextAutoCompactEnabledEl.checked = false;
-        if (els.selectedTaskContextThresholdEl) els.selectedTaskContextThresholdEl.value = String(defaults.defaultTaskContextThresholdPercent);
-        if (els.taskContextStateEl) els.taskContextStateEl.textContent = "Select a task to edit context management.";
+        if (els.taskContextStateEl) els.taskContextStateEl.textContent = "Select a task to edit token saving.";
         syncTaskContextFields();
         return;
       }
-      const policy = helpers.taskContextManagementPolicy(task);
-      if (els.selectedTaskContextAutoCompactEnabledEl) els.selectedTaskContextAutoCompactEnabledEl.checked = policy.auto_compact_enabled;
-      if (els.selectedTaskContextThresholdEl) els.selectedTaskContextThresholdEl.value = String(policy.auto_compact_threshold_percent);
+      const policy = helpers.taskTokenSavingPolicy?.(task) || helpers.taskContextManagementPolicy(task);
+      if (els.selectedTaskContextAutoCompactEnabledEl) els.selectedTaskContextAutoCompactEnabledEl.checked = policy.enabled === true || policy.auto_compact_enabled === true;
       syncTaskContextFields();
-      if (els.taskContextStateEl) els.taskContextStateEl.textContent = helpers.taskContextSummary(task);
+      if (els.taskContextStateEl) els.taskContextStateEl.textContent = helpers.taskTokenSavingSummary?.(task) || helpers.taskContextSummary(task);
     }
 
     function selectedTaskSkillPaths(selectEl = els.selectedTaskSkillSelectEl) {
@@ -565,16 +575,20 @@
       const task = getTaskSettingsTask();
       if (!task) return;
       const enabled = Boolean(els.selectedTaskContextAutoCompactEnabledEl?.checked);
-      const threshold = helpers.normalizeTaskContextThreshold(els.selectedTaskContextThresholdEl?.value || defaults.defaultTaskContextThresholdPercent);
-      if (els.selectedTaskContextThresholdEl) els.selectedTaskContextThresholdEl.value = String(threshold);
-      await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/context-management`), {
+      if (enabled && !headroomIntegrationEnabled()) {
+        const message = tokenSavingRequiresHeadroomMessage();
+        if (els.taskContextStateEl) els.taskContextStateEl.textContent = message;
+        alertUser(message);
+        return;
+      }
+      await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/token-saving`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(api.runScopedPayload({
-          auto_compact_enabled: enabled,
-          auto_compact_threshold_percent: threshold
+          enabled,
+          provider: "headroom"
         }))
-      }, "Failed to update task context management");
+      }, "Failed to update task token saving");
       contextEditingUntil = 0;
       await api.loadStatus({ forceTaskContext: true });
     }

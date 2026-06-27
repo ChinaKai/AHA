@@ -91,6 +91,7 @@
       if (settingsTab !== "integrations") {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setHeadroomIntegrationOpen?.(false);
         deps.setSkillsConsoleOpen?.(false);
         deps.setTokenUsageOpen?.(false);
       }
@@ -527,6 +528,7 @@
       if (elements.runImportFileEl) elements.runImportFileEl.disabled = actionInFlight;
       if (elements.webRestartEl) elements.webRestartEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
       if (elements.webUpgradeEl) elements.webUpgradeEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
+      if (elements.headroomIntegrationEl) elements.headroomIntegrationEl.disabled = actionInFlight;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.playConsoleEl) elements.playConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.skillsConsoleEl) elements.skillsConsoleEl.disabled = actionInFlight;
@@ -543,9 +545,14 @@
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
         deps.setTokenUsageOpen?.(false);
-        if (actionInFlight) deps.setSkillsConsoleOpen?.(false);
+        if (actionInFlight) {
+          deps.setHeadroomIntegrationOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+        }
       } else if (runMaintenanceConsoleOpen && elements.runMaintenancePopoverEl) {
         renderRunMaintenance();
+      } else if (deps.headroomIntegrationOpen?.() && elements.headroomIntegrationPopoverEl) {
+        deps.renderHeadroomIntegrationPopover?.();
       } else if (deps.skillsConsoleOpen?.() && elements.skillsConsolePopoverEl) {
         deps.renderSkillsConsolePopover?.();
       } else if (deps.tokenUsageOpen?.() && elements.tokenUsagePopoverEl) {
@@ -822,6 +829,18 @@
         }
         deps.setSkillsConsoleOpen?.(nextOpen);
       });
+      elements.headroomIntegrationEl?.addEventListener("click", event => {
+        event.stopPropagation();
+        if (runActionInFlight()) return;
+        const nextOpen = !deps.headroomIntegrationOpen?.();
+        if (nextOpen) {
+          deps.setWeixinConsoleOpen?.(false);
+          deps.setPlayConsoleOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+          deps.setTokenUsageOpen?.(false);
+        }
+        deps.setHeadroomIntegrationOpen?.(nextOpen);
+      });
       elements.tokenUsageEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
@@ -851,6 +870,7 @@
       });
       elements.weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.playConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
+      elements.headroomIntegrationPopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.skillsConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.tokenUsagePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.runImportEl?.addEventListener("click", () => {
@@ -892,6 +912,9 @@
         if (deps.playConsoleOpen?.() && !elements.playConsoleEl?.contains(target) && !elements.playConsolePopoverEl?.contains(target)) {
           deps.setPlayConsoleOpen?.(false);
         }
+        if (deps.headroomIntegrationOpen?.() && !elements.headroomIntegrationEl?.contains(target) && !elements.headroomIntegrationPopoverEl?.contains(target)) {
+          deps.setHeadroomIntegrationOpen?.(false);
+        }
         if (deps.skillsConsoleOpen?.() && !elements.skillsConsoleEl?.contains(target) && !elements.skillsConsolePopoverEl?.contains(target)) {
           deps.setSkillsConsoleOpen?.(false);
         }
@@ -907,6 +930,7 @@
           closeRunCreateDialog();
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
+          deps.setHeadroomIntegrationOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
           deps.setTokenUsageOpen?.(false);
         }

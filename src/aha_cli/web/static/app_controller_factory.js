@@ -81,7 +81,6 @@
       workspaceCustomEl,
       workspaceSelectEl
     }, {
-      bootstrapCodexEnvGroups: deps.bootstrapCodexEnvGroups,
       bootstrapConfigData: deps.bootstrapConfigData,
       bootstrapData: deps.bootstrapData,
       bootstrapEnvGroupName: deps.bootstrapEnvGroupName,
@@ -162,6 +161,8 @@
         supervisionAskUserGateDefs: deps.supervisionAskUserGateDefs,
         taskContextManagementPolicy: deps.taskContextManagementPolicy,
         taskContextSummary: deps.taskContextSummary,
+        taskTokenSavingPolicy: deps.taskTokenSavingPolicy,
+        taskTokenSavingSummary: deps.taskTokenSavingSummary,
         taskSkillsPolicy: deps.taskSkillsPolicy,
         taskSkillsSummary: deps.taskSkillsSummary,
         defaultHardwareDebugPermissions: deps.taskMetadata?.defaultHardwareDebugPermissions,
@@ -371,6 +372,7 @@
       agentRuntimeConfirmDialogEl, agentRuntimeConfirmMessageEl, agentTargetEl, agentsEl,
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
       messageImageFileEl, messageImageUploadEl,
+      headroomIntegrationEl, headroomIntegrationPopoverEl,
       closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
       playConsolePopoverEl, selectedAgentInfoEl, sendFormEl, sessionMenuEl, settingsContentEl,
       skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
@@ -476,6 +478,18 @@
       windowRef: deps.windowRef
     });
 
+    const headroomIntegrationController = window.AHAHeadroomIntegration.createHeadroomIntegrationController({
+      headroomIntegrationEl,
+      headroomIntegrationPopoverEl,
+      sessionMenuEl
+    }, {
+      apiUrl: deps.apiUrl,
+      applyBootstrapPayload: deps.applyBootstrapPayload,
+      bootstrapData: deps.bootstrapData,
+      fetchJson: deps.fetchJson,
+      windowRef: deps.windowRef
+    });
+
     const skillsConsoleController = window.AHASkillsConsole.createSkillsConsoleController({
       sessionMenuEl,
       skillsConsoleEl,
@@ -548,6 +562,7 @@
       closeTaskCreateDialog: deps.closeTaskCreateDialog,
       collaborationModeDelegationPolicy: deps.collaborationModeDelegationPolicy,
       collaborationModeMaxSubAgents: deps.taskOptionsController?.collaborationModeMaxSubAgents,
+      bootstrapConfigData: deps.bootstrapConfigData,
       createTaskConfirmRows: deps.createTaskConfirmRows,
       createTaskFallbackConfirmText: deps.createTaskFallbackConfirmText,
       createTaskPayload: deps.createTaskPayload,
@@ -703,6 +718,7 @@
 
     return Object.freeze({
       agentConfigController,
+      headroomIntegrationController,
       messageComposer,
       playConsoleController,
       settingsController,

@@ -42,11 +42,33 @@
     return rows.map(item => bootstrapConfigRowHtml("workspace_roots", { value: item })).join("");
   }
 
-  function bootstrapEnvGroups(value) {
+  function envGroupFieldsForBackend(backend) {
+    return backend === "codex" ? codexEnvGroupFields : claudeEnvGroupFields;
+  }
+
+  function envGroupModelKey(backend) {
+    return backend === "codex" ? "OPENAI_MODEL" : "ANTHROPIC_MODEL";
+  }
+
+  function envGroupSecretKey(backend) {
+    return backend === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  }
+
+  function bootstrapEnvGroups(value, backend = "claude") {
     if (Array.isArray(value)) {
       return value.filter(item => item && typeof item === "object" && !Array.isArray(item));
     }
     if (value && typeof value === "object") {
+      if (backend === "codex") {
+        return [{
+          name: "default",
+          OPENAI_BASE_URL: value.OPENAI_BASE_URL || value.ANTHROPIC_BASE_URL || value.base_url || "",
+          OPENAI_MODEL: value.OPENAI_MODEL || value.ANTHROPIC_MODEL || value.model || "",
+          OPENAI_API_KEY: value.OPENAI_API_KEY || value.ANTHROPIC_API_KEY || value.api_key || "",
+          CODEX_WIRE_API: value.CODEX_WIRE_API || value.wire_api || "responses",
+          CODEX_ENV_KEY: value.CODEX_ENV_KEY || value.env_key || "OPENAI_API_KEY"
+        }];
+      }
       return [{
         name: "default",
         ANTHROPIC_BASE_URL: value.ANTHROPIC_BASE_URL || value.base_url || "",
@@ -57,37 +79,14 @@
     return [];
   }
 
-  function bootstrapCodexEnvGroups(value) {
-    if (Array.isArray(value)) {
-      return value.filter(item => item && typeof item === "object" && !Array.isArray(item));
-    }
-    if (value && typeof value === "object") {
-      return [{
-        name: "default",
-        OPENAI_BASE_URL: value.OPENAI_BASE_URL || value.base_url || "",
-        OPENAI_MODEL: value.OPENAI_MODEL || value.model || "",
-        OPENAI_API_KEY: value.OPENAI_API_KEY || value.api_key || "",
-        CODEX_WIRE_API: value.CODEX_WIRE_API || value.wire_api || "",
-        CODEX_ENV_KEY: value.CODEX_ENV_KEY || value.env_key || ""
-      }];
-    }
-    return [];
-  }
-
   function bootstrapEnvGroupName(item, index) {
     return configString(item?.name, `env-${index + 1}`);
   }
 
-  function bootstrapEnvRows(value, _active = "", options = {}) {
-    const groups = bootstrapEnvGroups(value);
+  function bootstrapEnvRows(value, _active = "", options = {}, backend = "claude") {
+    const groups = bootstrapEnvGroups(value, backend);
     const rows = groups.length ? groups : [{ name: "" }];
-    return rows.map((item, index) => bootstrapConfigRowHtml("claude.env", item, index, options)).join("");
-  }
-
-  function bootstrapCodexEnvRows(value, options = {}) {
-    const groups = bootstrapCodexEnvGroups(value);
-    const rows = groups.length ? groups : [{ name: "" }];
-    return rows.map((item, index) => bootstrapConfigRowHtml("codex.env", item, index, options)).join("");
+    return rows.map((item, index) => bootstrapConfigRowHtml(`${backend}.env`, item, index, options)).join("");
   }
 
   function bootstrapProxyFieldsHtml(prefix, proxy = {}) {
@@ -194,9 +193,7 @@
     const envOptions = bootstrapConfigEnvGroups(form, backend, context)
       .map((group, index) => {
         const name = bootstrapEnvGroupName(group, index);
-        const model = backend === "codex"
-          ? configString(group.OPENAI_MODEL, "not configured")
-          : configString(group.ANTHROPIC_MODEL, "not configured");
+        const model = configString(group[envGroupModelKey(backend)], "not configured");
         return {
           name: envModelValue(name),
           label: `${model} (${name})`
@@ -224,63 +221,32 @@
         </div>
       `;
     }
-    if (kind === "codex.env") {
+    if (kind === "codex.env" || kind === "claude.env") {
+      const backend = kind.split(".", 1)[0] || "claude";
+      const fields = envGroupFieldsForBackend(backend);
+      const baseUrlKey = fields[0];
+      const modelKey = envGroupModelKey(backend);
+      const secretKey = envGroupSecretKey(backend);
       const name = configString(data.name);
       const namePlaceholder = index === 0 ? "default" : `env-${index + 1}`;
-      const wireApi = "responses";
-      const envKey = configString(data.CODEX_ENV_KEY || data.env_key, "OPENAI_API_KEY");
-      const apiKeyValue = options.maskSecrets ? "" : configString(data.OPENAI_API_KEY);
-      const apiKeyPlaceholder = options.maskSecrets && configString(data.OPENAI_API_KEY)
+      const apiKeyValue = options.maskSecrets ? "" : configString(data[secretKey]);
+      const apiKeyPlaceholder = options.maskSecrets && configString(data[secretKey])
         ? "Configured; leave blank to keep"
         : "";
-      return `
-        <div class="bootstrap-env-group" data-bootstrap-row="codex.env">
-          <div class="bootstrap-env-group-head">
-            <strong>Env group</strong>
-            <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
-          </div>
-          <div class="bootstrap-env-fields">
-            <label class="field-label">
-              <span>Name</span>
-              <input data-bootstrap-env-name placeholder="${escapeHtml(namePlaceholder)}" value="${escapeHtml(name)}">
-            </label>
-            <label class="field-label">
-              <span>OpenAI-compatible base URL</span>
-              <input data-bootstrap-env-field="OPENAI_BASE_URL" placeholder="https://api.openai.com/v1" value="${escapeHtml(configString(data.OPENAI_BASE_URL))}">
-            </label>
-            <label class="field-label">
-              <span>Model</span>
-              <input data-bootstrap-env-field="OPENAI_MODEL" placeholder="gpt-5.5" value="${escapeHtml(configString(data.OPENAI_MODEL))}">
-            </label>
-            <label class="field-label">
-              <span>API key</span>
-              <input data-bootstrap-env-field="OPENAI_API_KEY" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
-            </label>
+      const codexExtraFields = backend === "codex" ? `
             <label class="field-label">
               <span>Wire API</span>
-              <select data-bootstrap-env-field="CODEX_WIRE_API">
-                <option value="responses" ${wireApi === "responses" ? "selected" : ""}>responses</option>
-              </select>
+              <input data-bootstrap-env-field="CODEX_WIRE_API" placeholder="responses" value="${escapeHtml(configString(data.CODEX_WIRE_API, "responses"))}">
             </label>
             <label class="field-label">
-              <span>Env key</span>
-              <input data-bootstrap-env-field="CODEX_ENV_KEY" placeholder="OPENAI_API_KEY" value="${escapeHtml(envKey)}">
+              <span>Key env</span>
+              <input data-bootstrap-env-field="CODEX_ENV_KEY" placeholder="OPENAI_API_KEY" value="${escapeHtml(configString(data.CODEX_ENV_KEY, "OPENAI_API_KEY"))}">
             </label>
-          </div>
-        </div>
-      `;
-    }
-    if (kind === "claude.env") {
-      const name = configString(data.name);
-      const namePlaceholder = index === 0 ? "default" : `env-${index + 1}`;
-      const apiKeyValue = options.maskSecrets ? "" : configString(data.ANTHROPIC_API_KEY);
-      const apiKeyPlaceholder = options.maskSecrets && configString(data.ANTHROPIC_API_KEY)
-        ? "Configured; leave blank to keep"
-        : "";
+      ` : "";
       return `
-        <div class="bootstrap-env-group" data-bootstrap-row="claude.env">
+        <div class="bootstrap-env-group" data-bootstrap-row="${escapeHtml(kind)}">
           <div class="bootstrap-env-group-head">
-            <strong>Env group</strong>
+            <strong>${backend === "codex" ? "Provider group" : "Env group"}</strong>
             <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
           </div>
           <div class="bootstrap-env-fields">
@@ -290,16 +256,17 @@
             </label>
             <label class="field-label">
               <span>Base URL</span>
-              <input data-bootstrap-env-field="ANTHROPIC_BASE_URL" placeholder="https://api.anthropic.com" value="${escapeHtml(configString(data.ANTHROPIC_BASE_URL))}">
+              <input data-bootstrap-env-field="${escapeHtml(baseUrlKey)}" placeholder="${backend === "codex" ? "https://api.example.com/v1" : "https://api.anthropic.com"}" value="${escapeHtml(configString(data[baseUrlKey]))}">
             </label>
             <label class="field-label">
               <span>Model</span>
-              <input data-bootstrap-env-field="ANTHROPIC_MODEL" placeholder="claude-sonnet-4-5" value="${escapeHtml(configString(data.ANTHROPIC_MODEL))}">
+              <input data-bootstrap-env-field="${escapeHtml(modelKey)}" placeholder="${backend === "codex" ? "model-name" : "claude-sonnet-4-5"}" value="${escapeHtml(configString(data[modelKey]))}">
             </label>
             <label class="field-label">
               <span>API key</span>
-              <input data-bootstrap-env-field="ANTHROPIC_API_KEY" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
+              <input data-bootstrap-env-field="${escapeHtml(secretKey)}" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
             </label>
+            ${codexExtraFields}
           </div>
         </div>
       `;
@@ -363,19 +330,19 @@
             <label class="field-label">
               <span>Model</span>
               <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codex.model || envModelValue(codex.env_active), options)}</select>
-              <div class="field-help">Official Codex model or custom OpenAI-compatible provider model.</div>
+              <div class="field-help">Official Codex model or custom OpenAI-compatible provider.</div>
             </label>
           </div>
           <div class="bootstrap-config-grid">
             ${bootstrapProxyFieldsHtml("codex", codexProxy)}
           </div>
           <label class="field-label">
-            <span>Env groups</span>
+            <span>Provider groups</span>
             <div class="bootstrap-config-list" data-bootstrap-config-list="codex.env">
-              ${bootstrapCodexEnvRows(codex.env, { maskSecrets })}
-              <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="codex.env">Add env group</button>
+              ${bootstrapEnvRows(codex.env, codex.env_active, { maskSecrets }, "codex")}
+              <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="codex.env">Add provider group</button>
             </div>
-            <div class="field-help">Codex CLI currently requires OpenAI Responses-compatible providers; Chat Completions-only endpoints are not supported.</div>
+            <div class="field-help">Each group becomes a custom Codex model option using Codex provider override.</div>
           </label>
         </details>
         <details class="bootstrap-config-section">
@@ -432,16 +399,16 @@
   }
 
   function previousBootstrapEnvGroup(index, name, backend = "claude", config = {}) {
-    const groups = backend === "codex" ? bootstrapCodexEnvGroups(config?.codex?.env) : bootstrapEnvGroups(config?.claude?.env);
+    const groups = bootstrapEnvGroups(config?.[backend]?.env, backend);
     const named = groups.find(group => configString(group.name) === name);
     return named || groups[index] || {};
   }
 
   function bootstrapConfigEnvGroups(form, backend = "claude", context = {}) {
     const preserveSecrets = bootstrapConfigMode(form) === "settings";
-    const fields = backend === "codex" ? codexEnvGroupFields : claudeEnvGroupFields;
-    const secretKey = backend === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-    const modelKey = backend === "codex" ? "OPENAI_MODEL" : "ANTHROPIC_MODEL";
+    const fields = envGroupFieldsForBackend(backend);
+    const secretKey = envGroupSecretKey(backend);
+    const modelKey = envGroupModelKey(backend);
     const config = context.config || {};
     return [...form.querySelectorAll(`[data-bootstrap-row='${backend}.env']`)]
       .map((row, index) => {
@@ -560,21 +527,21 @@
           https_proxy: bootstrapConfigText(form, "claude.proxy.https_proxy"),
           no_proxy: bootstrapConfigText(form, "claude.proxy.no_proxy")
         }
-      }
+      },
+      integrations: config.integrations || {}
     };
     if (bootstrapConfigMode(form) === "settings") body.force = true;
     return body;
   }
 
   window.AHABootstrapConfig = Object.freeze({
-    claudeEnvModelPrefix,
     codexEnvGroupFields,
+    claudeEnvModelPrefix,
     claudeEnvGroupFields,
     configString,
     configListValues,
     bootstrapBackendOptions,
     bootstrapEnvGroups,
-    bootstrapCodexEnvGroups,
     bootstrapEnvGroupName,
     bootstrapConfigFormHtml,
     bootstrapConfigMode,

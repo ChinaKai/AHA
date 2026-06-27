@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
 import json
 import os
 from pathlib import Path
-import hashlib
 import re
 import shlex
 import subprocess
 import sys
 
 from aha_cli.backends.registry import normalize_model_selector, resolve_model
+from aha_cli.backends.codex_litellm_bridge import start_litellm_responses_bridge
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.output_artifacts import save_command_output_artifact
@@ -26,17 +27,31 @@ CONTEXT_OVERFLOW_MARKERS = (
     "too many tokens",
     "prompt is too long",
 )
+CODEX_ENV_MODEL_PREFIX = "env:"
+CODEX_PROVIDER_OVERRIDE_KEY = "_provider_override"
+CODEX_PROVIDER_DEFAULT_WIRE_API = "responses"
+CODEX_DISABLE_ENV_KEY = "_aha_disable_env"
+CODEX_LITELLM_RESPONSES_BRIDGE_KEY = "_litellm_responses_bridge"
+CODEX_ENV_GROUP_FIELDS = (
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "OPENAI_API_KEY",
+    "CODEX_WIRE_API",
+    "CODEX_ENV_KEY",
+)
 CODEX_CONFIG_ENV_ALIASES = {
     "api_key": "OPENAI_API_KEY",
+    "auth_token": "OPENAI_API_KEY",
     "base_url": "OPENAI_BASE_URL",
-    "env_key": "CODEX_ENV_KEY",
+    "api_url": "OPENAI_BASE_URL",
     "model": "OPENAI_MODEL",
     "wire_api": "CODEX_WIRE_API",
+    "env_key": "CODEX_ENV_KEY",
+    "anthropic_api_key": "OPENAI_API_KEY",
+    "anthropic_auth_token": "OPENAI_API_KEY",
+    "anthropic_base_url": "OPENAI_BASE_URL",
+    "anthropic_model": "OPENAI_MODEL",
 }
-CODEX_ENV_GROUP_FIELDS = ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY")
-CODEX_ENV_MODEL_PREFIX = "env:"
-CODEX_PROVIDER_DEFAULT_WIRE_API = "responses"
-CODEX_PROVIDER_WIRE_APIS = {"responses"}
 
 
 def tail_text(value: str, limit: int = OUTPUT_TAIL_LIMIT) -> str:
@@ -69,65 +84,43 @@ def codex_env_group_from_model(model: str | None) -> str | None:
     return name or None
 
 
-def _normalize_codex_env_key(key: str) -> str | None:
-    cleaned = key.strip()
-    if not cleaned:
-        return None
-    alias = CODEX_CONFIG_ENV_ALIASES.get(cleaned.lower())
-    if alias:
-        return alias
-    upper = cleaned.upper()
-    if upper.startswith("OPENAI_"):
-        return upper
-    return None
-
-
 def codex_config_env(codex_config: dict | None) -> dict[str, str]:
-    group = codex_selected_env_group(codex_config)
-    env: dict[str, str] = {}
-    api_key = str(group.get("OPENAI_API_KEY") or group.get("api_key") or "").strip()
-    if api_key:
-        env[codex_provider_env_key(codex_config)] = api_key
-    return env
-
-
-def codex_selected_env_group(codex_config: dict | None) -> dict:
-    if not isinstance(codex_config, dict):
+    group = codex_active_env_group(codex_config)
+    if not group:
         return {}
-    configured = codex_config.get("env")
-    if isinstance(configured, list):
-        active_configured = "env_active" in codex_config
-        active = str(codex_config.get("env_active") or "").strip()
-        if active_configured and not active:
-            configured = {}
-        else:
-            groups = [item for item in configured if isinstance(item, dict)]
-            selected = next((item for item in groups if active and str(item.get("name") or "").strip() == active), None)
-            selected_group = selected or (groups[0] if groups else {})
-            configured = {"name": selected_group.get("name")}
-            configured.update({key: selected_group.get(key) for key in CODEX_ENV_GROUP_FIELDS})
-    elif not isinstance(configured, dict):
-        configured = {}
-    return configured
+    api_key = _codex_group_value(group, "OPENAI_API_KEY")
+    env_key = _codex_group_value(group, "CODEX_ENV_KEY") or "OPENAI_API_KEY"
+    env: dict[str, str] = {}
+    if api_key:
+        env[env_key] = api_key
+        if env_key != "OPENAI_API_KEY":
+            env["OPENAI_API_KEY"] = api_key
+    return env
 
 
 def codex_config_for_model(codex_config: dict | None, model: str | None) -> dict:
     cfg = dict(codex_config or {})
+    if cfg.get(CODEX_PROVIDER_OVERRIDE_KEY):
+        return cfg
     model = normalize_model_selector("codex", model, {"codex": cfg})
     env_group = codex_env_group_from_model(model)
     if env_group:
         cfg["env_active"] = env_group
-    elif str(model or "").strip():
+        provider = codex_provider_override_from_env_group(cfg)
+        if provider:
+            cfg[CODEX_PROVIDER_OVERRIDE_KEY] = provider
+    elif codex_cli_model(cfg, model):
         cfg["env_active"] = None
+        cfg[CODEX_DISABLE_ENV_KEY] = True
     return cfg
 
 
 def codex_cli_model(codex_config: dict | None, model: str | None) -> str | None:
     model = normalize_model_selector("codex", model, {"codex": codex_config or {}})
-    env_group = codex_env_group_from_model(model)
-    if env_group:
-        group = codex_selected_env_group(codex_config_for_model(codex_config, model))
-        return str(group.get("OPENAI_MODEL") or group.get("model") or "").strip() or None
+    if codex_env_group_from_model(model):
+        group = codex_active_env_group(codex_config_for_model(codex_config, model))
+        group_model = _codex_group_value(group, "OPENAI_MODEL")
+        return group_model or None
     value = str(model or "").strip()
     return value or None
 
@@ -141,43 +134,211 @@ def apply_codex_environment(env: dict[str, str], codex_config: dict | None = Non
     return env
 
 
+def _normalize_codex_env_key(key: str) -> str | None:
+    cleaned = key.strip()
+    if not cleaned:
+        return None
+    alias = CODEX_CONFIG_ENV_ALIASES.get(cleaned.lower())
+    if alias:
+        return alias
+    upper = cleaned.upper()
+    if upper in CODEX_ENV_GROUP_FIELDS or upper.startswith(("OPENAI_", "CODEX_")):
+        return upper
+    if upper.startswith("ANTHROPIC_"):
+        return CODEX_CONFIG_ENV_ALIASES.get(upper.lower())
+    return None
+
+
+def _codex_group_value(group: dict | None, canonical_key: str) -> str:
+    if not isinstance(group, dict):
+        return ""
+    for raw_key, raw_value in group.items():
+        if _normalize_codex_env_key(str(raw_key)) == canonical_key:
+            value = str(raw_value or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _codex_responses_base_url(base_url: str) -> str:
+    value = str(base_url or "").strip()
+    trimmed = value.rstrip("/")
+    match = re.fullmatch(r"(https?://api\.minimax(?:i\.com|\.io))/anthropic", trimmed)
+    if match:
+        return f"{match.group(1)}/v1"
+    return value
+
+
+def _kimi_coding_base_url(base_url: str) -> str:
+    value = str(base_url or "").strip()
+    trimmed = value.rstrip("/")
+    if re.fullmatch(r"https?://api\.kimi\.com/coding(?:/v1)?", trimmed):
+        scheme = trimmed.split("://", 1)[0]
+        return f"{scheme}://api.kimi.com/coding/v1"
+    return ""
+
+
+def _kimi_coding_upstream_model(model: str) -> str:
+    value = str(model or "").strip()
+    if value == "kimi-for-coding":
+        return value
+    if value.lower().startswith("kimi-"):
+        return "kimi-for-coding"
+    return value or "kimi-for-coding"
+
+
+def _codex_litellm_responses_bridge(base_url: str, model: str) -> dict:
+    kimi_base_url = _kimi_coding_base_url(base_url)
+    if not kimi_base_url:
+        return {}
+    client_model = str(model or "").strip() or "kimi-for-coding"
+    return {
+        "provider": "kimi",
+        "upstream_base_url": kimi_base_url,
+        "upstream_model": _kimi_coding_upstream_model(client_model),
+        "client_model": client_model,
+        "display_name": f"{client_model} via AHA Kimi bridge",
+        "context_window": 262144,
+        "max_output_tokens": 32768,
+    }
+
+
+def _codex_env_groups(codex_config: dict | None) -> list[dict]:
+    if not isinstance(codex_config, dict):
+        return []
+    configured = codex_config.get("env")
+    if isinstance(configured, dict):
+        return [configured]
+    if isinstance(configured, list):
+        return [item for item in configured if isinstance(item, dict)]
+    return []
+
+
+def codex_active_env_group(codex_config: dict | None) -> dict:
+    if not isinstance(codex_config, dict) or codex_config.get(CODEX_DISABLE_ENV_KEY):
+        return {}
+    groups = _codex_env_groups(codex_config)
+    if not groups:
+        return {}
+    active_configured = "env_active" in codex_config
+    active = str(codex_config.get("env_active") or "").strip()
+    if active_configured and not active:
+        return {}
+    selected = next((item for item in groups if active and str(item.get("name") or "").strip() == active), None)
+    return selected or (groups[0] if not active_configured else {})
+
+
+def _safe_codex_provider_id(name: str, base_url: str) -> str:
+    seed = f"{name}\0{base_url}"
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", name.strip().lower()).strip("_")
+    if slug and not slug[0].isdigit():
+        return f"aha_codex_{slug}_{digest}"[:63]
+    return f"aha_codex_env_{digest}"
+
+
+def codex_provider_override_from_env_group(codex_config: dict | None) -> dict:
+    group = codex_active_env_group(codex_config)
+    if not group:
+        return {}
+    raw_base_url = _codex_group_value(group, "OPENAI_BASE_URL")
+    base_url = _codex_responses_base_url(raw_base_url)
+    model = _codex_group_value(group, "OPENAI_MODEL")
+    if not base_url or not model:
+        return {}
+    bridge = _codex_litellm_responses_bridge(raw_base_url, model)
+    if bridge:
+        base_url = bridge["upstream_base_url"]
+    name = str(group.get("name") or model or "Codex provider").strip()
+    env_key = _codex_group_value(group, "CODEX_ENV_KEY") or "OPENAI_API_KEY"
+    provider = {
+        "provider_id": _safe_codex_provider_id(name, base_url),
+        "name": name,
+        "base_url": base_url,
+        "wire_api": _codex_group_value(group, "CODEX_WIRE_API") or CODEX_PROVIDER_DEFAULT_WIRE_API,
+        "requires_openai_auth": False,
+        "env_key": env_key,
+    }
+    if bridge:
+        provider[CODEX_LITELLM_RESPONSES_BRIDGE_KEY] = bridge
+    return provider
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(str(value))
 
 
-def codex_provider_id(codex_config: dict | None) -> str:
-    group = codex_selected_env_group(codex_config)
-    name = str(group.get("name") or "custom").strip()
-    base_url = str(group.get("OPENAI_BASE_URL") or group.get("base_url") or "").strip()
-    digest = hashlib.sha256(f"{name}\0{base_url}".encode("utf-8")).hexdigest()[:10]
-    return f"aha_codex_env_{digest}"
+def _toml_bool(value: object) -> str:
+    return "true" if bool(value) else "false"
 
 
-def codex_provider_wire_api(codex_config: dict | None) -> str:
-    group = codex_selected_env_group(codex_config)
-    value = str(group.get("CODEX_WIRE_API") or group.get("wire_api") or CODEX_PROVIDER_DEFAULT_WIRE_API).strip().lower()
-    return value if value in CODEX_PROVIDER_WIRE_APIS else CODEX_PROVIDER_DEFAULT_WIRE_API
+def _provider_override(codex_config: dict | None) -> dict:
+    if not isinstance(codex_config, dict):
+        return {}
+    value = codex_config.get(CODEX_PROVIDER_OVERRIDE_KEY)
+    return value if isinstance(value, dict) else {}
 
 
-def codex_provider_env_key(codex_config: dict | None) -> str:
-    group = codex_selected_env_group(codex_config)
-    value = str(group.get("CODEX_ENV_KEY") or group.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
-    value = value.upper()
-    if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", value):
-        return "OPENAI_API_KEY"
-    return value
+def _provider_litellm_bridge(codex_config: dict | None) -> dict:
+    bridge = _provider_override(codex_config).get(CODEX_LITELLM_RESPONSES_BRIDGE_KEY)
+    return bridge if isinstance(bridge, dict) else {}
+
+
+def codex_litellm_responses_bridge_config(codex_config: dict | None, model: str | None = None) -> dict:
+    cfg = codex_config_for_model(codex_config, model)
+    return _provider_litellm_bridge(cfg)
+
+
+def _codex_config_with_bridge_base_url(codex_config: dict | None, base_url: str) -> dict:
+    cfg = dict(codex_config or {})
+    provider = dict(_provider_override(cfg))
+    provider["base_url"] = str(base_url or "").strip()
+    cfg[CODEX_PROVIDER_OVERRIDE_KEY] = provider
+    return cfg
+
+
+def _codex_bridge_api_key(codex_config: dict | None, bridge: dict) -> str:
+    env = codex_config_env(codex_config)
+    env_key = str(_provider_override(codex_config).get("env_key") or "").strip()
+    bridge_env_key = str(bridge.get("env_key") or "").strip()
+    for key in (bridge_env_key, env_key, "OPENAI_API_KEY"):
+        if key and env.get(key):
+            return env[key]
+    return ""
+
+
+def codex_config_with_provider_override(
+    codex_config: dict | None,
+    *,
+    provider_id: str,
+    name: str,
+    base_url: str,
+    wire_api: str = CODEX_PROVIDER_DEFAULT_WIRE_API,
+    requires_openai_auth: bool = False,
+    env_key: str | None = None,
+) -> dict:
+    cfg = codex_config_for_model(codex_config, None)
+    cfg[CODEX_PROVIDER_OVERRIDE_KEY] = {
+        "provider_id": str(provider_id or "aha_provider").strip() or "aha_provider",
+        "name": str(name or provider_id or "AHA provider").strip() or "AHA provider",
+        "base_url": str(base_url or "").strip(),
+        "wire_api": str(wire_api or CODEX_PROVIDER_DEFAULT_WIRE_API).strip() or CODEX_PROVIDER_DEFAULT_WIRE_API,
+        "requires_openai_auth": bool(requires_openai_auth),
+    }
+    if env_key:
+        cfg[CODEX_PROVIDER_OVERRIDE_KEY]["env_key"] = str(env_key).strip()
+    return cfg
 
 
 def codex_config_overrides(codex_config: dict | None) -> list[str]:
-    group = codex_selected_env_group(codex_config)
-    base_url = str(group.get("OPENAI_BASE_URL") or group.get("base_url") or "").strip()
-    api_key = str(group.get("OPENAI_API_KEY") or group.get("api_key") or "").strip()
+    provider = _provider_override(codex_config)
+    base_url = str(provider.get("base_url") or "").strip()
     if not base_url:
         return []
-    provider_id = codex_provider_id(codex_config)
-    name = str(group.get("name") or provider_id).strip() or provider_id
-    env_key = codex_provider_env_key(codex_config)
-    args = [
+    provider_id = str(provider.get("provider_id") or "aha_provider").strip() or "aha_provider"
+    name = str(provider.get("name") or provider_id).strip() or provider_id
+    wire_api = str(provider.get("wire_api") or CODEX_PROVIDER_DEFAULT_WIRE_API).strip() or CODEX_PROVIDER_DEFAULT_WIRE_API
+    overrides = [
         "-c",
         f"model_provider={_toml_string(provider_id)}",
         "-c",
@@ -185,18 +346,14 @@ def codex_config_overrides(codex_config: dict | None) -> list[str]:
         "-c",
         f"model_providers.{provider_id}.base_url={_toml_string(base_url)}",
         "-c",
-        f"model_providers.{provider_id}.wire_api={_toml_string(codex_provider_wire_api(codex_config))}",
+        f"model_providers.{provider_id}.wire_api={_toml_string(wire_api)}",
         "-c",
-        f"model_providers.{provider_id}.requires_openai_auth=false",
+        f"model_providers.{provider_id}.requires_openai_auth={_toml_bool(provider.get('requires_openai_auth'))}",
     ]
-    if api_key:
-        args.extend(
-            [
-                "-c",
-                f"model_providers.{provider_id}.env_key={_toml_string(env_key)}",
-            ]
-        )
-    return args
+    env_key = str(provider.get("env_key") or "").strip()
+    if env_key:
+        overrides.extend(["-c", f"model_providers.{provider_id}.env_key={_toml_string(env_key)}"])
+    return overrides
 
 
 def handle_codex_event(
@@ -363,36 +520,44 @@ def run_codex_exec(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     requested_model = session.get("requested_model") if session is not None and "requested_model" in session else model
     codex_config = codex_config_for_model(codex_config, model)
-    model = codex_resolved_model(codex_config, model)
-    if session is not None:
-        session["requested_model"] = requested_model
-        session["resolved_model"] = model
-        session["model"] = model
-    session_id = session.get("backend_session_id") if session else None
-    cmd = build_codex_exec_command(
-        codex_bin=codex_bin,
-        model=model,
-        approval=approval,
-        sandbox=sandbox,
-        cwd=cwd,
-        output_file=output_file,
-        json_events=json_events,
-        session_id=session_id,
-        config_overrides=codex_config_overrides(codex_config),
-    )
-    for raw in extra_args or []:
-        insert_at = -1 if cmd[-1] == "-" else len(cmd)
-        for part in shlex.split(raw):
-            cmd.insert(insert_at, part)
-            insert_at += 1
-
-    env = os.environ.copy()
-    add_user_backend_paths(env)
-    apply_codex_environment(env, codex_config)
-    apply_proxy_environment(env, proxy_env)
-
-    print(f"Running Codex backend: {' '.join(shlex.quote(part) for part in cmd[:-1])} -", flush=True)
+    bridge_runtime = None
     try:
+        bridge_config = _provider_litellm_bridge(codex_config)
+        if bridge_config:
+            bridge_runtime = start_litellm_responses_bridge(
+                bridge_config=bridge_config,
+                api_key=_codex_bridge_api_key(codex_config, bridge_config),
+            ).__enter__()
+            codex_config = _codex_config_with_bridge_base_url(codex_config, bridge_runtime.base_url)
+        model = codex_resolved_model(codex_config, model)
+        if session is not None:
+            session["requested_model"] = requested_model
+            session["resolved_model"] = model
+            session["model"] = model
+        session_id = session.get("backend_session_id") if session else None
+        cmd = build_codex_exec_command(
+            codex_bin=codex_bin,
+            model=model,
+            approval=approval,
+            sandbox=sandbox,
+            cwd=cwd,
+            output_file=output_file,
+            json_events=json_events,
+            session_id=session_id,
+            config_overrides=codex_config_overrides(codex_config),
+        )
+        for raw in extra_args or []:
+            insert_at = -1 if cmd[-1] == "-" else len(cmd)
+            for part in shlex.split(raw):
+                cmd.insert(insert_at, part)
+                insert_at += 1
+
+        env = os.environ.copy()
+        add_user_backend_paths(env)
+        apply_codex_environment(env, codex_config)
+        apply_proxy_environment(env, proxy_env)
+
+        print(f"Running Codex backend: {' '.join(shlex.quote(part) for part in cmd[:-1])} -", flush=True)
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
@@ -404,9 +569,39 @@ def run_codex_exec(
             bufsize=1,
             start_new_session=start_new_session,
         )
+        if event_callback:
+            event_callback(
+                "backend_process_started",
+                {"pid": process.pid, "process_group": process.pid if start_new_session else None},
+            )
+        assert process.stdin is not None
+        assert process.stdout is not None
+        try:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+        for raw_line in process.stdout:
+            print(raw_line, end="", flush=True)
+            line = raw_line.strip()
+            handle_codex_event(
+                line,
+                events_file=events_file,
+                run_id=run_id,
+                task_id=task_id,
+                source=source,
+                target=target,
+                session=session,
+            )
+            if event_callback:
+                for event_type, event_data in codex_callback_events(line):
+                    event_callback(event_type, event_data)
+        exit_code = process.wait()
+        final_text = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
+        return exit_code, final_text, session
     except OSError as exc:
         exit_code = 127 if isinstance(exc, FileNotFoundError) else 1
-        binary = exc.filename or cmd[0]
+        binary = exc.filename or codex_bin
         message = f"Failed to start Codex backend command `{binary}`: {exc.strerror or exc}"
         append_event_to_file(
             events_file,
@@ -416,36 +611,9 @@ def run_codex_exec(
         )
         output_file.write_text(message, encoding="utf-8")
         return exit_code, message, session
-    if event_callback:
-        event_callback(
-            "backend_process_started",
-            {"pid": process.pid, "process_group": process.pid if start_new_session else None},
-        )
-    assert process.stdin is not None
-    assert process.stdout is not None
-    try:
-        process.stdin.write(prompt)
-        process.stdin.close()
-    except BrokenPipeError:
-        pass
-    for raw_line in process.stdout:
-        print(raw_line, end="", flush=True)
-        line = raw_line.strip()
-        handle_codex_event(
-            line,
-            events_file=events_file,
-            run_id=run_id,
-            task_id=task_id,
-            source=source,
-            target=target,
-            session=session,
-        )
-        if event_callback:
-            for event_type, event_data in codex_callback_events(line):
-                event_callback(event_type, event_data)
-    exit_code = process.wait()
-    final_text = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
-    return exit_code, final_text, session
+    finally:
+        if bridge_runtime is not None:
+            bridge_runtime.__exit__(None, None, None)
 
 
 def build_codex_exec_command(

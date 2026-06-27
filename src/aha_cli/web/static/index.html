@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=overlays-content">
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=token-ledger-v10">
+  <link rel="stylesheet" href="/static/styles.css?v=token-saving-v5">
 </head>
 <body>
   <header>
@@ -109,26 +109,28 @@
                   <button id="web-upgrade" class="button-ghost" type="button" data-i18n="run.upgrade_web">Upgrade</button>
                 </div>
                 <div id="web-restart-state" class="meta" aria-live="polite"></div>
-                <div id="settings-dialog" class="settings-popover" aria-labelledby="settings-title" hidden>
-                  <div class="settings-popover-head">
-                    <div>
-                      <h2 id="settings-title" data-i18n="settings.title">AHA Settings</h2>
-                      <p data-i18n="settings.description">Edit the global `.aha/config.json` defaults used by new runs and agents.</p>
-                    </div>
-                    <button id="close-settings" class="settings-popover-close" type="button" data-i18n="common.close">Close</button>
+              </div>
+              <div id="settings-dialog" class="settings-popover" aria-labelledby="settings-title" hidden>
+                <div class="settings-popover-head">
+                  <div>
+                    <h2 id="settings-title" data-i18n="settings.title">AHA Settings</h2>
+                    <p data-i18n="settings.description">Edit the global `.aha/config.json` defaults used by new runs and agents.</p>
                   </div>
-                  <div id="settings-content"></div>
+                  <button id="close-settings" class="settings-popover-close" type="button" data-i18n="common.close">Close</button>
                 </div>
+                <div id="settings-content"></div>
               </div>
               <div class="run-actions-section run-actions-section-secondary run-integrations-section">
                 <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
                 <div class="web-service-actions">
                   <button id="skills-console" class="button-ghost" type="button" aria-controls="skills-console-popover" aria-expanded="false" data-i18n="skills.title">Skills</button>
+                  <button id="headroom-integration" class="button-ghost" type="button" aria-controls="headroom-integration-popover" aria-expanded="false" data-i18n="headroom.title">Headroom</button>
                   <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
                   <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
                   <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
                 </div>
                 <div id="skills-console-popover" class="skills-console-popover" hidden></div>
+                <div id="headroom-integration-popover" class="headroom-integration-popover" hidden></div>
                 <div id="token-usage-popover" class="token-usage-popover" hidden></div>
                 <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
                 <div id="play-console-popover" class="play-console-popover" hidden></div>
@@ -237,19 +239,16 @@
               <div id="task-supervision-state" class="meta"></div>
             </form>
           </section>
-          <section id="task-context-editor" class="task-detail-section task-context-editor">
-            <h3 data-i18n="task.context_management">Context management</h3>
-            <form id="task-context-form" class="context-form">
+          <section id="task-token-saving-editor" class="task-detail-section task-token-saving-editor">
+            <h3 data-i18n="task.token_saving">Token saving</h3>
+            <form id="task-token-saving-form" class="context-form">
               <label class="checkbox-line">
-                <input id="selected-task-context-auto-compact-enabled" type="checkbox">
-                <span data-i18n="task.context_auto">Agent context auto compact</span>
+                <input id="selected-task-token-saving-enabled" type="checkbox">
+                <span data-i18n="task.token_saving_headroom">Use Headroom for this task</span>
               </label>
-              <label id="selected-task-context-threshold-field" class="field-label" hidden>
-                <span data-i18n="task.context_threshold">Trigger percent</span>
-                <input id="selected-task-context-threshold" type="number" min="1" max="99" value="75">
-              </label>
-              <button type="submit" data-i18n="task.context_save">Save Context</button>
-              <div id="task-context-state" class="meta"></div>
+              <div class="field-help" data-i18n="task.token_saving_help">Requires Headroom integration and applies to Codex agents for this task.</div>
+              <button type="submit" data-i18n="task.token_saving_save">Save Token Saving</button>
+              <div id="task-token-saving-state" class="meta"></div>
             </form>
           </section>
           <section id="task-skills-editor" class="task-detail-section task-skills-editor">
@@ -608,18 +607,14 @@
               <select id="task-model"></select>
             </label>
           </div>
-          <div class="field-row task-defaults-grid task-create-context-grid">
+          <div class="field-row task-defaults-grid task-create-token-saving-grid">
             <label class="field-label checkbox-field">
-              <span data-i18n="task.context_management">Context management</span>
+              <span data-i18n="task.token_saving">Token saving</span>
               <span class="checkbox-line">
-                <input id="task-context-auto-compact-enabled" type="checkbox">
-                <span data-i18n="task.context_auto">Agent context auto compact</span>
+                <input id="task-token-saving-enabled" type="checkbox">
+                <span data-i18n="task.token_saving_headroom">Use Headroom for this task</span>
               </span>
-              <div class="field-help" data-i18n="task.context_auto_help">Automatically compact and reset long backend sessions when they approach the context limit.</div>
-            </label>
-            <label id="task-context-threshold-field" class="field-label" hidden>
-              <span data-i18n="task.context_threshold">Trigger percent</span>
-              <input id="task-context-threshold" type="number" min="1" max="99" value="75" disabled>
+              <div class="field-help" data-i18n="task.token_saving_help">Requires Headroom integration and applies to Codex agents for this task.</div>
             </label>
           </div>
         </fieldset>
@@ -888,26 +883,26 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=usage-v7"></script>
+  <script src="/static/i18n.js?v=token-saving-v5"></script>
   <script src="/static/app_helpers.js"></script>
-  <script src="/static/task_metadata.js"></script>
-  <script src="/static/bootstrap_config.js"></script>
+  <script src="/static/task_metadata.js?v=token-saving-v5"></script>
+  <script src="/static/bootstrap_config.js?v=token-saving-v5"></script>
   <script src="/static/bootstrap_controller.js"></script>
-  <script src="/static/task_form.js"></script>
-  <script src="/static/task_config_controller.js"></script>
+  <script src="/static/task_form.js?v=token-saving-v5"></script>
+  <script src="/static/task_config_controller.js?v=token-saving-v5"></script>
   <script src="/static/run_metadata.js"></script>
   <script src="/static/run_lifecycle_view.js"></script>
   <script src="/static/run_maintenance.js"></script>
   <script src="/static/agent_metadata.js"></script>
   <script src="/static/task_list.js"></script>
-  <script src="/static/task_controller.js"></script>
+  <script src="/static/task_controller.js?v=token-saving-v5"></script>
   <script src="/static/agent_controller.js"></script>
-    <script src="/static/conversation_metadata.js"></script>
+    <script src="/static/conversation_metadata.js?v=token-saving-v5"></script>
     <script src="/static/conversation_state.js"></script>
     <script src="/static/conversation_panel.js?v=token-ledger-v10"></script>
     <script src="/static/conversation_controller.js?v=token-ledger-v10"></script>
     <script src="/static/compact_reset.js"></script>
-    <script src="/static/timeline_view.js"></script>
+    <script src="/static/timeline_view.js?v=token-saving-v5"></script>
     <script src="/static/optimistic_events.js"></script>
   <script src="/static/task_timing.js"></script>
   <script src="/static/selection_state.js"></script>
@@ -917,13 +912,14 @@
   <script src="/static/prompt_metrics_popover.js"></script>
   <script src="/static/api_client.js"></script>
   <script src="/static/token_usage.js?v=usage-v7"></script>
+  <script src="/static/headroom_integration.js?v=token-saving-v5"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>
   <script src="/static/skills_console.js"></script>
   <script src="/static/knowledge_entry.js"></script>
-  <script src="/static/runtime_config.js"></script>
-  <script src="/static/agent_config_controller.js"></script>
+  <script src="/static/runtime_config.js?v=codex-env-v1"></script>
+  <script src="/static/agent_config_controller.js?v=codex-env-v1"></script>
   <script src="/static/event_cursor_store.js"></script>
   <script src="/static/realtime_state.js"></script>
   <script src="/static/realtime_client.js"></script>
@@ -938,20 +934,20 @@
   <script src="/static/status_controller.js"></script>
   <script src="/static/run_actions.js"></script>
   <script src="/static/app_actions.js"></script>
-  <script src="/static/task_create_controller.js"></script>
+  <script src="/static/task_create_controller.js?v=token-saving-v5"></script>
   <script src="/static/textarea_image_paste.js"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/task_memo_controller.js"></script>
-  <script src="/static/settings_controller.js"></script>
-  <script src="/static/run_controller.js"></script>
+  <script src="/static/settings_controller.js?v=token-saving-v5"></script>
+  <script src="/static/run_controller.js?v=token-saving-v5"></script>
   <script src="/static/message_flow.js"></script>
   <script src="/static/render_scheduler.js"></script>
   <script src="/static/confirm_dialog.js"></script>
-  <script src="/static/controller_registry.js"></script>
-  <script src="/static/app_bridge.js"></script>
-  <script src="/static/app_controller_factory.js"></script>
-  <script src="/static/app_runtime_setup.js?v=token-ledger-v10"></script>
-  <script src="/static/app_runtime_wiring.js?v=token-ledger-v10"></script>
+  <script src="/static/controller_registry.js?v=token-saving-v5"></script>
+  <script src="/static/app_bridge.js?v=token-saving-v5"></script>
+  <script src="/static/app_controller_factory.js?v=token-saving-v5"></script>
+  <script src="/static/app_runtime_setup.js?v=token-saving-v5"></script>
+  <script src="/static/app_runtime_wiring.js?v=token-saving-v5"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

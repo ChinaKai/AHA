@@ -51,7 +51,7 @@
       elements.settingsContentEl.innerHTML = bootstrapConfigFormHtml({ mode: "settings", submitLabel: "Save Settings" });
     }
 
-    async function open() {
+    async function open(options = {}) {
       const panel = elements.settingsDialogEl;
       if (!panel) return;
       if (!deps.bootstrapData?.()) await deps.loadBootstrap?.();

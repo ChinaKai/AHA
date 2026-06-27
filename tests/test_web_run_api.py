@@ -186,7 +186,7 @@ class WebRunApiTests(unittest.TestCase):
                         "default_mode": "implementation",
                         "workspace_roots": [str(workspace_root)],
                         "codex": {
-                            "model": "env:openai",
+                            "model": "gpt-5.5",
                             "proxy": {
                                 "enabled": True,
                                 "http_proxy": "http://codex.proxy:7890",
@@ -243,11 +243,21 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(cfg["codex"]["proxy"]["http_proxy"], "http://codex.proxy:7890")
         self.assertFalse(cfg["claude"]["proxy"]["enabled"])
         self.assertEqual(body["config"]["claude"]["proxy"]["https_proxy"], "http://claude.proxy:7890")
-        self.assertEqual(cfg["codex"]["model"], "env:openai")
+        self.assertEqual(cfg["codex"]["model"], "gpt-5.5")
         self.assertEqual(cfg["codex"]["env_active"], "openai")
-        self.assertEqual(cfg["codex"]["env"][0]["OPENAI_MODEL"], "gpt-5.5")
-        self.assertEqual(cfg["codex"]["env"][0]["CODEX_WIRE_API"], "responses")
-        self.assertEqual(cfg["codex"]["env"][0]["CODEX_ENV_KEY"], "OPENAI_API_KEY")
+        self.assertEqual(
+            cfg["codex"]["env"],
+            [
+                {
+                    "name": "openai",
+                    "OPENAI_BASE_URL": "https://openai.test/v1",
+                    "OPENAI_MODEL": "gpt-5.5",
+                    "OPENAI_API_KEY": "openai-key",
+                    "CODEX_WIRE_API": "responses",
+                    "CODEX_ENV_KEY": "OPENAI_API_KEY",
+                }
+            ],
+        )
         self.assertEqual(cfg["codex"]["sandbox"], "workspace-write")
         self.assertEqual(cfg["claude"]["model"], "env:work")
         self.assertEqual(cfg["claude"]["env_active"], "work")
@@ -272,6 +282,67 @@ class WebRunApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
         self.assertFalse((root / "config.json").exists())
+
+    def test_api_bootstrap_persists_headroom_integration_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "integrations": {
+                            "headroom": {
+                                "enabled": True,
+                                "package": "headroom-ai[proxy]",
+                                "command": "/opt/headroom/bin/headroom",
+                                "port": 8989,
+                                "mode": "cache",
+                                "network_proxy": "custom",
+                                "http_proxy": "http://proxy:7890",
+                                "https_proxy": "http://proxy:7890",
+                                "no_proxy": "internal.local",
+                                "ccr_enabled": True,
+                            }
+                        },
+                    },
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertTrue(cfg["integrations"]["headroom"]["enabled"])
+        self.assertEqual(cfg["integrations"]["headroom"]["command"], "/opt/headroom/bin/headroom")
+        self.assertEqual(cfg["integrations"]["headroom"]["port"], 8989)
+        self.assertEqual(cfg["integrations"]["headroom"]["mode"], "cache")
+        self.assertNotIn("network_proxy", cfg["integrations"]["headroom"])
+        self.assertNotIn("http_proxy", cfg["integrations"]["headroom"])
+        self.assertNotIn("https_proxy", cfg["integrations"]["headroom"])
+        self.assertNotIn("no_proxy", cfg["integrations"]["headroom"])
+        self.assertTrue(cfg["integrations"]["headroom"]["ccr_enabled"])
+
+    def test_api_headroom_integration_status_reports_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.headroom_integration.shutil.which",
+            return_value="/usr/bin/headroom",
+        ), mock.patch("aha_cli.services.headroom_integration._headroom_health", return_value=True):
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"headroom": {"enabled": True, "port": 8989}}}),
+                encoding="utf-8",
+            )
+            response = asyncio.run(fetch_ui_response(root, "", "/api/integrations/headroom"))
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["headroom"]["enabled"])
+        self.assertTrue(body["headroom"]["installed"])
+        self.assertTrue(body["headroom"]["running"])
+        self.assertEqual(body["headroom"]["port"], 8989)
 
     def test_api_bootstrap_can_select_official_claude_without_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

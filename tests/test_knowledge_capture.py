@@ -349,27 +349,19 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
     assert seen["proxy_env"] == {}
 
 
-def test_default_capture_agent_passes_codex_env_group_config(tmp_path: Path, monkeypatch):
+def test_default_capture_agent_passes_codex_runtime_config_without_env_group(tmp_path: Path, monkeypatch):
     from aha_cli.services.knowledge_capture_distill import default_capture_agent
 
     cfg = {
         "codex": {
             "bin": "/opt/codex/bin/codex",
-            "model": "env:openai",
+            "model": "gpt-5.5",
             "proxy": {
                 "enabled": True,
                 "http_proxy": "http://codex.proxy:7890",
                 "https_proxy": "http://codex.proxy:7890",
                 "no_proxy": "localhost,127.0.0.1",
             },
-            "env": [
-                {
-                    "name": "openai",
-                    "OPENAI_API_KEY": "openai-key",
-                    "OPENAI_BASE_URL": "https://openai.test/v1",
-                    "OPENAI_MODEL": "gpt-5.5",
-                }
-            ],
         }
     }
     seen = {}
@@ -379,17 +371,17 @@ def test_default_capture_agent_passes_codex_env_group_config(tmp_path: Path, mon
         return 0, _sidecar_reply(_ONE_CANDIDATE), None
 
     monkeypatch.setattr("aha_cli.backends.codex.run_codex_exec", fake_run)
-    reply = default_capture_agent({"prompt": "organize", "backend": "codex", "model": "env:openai", "config": cfg, "cwd": tmp_path})
+    reply = default_capture_agent({"prompt": "organize", "backend": "codex", "model": "gpt-5.5", "config": cfg, "cwd": tmp_path})
 
     assert "aha_knowledge_candidates" in reply
     assert seen["codex_bin"] == "/opt/codex/bin/codex"
-    assert seen["model"] == "env:openai"
-    assert seen["codex_config"]["env"][0]["OPENAI_API_KEY"] == "openai-key"
+    assert seen["model"] == "gpt-5.5"
+    assert "env" not in seen["codex_config"]
     assert seen["proxy_env"]["HTTP_PROXY"] == "http://codex.proxy:7890"
     assert seen["proxy_env"]["http_proxy"] == "http://codex.proxy:7890"
     assert seen["proxy_env"]["NO_PROXY"] == "localhost,127.0.0.1"
     seen.clear()
-    default_capture_agent({"prompt": "organize", "backend": "codex", "model": "env:openai", "proxy_enabled": False, "config": cfg, "cwd": tmp_path})
+    default_capture_agent({"prompt": "organize", "backend": "codex", "model": "gpt-5.5", "proxy_enabled": False, "config": cfg, "cwd": tmp_path})
     assert seen["proxy_env"] == {}
 
 

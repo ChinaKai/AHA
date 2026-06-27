@@ -434,18 +434,21 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrat
 }
 .session-menu.weixin-open,
 .session-menu.play-open,
+.session-menu.headroom-integration-open,
 .session-menu.skills-open,
 .session-menu.token-usage-open {
   overflow: visible;
 }
 body.settings-home .session-menu.weixin-open,
 body.settings-home .session-menu.play-open,
+body.settings-home .session-menu.headroom-integration-open,
 body.settings-home .session-menu.skills-open,
 body.settings-home .session-menu.token-usage-open {
   overflow: auto;
 }
 body.settings-home .session-menu.weixin-open .weixin-console-popover,
 body.settings-home .session-menu.play-open .play-console-popover,
+body.settings-home .session-menu.headroom-integration-open .headroom-integration-popover,
 body.settings-home .session-menu.skills-open .skills-console-popover,
 body.settings-home .session-menu.token-usage-open .token-usage-popover {
   position: static;
@@ -831,6 +834,19 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
 }
+.headroom-integration-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(78dvh, 720px);
+  overflow: auto;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
 .token-usage-popover {
   position: absolute;
   top: calc(100% + 8px);
@@ -843,6 +859,65 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
+.headroom-integration-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.headroom-integration-head,
+.headroom-config-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.headroom-integration-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.headroom-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.headroom-status-grid > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-muted);
+}
+.headroom-status-grid span {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.headroom-status-grid code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.headroom-config-form {
+  display: grid;
+  gap: 12px;
+}
+.headroom-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.headroom-config-advanced {
+  grid-column: 1 / -1;
+}
+.headroom-config-advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.headroom-config-advanced > .headroom-config-grid {
+  margin-top: 10px;
 }
 .settings-popover {
   display: grid;
@@ -893,6 +968,7 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
 .settings-popover,
 .weixin-console-popover,
 .play-console-popover,
+.headroom-integration-popover,
 .skills-console-popover,
 .token-usage-popover,
 .run-maintenance-popover {
@@ -914,6 +990,13 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   right: 0;
   width: min(420px, calc(100vw - 32px));
   max-height: min(calc(var(--app-viewport-height) - 96px), 560px);
+}
+.session-menu.headroom-integration-open .headroom-integration-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(calc(var(--app-viewport-height) - 96px), 720px);
 }
 .session-menu.skills-open .skills-console-popover {
   position: absolute;
@@ -938,6 +1021,7 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
 }
 .weixin-console-popover[hidden],
 .play-console-popover[hidden],
+.headroom-integration-popover[hidden],
 .skills-console-popover[hidden],
 .token-usage-popover[hidden],
 .settings-popover[hidden],
@@ -2367,6 +2451,7 @@ body.auth-required .login-view:not(.hidden) {
 .task-proxy-editor,
 .task-supervision-editor,
 .task-context-editor,
+.task-token-saving-editor,
 .task-skills-editor,
 .task-hardware-editor {
   background: var(--color-surface);
@@ -6007,6 +6092,12 @@ body.empty-run .panel {
     width: min(420px, calc(100vw - 430px));
     max-height: min(calc(var(--app-viewport-height) - 80px), 560px);
   }
+  .session-menu.headroom-integration-open .headroom-integration-popover {
+    top: 0;
+    right: calc(100% + 10px);
+    width: clamp(560px, calc(100vw - 430px), 720px);
+    max-height: min(calc(var(--app-viewport-height) - 80px), 720px);
+  }
   .session-menu.skills-open .skills-console-popover {
     top: 0;
     right: calc(100% + 10px);
@@ -6203,6 +6294,16 @@ body.empty-run .panel {
     max-height: none;
   }
   .session-menu.play-open .play-console-popover {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    z-index: 80;
+    width: auto;
+    max-height: none;
+  }
+  .session-menu.headroom-integration-open .headroom-integration-popover {
     position: fixed;
     top: 72px;
     right: 12px;
@@ -6717,11 +6818,14 @@ body.empty-run .panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .web-service-actions,
+  .headroom-status-grid,
+  .headroom-config-grid,
   .weixin-console-grid {
     grid-template-columns: 1fr;
   }
   .weixin-console-popover,
   .play-console-popover,
+  .headroom-integration-popover,
   .skills-console-popover,
   .token-usage-popover,
   .run-maintenance-popover {

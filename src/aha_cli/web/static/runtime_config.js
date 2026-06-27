@@ -96,38 +96,33 @@
     let backendCommands = new Map();
     let workspaceData = [];
 
-    function claudeEnvModelValue(name) {
+    function envModelValue(name) {
       const clean = configString(name).trim();
       return clean ? `${envModelPrefix}${clean}` : "";
     }
 
-    function isClaudeEnvModelValue(value) {
+    function isEnvModelValue(value) {
       return configString(value).startsWith(envModelPrefix);
     }
 
-    function claudeEnvModelName(value) {
-      if (!isClaudeEnvModelValue(value)) return "";
+    function envModelName(value) {
+      if (!isEnvModelValue(value)) return "";
       return configString(value).slice(envModelPrefix.length).trim();
     }
 
-    function claudeEnvModelLabel(group, index) {
+    function envModelLabel(backend, group, index) {
       const name = deps.bootstrapEnvGroupName?.(group, index) || "";
-      const model = configString(group?.ANTHROPIC_MODEL, "not configured");
+      const model = configString(backend === "codex" ? group?.OPENAI_MODEL : group?.ANTHROPIC_MODEL, "not configured");
       return `${model} (${name})`;
     }
 
-    function codexEnvModelValue(name) {
-      return claudeEnvModelValue(name);
-    }
-
-    function codexEnvModelName(value) {
-      return claudeEnvModelName(value);
-    }
-
-    function codexEnvModelLabel(group, index) {
-      const name = deps.bootstrapEnvGroupName?.(group, index) || "";
-      const model = configString(group?.OPENAI_MODEL, "not configured");
-      return `${model} (${name})`;
+    function envModelOptionsForBackend(backend) {
+      const cfg = deps.bootstrapConfigData?.();
+      const groups = deps.bootstrapEnvGroups?.(cfg?.[backend]?.env, backend) || [];
+      return groups.map((group, index) => ({
+        name: envModelValue(deps.bootstrapEnvGroupName?.(group, index)),
+        label: envModelLabel(backend, group, index)
+      })).filter(option => option.name);
     }
 
     function codexModelOptions() {
@@ -136,13 +131,7 @@
         name: configString(model.name),
         label: configString(model.label, model.name || "default")
       }));
-      const envOptions = (deps.bootstrapCodexEnvGroups?.(deps.bootstrapConfigData?.()?.codex?.env) || [])
-        .map((group, index) => ({
-          name: codexEnvModelValue(deps.bootstrapEnvGroupName?.(group, index)),
-          label: codexEnvModelLabel(group, index)
-        }))
-        .filter(option => option.name);
-      return [...officialOptions, ...envOptions];
+      return [...officialOptions, ...envModelOptionsForBackend("codex")];
     }
 
     function claudeModelOptions() {
@@ -151,13 +140,7 @@
         name: configString(model.name),
         label: configString(model.label, model.name || "default")
       }));
-      const envOptions = (deps.bootstrapEnvGroups?.(deps.bootstrapConfigData?.()?.claude?.env) || [])
-        .map((group, index) => ({
-          name: claudeEnvModelValue(deps.bootstrapEnvGroupName?.(group, index)),
-          label: claudeEnvModelLabel(group, index)
-        }))
-        .filter(option => option.name);
-      return [...officialOptions, ...envOptions];
+      return [...officialOptions, ...envModelOptionsForBackend("claude")];
     }
 
     function modelOptionsForBackend(backend) {
@@ -180,12 +163,12 @@
       if (backend === "claude") {
         const configured = configString(cfg?.claude?.model);
         const legacyEnv = configString(cfg?.claude?.env_active);
-        return configured || claudeEnvModelValue(legacyEnv);
+        return configured || envModelValue(legacyEnv);
       }
       if (backend === "codex") {
         const configured = configString(cfg?.codex?.model);
         const legacyEnv = configString(cfg?.codex?.env_active);
-        return configured || codexEnvModelValue(legacyEnv);
+        return configured || envModelValue(legacyEnv);
       }
       return "";
     }
@@ -299,12 +282,10 @@
       backendCommandsFor: backend => backendCommands.get(backend) || [],
       backendModels: () => backendModels,
       backendModelSelectOptions,
-      claudeEnvModelName,
-      claudeEnvModelValue,
+      claudeEnvModelName: envModelName,
+      claudeEnvModelValue: envModelValue,
       claudeModelOptions,
-      isClaudeEnvModelValue,
-      codexEnvModelName,
-      codexEnvModelValue,
+      isClaudeEnvModelValue: isEnvModelValue,
       codexModelOptions,
       defaultModelForBackend,
       fillModelSelect,

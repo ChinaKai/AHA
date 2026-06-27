@@ -146,7 +146,7 @@ class BackendRuntimeTests(unittest.TestCase):
         env = popen.call_args.kwargs["env"]
         command = popen.call_args.args[0]
         self.assertEqual(env["MINIMAX_API_KEY"], "work-key")
-        self.assertNotIn("OPENAI_BASE_URL", env)
+        self.assertEqual(env["OPENAI_API_KEY"], "work-key")
         self.assertIn("--model", command)
         self.assertEqual(command[command.index("--model") + 1], "env:openai")
         self.assertEqual(status["requested_model"], "env:openai")

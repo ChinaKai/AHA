@@ -30,6 +30,8 @@ from aha_cli.store.filesystem import (
 )
 from aha_cli.store.sessions import ensure_session, save_session
 from aha_cli.store.task_memos import create_task_memo
+from aha_cli.store.io import write_json
+from aha_cli.store.paths import config_path
 from aha_cli.web.server import handle_send_payload, workspace_options
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -86,6 +88,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertFalse(any(body["task"]["supervision"]["ask_user_gates"].values()))
         self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
+        self.assertFalse(body["task"]["token_saving"]["enabled"])
+        self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(status["tasks"][-1]["collaboration_mode"], "team")
         self.assertEqual(status["tasks"][-1]["workflow_template"], "fault-debug")
@@ -99,12 +103,15 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertIsNone(task_created["data"]["preferred_sub_model"])
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
-    def test_api_task_create_accepts_context_management_config(self) -> None:
+    def test_api_task_create_accepts_token_saving_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Task context create config", "--agents", "1")
+                cfg = read_json(config_path(root))
+                cfg.setdefault("integrations", {}).setdefault("headroom", {})["enabled"] = True
+                write_json(config_path(root), cfg)
+                code, plan_output = self.run_cli("plan", "Task token saving create config", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 response = asyncio.run(
@@ -114,11 +121,11 @@ class WebTaskApiTests(unittest.TestCase):
                         "/api/tasks",
                         method="POST",
                         payload={
-                            "title": "Context configured task",
+                            "title": "Token saving configured task",
                             "dispatch": False,
-                            "context_management": {
-                                "auto_compact_enabled": False,
-                                "auto_compact_threshold_percent": 82,
+                            "token_saving": {
+                                "enabled": True,
+                                "provider": "headroom",
                             },
                         },
                     )
@@ -127,9 +134,35 @@ class WebTaskApiTests(unittest.TestCase):
                 status = status_snapshot(root, run_id)
 
         self.assertTrue(body["ok"])
-        self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
-        self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 82)
-        self.assertEqual(status["tasks"][-1]["context_management"], body["task"]["context_management"])
+        self.assertTrue(body["task"]["token_saving"]["enabled"])
+        self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
+        self.assertEqual(status["tasks"][-1]["token_saving"], body["task"]["token_saving"])
+
+    def test_api_task_create_rejects_token_saving_when_headroom_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Task token saving disabled integration", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Token saving without headroom",
+                            "dispatch": False,
+                            "token_saving": {"enabled": True, "provider": "headroom"},
+                        },
+                    )
+                )
+                body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("Headroom integration must be enabled", body["error"])
 
     def test_api_task_create_and_update_accepts_hardware_debug_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1673,12 +1706,15 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["task"]["preferred_proxy_enabled"])
         self.assertEqual(body["proxy"]["http_proxy"], "http://proxy.local:8080")
 
-    def test_task_context_management_api_updates_existing_task(self) -> None:
+    def test_task_token_saving_api_updates_existing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("plan", "Context management API", "--agents", "1")
+                cfg = read_json(config_path(root))
+                cfg.setdefault("integrations", {}).setdefault("headroom", {})["enabled"] = True
+                write_json(config_path(root), cfg)
+                code, plan_output = self.run_cli("plan", "Token saving API", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
@@ -1686,11 +1722,11 @@ class WebTaskApiTests(unittest.TestCase):
                     fetch_ui_response(
                         root,
                         run_id,
-                        "/api/task/task-001/context-management",
+                        "/api/task/task-001/token-saving",
                         method="POST",
                         payload={
-                            "auto_compact_enabled": True,
-                            "auto_compact_threshold_percent": 82,
+                            "enabled": True,
+                            "provider": "headroom",
                         },
                     )
                 )
@@ -1699,9 +1735,37 @@ class WebTaskApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
-        self.assertTrue(body["task"]["context_management"]["auto_compact_enabled"])
-        self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 82)
-        self.assertEqual(snapshot["tasks"][0]["context_management"], body["task"]["context_management"])
+        self.assertTrue(body["task"]["token_saving"]["enabled"])
+        self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
+        self.assertEqual(snapshot["tasks"][0]["token_saving"], body["task"]["token_saving"])
+
+    def test_task_token_saving_api_rejects_enable_when_headroom_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Token saving disabled integration API", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/token-saving",
+                        method="POST",
+                        payload={
+                            "enabled": True,
+                            "provider": "headroom",
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                snapshot = status_snapshot(root, run_id)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("Headroom integration must be enabled", body["error"])
+        self.assertFalse(snapshot["tasks"][0]["token_saving"]["enabled"])
 
 
 if __name__ == "__main__":

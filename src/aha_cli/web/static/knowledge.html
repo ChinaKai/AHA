@@ -1874,8 +1874,10 @@
     }
     function captureEnvModelLabel(backendName, group, index) {
       const name = captureEnvGroupName(group, index);
-      const modelKey = backendName === "codex" ? "OPENAI_MODEL" : "ANTHROPIC_MODEL";
-      const model = configString(group?.[modelKey] || group?.model, "not configured");
+      const model = configString(
+        backendName === "codex" ? (group?.OPENAI_MODEL || group?.ANTHROPIC_MODEL || group?.model) : (group?.ANTHROPIC_MODEL || group?.model),
+        "not configured"
+      );
       return `${model} (${name})`;
     }
     function captureModelOptions(backendName) {
@@ -1884,15 +1886,17 @@
         name: configString(m.name),
         label: configString(m.label, m.name || "default"),
       }));
-      const env = captureEnvGroups(backendName).map((group, index) => {
+      const env = ["codex", "claude"].includes(backendName) ? captureEnvGroups(backendName).map((group, index) => {
         const name = captureEnvGroupName(group, index);
         return { name: captureEnvModelValue(name), label: captureEnvModelLabel(backendName, group, index) };
-      }).filter((m) => m.name);
+      }).filter((m) => m.name) : [];
       return official.concat(env);
     }
     function captureDefaultModel(backendName) {
       const cfg = state.captureConfig?.[backendName] || {};
-      return configString(cfg.model) || captureEnvModelValue(cfg.env_active);
+      if (backendName === "claude") return configString(cfg.model) || captureEnvModelValue(cfg.env_active);
+      if (backendName === "codex") return configString(cfg.model) || captureEnvModelValue(cfg.env_active);
+      return configString(cfg.model);
     }
     function captureDefaultProxyEnabled(backendName) {
       const backendProxy = state.captureConfig?.[backendName]?.proxy || {};

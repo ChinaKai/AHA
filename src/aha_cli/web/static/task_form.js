@@ -8,13 +8,12 @@
       : defaultTaskContextThresholdPercent;
   }
 
-  function taskContextConfirmLabel(payload) {
-    const policy = payload.context_management && typeof payload.context_management === "object"
-      ? payload.context_management
+  function taskTokenSavingConfirmLabel(payload) {
+    const policy = payload.token_saving && typeof payload.token_saving === "object"
+      ? payload.token_saving
       : {};
-    const enabled = policy.auto_compact_enabled === true;
-    const threshold = normalizeTaskContextThreshold(policy.auto_compact_threshold_percent);
-    return enabled ? `auto at ${threshold}%` : "auto off";
+    const provider = String(policy.provider || "headroom");
+    return policy.enabled === true ? `${provider} on` : "off";
   }
 
   function hardwareDebugConfirmLabel(payload) {
@@ -38,8 +37,7 @@
   function createTaskPayload(input = {}) {
     const proxyEnabled = Boolean(input.proxyEnabled);
     const backend = input.backend || "";
-    const contextAutoCompactEnabled = Boolean(input.contextAutoCompactEnabled);
-    const contextThreshold = normalizeTaskContextThreshold(input.contextThreshold);
+    const tokenSavingEnabled = Boolean(input.tokenSavingEnabled);
     return {
       title: String(input.title || "").trim(),
       description: String(input.description || "").trim(),
@@ -55,9 +53,9 @@
       max_sub_agents: Number(input.maxSubAgents ?? 3),
       preferred_sub_backend: input.preferredSubBackend || backend,
       supervision: input.supervision || {},
-      context_management: {
-        auto_compact_enabled: contextAutoCompactEnabled,
-        auto_compact_threshold_percent: contextThreshold
+      token_saving: {
+        enabled: tokenSavingEnabled,
+        provider: "headroom"
       },
       task_skills: input.taskSkills || {},
       hardware_debug: input.hardwareDebug || {},
@@ -87,7 +85,7 @@
       ["Supervision", context.supervisionSummary || "manual"],
       ["Host model", supervision.real_agent_enabled ? `${supervision.host_backend || "stub"} / ${hostModel}` : "-"],
       ["Host proxy", supervision.real_agent_enabled ? hostProxy : "-"],
-      ["Context", taskContextConfirmLabel(payload)],
+      ["Token saving", taskTokenSavingConfirmLabel(payload)],
       ["Skills", taskSkillsConfirmLabel(payload)],
       ["Hardware", hardwareDebugConfirmLabel(payload)],
       ["Proxy", taskProxyConfirmLabel(payload)]

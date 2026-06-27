@@ -22,8 +22,9 @@ from aha_cli.backends.claude import (
 from aha_cli.backends.codex import (
     build_codex_exec_command,
     codex_callback_events,
-    codex_config_env,
+    codex_config_for_model,
     codex_config_overrides,
+    codex_config_with_provider_override,
     handle_codex_event,
     is_context_overflow_message,
     run_codex_exec,
@@ -240,7 +241,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
             command = popen.call_args.args[0]
             self.assertEqual(command[:3], ["codex", "-m", CODEX_DEFAULT_MODEL])
 
-    def test_codex_exec_uses_env_group_model_and_environment(self) -> None:
+    def test_codex_exec_uses_env_group_provider_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "reply.md"
             output.write_text("done", encoding="utf-8")
@@ -287,14 +288,200 @@ class BackendRunnerSessionTests(unittest.TestCase):
             self.assertIn("-m", command)
             self.assertEqual(command[command.index("-m") + 1], "kimi-k2.6")
             joined_command = " ".join(command)
-            self.assertIn('model_provider="aha_codex_env_', joined_command)
-            self.assertIn("model_providers.", joined_command)
-            self.assertIn('wire_api="responses"', joined_command)
-            self.assertIn("requires_openai_auth=false", joined_command)
+            self.assertIn('model_provider="aha_codex_openai_', joined_command)
+            self.assertIn('model_providers.aha_codex_openai_', joined_command)
+            self.assertIn('base_url="https://openai.test/v1"', joined_command)
+            self.assertIn('wire_api="chat"', joined_command)
             self.assertIn('env_key="MINIMAX_API_KEY"', joined_command)
-            self.assertNotIn("OPENAI_BASE_URL", env)
             self.assertEqual(env["MINIMAX_API_KEY"], "openai-key")
-            self.assertEqual(codex_config_env({"env_active": None, "env": [{"name": "openai", "OPENAI_API_KEY": "x"}]}), {})
+            self.assertEqual(env["OPENAI_API_KEY"], "openai-key")
+
+    def test_codex_env_group_accepts_claude_style_provider_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+            session: dict = {}
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO("")
+
+                def wait(self) -> int:
+                    return 0
+
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()) as popen,
+            ):
+                code, reply, _ = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    model="env:custom-k2.6",
+                    session=session,
+                    codex_config={
+                        "env": [
+                            {
+                                "name": "custom-k2.6",
+                                "ANTHROPIC_BASE_URL": "https://api.example.test/v1",
+                                "ANTHROPIC_MODEL": "custom-k2.6",
+                                "ANTHROPIC_API_KEY": "custom-key",
+                            },
+                            {
+                                "name": "MiniMax-M3",
+                                "ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
+                                "ANTHROPIC_MODEL": "MiniMax-M3",
+                                "ANTHROPIC_API_KEY": "minimax-key",
+                            },
+                        ]
+                    },
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        self.assertEqual(session["resolved_model"], "custom-k2.6")
+        command = popen.call_args.args[0]
+        env = popen.call_args.kwargs["env"]
+        joined_command = " ".join(command)
+        self.assertIn('base_url="https://api.example.test/v1"', joined_command)
+        self.assertIn('wire_api="responses"', joined_command)
+        self.assertEqual(env["OPENAI_API_KEY"], "custom-key")
+
+    def test_codex_env_group_rewrites_minimax_anthropic_url_for_responses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO("")
+
+                def wait(self) -> int:
+                    return 0
+
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()) as popen,
+            ):
+                code, reply, _ = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    model="env:MiniMax-M2.7-highspeed",
+                    session={},
+                    codex_config={
+                        "env": [
+                            {
+                                "name": "MiniMax-M2.7-highspeed",
+                                "OPENAI_BASE_URL": "https://api.minimaxi.com/anthropic",
+                                "OPENAI_MODEL": "MiniMax-M2.7-highspeed",
+                                "OPENAI_API_KEY": "minimax-key",
+                            }
+                        ]
+                    },
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        command = popen.call_args.args[0]
+        joined_command = " ".join(command)
+        self.assertIn('base_url="https://api.minimaxi.com/v1"', joined_command)
+        self.assertIn('wire_api="responses"', joined_command)
+
+    def test_codex_env_group_marks_kimi_for_litellm_responses_bridge(self) -> None:
+        cfg = codex_config_for_model(
+            {
+                "env": [
+                    {
+                        "name": "kimi-k2.6",
+                        "OPENAI_BASE_URL": "https://api.kimi.com/coding/",
+                        "OPENAI_MODEL": "kimi-k2.6",
+                        "OPENAI_API_KEY": "kimi-key",
+                    }
+                ]
+            },
+            "env:kimi-k2.6",
+        )
+
+        provider = cfg["_provider_override"]
+        bridge = provider["_litellm_responses_bridge"]
+        self.assertEqual(provider["wire_api"], "responses")
+        self.assertEqual(provider["base_url"], "https://api.kimi.com/coding/v1")
+        self.assertEqual(bridge["upstream_base_url"], "https://api.kimi.com/coding/v1")
+        self.assertEqual(bridge["upstream_model"], "kimi-for-coding")
+        self.assertEqual(bridge["client_model"], "kimi-k2.6")
+
+    def test_codex_exec_routes_kimi_env_group_through_local_litellm_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO("")
+
+                def wait(self) -> int:
+                    return 0
+
+            class FakeBridge:
+                base_url = "http://127.0.0.1:19001/v1"
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("aha_cli.backends.codex.start_litellm_responses_bridge", return_value=FakeBridge()) as bridge,
+                mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()) as popen,
+            ):
+                code, reply, _ = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    model="env:kimi-k2.6",
+                    session={},
+                    codex_config={
+                        "env": [
+                            {
+                                "name": "kimi-k2.6",
+                                "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding/",
+                                "ANTHROPIC_MODEL": "kimi-k2.6",
+                                "ANTHROPIC_API_KEY": "kimi-key",
+                            }
+                        ]
+                    },
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        bridge.assert_called_once()
+        command = popen.call_args.args[0]
+        env = popen.call_args.kwargs["env"]
+        joined_command = " ".join(command)
+        self.assertIn("-m", command)
+        self.assertEqual(command[command.index("-m") + 1], "kimi-k2.6")
+        self.assertIn('base_url="http://127.0.0.1:19001/v1"', joined_command)
+        self.assertIn('wire_api="responses"', joined_command)
+        self.assertEqual(env["OPENAI_API_KEY"], "kimi-key")
+
+    def test_codex_provider_override_generates_config_args(self) -> None:
+        cfg = codex_config_with_provider_override(
+            {"model": "gpt-5.5", "env": [{"name": "ignored"}]},
+            provider_id="aha_headroom",
+            name="AHA Headroom",
+            base_url="http://127.0.0.1:8787/v1",
+        )
+
+        joined = " ".join(codex_config_overrides(cfg))
+
+        self.assertIn("env", cfg)
+        self.assertIn('model_provider="aha_headroom"', joined)
+        self.assertIn('model_providers.aha_headroom.base_url="http://127.0.0.1:8787/v1"', joined)
+        self.assertIn('model_providers.aha_headroom.wire_api="responses"', joined)
+        self.assertIn("model_providers.aha_headroom.requires_openai_auth=false", joined)
 
     def test_codex_exec_adds_common_user_bin_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -326,31 +513,6 @@ class BackendRunnerSessionTests(unittest.TestCase):
             parts = popen.call_args.kwargs["env"]["PATH"].split(os.pathsep)
             self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
             self.assertLess(parts.index(str(nvm_bin)), parts.index("/usr/bin"))
-
-    def test_codex_env_group_generates_provider_overrides(self) -> None:
-        overrides = codex_config_overrides(
-            {
-                "env_active": "work",
-                "env": [
-                    {
-                        "name": "work",
-                        "OPENAI_BASE_URL": "https://openai.test/v1",
-                        "OPENAI_MODEL": "model-x",
-                        "OPENAI_API_KEY": "key",
-                        "CODEX_WIRE_API": "responses",
-                        "CODEX_ENV_KEY": "OPENAI_API_KEY",
-                    }
-                ],
-            }
-        )
-
-        joined = " ".join(overrides)
-        self.assertIn("model_provider=", joined)
-        self.assertIn('model_providers.aha_codex_env_', joined)
-        self.assertIn('base_url="https://openai.test/v1"', joined)
-        self.assertIn('env_key="OPENAI_API_KEY"', joined)
-        self.assertIn('wire_api="responses"', joined)
-        self.assertIn("requires_openai_auth=false", joined)
 
     def test_codex_command_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

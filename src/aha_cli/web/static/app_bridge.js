@@ -170,6 +170,14 @@
       controllers.skillsConsoleController?.()?.setSkillsConsoleOpen(open);
     }
 
+    function renderHeadroomIntegrationPopover() {
+      controllers.headroomIntegrationController?.()?.renderHeadroomIntegrationPopover();
+    }
+
+    function setHeadroomIntegrationOpen(open) {
+      controllers.headroomIntegrationController?.()?.setHeadroomIntegrationOpen(open);
+    }
+
     function renderWeixinConsolePopover() {
       controllers.weixinConsoleController?.()?.renderWeixinConsolePopover();
     }
@@ -229,6 +237,7 @@
     function initSessionControl() {
       controllers.runController?.()?.bind();
       controllers.weixinConsoleController?.()?.bind();
+      controllers.headroomIntegrationController?.()?.bind();
       controllers.skillsConsoleController?.()?.bind();
       controllers.tokenUsageController?.()?.bind();
     }
@@ -655,6 +664,7 @@
       renderConversation,
       renderConversationFilters,
       renderFirstRunState,
+      renderHeadroomIntegrationPopover,
       renderMessageBody,
       renderModelOptions,
       renderPanelForRealtime,
@@ -689,6 +699,7 @@
       selectedTaskNeedsAgentDetails,
       selectedTaskRealtimeActive,
       setExpandedMessageKey,
+      setHeadroomIntegrationOpen,
       setPlayConsoleOpen,
       setRunArchiveState,
       setRunLifecycleState,

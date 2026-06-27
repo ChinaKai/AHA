@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main
+from aha_cli.backends.codex import codex_config_overrides
+from aha_cli.services import headroom_integration
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
 from aha_cli.store.filesystem import (
     append_event,
@@ -21,6 +24,8 @@ from aha_cli.store.filesystem import (
     update_task_proxy_config,
     update_task_skills_config,
     update_task_supervision_config,
+    update_task_token_saving_config,
+    write_json,
 )
 from aha_cli.store.paths import config_path
 
@@ -269,6 +274,51 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(proxy_env["HTTPS_PROXY"], "http://127.0.0.1:7890")
         self.assertEqual(proxy_env["NO_PROXY"], "localhost,127.0.0.1")
         self.assertEqual(proxy_env["http_proxy"], "http://127.0.0.1:8888")
+
+    def test_codex_chat_wraps_codex_with_headroom_when_auto_context_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                cfg = read_json(config_path(root))
+                cfg["codex"]["model"] = "gpt-test"
+                cfg["integrations"] = {"headroom": {"enabled": True, "port": 8989, "mode": "token", "command": "headroom"}}
+                write_json(config_path(root), cfg)
+                code, plan_output = self.run_cli("plan", "Headroom chat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="headroom")
+                append_message(root, run_id, "main", "use headroom", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch.dict(os.environ, {"OPENAI_BASE_URL": "https://openai.example/v1"}, clear=True),
+                    mock.patch(
+                        "aha_cli.services.chat.prepare_headroom_codex_runtime",
+                        wraps=headroom_integration.prepare_headroom_codex_runtime,
+                    ) as prepare_runtime,
+                    mock.patch(
+                        "aha_cli.services.headroom_integration.ensure_headroom_proxy",
+                        return_value={"ready": True, "port": 8989, "mode": "token"},
+                    ) as ensure_proxy,
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)) as run_agent,
+                ):
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        prepare_runtime.assert_called_once()
+        ensure_proxy.assert_called_once()
+        self.assertEqual(ensure_proxy.call_args.kwargs["upstream_base_url"], "https://openai.example/v1")
+        self.assertEqual(ensure_proxy.call_args.kwargs["scope"], {"run_id": run_id, "task_id": "task-001", "agent_id": "main"})
+        codex_config = run_agent.call_args.kwargs["codex_config"]
+        self.assertEqual(codex_config["model"], "gpt-test")
+        self.assertIn('model_provider="aha_headroom"', " ".join(codex_config_overrides(codex_config)))
+        proxy_env = run_agent.call_args.kwargs["proxy_env"]
+        self.assertEqual(proxy_env["OPENAI_BASE_URL"], "http://127.0.0.1:8989/v1")
+        self.assertIn("localhost", proxy_env["NO_PROXY"])
+        ready_events = [event for event in events if event["type"] == "headroom_integration_ready"]
+        self.assertTrue(ready_events)
+        self.assertEqual(ready_events[0]["data"]["scope"], {"run_id": run_id, "task_id": "task-001", "agent_id": "main"})
 
     def test_chat_prompt_includes_enabled_hardware_debug_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

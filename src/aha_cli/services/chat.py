@@ -20,6 +20,7 @@ from aha_cli.services.chat_prompt_context import (
     chat_prompt_with_metrics,
     model_family_for_guidance,
 )
+from aha_cli.services.headroom_integration import prepare_headroom_codex_runtime
 from aha_cli.services.chat_supervision import (
     SUPERVISION_FAILURE_FALLBACK_STATUS,
     apply_supervision_host_decision,
@@ -828,6 +829,37 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             event_callback=progress_heartbeat.handle_event if progress_heartbeat else None,
                         )
                     else:
+                        effective_codex_config, effective_proxy_env, headroom_runtime = prepare_headroom_codex_runtime(
+                            root,
+                            config=cfg,
+                            task=task,
+                            backend_name=backend_name,
+                            codex_config=codex_config,
+                            proxy_env=proxy_env,
+                            run_id=run_id,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            workspace=workspace,
+                        )
+                        if headroom_runtime.get("enabled"):
+                            append_event(
+                                root,
+                                run_id,
+                                "headroom_integration_ready" if headroom_runtime.get("ready") else "headroom_integration_skipped",
+                                {
+                                    "source": source_name,
+                                    "target": args.target,
+                                    "task_id": item_task_id,
+                                    "agent_id": agent_id,
+                                    "ready": bool(headroom_runtime.get("ready")),
+                                    "reason": headroom_runtime.get("reason"),
+                                    "port": headroom_runtime.get("port"),
+                                    "mode": headroom_runtime.get("mode"),
+                                    "scope": headroom_runtime.get("scope"),
+                                    "upstream_base_url": headroom_runtime.get("upstream_base_url"),
+                                    "local_base_url": headroom_runtime.get("local_base_url"),
+                                },
+                            )
                         exit_code, reply, returned_session = run_codex_exec(
                             prompt,
                             cwd=workspace,
@@ -844,8 +876,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             source=source_name,
                             target=args.target,
                             session=session,
-                            proxy_env=proxy_env,
-                            codex_config=codex_config,
+                            proxy_env=effective_proxy_env,
+                            codex_config=effective_codex_config,
                         )
                     session = returned_session if returned_session is not None else runner_session
                 except Exception as exc:

@@ -1,6 +1,7 @@
 const domRefs = window.AHAControllerRegistry.collectDomRefs(document);
 const {
   agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerRunConsoleEl, headerRunTitleEl, headerWorkspaceDirEl,
+  headroomIntegrationEl, headroomIntegrationPopoverEl,
   mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, openRunCreateEl, panelEl, pendingMessagesEl,
   playConsoleEl, playConsolePopoverEl, renameRunNameEl, runArchiveStateEl, runCreateFormEl, runExportEl,
   runCreateDialogEl, closeRunCreateEl, cancelRunCreateEl, runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
@@ -45,7 +46,6 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   alertError: message => alert(message),
   apiUrl,
   backendStatusData: () => backendStatusData,
-  bootstrapCodexEnvGroups,
   bootstrapConfigData,
   bootstrapData: () => bootstrapData,
   bootstrapEnvGroupName,
@@ -125,6 +125,8 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   taskAgentCount,
   taskContextManagementPolicy,
   taskContextSummary,
+  taskTokenSavingPolicy,
+  taskTokenSavingSummary,
   taskSkillsPolicy,
   taskSkillsSummary,
   hardwareDebugPermissionKeys,
@@ -627,6 +629,7 @@ const appActions = window.AHAAppActions.createAppActions({
 const featureControllers = window.AHAAppControllerFactory.createFeatureControllers(domRefs, {
   activeTab: () => activeTab,
   addBootstrapConfigRow,
+  applyBootstrapPayload,
   agentBackendProcessStatus,
   agentBackendModelChanged,
   agentConfigLabel,
@@ -637,6 +640,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   apiUrl,
   approvalOptions,
   bootstrapConfigFormHtml,
+  bootstrapConfigData,
   bootstrapData: () => bootstrapData,
   closeMobileActionPanel: () => uiShell.closeMobileActionPanel(),
   closeMobileSheets: () => uiShell.closeMobileSheets(),
@@ -720,6 +724,7 @@ const {
   taskCreateController,
   taskMemoController
 } = featureControllers;
+headroomIntegrationController = featureControllers.headroomIntegrationController;
 playConsoleController = featureControllers.playConsoleController;
 skillsConsoleController = featureControllers.skillsConsoleController;
 tokenUsageController = featureControllers.tokenUsageController;
@@ -768,6 +773,8 @@ const taskController = window.AHATaskController.createTaskController({
   taskCollaborationSummary,
   taskContextManagementPolicy,
   taskContextSummary,
+  taskTokenSavingPolicy,
+  taskTokenSavingSummary,
   taskHardwareDebugPolicy,
   taskHardwareDebugSummary,
   taskDisplayStatus,
@@ -826,6 +833,8 @@ const runController = window.AHARunController.createRunController({
   appVersionEl,
   authLogoutEl,
   documentRef: document,
+  headroomIntegrationEl,
+  headroomIntegrationPopoverEl,
   openRunCreateEl,
   runCreateDialogEl,
   headerRunConsoleEl,
@@ -892,6 +901,7 @@ const runController = window.AHARunController.createRunController({
   loadAccessControlStatus,
   loadRuns,
   logoutAuthSession,
+  headroomIntegrationOpen: () => headroomIntegrationController.isOpen(),
   playConsoleOpen: () => playConsoleController.isOpen(),
   renameCurrentRun: runActions.renameCurrentRun,
   apiUrl,
@@ -900,6 +910,7 @@ const runController = window.AHARunController.createRunController({
   fetchJson,
   formatMetricBytes,
   renderAccessControlStatus,
+  renderHeadroomIntegrationPopover: () => headroomIntegrationController.renderHeadroomIntegrationPopover(),
   renderPlayConsolePopover,
   renderSkillsConsolePopover,
   renderTokenUsagePopover: () => tokenUsageController.renderTokenUsagePopover(),
@@ -919,6 +930,7 @@ const runController = window.AHARunController.createRunController({
   runTitleOf,
   sessionOptionLabel,
   setPlayConsoleOpen,
+  setHeadroomIntegrationOpen: value => headroomIntegrationController.setHeadroomIntegrationOpen(value),
   setSkillsConsoleOpen,
   setTokenUsageOpen: value => tokenUsageController.setTokenUsageOpen(value),
   setWeixinConsoleOpen,

@@ -5,7 +5,8 @@ import tempfile
 from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
-from aha_cli.domain.models import default_config
+from aha_cli.domain.models import default_config, normalize_integrations_config
+from aha_cli.services.headroom_integration import headroom_status
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
@@ -58,15 +59,15 @@ CONFIG_SANDBOX_OPTIONS = SANDBOX_OPTIONS | {"auto"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 SESSION_POLICY_OPTIONS = {"sticky", "fresh"}
 BOOTSTRAP_BACKEND_OPTIONS = {"codex", "claude"}
-CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
 CODEX_ENV_GROUP_FIELDS = ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY")
 CODEX_ENV_GROUP_ALIASES = {
-    "OPENAI_BASE_URL": ("OPENAI_BASE_URL", "base_url"),
-    "OPENAI_MODEL": ("OPENAI_MODEL", "model"),
-    "OPENAI_API_KEY": ("OPENAI_API_KEY", "api_key"),
+    "OPENAI_BASE_URL": ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "base_url", "api_url"),
+    "OPENAI_MODEL": ("OPENAI_MODEL", "ANTHROPIC_MODEL", "model"),
+    "OPENAI_API_KEY": ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "api_key", "auth_token"),
     "CODEX_WIRE_API": ("CODEX_WIRE_API", "wire_api"),
     "CODEX_ENV_KEY": ("CODEX_ENV_KEY", "env_key"),
 }
+CLAUDE_ENV_GROUP_FIELDS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY")
 CLAUDE_ENV_GROUP_ALIASES = {
     "ANTHROPIC_BASE_URL": ("ANTHROPIC_BASE_URL", "base_url"),
     "ANTHROPIC_MODEL": ("ANTHROPIC_MODEL", "model"),
@@ -496,7 +497,6 @@ def _codex_env_groups(value: object) -> list[dict]:
         legacy = {"name": "default"}
         for key in CODEX_ENV_GROUP_FIELDS:
             legacy[key] = next((str(value.get(alias) or "").strip() for alias in CODEX_ENV_GROUP_ALIASES[key] if value.get(alias)), "")
-        legacy["CODEX_WIRE_API"] = "responses"
         if not any(legacy.get(key) for key in CODEX_ENV_GROUP_FIELDS):
             return []
         return [legacy]
@@ -509,8 +509,7 @@ def _codex_env_groups(value: object) -> list[dict]:
         raw_name = str(item.get("name") or "").strip()
         group = {"name": raw_name or f"env-{index}"}
         for key in CODEX_ENV_GROUP_FIELDS:
-            group[key] = str(item.get(key) or "").strip()
-        group["CODEX_WIRE_API"] = "responses"
+            group[key] = next((str(item.get(alias) or "").strip() for alias in CODEX_ENV_GROUP_ALIASES[key] if item.get(alias)), "")
         if raw_name or any(group.get(key) for key in CODEX_ENV_GROUP_FIELDS):
             groups.append(group)
     return groups
@@ -586,6 +585,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "env": claude_env,
         "proxy": _proxy_config_from_payload(claude_payload.get("proxy"), "claude.proxy", proxy_fallback),
     }
+    integrations = normalize_integrations_config(_object_value(payload.get("integrations"), "integrations"))
 
     return {
         "backend": backend,
@@ -597,6 +597,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "proxy": legacy_proxy,
         "context_windows": _object_value(payload.get("context_windows"), "context_windows"),
         "retention_policy": retention_policy_schedule_config(payload.get("retention_policy")),
+        "integrations": integrations,
         "codex": codex,
         "claude": claude,
     }
@@ -609,6 +610,11 @@ def handle_save_bootstrap(root: Path, default_run_id: str, body: bytes) -> bytes
     cfg = _bootstrap_config_from_payload(payload)
     write_json(config_path(root), cfg)
     return json_response(bootstrap_payload(root, default_run_id), "201 Created")
+
+
+def handle_headroom_integration_status(root: Path, method: str) -> bytes:
+    response = json_response({"headroom": headroom_status(root, load_config(root))})
+    return head_or_response(method, response)
 
 
 def handle_create_run(root: Path, body: bytes) -> bytes:
@@ -792,6 +798,8 @@ def handle_run_workspace_route(
         return handle_bootstrap(root, default_run_id, method, headers)
     if method == "POST" and path == "/api/bootstrap":
         return handle_save_bootstrap(root, default_run_id, body)
+    if method in {"GET", "HEAD"} and path == "/api/integrations/headroom":
+        return handle_headroom_integration_status(root, method)
     if method == "POST" and path == "/api/runs":
         return handle_create_run(root, body)
     if method in {"GET", "HEAD"} and path.startswith("/api/runs/"):

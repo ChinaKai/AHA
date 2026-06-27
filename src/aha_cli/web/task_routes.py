@@ -14,6 +14,7 @@ from aha_cli.services.hardware_bridge import (
     ensure_bridge,
     task_devices,
 )
+from aha_cli.services.headroom_integration import headroom_config
 
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
@@ -69,6 +70,7 @@ from aha_cli.store.filesystem import (
     update_task_proxy_config,
     update_task_skills_config,
     update_task_supervision_config,
+    update_task_token_saving_config,
 )
 from aha_cli.store.task_memos import (
     create_task_memo,
@@ -96,6 +98,7 @@ from aha_cli.web.task_actions import (
     parse_task_proxy_fields,
     parse_task_skills_fields,
     parse_task_supervision_fields,
+    parse_task_token_saving_fields,
     prepare_task_main_autostart,
     start_prepared_backend,
     start_dispatched_task_backend,
@@ -103,6 +106,7 @@ from aha_cli.web.task_actions import (
 
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
+TOKEN_SAVING_REQUIRES_HEADROOM_MESSAGE = "Headroom integration must be enabled before token saving can be enabled."
 
 
 def route_result(payload: dict, status: str = "200 OK") -> dict:
@@ -115,6 +119,17 @@ def binary_route_result(body: bytes, content_type: str, status: str = "200 OK", 
 
 def route_not_handled() -> dict:
     return {"handled": False}
+
+
+def token_saving_headroom_error(root: Path, token_saving: dict[str, object]) -> str | None:
+    if not token_saving.get("enabled"):
+        return None
+    provider = str(token_saving.get("provider") or "headroom").strip().lower() or "headroom"
+    if provider != "headroom":
+        return None
+    if headroom_config(load_config(root)).get("enabled"):
+        return None
+    return TOKEN_SAVING_REQUIRES_HEADROOM_MESSAGE
 
 
 def task_description_with_memo_attachment_context(root: Path, run_id: str, description: str, source_memo_id: str) -> str:
@@ -232,6 +247,12 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             return route_result({"ok": True, "task": task, "proxy": backend_proxy_config(load_config(root), task.get("preferred_backend"), require_plan(root, run_id), task)})
         elif action == "context-management":
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(parse_json_body(body)))
+        elif action == "token-saving":
+            token_saving_update = parse_task_token_saving_fields(parse_json_body(body))
+            error = token_saving_headroom_error(root, token_saving_update)
+            if error:
+                return route_result({"error": error}, "400 Bad Request")
+            task = update_task_token_saving_config(root, run_id, task_id, **token_saving_update)
         elif action == "skills":
             task = update_task_skills_config(root, run_id, task_id, **parse_task_skills_fields(parse_json_body(body)))
         elif action == "hardware-debug":
@@ -378,6 +399,14 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             if not isinstance(payload.get("context_management"), dict):
                 return route_result({"error": "context_management must be an object"}, "400 Bad Request")
             context_management = parse_task_context_management_fields(payload["context_management"])
+        token_saving = None
+        if "token_saving" in payload:
+            if not isinstance(payload.get("token_saving"), dict):
+                return route_result({"error": "token_saving must be an object"}, "400 Bad Request")
+            token_saving = parse_task_token_saving_fields(payload["token_saving"])
+            error = token_saving_headroom_error(root, token_saving)
+            if error:
+                return route_result({"error": error}, "400 Bad Request")
         task_skills = None
         if "task_skills" in payload:
             if not isinstance(payload.get("task_skills"), dict):
@@ -412,6 +441,7 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             description=description,
             supervision=supervision,
             context_management=context_management,
+            token_saving=token_saving,
             task_skills=task_skills,
             hardware_debug=hardware_debug,
             dispatch=dispatch,
@@ -717,7 +747,13 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
     if not task_id:
         return route_result({"error": "task_id is required"}, "400 Bad Request")
     try:
-        if "context_management" in payload and isinstance(payload.get("context_management"), dict):
+        if "token_saving" in payload and isinstance(payload.get("token_saving"), dict):
+            token_saving_update = parse_task_token_saving_fields(payload["token_saving"])
+            error = token_saving_headroom_error(root, token_saving_update)
+            if error:
+                return route_result({"error": error}, "400 Bad Request")
+            task = update_task_token_saving_config(root, run_id, task_id, **token_saving_update)
+        elif "context_management" in payload and isinstance(payload.get("context_management"), dict):
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(payload["context_management"]))
         elif "task_skills" in payload and isinstance(payload.get("task_skills"), dict):
             task = update_task_skills_config(root, run_id, task_id, **parse_task_skills_fields(payload["task_skills"]))

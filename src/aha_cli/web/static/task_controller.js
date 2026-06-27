@@ -95,10 +95,12 @@
     }
 
     function taskContextBadge(task) {
-      const policy = deps.taskContextManagementPolicy?.(task) || {};
-      return policy.auto_compact_enabled
-        ? `<span class="status context-auto-on">ctx auto ${escapeHtml(policy.auto_compact_threshold_percent)}%</span>`
-        : '<span class="status context-auto-off">ctx auto off</span>';
+      const policy = deps.taskTokenSavingPolicy?.(task) || deps.taskContextManagementPolicy?.(task) || {};
+      const enabled = policy.enabled === true || policy.auto_compact_enabled === true;
+      const provider = policy.provider || "headroom";
+      return enabled
+        ? `<span class="status context-auto-on">save ${escapeHtml(provider)}</span>`
+        : '<span class="status context-auto-off">save off</span>';
     }
 
     function taskCurrentStatus(task) {

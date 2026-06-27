@@ -6,7 +6,7 @@ REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 
 INSTALL_BIN="${HOME}/.local/bin/aha"
 SERVICE_NAME="aha.service"
-AHA_HOME="${AHA_HOME:-${HOME}/.aha}"
+AHA_HOME="${HOME}/.aha"
 HOST="127.0.0.1"
 PORT="8788"
 RUN_ID=""

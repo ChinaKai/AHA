@@ -101,6 +101,17 @@ def parse_task_context_management_fields(payload: dict) -> dict[str, object]:
     return update
 
 
+def parse_task_token_saving_fields(payload: dict) -> dict[str, object]:
+    update: dict[str, object] = {}
+    if "enabled" in payload:
+        update["enabled"] = parse_optional_bool(payload.get("enabled"), "enabled")
+    elif "token_saving_enabled" in payload:
+        update["enabled"] = parse_optional_bool(payload.get("token_saving_enabled"), "token_saving_enabled")
+    if "provider" in payload:
+        update["provider"] = str(payload.get("provider") or "headroom")
+    return update
+
+
 def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
     update: dict[str, object] = {}
     if "channels" in payload:
@@ -171,6 +182,7 @@ __all__ = [
     "message_backend_autostart_config",
     "parse_task_proxy_fields",
     "parse_task_context_management_fields",
+    "parse_task_token_saving_fields",
     "parse_task_hardware_debug_fields",
     "parse_task_supervision_fields",
     "parse_task_skills_fields",

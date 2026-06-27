@@ -17,13 +17,21 @@ PREFLIGHT_SERVICE_UPGRADE = REPO_ROOT / "scripts" / "preflight_service_upgrade.p
 
 
 class ServiceInstallerTests(unittest.TestCase):
-    def run_script(self, args: list[str], *, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    def run_script(
+        self,
+        args: list[str],
+        *,
+        tmp_path: Path,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.pop("AHA_HOME", None)
         env.pop("AHA_RUN_ID", None)
         env["HOME"] = str(tmp_path / "home")
         env["XDG_CONFIG_HOME"] = str(tmp_path / "config")
         env["USER"] = "aha-smoke"
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             args,
             cwd=REPO_ROOT,
@@ -93,6 +101,29 @@ class ServiceInstallerTests(unittest.TestCase):
             self.assertFalse((tmp_path / "home" / ".aha").exists())
             self.assertFalse(service_path.exists())
             self.assertFalse(token_file.exists())
+
+    def test_onebin_installer_default_home_ignores_ambient_aha_home(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aha-service-onebin-default-") as tmp:
+            tmp_path = Path(tmp)
+            default_home = tmp_path / "home" / ".aha"
+            leaked_home = tmp_path / "leaked-home"
+            result = self.run_script(
+                [
+                    "bash",
+                    str(INSTALL_ONEBIN),
+                    "--dry-run",
+                    "--no-start",
+                    "--no-linger",
+                ],
+                tmp_path=tmp_path,
+                extra_env={"AHA_HOME": str(leaked_home)},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"AHA home: {default_home}", result.stdout)
+            self.assertIn(f'Environment="AHA_HOME={default_home}"', result.stdout)
+            self.assertIn(f'--home "{default_home}"', result.stdout)
+            self.assertNotIn(str(leaked_home), result.stdout)
 
     def test_source_installer_dry_run_prints_unit_without_writing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="aha-service-source-") as tmp:

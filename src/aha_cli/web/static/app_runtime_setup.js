@@ -120,6 +120,7 @@ let bootstrapController = null;
 let timelineView = null;
 let optimisticEvents = null;
 let accessControlController = null;
+let headroomIntegrationController = null;
 let playConsoleController = null;
 let skillsConsoleController = null;
 let tokenUsageController = null;
@@ -188,6 +189,8 @@ const {
   normalizeTaskContextThreshold,
   taskContextManagementPolicy,
   taskContextSummary,
+  taskTokenSavingPolicy,
+  taskTokenSavingSummary,
   taskSkillsPolicy,
   taskSkillsSummary,
   hardwareDebugPermissionKeys,
@@ -202,7 +205,6 @@ const {
   configString,
   bootstrapBackendOptions,
   bootstrapEnvGroups,
-  bootstrapCodexEnvGroups,
   bootstrapEnvGroupName
 } = bootstrapConfigHelpers;
 const taskFormHelpers = window.AHATaskForm;
@@ -438,6 +440,7 @@ appBridge = window.AHAAppBridge.createAppBridge({
   bootstrapController: () => bootstrapController,
   compactResetController: () => compactResetController,
   conversationController: () => conversationController,
+  headroomIntegrationController: () => headroomIntegrationController,
   optimisticEvents: () => optimisticEvents,
   panelController: () => panelController,
   playConsoleController: () => playConsoleController,
@@ -602,6 +605,7 @@ const realtimeStatusRefreshEventTypes = new Set([
   "backend_started",
   "backend_stopped",
   "task_completed",
+  "task_token_saving_config_updated",
   "task_context_management_config_updated",
   "task_created",
   "task_reopened",

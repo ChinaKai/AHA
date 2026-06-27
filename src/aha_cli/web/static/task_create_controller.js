@@ -119,6 +119,24 @@
       return String(deps.currentRunId?.() || "").trim();
     }
 
+    function headroomIntegrationEnabled() {
+      const config = deps.bootstrapConfigData?.() || {};
+      return config?.integrations?.headroom?.enabled === true;
+    }
+
+    function tokenSavingRequiresHeadroomMessage() {
+      return t("task.token_saving_requires_headroom", "Enable Headroom in Integrations before using token saving.");
+    }
+
+    function canUseTokenSaving(enabled) {
+      if (!enabled || headroomIntegrationEnabled()) return true;
+      const message = tokenSavingRequiresHeadroomMessage();
+      setDraftStatus(message);
+      alertUser(message);
+      realtimeDebug("task_create.skip", { reason: "headroom_integration_disabled" });
+      return false;
+    }
+
     function setDraftStatus(message = "") {
       if (elements.taskDraftStateEl) elements.taskDraftStateEl.textContent = message;
     }
@@ -252,13 +270,12 @@
     }
 
     function syncCreateTaskContextFields() {
-      const enabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
       if (elements.taskContextThresholdFieldEl) {
-        elements.taskContextThresholdFieldEl.hidden = !enabled;
-        elements.taskContextThresholdFieldEl.classList.toggle("hidden", !enabled);
+        elements.taskContextThresholdFieldEl.hidden = true;
+        elements.taskContextThresholdFieldEl.classList.add("hidden");
       }
       if (elements.taskContextThresholdEl) {
-        elements.taskContextThresholdEl.disabled = !enabled;
+        elements.taskContextThresholdEl.disabled = true;
       }
     }
 
@@ -335,8 +352,7 @@
           supervision_host_proxy_enabled: Boolean(elements.taskSupervisionHostProxyEnabledEl?.checked),
           supervision_max_rounds: elements.taskSupervisionMaxRoundsEl?.value || "",
           supervision_ask_user_gates: readAskUserGates(),
-          context_auto_compact_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
-          context_threshold_percent: elements.taskContextThresholdEl?.value || "",
+          token_saving_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
           task_skill_paths: selectedTaskSkillPaths(),
           hardware_enabled: createHardwareDebugPayload().enabled,
           hardware_channels: createHardwareDebugPayload().channels
@@ -530,8 +546,7 @@
       setCheckboxValue(elements.taskSupervisionHostProxyEnabledEl, values.supervision_host_proxy_enabled);
       setInputValue(elements.taskSupervisionMaxRoundsEl, values.supervision_max_rounds);
       restoreAskUserGates(values);
-      setCheckboxValue(elements.taskContextAutoCompactEnabledEl, values.context_auto_compact_enabled);
-      setInputValue(elements.taskContextThresholdEl, values.context_threshold_percent);
+      setCheckboxValue(elements.taskContextAutoCompactEnabledEl, values.token_saving_enabled ?? values.context_auto_compact_enabled);
       syncCreateTaskContextFields();
       renderTaskSkillOptions(values.task_skill_paths || []);
       setHardwareChannelValues(values.hardware_channels || [], {
@@ -554,8 +569,7 @@
         workflow_template: memo.workflow_template || "auto",
         max_sub_agents: memo.max_sub_agents ?? "",
         supervision_mode: "manual",
-        context_auto_compact_enabled: false,
-        context_threshold_percent: "75",
+        token_saving_enabled: false,
         task_skill_paths: [],
         hardware_channels: [],
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
@@ -668,6 +682,8 @@
         realtimeDebug("task_create.skip", { reason: "missing_title" });
         return;
       }
+      const tokenSavingEnabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
+      if (!canUseTokenSaving(tokenSavingEnabled)) return;
       createInFlight = true;
       const description = elements.newTaskDescriptionEl?.value.trim() || "";
       const collaborationMode = elements.collaborationModeEl?.value || "auto";
@@ -684,8 +700,6 @@
       );
       deps.setCreateProxyDefaultsFromInputs?.();
       const createProxyEnabled = Boolean(elements.taskProxyEnabledEl?.checked);
-      const contextThreshold = deps.normalizeTaskContextThreshold?.(elements.taskContextThresholdEl?.value || 75) || 75;
-      if (elements.taskContextThresholdEl) elements.taskContextThresholdEl.value = String(contextThreshold);
       const payload = deps.createTaskPayload?.({
         title,
         description,
@@ -702,8 +716,7 @@
         maxSubAgents,
         preferredSubBackend: elements.taskBackendEl.value,
         supervision,
-        contextAutoCompactEnabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
-        contextThreshold,
+        tokenSavingEnabled,
         taskSkills: createTaskSkillsPayload(),
         hardwareDebug: createHardwareDebugPayload(),
         dispatch: true
@@ -722,7 +735,7 @@
           workspace_path: payload?.workspace_path || "",
           collaboration_mode: payload?.collaboration_mode || "",
           workflow_template: payload?.workflow_template || "",
-          context_auto_compact_enabled: payload?.context_management?.auto_compact_enabled
+          token_saving_enabled: payload?.token_saving?.enabled
         });
         const confirmed = await confirmAddTask(payload);
         realtimeDebug("task_create.confirm_result", { confirmed: Boolean(confirmed) });
