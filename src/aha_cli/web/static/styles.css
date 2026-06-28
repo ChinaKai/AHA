@@ -5461,9 +5461,39 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   right: 8px;
   z-index: 1;
   min-height: 32px;
+  border: 1px solid #d0d5dd;
   border-color: rgba(255, 255, 255, 0.5);
   background: rgba(255, 255, 255, 0.92);
   color: #101828;
+}
+.task-memo-image-viewer-download {
+  position: absolute;
+  top: 8px;
+  right: calc(8px + 80px);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid #d0d5dd;
+  border-color: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #101828;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.task-memo-image-viewer-download:hover {
+  background: #ffffff;
+  color: #1f6feb;
+  border-color: #bfdbfe;
+}
+.task-memo-image-viewer-download:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: 2px;
 }
 .task-memo-status-field {
   display: grid;

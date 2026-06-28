@@ -182,6 +182,7 @@
     const image = documentRef.createElement("img");
     image.src = src;
     image.alt = alt || options.t?.("memo.pasted_image_alt", "pasted image") || "pasted image";
+    if (path) image.dataset.filename = path;
     wrapper.appendChild(image);
     return wrapper;
   }
@@ -499,6 +500,30 @@
       state.dialog.removeAttribute("open");
     }
     state.image?.removeAttribute("src");
+    if (state.download) {
+      state.download.removeAttribute("href");
+      state.download.removeAttribute("download");
+    }
+  }
+
+  function inferImageFilename(src, fallback) {
+    if (!src) return fallback || "";
+    try {
+      const url = new URL(src, typeof window !== "undefined" ? window.location.href : "http://localhost/");
+      const last = url.pathname.split("/").filter(Boolean).pop();
+      if (last) {
+        try { return decodeURIComponent(last); } catch (_) { return last; }
+      }
+      if (url.protocol === "data:") {
+        const match = /^data:image\/([a-z0-9+.-]+);/i.exec(url.pathname);
+        return `pasted-image.${(match && match[1]) ? match[1].replace("jpeg", "jpg") : "png"}`;
+      }
+    } catch (_) {
+      const cleaned = String(src).split("?")[0].split("#")[0];
+      const last = cleaned.split("/").filter(Boolean).pop();
+      if (last) return last;
+    }
+    return fallback || "image";
   }
 
   function ensureImageViewer(documentRef, t = (_key, fallback = "") => fallback) {
@@ -513,8 +538,13 @@
     closeButton.type = "button";
     closeButton.className = "task-memo-image-viewer-close";
     closeButton.textContent = t("common.close", "Close");
+    const downloadButton = documentRef.createElement("a");
+    downloadButton.className = "task-memo-image-viewer-download";
+    downloadButton.textContent = t("memo.image_download", "Download");
+    downloadButton.setAttribute("role", "button");
     const image = documentRef.createElement("img");
     image.className = "task-memo-image-viewer-img";
+    frame.appendChild(downloadButton);
     frame.appendChild(closeButton);
     frame.appendChild(image);
     dialog.appendChild(frame);
@@ -525,6 +555,7 @@
     documentRef.body.appendChild(dialog);
     state.dialog = dialog;
     state.image = image;
+    state.download = downloadButton;
     return dialog;
   }
 
@@ -538,6 +569,13 @@
     if (!viewer || !state?.image) return false;
     state.image.src = src;
     state.image.alt = image.alt || t("memo.pasted_image_alt", "pasted image");
+    if (state.download) {
+      const filename = inferImageFilename(src, image.getAttribute("data-filename") || image.alt || "image");
+      state.download.setAttribute("href", src);
+      state.download.setAttribute("download", filename);
+      state.download.setAttribute("aria-label", t("memo.image_download", "Download"));
+      state.download.title = t("memo.image_download", "Download");
+    }
     if (typeof viewer.showModal === "function") {
       if (!viewer.open) viewer.showModal();
     } else {
