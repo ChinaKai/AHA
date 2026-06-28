@@ -70,6 +70,8 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertIn("AHA knowledge-base feedback request.", forwarded or "")
         self.assertIn("Use only your existing backend session context", forwarded or "")
         self.assertIn("Do not generate project navigation entries here", forwarded or "")
+        self.assertIn("assets/<entry-slug>/<filename>", forwarded or "")
+        self.assertIn("Do not invent image paths", forwarded or "")
         self.assertIn("将刚才整理的蓝牙配网流程输出到知识库", forwarded or "")
         self.assertTrue(empty_handled)
         self.assertIsNone(empty_forwarded)

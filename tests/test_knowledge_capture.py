@@ -556,6 +556,8 @@ def test_distill_prompt_uses_title_and_body_as_one_clean_article(tmp_path: Path)
     assert "不要修改核心内容" in prompt
     assert "不要拆成多条候选" in prompt
     assert "不搜索、不读取知识库" in prompt
+    assert "assets/<entry-slug>/<filename>" in prompt
+    assert "不要编造图片路径" in prompt
     assert "--- NOTE TITLE ---" in prompt
     assert "微信通知" in prompt
     assert "--- NOTE BODY ---" in prompt
