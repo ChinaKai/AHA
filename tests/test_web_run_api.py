@@ -401,6 +401,50 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(cfg["backend"], "claude")
         self.assertEqual(cfg["default_parallel"], 10)
 
+    def test_api_bootstrap_force_preserves_existing_knowledge_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            existing_knowledge = {
+                "enabled": True,
+                "path": str(Path(tmp) / "knowledge"),
+                "git": {
+                    "enabled": True,
+                    "remote": "git@example.com:aha/knowledge.git",
+                    "branch": "main",
+                    "auto_commit": True,
+                    "auto_push": False,
+                    "auto_pull": True,
+                    "author_name": "AHA",
+                    "author_email": "aha@local",
+                },
+                "curation": {"gate": "manual"},
+                "project_nav": {"enabled": True, "maintain_during_task": True},
+                "retrieval": {"max_entries": 7, "max_chars": 5000, "inject_mode": "references", "summary_chars": 180},
+            }
+            (root / "config.json").write_text(
+                json.dumps({"backend": "codex", "default_parallel": 3, "knowledge": existing_knowledge}),
+                encoding="utf-8",
+            )
+
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={"backend": "claude", "default_parallel": 10, "force": True},
+                )
+            )
+            body = json_response_body(response)
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(cfg["backend"], "claude")
+        self.assertEqual(cfg["knowledge"], existing_knowledge)
+        self.assertTrue(body["config"]["knowledge"]["enabled"])
+        self.assertTrue(body["config"]["knowledge"]["project_nav"]["enabled"])
+
     def test_api_bootstrap_rejects_non_ui_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"

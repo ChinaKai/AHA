@@ -33,7 +33,7 @@ from aha_cli.store.filesystem import (
     run_summary,
     update_run_proxy_config,
 )
-from aha_cli.store.io import write_json
+from aha_cli.store.io import read_json, write_json
 from aha_cli.web.execution_fields import parse_execution_fields
 from aha_cli.web.http_utils import (
     http_response,
@@ -606,12 +606,26 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
     }
 
 
+def _preserve_existing_bootstrap_sections(config_file: Path, cfg: dict) -> dict:
+    if not config_file.exists():
+        return cfg
+    try:
+        existing = read_json(config_file)
+    except (OSError, ValueError):
+        return cfg
+    existing_knowledge = existing.get("knowledge") if isinstance(existing, dict) else None
+    if isinstance(existing_knowledge, dict):
+        cfg["knowledge"] = existing_knowledge
+    return cfg
+
+
 def handle_save_bootstrap(root: Path, default_run_id: str, body: bytes) -> bytes:
     payload = parse_json_body(body)
-    if config_path(root).exists() and not parse_optional_bool(payload.get("force", False), "force"):
+    path = config_path(root)
+    if path.exists() and not parse_optional_bool(payload.get("force", False), "force"):
         return json_response({"error": "AHA is already initialized"}, "409 Conflict")
-    cfg = _bootstrap_config_from_payload(payload)
-    write_json(config_path(root), cfg)
+    cfg = _preserve_existing_bootstrap_sections(path, _bootstrap_config_from_payload(payload))
+    write_json(path, cfg)
     return json_response(bootstrap_payload(root, default_run_id), "201 Created")
 
 
