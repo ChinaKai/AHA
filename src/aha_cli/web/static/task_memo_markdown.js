@@ -534,20 +534,25 @@
     dialog.setAttribute("aria-label", t("memo.image_viewer", "Memo image"));
     const frame = documentRef.createElement("div");
     frame.className = "task-memo-image-viewer-frame";
+    const actions = documentRef.createElement("div");
+    actions.className = "task-memo-image-viewer-actions";
     const closeButton = documentRef.createElement("button");
     closeButton.type = "button";
     closeButton.className = "task-memo-image-viewer-close";
+    closeButton.setAttribute("aria-label", t("common.close", "Close"));
+    closeButton.title = t("common.close", "Close");
     closeButton.textContent = t("common.close", "Close");
     const downloadButton = documentRef.createElement("a");
     downloadButton.className = "task-memo-image-viewer-download";
-    downloadButton.textContent = t("memo.image_download", "Download");
     downloadButton.setAttribute("role", "button");
+    downloadButton.textContent = t("memo.image_download", "Download");
     const image = documentRef.createElement("img");
     image.className = "task-memo-image-viewer-img";
-    frame.appendChild(downloadButton);
-    frame.appendChild(closeButton);
+    actions.appendChild(downloadButton);
+    actions.appendChild(closeButton);
     frame.appendChild(image);
     dialog.appendChild(frame);
+    dialog.appendChild(actions);
     dialog.addEventListener("click", event => {
       if (event.target === dialog) closeImageViewer(documentRef);
     });
