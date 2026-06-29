@@ -10,9 +10,11 @@ import pytest
 from aha_cli.cli import main
 from aha_cli.domain.models import default_knowledge_config
 from aha_cli.services.knowledge_capture_distill import distill_note
-from aha_cli.store.io import write_json
+from aha_cli.store.io import read_json, write_json
+from aha_cli.store.filesystem import create_plan, run_dir
 from aha_cli.store.knowledge import (
     approve_candidate,
+    enqueue_candidate,
     entry_dir,
     init_knowledge_base,
     knowledge_root,
@@ -592,6 +594,42 @@ def test_approve_promotes_capture_note_assets_to_entry(tmp_path: Path):
     stored = read_note(home, cfg, note["id"])
     raw_asset = knowledge_root(home, cfg) / stored["images"][0]["path"]
     assert raw_asset.is_file() and raw_asset.read_bytes() == _PNG
+
+
+def test_approve_promotes_task_memo_images_referenced_in_candidate_body(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    plan = create_plan(home, "Image run", 1, "research", ["Review pipeline"], [], backend="stub")
+    run_id = plan["id"]
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+    source = run_dir(home, run_id) / "task_memo_assets" / "vega-pipeline" / "current-pipeline.svg"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(svg)
+    pending_path = enqueue_candidate(home, cfg, {
+        "kind": "solutions",
+        "scope": "project",
+        "project_key": "git-abc",
+        "title": "Pipeline Diagram",
+        "body": "## 图\n![pipeline](task_memo_assets/vega-pipeline/current-pipeline.svg)\n",
+        "source": {"run_id": run_id, "task_id": "task-132"},
+    })
+    candidate_id = read_json(pending_path)["id"]
+
+    entry_path = approve_candidate(home, cfg, candidate_id)
+    entry = read_entry(entry_path)
+
+    assert "![pipeline](assets/pipeline-diagram/current-pipeline.svg)" in entry["body"]
+    assert entry["meta"]["assets"] == [
+        {
+            "name": "current-pipeline.svg",
+            "original": "current-pipeline.svg",
+            "mime": "image/svg+xml",
+            "size": len(svg),
+            "path": "assets/pipeline-diagram/current-pipeline.svg",
+        }
+    ]
+    assert (Path(entry_path).parent / "assets" / "pipeline-diagram" / "current-pipeline.svg").read_bytes() == svg
+    assert source.read_bytes() == svg
 
 
 def test_promote_assets_idempotent_never_overwrites(tmp_path: Path):

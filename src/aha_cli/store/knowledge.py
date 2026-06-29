@@ -26,6 +26,7 @@ import json
 import re
 import shutil
 from pathlib import Path
+from urllib.parse import unquote
 
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.store.io import read_json, write_json
@@ -865,6 +866,104 @@ def remove_pending(root: Path, config: dict | None, candidate_id_value: str) -> 
     return False
 
 
+_TASK_MEMO_IMAGE_LINK_RE = re.compile(r"!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
+
+
+def _task_memo_asset_name_from_markdown_path(path_text: str) -> str:
+    clean = str(path_text or "").strip().split("#", 1)[0].split("?", 1)[0]
+    if clean.startswith("task_memo_assets/"):
+        return clean.removeprefix("task_memo_assets/")
+    if clean.startswith("/api/task-memo-assets/"):
+        return unquote(clean.removeprefix("/api/task-memo-assets/").strip("/"))
+    return ""
+
+
+def _merge_entry_assets(existing: object, additions: list[dict]) -> list[dict]:
+    assets = [dict(item) for item in existing or [] if isinstance(item, dict)]
+    seen = {str(item.get("path") or "") for item in assets}
+    for item in additions:
+        path = str(item.get("path") or "")
+        if path and path not in seen:
+            assets.append(dict(item))
+            seen.add(path)
+    return assets
+
+
+def _entry_asset_target_name(dest: Path, source_name: str, data: bytes) -> str:
+    leaf = Path(source_name).name.strip() or "image"
+    target = dest / leaf
+    if not target.exists():
+        return leaf
+    try:
+        if target.read_bytes() == data:
+            return leaf
+    except OSError:
+        pass
+    return f"{hashlib.sha256(data).hexdigest()[:8]}-{leaf}"
+
+
+def _promote_task_memo_assets_for_entry(
+    root: Path,
+    config: dict | None,
+    candidate: dict,
+    body: str,
+    *,
+    scope: str,
+    kind: str,
+    project_key: str | None,
+    slug: str,
+) -> dict | None:
+    source = candidate.get("source") if isinstance(candidate.get("source"), dict) else {}
+    run_id = str(source.get("run_id") or candidate.get("run_id") or "").strip()
+    if not run_id or ("task_memo_assets/" not in body and "/api/task-memo-assets/" not in body):
+        return None
+
+    try:
+        from aha_cli.store.task_memo_assets import read_task_memo_asset
+
+        dest = entry_dir(knowledge_root(root, config), scope, kind, project_key) / "assets" / slug
+    except (ImportError, ValueError):
+        return None
+    dest.mkdir(parents=True, exist_ok=True)
+
+    assets: list[dict] = []
+    promoted: dict[str, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        alt = match.group(1)
+        raw_path = match.group(2)
+        asset_name = _task_memo_asset_name_from_markdown_path(raw_path)
+        if not asset_name:
+            return match.group(0)
+        if asset_name in promoted:
+            return f"![{alt}]({promoted[asset_name]})"
+        try:
+            data, mime, safe_name = read_task_memo_asset(root, run_id, asset_name)
+        except (FileNotFoundError, OSError, ValueError):
+            return match.group(0)
+        if not str(mime or "").startswith("image/"):
+            return match.group(0)
+        name = _entry_asset_target_name(dest, safe_name, data)
+        target = dest / name
+        if not target.exists():
+            target.write_bytes(data)
+        rel = f"assets/{slug}/{name}"
+        promoted[asset_name] = rel
+        assets.append({
+            "name": name,
+            "original": Path(safe_name).name,
+            "mime": mime,
+            "size": len(data),
+            "path": rel,
+        })
+        return f"![{alt}]({rel})"
+
+    updated_body = _TASK_MEMO_IMAGE_LINK_RE.sub(replace, body)
+    if not assets:
+        return None
+    return {"body": updated_body, "assets": assets}
+
+
 def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) -> Path:
     """Promote a pending candidate into a tracked knowledge entry, then dequeue it."""
     path = pending_dir(root, config) / f"{candidate_id_value}.json"
@@ -897,7 +996,14 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
         if promo["body_suffix"] not in body:
             body = body.rstrip() + promo["body_suffix"]
         meta["source_note_id"] = promo["source_note_id"]
-        meta["assets"] = promo["assets"]
+        meta["assets"] = _merge_entry_assets(meta.get("assets"), promo["assets"])
+
+    task_memo_promo = _promote_task_memo_assets_for_entry(
+        root, config, record, body, scope=scope, kind=kind, project_key=project_key_value, slug=slug,
+    )
+    if task_memo_promo:
+        body = task_memo_promo["body"]
+        meta["assets"] = _merge_entry_assets(meta.get("assets"), task_memo_promo["assets"])
 
     entry_path = write_entry(
         root,

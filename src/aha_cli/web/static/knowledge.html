@@ -1667,10 +1667,27 @@
       openEntryReference(link.getAttribute("href").slice("#kb-entry:".length));
     });
 
-    function pendingImageSrc(path) {
+    function appendRunId(url, runId) {
+      const text = String(url || "").trim();
+      const rid = String(runId || "").trim();
+      if (!text || !rid || /[?&]run_id=/.test(text)) return text;
+      return `${text}${text.includes("?") ? "&" : "?"}run_id=${encodeURIComponent(rid)}`;
+    }
+
+    function pendingCandidateRunId(candidate) {
+      const source = candidate && typeof candidate.source === "object" ? candidate.source : {};
+      return String(source.run_id || candidate?.run_id || pageRunId || "").trim();
+    }
+
+    function pendingImageSrc(path, candidate = null) {
       const raw = String(path || "").trim();
       if (!raw) return "";
       if (/^(data:image\/|https?:\/\/|\/api\/kb\/capture\/image|\/api\/kb\/entry\/image)/i.test(raw)) return raw;
+      const memoSrc = window.AHATaskMemoMarkdown?.memoImageSrc?.(
+        raw,
+        (url) => appendRunId(url, pendingCandidateRunId(candidate)),
+      );
+      if (memoSrc) return memoSrc;
       return "";
     }
 
@@ -1684,7 +1701,7 @@
             documentRef: document,
             t,
             linkHref: knowledgeLinkHref,
-            imageSrc: pendingImageSrc,
+            imageSrc: (path) => pendingImageSrc(path, candidate),
           });
         } else {
           el.textContent = candidate.body || "";
