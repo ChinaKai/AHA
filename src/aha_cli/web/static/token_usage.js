@@ -1,8 +1,8 @@
 (() => {
   const TOKEN_USAGE_TIMEOUT_MS = 600000;
   const TOKEN_USAGE_POLL_MS = 1500;
-  const DEFAULT_SINCE_DAYS = 0;
-  const SINCE_STORAGE_KEY = "aha.tokenUsageSince.v2";
+  const DEFAULT_SINCE_DAYS = 7;
+  const SINCE_STORAGE_KEY = "aha.tokenUsageSince.v3";
 
   function t(key, fallback = "") {
     return window.AHAI18n?.t?.(key, fallback) || fallback;
