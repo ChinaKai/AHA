@@ -206,7 +206,6 @@
     return {
       type,
       settings: value.settings && typeof value.settings === "object" ? { ...value.settings } : {},
-      operation_skill_path: String(value.operation_skill_path || value.operation_skill || ""),
       permissions: normalizeHardwareDebugPermissions(value.permissions)
     };
   }
@@ -222,7 +221,6 @@
         port: device?.port || device?.path || "",
         baudrate: device?.baudrate || device?.baud || 115200
       },
-      operation_skill_path: policy.operation_skill_path || policy.operation_skill || "",
       permissions: policy.permissions || {}
     })).filter(Boolean);
   }
@@ -262,8 +260,7 @@
     if (!policy.enabled) return "off";
     if (!policy.channels.length) return "on | no channels";
     const types = policy.channels.map(channel => channel.type.toUpperCase()).join(", ");
-    const skillCount = policy.channels.filter(channel => channel.operation_skill_path).length;
-    return `${policy.channels.length} channel${policy.channels.length === 1 ? "" : "s"} | ${types} | ${skillCount} skill${skillCount === 1 ? "" : "s"}`;
+    return `${policy.channels.length} channel${policy.channels.length === 1 ? "" : "s"} | ${types}`;
   }
 
   function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates, hostOptions = {}) {

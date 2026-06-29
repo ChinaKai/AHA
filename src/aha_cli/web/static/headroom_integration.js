@@ -268,6 +268,13 @@
     function setOpen(nextOpen) {
       open = Boolean(nextOpen && popover);
       if (!popover) return;
+      if (open) {
+        deps.setRunMaintenanceConsoleOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
+        deps.setWeixinConsoleOpen?.(false);
+        deps.setPlayConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
+      }
       sessionMenu?.classList?.toggle("headroom-integration-open", open);
       popover.hidden = !open;
       button?.setAttribute("aria-expanded", String(open));

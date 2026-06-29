@@ -214,10 +214,12 @@ Tasks may also carry optional board-side automation context under
 `hardware_debug`. The setting is disabled by default for archive and old-plan
 compatibility. New tasks store a list of hardware channels. An empty channel
 list means `NONE`; one task can expose multiple channels such as `UART`, `NFS`,
-and `TELNET` at the same time. Each channel stores only connection settings,
-read/write permissions, and an optional operation skill that describes how to
-operate that channel. When channels are configured, AHA injects a compact
-hardware debug block into task assignment and chat prompts:
+and `TELNET` at the same time. Each channel stores connection settings
+(including optional `username`/`password` for UART/TELNET) and read/write
+permissions. Hardware operation instructions belong in task-level skills under
+`task_skills`, not in per-channel fields. When channels are configured, AHA
+injects a compact hardware debug block into task assignment and chat prompts;
+passwords are intentionally omitted from prompts:
 
 ```json
 {
@@ -227,9 +229,10 @@ hardware debug block into task assignment and chat prompts:
         "type": "uart",
         "settings": {
           "port": "/dev/ttyUSB0",
-          "baudrate": 115200
+          "baudrate": 115200,
+          "username": "board",
+          "password": "secret"
         },
-        "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
         "permissions": {
           "read": true,
           "write": true
@@ -242,7 +245,6 @@ hardware debug block into task assignment and chat prompts:
           "remote_path": "/srv/nfs/rootfs",
           "mount_path": "/mnt/rootfs"
         },
-        "operation_skill_path": "/repo/.aha/skills/nfs-rootfs/SKILL.md",
         "permissions": {
           "read": true,
           "write": false
@@ -257,10 +259,9 @@ Channel entries describe the hardware access target. Permission flags are
 task-local policy for the agent; AHA stores and prompts them, but hardware
 resource locking and device-specific command wrappers are a separate runtime
 capability. Device operations such as reset, entering U-Boot, NFS mount
-workflow, flashing, and env inspection belong in the channel operation skill
-rather than in `hardware_debug`. Legacy `enabled`/`devices`/`serial_*`
-payloads are accepted as compatibility input and normalized to a `uart`
-channel.
+workflow, flashing, and env inspection belong in enabled task skills rather
+than in `hardware_debug`. Legacy `enabled`/`devices`/`serial_*` payloads are
+accepted as compatibility input and normalized to a `uart` channel.
 
 Hardware channel input/output can be mirrored to the Web UI through task-local
 hardware I/O records. AHA stores records under

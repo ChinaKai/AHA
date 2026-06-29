@@ -207,7 +207,10 @@
       if (!elements.weixinConsolePopoverEl) return;
       if (open) {
         deps.setRunMaintenanceConsoleOpen?.(false);
+        deps.setHeadroomIntegrationOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
       }
       elements.sessionMenuEl?.classList.toggle("weixin-open", open);
       if (open) {

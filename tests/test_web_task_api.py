@@ -242,8 +242,9 @@ class WebTaskApiTests(unittest.TestCase):
                                         "settings": {
                                             "port": "/dev/ttyUSB0",
                                             "baudrate": "115200",
+                                            "username": "board",
+                                            "password": "secret",
                                         },
-                                        "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
                                         "permissions": {
                                             "read": True,
                                             "write": True,
@@ -255,8 +256,9 @@ class WebTaskApiTests(unittest.TestCase):
                                         "settings": {
                                             "host": "192.168.1.20",
                                             "port": "23",
+                                            "username": "admin",
+                                            "password": "telnetpw",
                                         },
-                                        "operation_skill_path": "/repo/.aha/skills/telnet-console/SKILL.md",
                                         "permissions": {
                                             "read": True,
                                             "write": False,
@@ -296,7 +298,6 @@ class WebTaskApiTests(unittest.TestCase):
                                         "remote_path": "/srv/nfs/rootfs",
                                         "mount_path": "/mnt/rootfs",
                                     },
-                                    "operation_skill_path": "/repo/.aha/skills/nfs-rootfs/SKILL.md",
                                     "permissions": {
                                         "read": True,
                                         "write": False,
@@ -316,12 +317,18 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
         hardware = body["task"]["hardware_debug"]
         self.assertEqual([channel["type"] for channel in hardware["channels"]], ["uart", "telnet"])
-        self.assertEqual(hardware["channels"][0]["settings"], {"port": "/dev/ttyUSB0", "baudrate": 115200})
-        self.assertEqual(hardware["channels"][0]["operation_skill_path"], "/repo/.aha/skills/uboot-uart/SKILL.md")
+        self.assertEqual(
+            hardware["channels"][0]["settings"],
+            {"port": "/dev/ttyUSB0", "baudrate": 115200, "username": "board", "password": "secret"},
+        )
+        self.assertNotIn("operation_skill_path", hardware["channels"][0])
         self.assertTrue(hardware["channels"][0]["permissions"]["read"])
         self.assertTrue(hardware["channels"][0]["permissions"]["write"])
         self.assertNotIn("reset", hardware["channels"][0]["permissions"])
-        self.assertEqual(hardware["channels"][1]["settings"], {"host": "192.168.1.20", "port": 23, "username": ""})
+        self.assertEqual(
+            hardware["channels"][1]["settings"],
+            {"host": "192.168.1.20", "port": 23, "username": "admin", "password": "telnetpw"},
+        )
         self.assertTrue(hardware["enabled"])
         self.assertNotIn("devices", hardware)
         self.assertTrue(update_body["ok"])
@@ -329,7 +336,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(skills_body["ok"])
         self.assertEqual(skills_body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md", "/repo/.aha/skills/log/SKILL.md"])
         self.assertEqual(update_body["task"]["hardware_debug"]["channels"][0]["type"], "nfs")
-        self.assertEqual(update_body["task"]["hardware_debug"]["channels"][0]["operation_skill_path"], "/repo/.aha/skills/nfs-rootfs/SKILL.md")
+        self.assertNotIn("operation_skill_path", update_body["task"]["hardware_debug"]["channels"][0])
         self.assertTrue(update_body["task"]["hardware_debug"]["channels"][0]["permissions"]["read"])
         self.assertFalse(update_body["task"]["hardware_debug"]["channels"][0]["permissions"]["write"])
         self.assertNotIn("reset", update_body["task"]["hardware_debug"]["channels"][0]["permissions"])

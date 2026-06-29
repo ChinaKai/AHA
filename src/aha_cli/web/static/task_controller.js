@@ -131,16 +131,25 @@
       setTaskSettingsButton(taskSettingsButton("delete"), "delete", t("task.delete", "Delete"), disabled);
     }
 
-    function taskSettingsTriggerFor(taskId) {
-      const buttons = elements.tasksEl?.querySelectorAll("[data-task-settings-trigger]") || [];
-      return Array.from(buttons).find(button => button.getAttribute("data-task-settings-trigger") === taskId) || null;
-    }
-
     function clearTaskSettingsPosition() {
       if (!elements.taskSettingsPanelEl) return;
       elements.taskSettingsPanelEl.style.removeProperty("top");
       elements.taskSettingsPanelEl.style.removeProperty("left");
       elements.taskSettingsPanelEl.style.removeProperty("width");
+    }
+
+    function syncTaskEditorOpenClass() {
+      const body = documentRef.body;
+      if (!body) return;
+      body.classList.toggle(
+        "task-editor-open",
+        body.classList.contains("task-create-editor-open") || body.classList.contains("task-settings-editor-open")
+      );
+    }
+
+    function setTaskSettingsEditorOpen(open) {
+      documentRef.body?.classList.toggle("task-settings-editor-open", Boolean(open));
+      syncTaskEditorOpenClass();
     }
 
     function taskSettingsUseSheet() {
@@ -153,23 +162,9 @@
       clearTaskSettingsPosition();
       const useSheet = taskSettingsUseSheet();
       panel.classList.toggle("task-settings-sheet", useSheet);
-      panel.classList.toggle("task-settings-popover", !useSheet);
-      if (useSheet) return;
-      const trigger = taskSettingsTriggerFor(task.id);
-      const rect = trigger?.getBoundingClientRect?.();
-      if (!rect) return;
-      const margin = 12;
-      const gap = 8;
-      const width = Math.min(360, Math.max(280, windowRef.innerWidth - margin * 2));
-      panel.style.width = `${width}px`;
-      const height = Math.min(panel.offsetHeight || 420, windowRef.innerHeight - margin * 2);
-      let left = rect.right + gap;
-      if (left + width > windowRef.innerWidth - margin) left = rect.left - width - gap;
-      left = Math.max(margin, Math.min(left, windowRef.innerWidth - width - margin));
-      const maxTop = Math.max(margin, windowRef.innerHeight - height - margin);
-      const top = Math.max(margin, Math.min(rect.top, maxTop));
-      panel.style.left = `${Math.round(left)}px`;
-      panel.style.top = `${Math.round(top)}px`;
+      panel.classList.toggle("task-settings-main", !useSheet);
+      panel.classList.toggle("task-settings-popover", false);
+      if (useSheet || !task) return;
     }
 
     function renderTaskSettingsPanel(task, options = {}) {
@@ -178,6 +173,7 @@
       const forceEditors = Boolean(options.forceEditors);
       elements.taskSettingsPanelEl.classList.toggle("hidden", !open);
       elements.taskSettingsPanelEl.hidden = !open;
+      setTaskSettingsEditorOpen(open && !taskSettingsUseSheet());
       if (elements.taskSettingsSubtitleEl) {
         elements.taskSettingsSubtitleEl.textContent = task
           ? `${task.id} | ${deps.pathName?.(task.workspace_path) || "-"}`
@@ -316,6 +312,7 @@
       deps.setTaskSettingsEditorTaskId?.(taskId);
       renderTaskList();
       renderTaskSettingsPanel(taskSettingsTask(), { forceEditors: true });
+      deps.closeTaskCreateDialog?.();
     }
 
     function closeTaskSettings(options = {}) {
@@ -400,6 +397,7 @@
         if (!target) return;
         if (elements.taskSettingsPanelEl?.contains(target)) return;
         if (target.closest("[data-task-settings-trigger]")) return;
+        if (target.closest("#open-task-create")) return;
         closeTaskSettings();
       });
 
@@ -422,6 +420,7 @@
       renderTaskList,
       renderTaskVisibilityFilter,
       renderSelectedHeader,
+      closeTaskSettings,
       selectTask,
       updateTaskVisibility,
       visibleTasks

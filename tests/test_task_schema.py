@@ -26,7 +26,6 @@ class TaskSchemaTests(unittest.TestCase):
                 "hardware_debug": {
                     "enabled": True,
                     "devices": {"id": "legacy-id", "type": "legacy", "port": "/dev/ttyUSB0", "baud": "115200", "prompt": "Sgs #"},
-                    "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
                     "permissions": {"serial_write": "true", "reset": "on"},
                 },
             },
@@ -51,8 +50,11 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertTrue(projection["hardware_debug"]["enabled"])
         hardware_channel = projection["hardware_debug"]["channels"][0]
         self.assertEqual(hardware_channel["type"], "uart")
-        self.assertEqual(hardware_channel["settings"], {"port": "/dev/ttyUSB0", "baudrate": 115200})
-        self.assertEqual(hardware_channel["operation_skill_path"], "/repo/.aha/skills/uboot-uart/SKILL.md")
+        self.assertEqual(
+            hardware_channel["settings"],
+            {"port": "/dev/ttyUSB0", "baudrate": 115200, "username": "", "password": ""},
+        )
+        self.assertNotIn("operation_skill_path", hardware_channel)
         self.assertTrue(hardware_channel["permissions"]["write"])
         self.assertNotIn("reset", hardware_channel["permissions"])
 

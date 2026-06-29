@@ -22,13 +22,10 @@ def hardware_debug_context_for_prompt(task: dict) -> str:
             setting_text = ", ".join(
                 f"{key}={value}"
                 for key, value in settings.items()
-                if value not in (None, "")
+                if key != "password" and value not in (None, "")
             )
             if setting_text:
                 lines.append(f"  settings: {setting_text}")
-        operation_skill_path = str(channel.get("operation_skill_path") or "").strip()
-        if operation_skill_path:
-            lines.append(f"  operation skill path: {operation_skill_path}")
         permissions = channel.get("permissions") or {}
         if permissions:
             permission_text = ", ".join(f"{key}={bool(value)}" for key, value in permissions.items())

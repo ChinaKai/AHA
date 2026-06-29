@@ -134,11 +134,55 @@
       };
     }
 
+    function createProxyEnabledValue() {
+      if (!els.taskProxyEnabledEl) return false;
+      if (els.taskProxyEnabledEl.tagName === "SELECT") {
+        return els.taskProxyEnabledEl.value === "on";
+      }
+      return Boolean(els.taskProxyEnabledEl.checked);
+    }
+
+    function setCreateProxyEnabled(value) {
+      if (!els.taskProxyEnabledEl) return;
+      if (els.taskProxyEnabledEl.tagName === "SELECT") {
+        els.taskProxyEnabledEl.value = value ? "on" : "off";
+      } else {
+        els.taskProxyEnabledEl.checked = Boolean(value);
+      }
+    }
+
+    function renderCreateProxyDefaultsPreview() {
+      const previewEl = els.taskProxyDefaultsPreviewEl;
+      if (!previewEl) return;
+      if (!createProxyEnabledValue()) {
+        previewEl.hidden = true;
+        previewEl.innerHTML = "";
+        return;
+      }
+      const config = backendProxyDefaultConfig();
+      const rows = [
+        ["HTTP", config.http_proxy || ""],
+        ["HTTPS", config.https_proxy || ""],
+        ["NO_PROXY", config.no_proxy || defaults.defaultNoProxy || ""]
+      ];
+      previewEl.innerHTML = rows.map(([label, value]) => `
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <code title="${escapeHtml(value || "-")}">${escapeHtml(value || "-")}</code>
+        </div>
+      `).join("");
+      previewEl.hidden = false;
+    }
+
     function syncCreateProxyDefaultForBackend(options = {}) {
       if (!els.taskProxyEnabledEl) return;
       if (options.force) createProxyOverride = false;
-      if (createProxyOverride && !options.force) return;
-      els.taskProxyEnabledEl.checked = Boolean(backendProxyDefaultConfig().enabled);
+      if (createProxyOverride && !options.force) {
+        renderCreateProxyDefaultsPreview();
+        return;
+      }
+      setCreateProxyEnabled(Boolean(backendProxyDefaultConfig().enabled));
+      renderCreateProxyDefaultsPreview();
     }
 
     function runProxySummary() {
@@ -352,21 +396,6 @@
       }).join("");
     }
 
-    function renderOperationSkillSelect(selectEl, selectedPath = "") {
-      if (!selectEl) return;
-      const options = Array.isArray(getSkillOptions()) ? getSkillOptions() : [];
-      const emptyLabel = window.AHAI18n?.t?.("task.hardware_operation_skill_none", "None") || "None";
-      const rows = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
-      rows.push(...options.map(option => {
-        const path = String(option.path || "").trim();
-        const label = String(option.label || option.id || path).trim();
-        const source = String(option.source || "").trim();
-        const text = source ? `${label} (${source})` : label;
-        return `<option value="${escapeHtml(path)}" ${path === selectedPath ? "selected" : ""}>${escapeHtml(text)}</option>`;
-      }));
-      selectEl.innerHTML = rows.join("");
-    }
-
     function renderTaskSkillsEditor(taskArg) {
       const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
       if (!els.taskSkillsEditorEl || !els.taskSkillsFormEl) return;
@@ -415,7 +444,6 @@
       cards.forEach(card => {
         const toggle = card.querySelector("[data-hardware-channel-toggle]");
         if (toggle) toggle.checked = false;
-        renderOperationSkillSelect(card.querySelector("[data-hardware-operation-skill]"), "");
         card.querySelectorAll("[data-hardware-setting]").forEach(input => {
           input.value = input.defaultValue || "";
         });
@@ -434,7 +462,6 @@
         const channel = byType.get(type) || null;
         const toggle = card.querySelector("[data-hardware-channel-toggle]");
         if (toggle) toggle.checked = Boolean(channel);
-        renderOperationSkillSelect(card.querySelector("[data-hardware-operation-skill]"), channel?.operation_skill_path || "");
         const settings = channel?.settings && typeof channel.settings === "object" ? channel.settings : {};
         card.querySelectorAll("[data-hardware-setting]").forEach(input => {
           const key = input.dataset.hardwareSetting || "";
@@ -630,7 +657,6 @@
       return {
         type,
         settings: readTaskHardwareChannelSettings(card, type),
-        operation_skill_path: String(card.querySelector("[data-hardware-operation-skill]")?.value || "").trim(),
         permissions: {
           read: Boolean(card.querySelector('[data-hardware-permission="read"]')?.checked),
           write: Boolean(card.querySelector('[data-hardware-permission="write"]')?.checked)
@@ -754,6 +780,7 @@
       });
       els.taskProxyEnabledEl?.addEventListener("change", () => {
         createProxyOverride = true;
+        renderCreateProxyDefaultsPreview();
       });
       els.taskSupervisionHostProxyEnabledEl?.addEventListener("change", () => {
         createHostProxyOverride = true;
@@ -792,6 +819,7 @@
       renderTaskSkillsEditor,
       renderTaskProxyEditor,
       renderTaskSupervisionEditor,
+      renderCreateProxyDefaultsPreview,
       resetEditing,
       saveTaskContextConfig,
       saveTaskHardwareConfig,

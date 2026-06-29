@@ -15,6 +15,7 @@ const {
   taskSettingsPanelEl, taskSettingsSubtitleEl, tasksEl, taskVisibilityFilterEl,
   webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
 } = domRefs;
+let taskController = null;
 const initialControllers = window.AHAAppControllerFactory.createInitialControllers(domRefs, {
   accessControlData: () => accessControlData,
   accessControlError: () => accessControlError,
@@ -52,6 +53,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   bootstrapEnvGroups,
   captureContextScrollState,
   claudeEnvModelPrefix,
+  closeTaskSettings: () => taskController?.closeTaskSettings?.(),
   closeEventWebSocket,
   collaborationModeDescription,
   collaborationModeOptions,
@@ -693,11 +695,13 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   selectedTask,
   selectedTaskId: () => selectedTaskId,
   setCreateProxyDefaultsFromInputs,
+  setHeadroomIntegrationOpen: value => headroomIntegrationController?.setHeadroomIntegrationOpen(value),
   setPlayConsoleOpen,
   setRunMaintenanceConsoleOpen,
   setSelectedTaskId: value => { selectedTaskId = value || null; },
   setSessionMenu,
   setSkillsConsoleOpen,
+  setTokenUsageOpen: value => tokenUsageController?.setTokenUsageOpen(value),
   setWeixinConsoleOpen,
   onSkillsChanged: options => {
     bootstrapData = { ...(bootstrapData || {}), skill_options: Array.isArray(options) ? options : [] };
@@ -729,7 +733,7 @@ playConsoleController = featureControllers.playConsoleController;
 skillsConsoleController = featureControllers.skillsConsoleController;
 tokenUsageController = featureControllers.tokenUsageController;
 weixinConsoleController = featureControllers.weixinConsoleController;
-const taskController = window.AHATaskController.createTaskController({
+taskController = window.AHATaskController.createTaskController({
   headerWorkspaceDirEl,
   mobileTaskStatusEl,
   mobileTaskSummaryEl,
@@ -750,6 +754,7 @@ const taskController = window.AHATaskController.createTaskController({
   defaultTaskId,
   documentRef: document,
   dispatchAction: appActions.dispatch,
+  closeTaskCreateDialog: () => uiShell.closeTaskCreateDialog(),
   closeTaskMemoPage: () => taskMemoController.closeDialog?.(),
   normalizeTaskVisibilityFilter,
   renderAgents,

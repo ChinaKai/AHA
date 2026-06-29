@@ -196,27 +196,6 @@
       }).join("");
     }
 
-    function renderHardwareOperationSkillSelect(selectEl, selectedPath = "") {
-      if (!selectEl) return;
-      const options = taskSkillOptions();
-      const emptyLabel = t("task.hardware_operation_skill_none", "None");
-      const rows = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
-      rows.push(...options.map(option => {
-        const path = String(option.path || "").trim();
-        const label = String(option.label || option.id || path).trim();
-        const source = String(option.source || "").trim();
-        const text = source ? `${label} (${source})` : label;
-        return `<option value="${escapeHtml(path)}" ${path === selectedPath ? "selected" : ""}>${escapeHtml(text)}</option>`;
-      }));
-      selectEl.innerHTML = rows.join("");
-    }
-
-    function renderHardwareOperationSkillOptions() {
-      elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-operation-skill]").forEach(selectEl => {
-        renderHardwareOperationSkillSelect(selectEl, String(selectEl.value || ""));
-      });
-    }
-
     function createTaskSkillsPayload() {
       return {
         enabled_paths: selectedTaskSkillPaths()
@@ -253,7 +232,6 @@
       return {
         type,
         settings: readHardwareChannelSettings(card, type),
-        operation_skill_path: String(card.querySelector("[data-hardware-operation-skill]")?.value || "").trim(),
         permissions: readHardwareChannelPermissions(card)
       };
     }
@@ -316,7 +294,6 @@
         const channel = byType.get(type) || null;
         const enabledEl = card.querySelector("[data-hardware-channel-toggle]");
         if (enabledEl) enabledEl.checked = Boolean(channel);
-        renderHardwareOperationSkillSelect(card.querySelector("[data-hardware-operation-skill]"), channel?.operation_skill_path || "");
         const settings = channel?.settings && typeof channel.settings === "object" ? channel.settings : {};
         card.querySelectorAll("[data-hardware-setting]").forEach(input => {
           const key = input.dataset.hardwareSetting || "";
@@ -340,7 +317,7 @@
           model: elements.taskModelEl?.value || "",
           sandbox: elements.taskSandboxEl?.value || "",
           approval: elements.taskApprovalEl?.value || "",
-          proxy_enabled: Boolean(elements.taskProxyEnabledEl?.checked),
+          proxy_enabled: taskProxyEnabledValue(),
           workspace_value: elements.workspaceSelectEl?.value || "",
           workspace_path: selectedWorkspacePath(),
           workspace_custom: elements.workspaceCustomEl?.value || "",
@@ -500,6 +477,24 @@
       if (inputEl && typeof value === "boolean") inputEl.checked = value;
     }
 
+    function taskProxyEnabledValue() {
+      if (!elements.taskProxyEnabledEl) return false;
+      if (elements.taskProxyEnabledEl.tagName === "SELECT") {
+        return elements.taskProxyEnabledEl.value === "on";
+      }
+      return Boolean(elements.taskProxyEnabledEl.checked);
+    }
+
+    function setTaskProxyEnabledValue(value) {
+      if (!elements.taskProxyEnabledEl || typeof value !== "boolean") return;
+      if (elements.taskProxyEnabledEl.tagName === "SELECT") {
+        elements.taskProxyEnabledEl.value = value ? "on" : "off";
+      } else {
+        elements.taskProxyEnabledEl.checked = value;
+      }
+      deps.renderCreateProxyDefaultsPreview?.();
+    }
+
     function restoreWorkspaceDraft(values = {}) {
       if (!elements.workspaceSelectEl) return;
       const workspaceValue = String(values.workspace_value || "");
@@ -552,7 +547,7 @@
       setHardwareChannelValues(values.hardware_channels || [], {
         enabled: typeof values.hardware_enabled === "boolean" ? values.hardware_enabled : undefined
       });
-      setCheckboxValue(elements.taskProxyEnabledEl, values.proxy_enabled);
+      setTaskProxyEnabledValue(values.proxy_enabled);
     }
 
     function memoTaskValues(memo = {}) {
@@ -699,7 +694,7 @@
         }
       );
       deps.setCreateProxyDefaultsFromInputs?.();
-      const createProxyEnabled = Boolean(elements.taskProxyEnabledEl?.checked);
+      const createProxyEnabled = taskProxyEnabledValue();
       const payload = deps.createTaskPayload?.({
         title,
         description,
@@ -830,7 +825,6 @@
         const observer = new windowRef.MutationObserver(() => {
           if (elements.taskCreateDialogEl.open) {
             renderTaskSkillOptions();
-            renderHardwareOperationSkillOptions();
             syncCreateHardwareDebugFields();
             void loadTaskMemoOptions().catch(err => {
               const message = err?.message || String(err);
@@ -843,7 +837,6 @@
       renderDraftBox();
       syncCreateTaskContextFields();
       renderTaskSkillOptions();
-      renderHardwareOperationSkillOptions();
       syncCreateHardwareDebugFields();
       void loadTaskMemoOptions().catch(err => {
         const message = err?.message || String(err);

@@ -164,6 +164,7 @@
     taskSandboxEl: "task-sandbox",
     taskApprovalEl: "task-approval",
     taskProxyEnabledEl: "task-proxy-enabled",
+    taskProxyDefaultsPreviewEl: "task-proxy-defaults-preview",
     taskContextAutoCompactEnabledEl: "task-token-saving-enabled",
     taskContextThresholdFieldEl: "task-token-saving-threshold-field",
     taskContextThresholdEl: "task-token-saving-threshold",

@@ -2,7 +2,7 @@ Hardware debug context:
 - enabled channels: $enabled_channel_count
 $channels
 Hardware debug operating rules:
-- Read the channel operation skill before sending commands through that hardware channel.
+- Read the enabled task skills and channel settings before sending commands through a hardware channel.
 - Treat the permission flags as task-local policy; do not perform disabled hardware operations.
 - A UART/serial port is a continuous stream, not request/response: the board keeps logging
   after power-up even when you send nothing. Watch the stream to judge state (U-Boot countdown,

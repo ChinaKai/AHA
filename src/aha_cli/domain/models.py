@@ -429,6 +429,8 @@ def normalize_task_hardware_debug_uart_settings(value: object) -> dict:
     return {
         "port": port,
         "baudrate": max(1, baudrate),
+        "username": str(raw.get("username") or raw.get("user") or "").strip(),
+        "password": str(raw.get("password") or ""),
     }
 
 
@@ -452,6 +454,7 @@ def normalize_task_hardware_debug_telnet_settings(value: object) -> dict:
         "host": str(raw.get("host") or raw.get("server") or "").strip(),
         "port": max(1, port),
         "username": str(raw.get("username") or raw.get("user") or "").strip(),
+        "password": str(raw.get("password") or ""),
     }
 
 
@@ -473,7 +476,6 @@ def normalize_task_hardware_debug_channel(value: object) -> dict | None:
     return {
         "type": channel_type,
         "settings": settings,
-        "operation_skill_path": str(value.get("operation_skill_path") or value.get("operation_skill") or "").strip(),
         "permissions": normalize_task_hardware_debug_permissions(value.get("permissions")),
     }
 
@@ -499,7 +501,6 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
                         {
                             "type": "uart",
                             "settings": device,
-                            "operation_skill_path": raw.get("operation_skill_path", raw.get("operation_skill")),
                             "permissions": raw.get("permissions"),
                         }
                     )
@@ -510,7 +511,6 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
                     {
                         "type": "uart",
                         "settings": {},
-                        "operation_skill_path": raw.get("operation_skill_path", raw.get("operation_skill")),
                         "permissions": raw.get("permissions"),
                     }
                 )

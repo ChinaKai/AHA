@@ -71,6 +71,29 @@
       } else {
         elements.taskCreateDialogEl.removeAttribute("open");
       }
+      setTaskCreateEditorOpen(false);
+    }
+
+    function taskCreateUsesMainEditor() {
+      return Boolean(windowRef.matchMedia?.("(min-width: 641px)")?.matches);
+    }
+
+    function syncTaskEditorOpenClass() {
+      const body = elements.body;
+      if (!body) return;
+      body.classList.toggle(
+        "task-editor-open",
+        body.classList.contains("task-create-editor-open") || body.classList.contains("task-settings-editor-open")
+      );
+    }
+
+    function setTaskCreateEditorOpen(open) {
+      elements.body?.classList.toggle("task-create-editor-open", Boolean(open));
+      syncTaskEditorOpenClass();
+    }
+
+    function isTaskCreateDialogOpen() {
+      return Boolean(elements.taskCreateDialogEl?.open || elements.body?.classList.contains("task-create-editor-open"));
     }
 
     function openTaskCreateDialog() {
@@ -84,23 +107,55 @@
       deps.syncCreateProxyDefaultForBackend?.({ force: true });
       deps.syncCreateTaskSupervisionModeFields?.({ force: true });
       try {
-        if (typeof elements.taskCreateDialogEl.showModal === "function") {
+        if (taskCreateUsesMainEditor()) {
+          elements.taskCreateDialogEl.setAttribute("open", "");
+          setTaskCreateEditorOpen(true);
+        } else if (typeof elements.taskCreateDialogEl.showModal === "function") {
           if (!elements.taskCreateDialogEl.open) elements.taskCreateDialogEl.showModal();
+          setTaskCreateEditorOpen(false);
         } else {
           elements.taskCreateDialogEl.setAttribute("open", "");
+          setTaskCreateEditorOpen(false);
         }
       } catch (_err) {
         elements.taskCreateDialogEl.setAttribute("open", "");
+        setTaskCreateEditorOpen(taskCreateUsesMainEditor());
       }
+      deps.closeTaskSettings?.();
       windowRef.setTimeout(() => elements.newTaskTitleEl?.focus(), 0);
     }
 
+    function toggleTaskCreateDialog() {
+      if (isTaskCreateDialogOpen()) {
+        closeTaskCreateDialog();
+        return;
+      }
+      openTaskCreateDialog();
+    }
+
     function initTaskCreateDialog() {
-      elements.openTaskCreateEl?.addEventListener("click", openTaskCreateDialog);
+      elements.openTaskCreateEl?.addEventListener("click", toggleTaskCreateDialog);
       elements.closeTaskCreateEl?.addEventListener("click", closeTaskCreateDialog);
       elements.cancelTaskCreateEl?.addEventListener("click", closeTaskCreateDialog);
       elements.taskCreateDialogEl?.addEventListener("click", event => {
         if (event.target === elements.taskCreateDialogEl) closeTaskCreateDialog();
+      });
+      elements.taskCreateDialogEl?.addEventListener("close", () => setTaskCreateEditorOpen(false));
+      documentRef.addEventListener("pointerdown", event => {
+        if (!elements.body?.classList.contains("task-create-editor-open")) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        if (elements.taskCreateDialogEl?.contains(target)) return;
+        if (elements.openTaskCreateEl?.contains(target)) return;
+        if (target.closest("[data-task-settings-trigger]")) return;
+        closeTaskCreateDialog();
+      });
+      documentRef.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || !elements.body?.classList.contains("task-create-editor-open")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        closeTaskCreateDialog();
       });
     }
 

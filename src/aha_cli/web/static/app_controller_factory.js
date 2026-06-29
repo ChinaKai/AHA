@@ -32,7 +32,7 @@
       taskContextAutoCompactEnabledEl, taskContextThresholdEl, taskContextThresholdFieldEl,
       taskSkillSelectEl,
       taskHardwareEditorEl, taskHardwareFormEl, taskHardwareStateEl,
-      taskProxyEditorEl, taskProxyEnabledEl,
+      taskProxyDefaultsPreviewEl, taskProxyEditorEl, taskProxyEnabledEl,
       taskProxyFormEl, taskProxyStateEl, taskSupervisionAskUserFieldEl,
       taskSupervisionAskUserGatesEl, taskSupervisionEditorEl, taskSupervisionFormEl,
       taskSupervisionHostModelEl, taskSupervisionHostModelFieldEl,
@@ -106,6 +106,7 @@
         runProxyStateEl,
         taskBackendEl,
         taskProxyEnabledEl,
+        taskProxyDefaultsPreviewEl,
         taskProxyEditorEl,
         taskProxyFormEl,
         selectedTaskProxyEnabledEl,
@@ -215,6 +216,7 @@
       activeTab: deps.activeTab,
       activateTab: deps.activateTab,
       alertError: deps.alertError,
+      closeTaskSettings: () => deps.closeTaskSettings?.(),
       currentRunId: deps.currentRunId,
       selectedTask: deps.selectedTask,
       hasMessage: () => deps.messageComposer?.()?.hasMessage(),
@@ -460,7 +462,10 @@
       currentRunId: deps.currentRunId,
       escapeHtml: deps.escapeHtml,
       fetchJson: deps.fetchJson,
+      setHeadroomIntegrationOpen: deps.setHeadroomIntegrationOpen,
       setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
+      setTokenUsageOpen: deps.setTokenUsageOpen,
       setWeixinConsoleOpen: deps.setWeixinConsoleOpen
     });
 
@@ -475,6 +480,11 @@
       fetchJson: deps.fetchJson,
       fetchWithTimeout: deps.fetchWithTimeout,
       readJsonResponse: deps.readJsonResponse,
+      setHeadroomIntegrationOpen: deps.setHeadroomIntegrationOpen,
+      setPlayConsoleOpen: deps.setPlayConsoleOpen,
+      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
+      setWeixinConsoleOpen: deps.setWeixinConsoleOpen,
       windowRef: deps.windowRef
     });
 
@@ -487,6 +497,11 @@
       applyBootstrapPayload: deps.applyBootstrapPayload,
       bootstrapData: deps.bootstrapData,
       fetchJson: deps.fetchJson,
+      setPlayConsoleOpen: deps.setPlayConsoleOpen,
+      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
+      setTokenUsageOpen: deps.setTokenUsageOpen,
+      setWeixinConsoleOpen: deps.setWeixinConsoleOpen,
       windowRef: deps.windowRef
     });
 
@@ -500,8 +515,10 @@
       escapeHtml: deps.escapeHtml,
       fetchJson: deps.fetchJson,
       onSkillsChanged: deps.onSkillsChanged,
+      setHeadroomIntegrationOpen: deps.setHeadroomIntegrationOpen,
       setPlayConsoleOpen: deps.setPlayConsoleOpen,
       setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setTokenUsageOpen: deps.setTokenUsageOpen,
       setWeixinConsoleOpen: deps.setWeixinConsoleOpen
     });
 
@@ -518,8 +535,11 @@
       fetchJson: deps.fetchJson,
       formatDuration: deps.formatDuration,
       formatLocalTimestamp: deps.formatLocalTimestamp,
+      setHeadroomIntegrationOpen: deps.setHeadroomIntegrationOpen,
       setPlayConsoleOpen: deps.setPlayConsoleOpen,
-      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen
+      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
+      setTokenUsageOpen: deps.setTokenUsageOpen
     });
 
     const taskCreateController = window.AHATaskCreateController.createTaskCreateController({
@@ -580,6 +600,7 @@
       readAskUserGateControls: deps.readAskUserGateControls,
       realtimeDebug: deps.realtimeDebug,
       refreshRunScopedView: deps.refreshRunScopedView,
+      renderCreateProxyDefaultsPreview: () => taskConfigController.renderCreateProxyDefaultsPreview?.(),
       resetEventWebSocketReconnectState: deps.resetEventWebSocketReconnectState,
       runScopedPayload: deps.runScopedPayload,
       selectTask: deps.selectTask,

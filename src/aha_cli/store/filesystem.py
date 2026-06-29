@@ -960,7 +960,6 @@ def update_task_hardware_debug_config(
     channels: object = UNSET,
     enabled: object = UNSET,
     devices: object = UNSET,
-    operation_skill_path: object = UNSET,
     permissions: object = UNSET,
 ) -> dict:
     with locked_plan(root, run_id):
@@ -973,7 +972,7 @@ def update_task_hardware_debug_config(
             hardware_debug["channels"] = channels
             if enabled is UNSET:
                 hardware_debug["enabled"] = bool(channels)
-        elif any(item is not UNSET for item in (devices, operation_skill_path, permissions)):
+        elif any(item is not UNSET for item in (devices, permissions)):
             existing_uart = next(
                 (channel for channel in hardware_debug.get("channels") or [] if isinstance(channel, dict) and channel.get("type") == "uart"),
                 {},
@@ -990,11 +989,6 @@ def update_task_hardware_debug_config(
                 {
                     "type": "uart",
                     "settings": legacy_device,
-                    "operation_skill_path": (
-                        operation_skill_path
-                        if operation_skill_path is not UNSET
-                        else existing_uart.get("operation_skill_path", "")
-                    ),
                     "permissions": permissions if permissions is not UNSET else existing_uart.get("permissions", {}),
                 }
             ]

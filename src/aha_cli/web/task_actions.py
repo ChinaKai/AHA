@@ -128,10 +128,6 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
         if not isinstance(devices, (list, dict)):
             raise ValueError("devices must be a list or object")
         update["devices"] = devices
-    if "operation_skill_path" in payload:
-        update["operation_skill_path"] = str(payload.get("operation_skill_path") or "")
-    elif "operation_skill" in payload:
-        update["operation_skill_path"] = str(payload.get("operation_skill") or "")
     if "permissions" in payload:
         permissions = payload.get("permissions")
         if not isinstance(permissions, dict):

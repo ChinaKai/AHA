@@ -105,7 +105,10 @@
       if (!elements.playConsolePopoverEl) return;
       if (open) {
         deps.setRunMaintenanceConsoleOpen?.(false);
+        deps.setHeadroomIntegrationOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
         deps.setWeixinConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
       }
       elements.sessionMenuEl?.classList.toggle("play-open", open);
       if (open) {

@@ -339,9 +339,10 @@ class ChatPromptTests(unittest.TestCase):
                                 "id": "dev-board-1",
                                 "port": "/dev/ttyUSB0",
                                 "baudrate": 115200,
+                                "username": "board",
+                                "password": "secret",
                                 "prompt": "Sgs #",
                             },
-                            "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
                             "permissions": {"write": True, "reset": True, "flash": False},
                         },
                         {
@@ -349,8 +350,9 @@ class ChatPromptTests(unittest.TestCase):
                             "settings": {
                                 "host": "192.168.1.20",
                                 "port": 23,
+                                "username": "admin",
+                                "password": "telnetpw",
                             },
-                            "operation_skill_path": "/repo/.aha/skills/telnet-console/SKILL.md",
                             "permissions": {"read": True, "write": False},
                         },
                     ],
@@ -384,24 +386,27 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", prompt)
         self.assertIn("channel 1: type=uart", prompt)
         self.assertIn("channel 2: type=telnet", prompt)
-        self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", prompt)
-        self.assertIn("operation skill path: /repo/.aha/skills/telnet-console/SKILL.md", prompt)
         self.assertIn("port=/dev/ttyUSB0", prompt)
         self.assertIn("baudrate=115200", prompt)
+        self.assertIn("username=board", prompt)
+        self.assertIn("username=admin", prompt)
         self.assertIn("write=True", prompt)
         self.assertNotIn("id=dev-board-1", prompt)
         self.assertNotIn("prompt=Sgs #", prompt)
         self.assertNotIn("flash=False", prompt)
+        self.assertNotIn("operation skill path", prompt)
+        self.assertNotIn("password=secret", prompt)
+        self.assertNotIn("password=telnetpw", prompt)
         self.assertEqual(sticky_metrics["prompt_mode"], "sticky_delta")
         self.assertEqual(sticky_prompt, "use hardware again")
         self.assertEqual(set(sticky_metrics["components"]), {"user_message"})
         self.assertNotIn("Task skills context:", sticky_prompt)
         self.assertNotIn("Hardware debug context:", sticky_prompt)
         self.assertNotIn("/repo/.aha/skills/board-debug/SKILL.md", sticky_prompt)
-        self.assertNotIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", sticky_prompt)
         self.assertNotIn("port=/dev/ttyUSB0", sticky_prompt)
         self.assertNotIn("channel 2: type=telnet", sticky_prompt)
         self.assertNotIn("write=True", sticky_prompt)
+        self.assertNotIn("operation skill path", sticky_prompt)
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1219,8 +1224,7 @@ class ChatPromptTests(unittest.TestCase):
                     channels=[
                         {
                             "type": "uart",
-                            "settings": {"port": "/dev/ttyUSB0", "baudrate": 115200},
-                            "operation_skill_path": "/repo/.aha/skills/uboot-uart/SKILL.md",
+                            "settings": {"port": "/dev/ttyUSB0", "baudrate": 115200, "username": "u", "password": "p"},
                             "permissions": {"read": True, "write": True},
                         }
                     ],
@@ -1244,7 +1248,10 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Task skills context:", prompt)
         self.assertIn("AHA conversation image output:", prompt)
         self.assertIn("task_memo_assets/example.png", prompt)
-        self.assertIn("operation skill path: /repo/.aha/skills/uboot-uart/SKILL.md", prompt)
+        self.assertIn("port=/dev/ttyUSB0", prompt)
+        self.assertIn("username=u", prompt)
+        self.assertNotIn("password=p", prompt)
+        self.assertNotIn("operation skill path", prompt)
         self.assertIn("/repo/.aha/skills/board-debug/SKILL.md", prompt)
         self.assertIn("continue with image output", prompt)
         self.assertIn("context_delta", metrics["components"])
