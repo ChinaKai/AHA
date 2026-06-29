@@ -67,6 +67,51 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertFalse(start_backend.call_args.kwargs["from_start"])
         self.assertEqual([item["message"] for item in messages], ["continue"])
 
+    def test_aha_agent_routed_commands_queue_backend_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "AHA command autostart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+                queued: list[dict | None] = []
+
+                def queue_backend_start(_root: Path, _run_id: str, autostart: dict | None) -> dict | None:
+                    queued.append(autostart)
+                    return {"queued": True, "target": autostart["target"], "task_id": autostart["task_id"]} if autostart else None
+
+                with mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "message": "/aha kb 更新知识库导航状态说明",
+                        },
+                        queued_backend_starter=queue_backend_start,
+                        background_backend_start=True,
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+                offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["backend_start"]["queued"])
+        self.assertEqual(result["backend_start"]["target"], "main")
+        self.assertEqual(result["backend_start"]["task_id"], "task-001")
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["backend"], "codex")
+        self.assertEqual(messages[-1]["command_namespace"], "aha_kb")
+        self.assertEqual(messages[-1]["original_command"], "/aha kb 更新知识库导航状态说明")
+        self.assertTrue(messages[-1]["plain_sticky"])
+        self.assertIn("AHA knowledge-base feedback request.", messages[-1]["message"])
+
     def test_supervision_host_message_advances_offset_without_autostart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

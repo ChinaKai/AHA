@@ -97,8 +97,14 @@
       }
     }
 
+    function shouldSkipOptimisticSendFeedback(message) {
+      const text = String(message || "").trim();
+      if (!deps.isAhaCommand?.(text)) return false;
+      return !/^\/aha\s+(kb|nav)\s+\S[\s\S]*$/i.test(text);
+    }
+
     function addOptimisticSendFeedback(task, target, message) {
-      if (!task || !target || !message || deps.isAhaCommand?.(message)) return false;
+      if (!task || !target || !message || shouldSkipOptimisticSendFeedback(message)) return false;
       clearOptimisticEventsForContext(task.id, target);
       const ts = new Date().toISOString();
       const role = target === "main" ? "main" : "sub";
