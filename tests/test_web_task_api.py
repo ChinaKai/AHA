@@ -474,6 +474,20 @@ class WebTaskApiTests(unittest.TestCase):
                     )
                 )
                 asset = json_response_body(asset_response)["asset"]
+                svg_asset_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task-memo-assets",
+                        method="POST",
+                        payload={
+                            "filename": "diagram.svg",
+                            "content_type": "image/svg+xml",
+                            "data_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg==",
+                        },
+                    )
+                )
+                svg_asset = json_response_body(svg_asset_response)["asset"]
                 heic_asset_response = asyncio.run(
                     fetch_ui_response(
                         root,
@@ -550,6 +564,10 @@ class WebTaskApiTests(unittest.TestCase):
                     fetch_ui_response(root, run_id, f"/api/task-memo-assets/{asset['filename']}?run_id={run_id}")
                 )
                 asset_fetch_headers, asset_fetch_body = asset_fetch_response.split(b"\r\n\r\n", 1)
+                svg_asset_fetch_response = asyncio.run(
+                    fetch_ui_response(root, run_id, f"/api/task-memo-assets/{svg_asset['filename']}?run_id={run_id}")
+                )
+                svg_asset_fetch_headers, svg_asset_fetch_body = svg_asset_fetch_response.split(b"\r\n\r\n", 1)
                 semantic_svg_path = run_dir(root, run_id) / "task_memo_assets" / "vega_pipeline" / "current_pipeline.svg"
                 semantic_svg_path.parent.mkdir(parents=True, exist_ok=True)
                 semantic_svg_path.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')
@@ -706,6 +724,11 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(asset_fetch_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertIn(b"Content-Type: image/png", asset_fetch_headers)
         self.assertEqual(asset_fetch_body, b"\x89PNG\r\n\x1a\n")
+        self.assertTrue(svg_asset_response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(svg_asset["content_type"], "image/svg+xml")
+        self.assertTrue(svg_asset["filename"].endswith(".svg"))
+        self.assertIn(b"Content-Type: image/svg+xml", svg_asset_fetch_headers)
+        self.assertEqual(svg_asset_fetch_body, b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')
         self.assertTrue(semantic_svg_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertIn(b"Content-Type: image/svg+xml", semantic_svg_headers)
         self.assertEqual(semantic_svg_body, b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')

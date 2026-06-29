@@ -22,6 +22,7 @@ IMAGE_TYPES = {
     "image/heif-sequence": ".heif",
     "image/jpeg": ".jpg",
     "image/png": ".png",
+    "image/svg+xml": ".svg",
     "image/webp": ".webp",
 }
 DATA_URL_RE = re.compile(r"^data:([^;,]*);base64,(.*)$", re.DOTALL)
@@ -43,6 +44,8 @@ def normalize_image_type(value: object) -> str:
         content_type = "image/heic"
     if content_type == "image/x-heif":
         content_type = "image/heif"
+    if content_type in {"image/svg", "image/x-svg+xml"}:
+        content_type = "image/svg+xml"
     if content_type not in IMAGE_TYPES:
         raise ValueError(f"unsupported memo image type: {content_type or 'unknown'}")
     return content_type
@@ -54,6 +57,8 @@ def image_type_from_filename(value: object) -> str:
         return "image/jpeg"
     if suffix == ".png":
         return "image/png"
+    if suffix == ".svg":
+        return "image/svg+xml"
     if suffix == ".gif":
         return "image/gif"
     if suffix == ".webp":

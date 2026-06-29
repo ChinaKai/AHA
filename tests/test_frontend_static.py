@@ -1951,6 +1951,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("memo.image_paste_failed", memo_markdown)
         self.assertIn("memo.image_upload_failed", memo_markdown)
         self.assertIn("function memoAssetContentType", memo_markdown)
+        self.assertIn('if (/\\.svg$/.test(name)) return "image/svg+xml";', memo_markdown)
         self.assertIn("function memoImageFileType", memo_markdown)
         self.assertIn("normalizeMemoImageDataUrl(dataUrl, file)", memo_markdown)
         self.assertIn("memoImageFailureMessage(failureMessage, err)", memo_markdown)

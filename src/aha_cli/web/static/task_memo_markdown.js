@@ -46,6 +46,7 @@
     const name = String(file?.name || "").trim().toLowerCase();
     if (/\.(jpe?g)$/.test(name)) return "image/jpeg";
     if (/\.png$/.test(name)) return "image/png";
+    if (/\.svg$/.test(name)) return "image/svg+xml";
     if (/\.gif$/.test(name)) return "image/gif";
     if (/\.webp$/.test(name)) return "image/webp";
     if (/\.avif$/.test(name)) return "image/avif";

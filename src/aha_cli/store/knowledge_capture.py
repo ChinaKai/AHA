@@ -37,7 +37,7 @@ CAPTURE_SCOPES = ("personal", "project", "general")
 
 # Image guardrails (no new dependency): allow only these types, sniffed from the
 # bytes (not the filename), and bound per-image / per-note total size.
-ALLOWED_IMAGE_MIME = {"image/png", "image/jpeg", "image/webp"}
+ALLOWED_IMAGE_MIME = {"image/png", "image/jpeg", "image/svg+xml", "image/webp"}
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_NOTE_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 
@@ -47,19 +47,33 @@ class ImageRejected(ValueError):
 
 
 def sniff_image_mime(data: bytes) -> str | None:
-    """Detect png/jpeg/webp from magic bytes; None if unrecognized."""
+    """Detect supported image types from bytes; None if unrecognized."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
+    if _looks_like_svg(data):
+        return "image/svg+xml"
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
 
 
+def _looks_like_svg(data: bytes) -> bool:
+    sample = bytes(data[:4096]).lstrip()
+    if sample.startswith(b"\xef\xbb\xbf"):
+        sample = sample[3:].lstrip()
+    lowered = sample.lower()
+    if lowered.startswith(b"<?xml"):
+        end = lowered.find(b"?>")
+        if end >= 0:
+            lowered = lowered[end + 2:].lstrip()
+    return lowered.startswith(b"<svg") and (len(lowered) == 4 or lowered[4] in b" \t\r\n>/")
+
+
 def _safe_asset_name(filename: str, mime: str) -> str:
     """Filesystem-safe asset filename with an extension matching the sniffed mime."""
-    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(mime, "")
+    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}.get(mime, "")
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", (filename or "").rsplit("/", 1)[-1]).strip("._") or "image"
     stem = stem.rsplit(".", 1)[0][:60] or "image"
     return f"{stem}{ext}"
@@ -403,7 +417,7 @@ def add_note_image(
         raise FileNotFoundError(f"capture note not found: {note_id}")
     mime = sniff_image_mime(data or b"")
     if mime not in ALLOWED_IMAGE_MIME:
-        raise ImageRejected("unsupported image type (allowed: png, jpeg, webp)")
+        raise ImageRejected("unsupported image type (allowed: png, jpeg, svg, webp)")
     if len(data) > MAX_IMAGE_BYTES:
         raise ImageRejected(f"image exceeds {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit")
     images = list(record.get("images") or [])

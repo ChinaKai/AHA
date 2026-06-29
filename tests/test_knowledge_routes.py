@@ -299,6 +299,26 @@ def test_capture_image_upload_serve_and_delete(tmp_path: Path):
     assert len(note["images"]) == 1
 
 
+def test_capture_svg_image_upload_and_serve(tmp_path: Path):
+    import base64
+
+    home = _setup(tmp_path)
+    created = json_response_body(_post(home, "/api/kb/capture", {"text": "with svg"}))
+    nid = created["note"]["id"]
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+    data_url = "data:image/svg+xml;base64," + base64.b64encode(svg).decode()
+
+    up = json_response_body(_post(home, "/api/kb/capture/image", {"id": nid, "filename": "diagram.svg", "data_url": data_url}))
+    assert up["image"]["mime"] == "image/svg+xml"
+    assert up["image"]["name"].endswith(".svg")
+    name = up["image"]["name"]
+
+    raw = knowledge_route_response(home, "GET", "/api/kb/capture/image", {"id": [nid], "name": [name]}, b"", {})
+    headers, body = raw.split(b"\r\n\r\n", 1)
+    assert b"Content-Type: image/svg+xml" in headers
+    assert body == svg
+
+
 def test_capture_image_rejects_non_image(tmp_path: Path):
     import base64
 
@@ -351,6 +371,28 @@ def test_entry_image_upload_and_serve(tmp_path: Path):
     )
     assert b"Content-Type: image/png" in raw.split(b"\r\n\r\n", 1)[0]
     assert raw.split(b"\r\n\r\n", 1)[1] == png
+
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+    svg_data_url = "data:image/svg+xml;base64," + base64.b64encode(svg).decode()
+    svg_up = json_response_body(_post(home, "/api/kb/entry/image", {
+        "id": entry["meta"]["id"],
+        "filename": "diagram.svg",
+        "data_url": svg_data_url,
+    }))
+    svg_image = svg_up["image"]
+    assert svg_image["mime"] == "image/svg+xml"
+    assert svg_image["path"].endswith(".svg")
+    svg_raw = knowledge_route_response(
+        home,
+        "GET",
+        "/api/kb/entry/image",
+        {"id": [entry["meta"]["id"]], "path": [svg_image["path"]]},
+        b"",
+        {},
+    )
+    svg_headers, svg_body = svg_raw.split(b"\r\n\r\n", 1)
+    assert b"Content-Type: image/svg+xml" in svg_headers
+    assert svg_body == svg
 
 
 def test_capture_distill_forwards_backend_model_and_proxy(tmp_path: Path, monkeypatch):

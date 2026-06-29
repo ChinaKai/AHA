@@ -15,7 +15,7 @@ from aha_cli.store.knowledge import (
 )
 
 ENTRY_ASSETS_DIR = "assets"
-ALLOWED_ENTRY_IMAGE_MIME = {"image/png", "image/jpeg", "image/webp"}
+ALLOWED_ENTRY_IMAGE_MIME = {"image/png", "image/jpeg", "image/svg+xml", "image/webp"}
 MAX_ENTRY_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_ENTRY_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 
@@ -29,13 +29,27 @@ def _sniff_entry_image_mime(data: bytes) -> str | None:
         return "image/png"
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
+    if _looks_like_svg(data):
+        return "image/svg+xml"
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
 
 
+def _looks_like_svg(data: bytes) -> bool:
+    sample = bytes(data[:4096]).lstrip()
+    if sample.startswith(b"\xef\xbb\xbf"):
+        sample = sample[3:].lstrip()
+    lowered = sample.lower()
+    if lowered.startswith(b"<?xml"):
+        end = lowered.find(b"?>")
+        if end >= 0:
+            lowered = lowered[end + 2:].lstrip()
+    return lowered.startswith(b"<svg") and (len(lowered) == 4 or lowered[4] in b" \t\r\n>/")
+
+
 def _safe_entry_asset_name(filename: str, mime: str) -> str:
-    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(mime, "")
+    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}.get(mime, "")
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", (filename or "").rsplit("/", 1)[-1]).strip("._") or "image"
     stem = stem.rsplit(".", 1)[0][:60] or "image"
     return f"{stem}{ext}"
@@ -97,7 +111,7 @@ def add_entry_image(
         raise FileNotFoundError(f"entry not found: {identifier}")
     mime = _sniff_entry_image_mime(data or b"")
     if mime not in ALLOWED_ENTRY_IMAGE_MIME:
-        raise EntryImageRejected("unsupported image type (allowed: png, jpeg, webp)")
+        raise EntryImageRejected("unsupported image type (allowed: png, jpeg, svg, webp)")
     if len(data) > MAX_ENTRY_IMAGE_BYTES:
         raise EntryImageRejected(f"image exceeds {MAX_ENTRY_IMAGE_BYTES // (1024 * 1024)}MB limit")
     meta = dict(entry.get("meta") or {})
