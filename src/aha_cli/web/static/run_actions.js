@@ -7,7 +7,7 @@
     const alertUser = deps.alert || (message => window.alert(message));
     const windowRef = deps.windowRef || window;
     const documentRef = elements.documentRef || document;
-    const requestTimeoutMs = Number(deps.requestTimeoutMs || 12000);
+    const requestTimeoutMs = Number(deps.requestTimeoutMs || 30000);
 
     function t(key, fallback = "") {
       return window.AHAI18n?.t?.(key, fallback) || fallback;

@@ -1,6 +1,6 @@
 (() => {
   function createApiClient(options = {}) {
-    const requestTimeoutMs = Number(options.requestTimeoutMs) || 12000;
+    const requestTimeoutMs = Number(options.requestTimeoutMs) || 30000;
     const currentRunId = () => String(options.currentRunId?.() || "").trim();
 
     async function readJsonResponse(res, fallbackMessage = "Request failed") {
