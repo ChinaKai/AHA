@@ -173,7 +173,8 @@
     .kb-entry-edit-preview {
       min-height: 220px; white-space: normal;
     }
-    .kb-pending-body { max-height: min(420px, 55vh); overflow: auto; }
+    .kb-pending-body { max-height: min(420px, 55vh); overflow: auto; white-space: normal; }
+    .kb-pending-body pre { white-space: pre-wrap; }
     #capture-list .kb-card { padding: 8px 10px; margin: 6px 0; gap: 4px; }
     #capture-list .kb-card h3 { font-size: 14px; }
     .kb-cap-preview { font-size: 12px; color: var(--color-text); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 2.8em; overflow: hidden; }
@@ -1666,6 +1667,32 @@
       openEntryReference(link.getAttribute("href").slice("#kb-entry:".length));
     });
 
+    function pendingImageSrc(path) {
+      const raw = String(path || "").trim();
+      if (!raw) return "";
+      if (/^(data:image\/|https?:\/\/|\/api\/kb\/capture\/image|\/api\/kb\/entry\/image)/i.test(raw)) return raw;
+      return "";
+    }
+
+    function renderPendingMarkdown() {
+      for (const el of document.querySelectorAll("[data-pending-body]")) {
+        const id = String(el.dataset.pendingBody || "");
+        const candidate = state.pending.find((item) => String(item.id || "") === id) || { body: "" };
+        el.innerHTML = "";
+        if (window.AHATaskMemoMarkdown) {
+          window.AHATaskMemoMarkdown.renderMarkdownPreview(el, candidate.body || "", {
+            documentRef: document,
+            t,
+            linkHref: knowledgeLinkHref,
+            imageSrc: pendingImageSrc,
+          });
+        } else {
+          el.textContent = candidate.body || "";
+        }
+        if (!el.childNodes.length) el.appendChild(document.createElement("br"));
+      }
+    }
+
     function renderPending() {
       $("#pending-list").innerHTML = state.pending.length
         ? state.pending.map((c) => {
@@ -1687,9 +1714,10 @@
               <button class="kb-approve" type="button" onclick="decide('approve','${esc(c.id)}')">${esc(t("knowledge.approve", "Approve"))}</button>
               <button class="kb-reject" type="button" onclick="decide('reject','${esc(c.id)}')">${esc(t("knowledge.reject", "Reject"))}</button>
             </div>
-            ${expanded ? `<pre class="kb-body kb-pending-body">${esc(c.body)}</pre>` : ""}</div>`;
+            ${expanded ? `<div class="kb-body kb-pending-body" data-pending-body="${pendingDomId}"></div>` : ""}</div>`;
         }).join("")
         : `<p class="kb-muted">${esc(t("knowledge.pending_empty", "No pending candidates"))}</p>`;
+      renderPendingMarkdown();
     }
 
     async function loadPending() {
