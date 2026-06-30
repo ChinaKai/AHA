@@ -204,10 +204,12 @@ def test_distill_note_enqueues_candidates_and_marks_distilled(tmp_path: Path):
     assert pending[0]["scope"] == "personal"
     assert pending[0]["project_key"] is None
     assert pending[0]["title"] == "重试要带指数退避"
+    assert pending[0]["meta"]["distill_mode"] == "organize"
 
     updated = read_note(home, cfg, note["id"])
     assert updated["status"] == "distilled"
     assert updated["candidate_ids"] == result["candidate_ids"]
+    assert result["distill_mode"] == "organize"
 
 
 def test_distill_agent_context_includes_config_and_cwd(tmp_path: Path):
@@ -247,6 +249,7 @@ def test_distill_note_writes_agent_log_success_and_error(tmp_path: Path):
     assert log["id"] == result["log_id"]
     assert log["status"] == "distilled"
     assert log["backend"] == "claude" and log["model"] == "env:work"
+    assert log["distill_mode"] == "organize"
     assert "raw retry idea" in log["prompt"]
     assert "aha_knowledge_candidates" in log["reply"]
     assert log["candidate_ids"] == result["candidate_ids"]
@@ -300,6 +303,7 @@ def test_capture_navigation_distill_log_includes_nav_summary_and_parent(tmp_path
     pending = list_pending(home, cfg)
     by_slug = {item["slug"]: item for item in pending}
     assert set(by_slug) == {"modules/weixin-notifications", "index"}
+    assert all(item["meta"]["distill_mode"] == "organize" for item in pending)
     assert "notification_status.ready" in by_slug["modules/weixin-notifications"]["body"]
     log = read_distill_log(home, cfg, note["id"])
     assert log["navigation"]["candidates"] == 2
@@ -405,10 +409,12 @@ def test_distill_note_passes_effective_backend_and_model_to_agent(tmp_path: Path
     assert seen["backend"] == "codex"
     assert seen["model"] == "env:openai"
     assert seen["proxy_enabled"] is False
+    assert seen["distill_mode"] == "organize"
     log = read_distill_log(home, cfg, note["id"])
     assert log["backend"] == "codex"
     assert log["model"] == "env:openai"
     assert log["proxy_enabled"] is False
+    assert log["distill_mode"] == "organize"
 
 
 def test_distill_rerun_replaces_previous_candidates(tmp_path: Path):
@@ -566,6 +572,33 @@ def test_distill_prompt_uses_title_and_body_as_one_clean_article(tmp_path: Path)
     assert "只读排查发现微信通知入口" in prompt
     assert '"kind":"wiki"' in prompt
     assert "aha_knowledge_candidates" in prompt
+
+
+def test_generate_distill_mode_allows_article_generation_with_guardrails(tmp_path: Path):
+    from aha_cli.services.knowledge_capture_distill import build_capture_prompt
+
+    home = _home(tmp_path)
+    cfg = _cfg()
+    note = create_note(home, cfg, text="只有零散要点：AHA nav 状态要看前端 optimistic。", scope_hint="personal")
+    seen = {}
+
+    def agent(ctx):
+        seen.update(ctx)
+        return _sidecar_reply('[{"kind":"wiki","title":"AHA nav 状态排查","body":"## 结论\\n生成后的文章"}]')
+
+    prompt = build_capture_prompt(note, mode="generate")
+    result = distill_note(home, cfg, note["id"], mode="generate", agent=agent)
+    pending = list_pending(home, cfg)
+    log = read_distill_log(home, cfg, note["id"])
+
+    assert result["ok"]
+    assert result["distill_mode"] == "generate"
+    assert seen["distill_mode"] == "generate"
+    assert "当前模式：生成" in prompt
+    assert "生成一篇可直接进入知识库审核的完整文章" in prompt
+    assert "基于速记推断" in prompt
+    assert pending[0]["meta"]["distill_mode"] == "generate"
+    assert log["distill_mode"] == "generate"
 
 
 def test_approve_promotes_capture_note_assets_to_entry(tmp_path: Path):

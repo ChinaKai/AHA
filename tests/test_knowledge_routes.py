@@ -120,18 +120,20 @@ def test_capture_api_crud_and_distill(tmp_path: Path, monkeypatch):
     # Distill runs synchronously through the seam with a stub agent.
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     resp = json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
     assert resp["status"] == "distilling"
+    assert resp["distill_mode"] == "organize"
 
     note = _get(home, "/api/kb/capture", {"id": [nid]})
     assert note["status"] == "distilled" and note["candidate_ids"]
     assert _get(home, "/api/kb/pending")["count"] == 1
     log = _get(home, "/api/kb/capture/distill-log", {"id": [nid]})["log"]
     assert log["status"] == "distilled"
+    assert log["distill_mode"] == "organize"
     assert "raw retry idea" in log["prompt"]
     assert "aha_knowledge_candidates" in log["reply"]
     assert log["candidate_ids"] == note["candidate_ids"]
@@ -153,8 +155,8 @@ def test_capture_search_and_relationship_refs(tmp_path: Path, monkeypatch):
     nid = created["note"]["id"]
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -201,8 +203,8 @@ def test_capture_reject_preserves_source_note(tmp_path: Path, monkeypatch):
     nid = created["note"]["id"]
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -238,8 +240,8 @@ def test_capture_approve_deletes_source_note_after_last_candidate(tmp_path: Path
         "]"
     )
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -402,12 +404,12 @@ def test_capture_distill_forwards_backend_model_and_proxy(tmp_path: Path, monkey
     nid = json_response_body(_post(home, "/api/kb/capture", {"text": "raw"}))["note"]["id"]
     seen = {}
 
-    def record_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None):
-        seen.update({"note_id": note_id, "backend": backend, "model": model, "proxy_enabled": proxy_enabled})
+    def record_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
+        seen.update({"note_id": note_id, "backend": backend, "model": model, "proxy_enabled": proxy_enabled, "mode": mode})
 
     monkeypatch.setattr(kr, "dispatch_distill_job", record_dispatch)
-    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False}))
-    assert seen == {"note_id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False}
+    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False, "distill_mode": "generate"}))
+    assert seen == {"note_id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False, "mode": "generate"}
 
 
 def test_capture_distill_missing_note_is_404(tmp_path: Path):

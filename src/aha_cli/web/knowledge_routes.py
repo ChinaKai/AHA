@@ -53,7 +53,7 @@ from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 
 
-def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, model, proxy_enabled=None) -> None:
+def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, model, proxy_enabled=None, mode=None) -> None:
     """Run a capture distill as a background daemon thread (non-blocking).
 
     Seam: tests replace ``dispatch_distill_job`` to run synchronously with a
@@ -67,7 +67,7 @@ def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, 
     threading.Thread(
         target=run_distill_job,
         args=(root, cfg, note_id),
-        kwargs={"backend": backend, "model": model, "proxy_enabled": proxy_enabled},
+        kwargs={"backend": backend, "model": model, "proxy_enabled": proxy_enabled, "mode": mode or "organize"},
         daemon=True,
     ).start()
 
@@ -1216,6 +1216,8 @@ def knowledge_route_response(
 
     # --- Capture inbox (raw notes) ------------------------------------------ #
     if method == "POST" and path == "/api/kb/capture/distill":
+        from aha_cli.services.knowledge_capture_distill import normalize_distill_mode
+
         payload = parse_json_body(body) if body.strip() else {}
         note_id = str(payload.get("id") or "").strip()
         note = capture.read_note(root, cfg, note_id)
@@ -1225,11 +1227,15 @@ def knowledge_route_response(
             proxy_enabled = _optional_bool(payload.get("proxy_enabled"), "proxy_enabled")
         except ValueError as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
+        try:
+            distill_mode = normalize_distill_mode(payload.get("distill_mode") or payload.get("mode"))
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
         # Mark distilling synchronously so an immediate poll observes the job,
         # then run the slow model call off the request thread.
         capture.update_note(root, cfg, note_id, status="distilling", last_error="")
-        dispatch_distill_job(root, cfg, note_id, payload.get("backend"), payload.get("model"), proxy_enabled)
-        return json_response({"ok": True, "id": note_id, "status": "distilling"})
+        dispatch_distill_job(root, cfg, note_id, payload.get("backend"), payload.get("model"), proxy_enabled, distill_mode)
+        return json_response({"ok": True, "id": note_id, "status": "distilling", "distill_mode": distill_mode})
 
     if method in {"GET", "HEAD"} and path == "/api/kb/capture/distill-log":
         note_id = str(query.get("id", [""])[0] or "").strip()

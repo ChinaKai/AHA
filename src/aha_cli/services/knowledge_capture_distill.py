@@ -47,10 +47,46 @@ from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 
 # Seam: raw context -> agent reply text (expected to contain the sidecar block).
 CaptureAgent = Callable[[dict], str]
+CAPTURE_DISTILL_MODES = ("organize", "generate")
 
 
 class CaptureAgentError(RuntimeError):
     """Raised when the real capture agent cannot produce a reply."""
+
+
+def normalize_distill_mode(value: object = None) -> str:
+    clean = str(value or "").strip().lower()
+    if not clean or clean in {"organize", "organized", "distill", "整理"}:
+        return "organize"
+    if clean in {"generate", "generated", "create", "gen", "生成"}:
+        return "generate"
+    raise ValueError("distill_mode must be organize or generate")
+
+
+def _distill_mode_prompt_parts(mode: str) -> dict[str, str]:
+    if normalize_distill_mode(mode) == "generate":
+        return {
+            "distill_mode_label": "生成",
+            "distill_mode_summary": "根据原始 note 生成一篇可直接进入知识库审核的完整文章。",
+            "distill_mode_rules": "\n".join(
+                [
+                    "- 可以主动组织结构、补足行文衔接、提炼标题、扩写步骤和解释，让文章像完整知识文档。",
+                    "- 事实依据必须来自原始 note；不要把外部知识或猜测写成事实。",
+                    "- 如果需要补充合理推断，必须在正文中明确标注“基于速记推断”或“待确认”。",
+                    "- 不要抹掉原文中的不确定性、限制条件和待办问题。",
+                ]
+            ),
+        }
+    return {
+        "distill_mode_label": "整理",
+        "distill_mode_summary": "把收到的原始 note 整理成一篇逻辑清晰的文章。只做格式、段落和表达顺序整理，不要拓展，不要总结成新的观点，也不要修改核心内容。",
+        "distill_mode_rules": "\n".join(
+            [
+                "- 只做整理、去重、归类和表达顺序调整，不新增原文没有的信息。",
+                "- 可以删除明显重复、口头禅和无意义闲聊，但不要删除会改变含义的信息。",
+            ]
+        ),
+    }
 
 
 def _image_manifest(note: dict) -> str:
@@ -73,14 +109,16 @@ def _image_manifest(note: dict) -> str:
     return "\n" + render_prompt_template("knowledge_capture_image_manifest.md", images="\n".join(lines)).rstrip()
 
 
-def build_capture_prompt(note: dict) -> str:
+def build_capture_prompt(note: dict, *, mode: str = "organize") -> str:
     """Prompt instructing an agent to turn one raw note into KB candidates."""
+    prompt_parts = _distill_mode_prompt_parts(mode)
     scope_hint = str(note.get("scope_hint") or "personal")
     title = str(note.get("title") or "").strip()
     text = str(note.get("text") or "")
     manifest = _image_manifest(note)
     return render_prompt_template(
         "knowledge_capture_prompt.md",
+        **prompt_parts,
         scope_hint=scope_hint,
         title=title,
         body=text,
@@ -310,6 +348,7 @@ def distill_note(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    mode: str = "organize",
     agent: CaptureAgent | None = None,
 ) -> dict:
     """Distill one raw note into pending candidates; mark the note distilled.
@@ -322,7 +361,8 @@ def distill_note(
     if note is None:
         return {"ok": False, "error": f"capture note not found: {note_id}"}
 
-    prompt = build_capture_prompt(note)
+    distill_mode = normalize_distill_mode(mode)
+    prompt = build_capture_prompt(note, mode=distill_mode)
     effective_backend = _effective_backend(config, backend)
     effective_model = _effective_model(config, effective_backend, model)
     effective_proxy_enabled = _effective_proxy_enabled(config, effective_backend, proxy_enabled)
@@ -330,6 +370,7 @@ def distill_note(
         "backend": effective_backend,
         "model": effective_model,
         "proxy_enabled": effective_proxy_enabled,
+        "distill_mode": distill_mode,
         "status": "running",
         "prompt": prompt,
         "started_at": utc_now(),
@@ -340,6 +381,7 @@ def distill_note(
                 backend=effective_backend,
                 model=effective_model,
                 proxy_enabled=effective_proxy_enabled,
+                distill_mode=distill_mode,
             )
         ],
     })
@@ -353,6 +395,7 @@ def distill_note(
             "backend": effective_backend,
             "model": effective_model,
             "proxy_enabled": effective_proxy_enabled,
+            "distill_mode": distill_mode,
             "config": config,
             "cwd": root,
             "progress_callback": progress_callback,
@@ -380,10 +423,13 @@ def distill_note(
         # Explicit candidate->note link so approve can promote the note's assets
         # (a reverse lookup via note.candidate_ids remains as a compat path).
         c["source_note_id"] = note_id
+        c.setdefault("meta", {})["distill_mode"] = distill_mode
         normalized.append(c)
     normalized = _bind_candidates_to_existing_entries(normalized, _entries_for_note(root, config, note_id))
     normalized, skipped_navigation = filter_project_nav_candidates(root, config, normalized, {"source_type": "capture_note"})
     normalized = ensure_navigation_parent_entries(root, config, normalized, {"source": source})
+    for cand in normalized:
+        cand.setdefault("meta", {})["distill_mode"] = distill_mode
 
     init_knowledge_base(root, config)
     # Re-run replacement: drop every pending candidate from this note, including
@@ -426,6 +472,7 @@ def distill_note(
         "candidates": len(enqueued_ids),
         "candidate_ids": enqueued_ids,
         "log_id": log_id,
+        "distill_mode": distill_mode,
         "navigation": navigation,
     }
 
@@ -438,6 +485,7 @@ def run_distill_job(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    mode: str = "organize",
     agent: CaptureAgent | None = None,
 ) -> dict:
     """Run distillation as a job that drives the note's status state machine.
@@ -450,7 +498,7 @@ def run_distill_job(
         update_note(root, config, note_id, status="distilling", last_error="")
     except FileNotFoundError:
         return {"ok": False, "error": f"capture note not found: {note_id}"}
-    result = distill_note(root, config, note_id, backend=backend, model=model, proxy_enabled=proxy_enabled, agent=agent)
+    result = distill_note(root, config, note_id, backend=backend, model=model, proxy_enabled=proxy_enabled, mode=mode, agent=agent)
     if not result.get("ok"):
         try:
             update_note(root, config, note_id, status="error", last_error=result.get("error", "distill failed"))
