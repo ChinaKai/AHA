@@ -12,7 +12,7 @@
     const policy = payload.token_saving && typeof payload.token_saving === "object"
       ? payload.token_saving
       : {};
-    const provider = String(policy.provider || "headroom");
+    const provider = String(policy.provider || "map");
     return policy.enabled === true ? `${provider} on` : "off";
   }
 
@@ -55,7 +55,7 @@
       supervision: input.supervision || {},
       token_saving: {
         enabled: tokenSavingEnabled,
-        provider: "headroom"
+        provider: "map"
       },
       task_skills: input.taskSkills || {},
       hardware_debug: input.hardwareDebug || {},

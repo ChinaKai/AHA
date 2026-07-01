@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 import re
 
+from aha_cli.domain.models import normalize_task_token_saving
 from aha_cli.services.chat_supervision import (
     agents_visible_to_prompt,
     is_task_supervision_host_agent,
@@ -22,6 +23,7 @@ from aha_cli.store.event_views import event_agent_refs
 from aha_cli.store.filesystem import (
     event_path,
     iter_jsonl_reverse,
+    load_config,
     require_plan,
     run_dir,
     status_snapshot,
@@ -395,16 +397,77 @@ def _input_image_guidance_for_prompt(root: Path, run_id: str, item: dict) -> str
     ).rstrip()
 
 
+def _compact_prompt_list(values: object) -> str:
+    if not isinstance(values, list):
+        return "-"
+    items = [str(item).strip() for item in values if str(item).strip()]
+    return ", ".join(items[:8]) if items else "-"
+
+
+def _compact_count_summary(counts: object) -> str:
+    if not isinstance(counts, dict):
+        return "-"
+    parts = [f"{key}={counts[key]}" for key in sorted(counts) if counts.get(key)]
+    return ", ".join(parts[:10]) if parts else "-"
+
+
+def _token_saving_map_enabled(task: dict | None) -> bool:
+    if not isinstance(task, dict):
+        return False
+    policy = normalize_task_token_saving(task.get("token_saving"), task.get("context_management"))
+    return bool(policy.get("enabled") and policy.get("provider") == "map")
+
+
+def _project_map_context_for_prompt(root: Path, task: dict | None) -> str:
+    if not _token_saving_map_enabled(task):
+        return ""
+    workspace_text = str((task or {}).get("workspace_path") or "").strip()
+    if not workspace_text:
+        return ""
+    try:
+        workspace = Path(workspace_text).expanduser().resolve()
+    except OSError:
+        return ""
+    if not workspace.exists():
+        return ""
+    try:
+        from aha_cli.services.project_context_index import project_context_index_status
+
+        status = project_context_index_status(root, workspace, config=load_config(root), verify_worktree=False)
+    except (OSError, ValueError):
+        return ""
+    if not status.get("exists"):
+        return ""
+    paths = status.get("paths") if isinstance(status.get("paths"), dict) else {}
+    map_index = str(paths.get("index") or "").strip()
+    if not map_index:
+        return ""
+    return render_prompt_template(
+        "backend_project_map_context.md",
+        project_key_value=status.get("project_key") or "-",
+        workspace_id=status.get("workspace_id") or "-",
+        map_status=status.get("status") or "-",
+        map_index=map_index,
+        generated_at=status.get("generated_at") or "-",
+        map_counts=_compact_count_summary(status.get("counts")),
+        map_flavors=_compact_prompt_list(status.get("flavors")),
+        map_profiles=_compact_prompt_list(status.get("profiles")),
+    ).rstrip()
+
+
 def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, include_attachment_output: bool = True) -> dict[str, str]:
     if not task:
         return {}
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
     skills_context = task_skills_context_for_prompt(task).rstrip()
+    project_map_context = _project_map_context_for_prompt(root, task).rstrip()
     fingerprints = {
         "hardware_debug": _context_fingerprint(hardware_context),
         "task_skills": _context_fingerprint(skills_context),
         "knowledge_enabled": "enabled" if _knowledge_enabled_for_prompt(root) else "disabled",
     }
+    if project_map_context:
+        fingerprints["project_map_context"] = _context_fingerprint(project_map_context)
     if include_attachment_output:
         fingerprints["attachment_output_guidance"] = _context_fingerprint(_attachment_output_guidance_for_prompt(root, run_id))
     return fingerprints
@@ -436,6 +499,9 @@ def _sticky_context_delta_for_prompt(
         sections.append(skills_context)
     if current_fingerprints.get("knowledge_enabled") == "enabled" and delivered.get("knowledge_enabled") != "enabled":
         sections.append(_knowledge_context_delta_for_prompt(root, run_id, task))
+    project_map_context = _project_map_context_for_prompt(root, task).rstrip()
+    if current_fingerprints.get("project_map_context") and delivered.get("project_map_context") != current_fingerprints.get("project_map_context"):
+        sections.append(project_map_context)
     if (
         current_fingerprints.get("attachment_output_guidance")
         and delivered.get("attachment_output_guidance") != current_fingerprints.get("attachment_output_guidance")
@@ -1057,6 +1123,7 @@ def chat_prompt(
             )
             coordination_policy = _coordination_policy_for_prompt(coordination_policy_needed)
             action_contract = _action_contract_for_prompt(coordination_policy_needed)
+            project_map_context = _project_map_context_for_prompt(root, detail["task"]).rstrip()
             visible_agent_constraints = [_agent_constraints_for_prompt(entry) for entry in visible_agents]
             current_agent_constraints = _agent_constraints_for_prompt(agent)
             agent_context = _agent_context_for_prompt(
@@ -1072,6 +1139,7 @@ def chat_prompt(
                     "commit_policy": commit_policy,
                     "coordination_policy": coordination_policy,
                     "compact_summary": compact_context,
+                    "project_map_context": project_map_context,
                 }
             )
             if is_result_request:
@@ -1094,6 +1162,7 @@ def chat_prompt(
                     status=detail["task"].get("status", ""),
                     role=item.get("role", ""),
                     workspace=detail["task"].get("workspace_path", ""),
+                    project_map_context=project_map_context,
                     collaboration_mode=detail["task"].get("collaboration_mode", "auto"),
                     workflow_template=detail["task"].get("workflow_template", "auto"),
                     delegation_policy=detail["task"].get("delegation_policy", "auto"),

@@ -45,7 +45,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertTrue(projection["context_management"]["auto_compact_enabled"])
         self.assertEqual(projection["context_management"]["auto_compact_threshold_percent"], 88)
         self.assertTrue(projection["token_saving"]["enabled"])
-        self.assertEqual(projection["token_saving"]["provider"], "headroom")
+        self.assertEqual(projection["token_saving"]["provider"], "map")
         self.assertEqual(projection["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
         self.assertTrue(projection["hardware_debug"]["enabled"])
         hardware_channel = projection["hardware_debug"]["channels"][0]
@@ -124,7 +124,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(enriched_task["supervision"]["mode"], "manual")
         self.assertFalse(enriched_task["context_management"]["auto_compact_enabled"])
         self.assertFalse(enriched_task["token_saving"]["enabled"])
-        self.assertEqual(enriched_task["token_saving"]["provider"], "headroom")
+        self.assertEqual(enriched_task["token_saving"]["provider"], "map")
         self.assertEqual(enriched_task["hardware_debug"]["channels"], [])
         self.assertEqual(enriched_task["task_skills"]["enabled_paths"], [])
         self.assertEqual(snapshot_task["workspace_id"], "ws-legacy")

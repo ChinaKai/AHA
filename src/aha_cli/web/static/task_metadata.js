@@ -164,7 +164,7 @@
     const policy = task?.token_saving && typeof task.token_saving === "object" ? task.token_saving : {};
     const legacyPolicy = task?.context_management && typeof task.context_management === "object" ? task.context_management : {};
     const hasTokenPolicy = Boolean(task?.token_saving && typeof task.token_saving === "object");
-    const provider = String(policy.provider || "headroom").trim().toLowerCase() || "headroom";
+    const provider = String(policy.provider || "map").trim().toLowerCase() || "map";
     return {
       enabled: typeof policy.enabled === "boolean" ? policy.enabled : (!hasTokenPolicy && legacyPolicy.auto_compact_enabled === true),
       provider

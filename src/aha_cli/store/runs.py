@@ -53,8 +53,8 @@ def run_exists(root: Path, run_id: str) -> bool:
     return bool(run_id) and plan_path(root, run_id).exists()
 
 
-def run_summary_from_plan(root: Path, plan: dict) -> dict:
-    cfg = load_config(root)
+def run_summary_from_plan(root: Path, plan: dict, config: dict | None = None) -> dict:
+    cfg = config if isinstance(config, dict) else load_config(root)
     tasks = [task for task in plan.get("tasks", []) if not task.get("deleted_at")]
     lifecycle = run_lifecycle_projection(plan)
     ui = plan.get("ui") if isinstance(plan.get("ui"), dict) else {}
@@ -105,8 +105,9 @@ def run_summary_from_plan(root: Path, plan: dict) -> dict:
 
 
 def run_summary(root: Path, run_id: str) -> dict:
-    plan = enrich_plan(read_json(plan_path(root, run_id)), load_config(root).get("backend", "codex"))
-    return run_summary_from_plan(root, plan)
+    cfg = load_config(root)
+    plan = enrich_plan(read_json(plan_path(root, run_id)), cfg.get("backend", "codex"))
+    return run_summary_from_plan(root, plan, cfg)
 
 
 def update_run_lifecycle(root: Path, run_id: str, status: object) -> dict:
@@ -165,11 +166,13 @@ def list_run_summaries(root: Path) -> list[dict]:
     runs = aha_home_path(root) / RUNS_DIR
     if not runs.is_dir():
         return []
+    cfg = load_config(root)
+    backend = cfg.get("backend", "codex")
     summaries: list[dict] = []
     for path in sorted(runs.glob(f"*/{PLAN_FILE}"), reverse=True):
         try:
-            plan = enrich_plan(read_json(path), load_config(root).get("backend", "codex"))
-            summaries.append(run_summary_from_plan(root, plan))
+            plan = enrich_plan(read_json(path), backend)
+            summaries.append(run_summary_from_plan(root, plan, cfg))
         except (OSError, ValueError, KeyError):
             continue
     return summaries

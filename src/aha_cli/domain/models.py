@@ -13,7 +13,7 @@ from aha_cli.services.prompt_templates import render_prompt_template
 
 DEFAULT_RETENTION_POLICY_REPORT_INTERVAL_SECONDS = 6 * 60 * 60
 HEADROOM_INTEGRATION_MODES = {"token", "cache"}
-TOKEN_SAVING_PROVIDERS = {"headroom"}
+TOKEN_SAVING_PROVIDERS = {"map"}
 
 
 def utc_now() -> str:
@@ -64,6 +64,18 @@ def default_knowledge_config() -> dict:
             "inject_mode": "references",
             "summary_chars": 120,
         },
+        "project_context_index": default_project_context_index_config(),
+    }
+
+
+def default_project_context_index_config() -> dict:
+    return {
+        # Prompt injection is intentionally separate from manual map commands.
+        "prompt_injection_enabled": False,
+        "max_files": 20000,
+        "max_file_bytes": 2 * 1024 * 1024,
+        "max_records_per_extractor": 20000,
+        "include_untracked": False,
     }
 
 
@@ -326,7 +338,7 @@ def default_task_context_management() -> dict:
 def default_task_token_saving() -> dict:
     return {
         "enabled": False,
-        "provider": "headroom",
+        "provider": "map",
     }
 
 
@@ -358,7 +370,7 @@ def normalize_task_token_saving(value: object | None = None, legacy_context: obj
     elif value is None and legacy_context is not None:
         token_saving["enabled"] = bool(normalize_task_context_management(legacy_context).get("auto_compact_enabled"))
     provider = str(raw.get("provider") or token_saving["provider"]).strip().lower()
-    token_saving["provider"] = provider if provider in TOKEN_SAVING_PROVIDERS else "headroom"
+    token_saving["provider"] = provider if provider in TOKEN_SAVING_PROVIDERS else "map"
     return token_saving
 
 

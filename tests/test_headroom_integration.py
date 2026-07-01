@@ -7,19 +7,18 @@ import unittest
 from unittest import mock
 
 from aha_cli.domain.models import default_config, normalize_headroom_integration_config
-from aha_cli.backends.codex import codex_config_overrides
 from aha_cli.services.headroom_integration import (
     codex_proxy_env_for_headroom,
     codex_upstream_base_url,
+    ensure_headroom_proxy,
     headroom_should_wrap_codex,
     headroom_status,
+    headroom_scope,
     headroom_usage_summary,
     merge_no_proxy_values,
     prepare_headroom_codex_runtime,
 )
 from aha_cli.store.filesystem import append_event
-from aha_cli.store.io import write_json
-from aha_cli.store.paths import plan_path
 
 
 class HeadroomIntegrationTests(unittest.TestCase):
@@ -67,39 +66,18 @@ class HeadroomIntegrationTests(unittest.TestCase):
         self.assertEqual([agent["agent_id"] for agent in task_002["agents"]], ["main", "sub-001"])
         self.assertEqual(task_002["agents"][1]["last_reason"], "not_ready")
 
-    def test_usage_summary_includes_enabled_tasks_without_turns(self) -> None:
+    def test_usage_summary_no_longer_derives_enabled_tasks_from_token_saving(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_id = "run-001"
-            path = plan_path(root, run_id)
-            path.parent.mkdir(parents=True)
-            write_json(
-                path,
-                {
-                    "id": run_id,
-                    "tasks": [
-                        {
-                            "id": "task-001",
-                            "token_saving": {"enabled": True, "provider": "headroom"},
-                            "agents": [{"id": "main", "role": "main"}],
-                        },
-                        {
-                            "id": "task-002",
-                            "token_saving": {"enabled": True, "provider": "headroom"},
-                            "agents": [{"id": "main", "role": "main"}],
-                        },
-                    ],
-                },
-            )
 
             summary = headroom_usage_summary(root, run_id)
 
-        self.assertEqual(summary["enabled_tasks"], 2)
+        self.assertEqual(summary["enabled_tasks"], 0)
         self.assertEqual(summary["ready_turns"], 0)
         self.assertEqual(summary["skipped_turns"], 0)
-        self.assertEqual(summary["task_count"], 2)
-        self.assertEqual([task["task_id"] for task in summary["tasks"]], ["task-001", "task-002"])
-        self.assertTrue(all(task["enabled"] for task in summary["tasks"]))
+        self.assertEqual(summary["task_count"], 0)
+        self.assertEqual(summary["tasks"], [])
 
     def test_codex_upstream_base_url_reads_process_env(self) -> None:
         with mock.patch.dict(os.environ, {"OPENAI_BASE_URL": "https://openai.example/v1"}, clear=True):
@@ -122,10 +100,10 @@ class HeadroomIntegrationTests(unittest.TestCase):
         self.assertEqual(proxy_env["NO_PROXY"], proxy_env["no_proxy"])
         self.assertEqual(merge_no_proxy_values("localhost", "internal.local"), "localhost,127.0.0.1,::1,internal.local")
 
-    def test_prepare_runtime_requires_headroom_and_task_token_saving(self) -> None:
+    def test_prepare_runtime_never_wraps_from_task_token_saving(self) -> None:
         cfg = default_config()
         cfg["integrations"]["headroom"]["enabled"] = True
-        task = {"token_saving": {"enabled": False, "provider": "headroom"}}
+        task = {"token_saving": {"enabled": True, "provider": "map"}}
 
         self.assertFalse(headroom_should_wrap_codex(cfg, task, "codex"))
         codex_config, proxy_env, status = prepare_headroom_codex_runtime(
@@ -141,76 +119,10 @@ class HeadroomIntegrationTests(unittest.TestCase):
         self.assertEqual(proxy_env, {})
         self.assertEqual(status["reason"], "not_selected")
 
-    def test_prepare_runtime_wraps_codex_when_task_token_saving_is_enabled(self) -> None:
+    def test_prepare_runtime_does_not_consider_litellm_bridge_when_not_selected(self) -> None:
         cfg = default_config()
         cfg["integrations"]["headroom"].update({"enabled": True, "port": 8989})
-        task = {"token_saving": {"enabled": True, "provider": "headroom"}}
-        codex_config = {"model": "gpt-test"}
-
-        with mock.patch.dict(os.environ, {"OPENAI_BASE_URL": "https://openai.example/v1"}, clear=True), mock.patch(
-            "aha_cli.services.headroom_integration.ensure_headroom_proxy",
-            return_value={"ready": True, "port": 8989, "mode": "token"},
-        ) as ensure_proxy:
-            wrapped_config, proxy_env, status = prepare_headroom_codex_runtime(
-                Path("/tmp/aha-test"),
-                config=cfg,
-                task=task,
-                backend_name="codex",
-                codex_config=codex_config,
-                proxy_env={"NO_PROXY": "internal.local"},
-            )
-
-        ensure_proxy.assert_called_once()
-        self.assertEqual(ensure_proxy.call_args.kwargs["proxy_env"], {"NO_PROXY": "internal.local"})
-        self.assertEqual(ensure_proxy.call_args.kwargs["scope"], {"run_id": "run", "task_id": "task", "agent_id": "agent"})
-        self.assertTrue(status["ready"])
-        self.assertEqual(status["upstream_base_url"], "https://openai.example/v1")
-        self.assertEqual(status["local_base_url"], "http://127.0.0.1:8989/v1")
-        self.assertEqual(wrapped_config["model"], "gpt-test")
-        self.assertIn('model_provider="aha_headroom"', " ".join(codex_config_overrides(wrapped_config)))
-        self.assertEqual(proxy_env["OPENAI_BASE_URL"], "http://127.0.0.1:8989/v1")
-        self.assertIn("internal.local", proxy_env["NO_PROXY"])
-
-    def test_prepare_runtime_uses_codex_provider_as_headroom_upstream(self) -> None:
-        cfg = default_config()
-        cfg["integrations"]["headroom"].update({"enabled": True, "port": 8989})
-        task = {"token_saving": {"enabled": True, "provider": "headroom"}}
-        codex_config = {
-            "env_active": "MiniMax-M3",
-            "env": [
-                {
-                    "name": "MiniMax-M3",
-                    "ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
-                    "ANTHROPIC_MODEL": "MiniMax-M3",
-                    "ANTHROPIC_API_KEY": "minimax-key",
-                }
-            ],
-        }
-
-        with mock.patch(
-            "aha_cli.services.headroom_integration.ensure_headroom_proxy",
-            return_value={"ready": True, "port": 8989, "mode": "token"},
-        ) as ensure_proxy:
-            wrapped_config, _proxy_env, status = prepare_headroom_codex_runtime(
-                Path("/tmp/aha-test"),
-                config=cfg,
-                task=task,
-                backend_name="codex",
-                codex_config=codex_config,
-                proxy_env={},
-            )
-
-        self.assertEqual(ensure_proxy.call_args.kwargs["upstream_base_url"], "https://api.minimaxi.com/v1")
-        self.assertEqual(ensure_proxy.call_args.kwargs["provider_env"]["OPENAI_API_KEY"], "minimax-key")
-        self.assertEqual(status["upstream_base_url"], "https://api.minimaxi.com/v1")
-        joined = " ".join(codex_config_overrides(wrapped_config))
-        self.assertIn('model_provider="aha_headroom"', joined)
-        self.assertIn('base_url="http://127.0.0.1:8989/v1"', joined)
-
-    def test_prepare_runtime_skips_headroom_for_kimi_litellm_bridge_provider(self) -> None:
-        cfg = default_config()
-        cfg["integrations"]["headroom"].update({"enabled": True, "port": 8989})
-        task = {"token_saving": {"enabled": True, "provider": "headroom"}}
+        task = {"token_saving": {"enabled": True, "provider": "map"}}
         codex_config = {
             "env_active": "kimi-k2.6",
             "env": [
@@ -236,7 +148,7 @@ class HeadroomIntegrationTests(unittest.TestCase):
         ensure_proxy.assert_not_called()
         self.assertIs(wrapped_config, codex_config)
         self.assertEqual(proxy_env, {})
-        self.assertEqual(status["reason"], "litellm_bridge_provider")
+        self.assertEqual(status["reason"], "not_selected")
 
     def test_ensure_proxy_uses_agent_proxy_env_for_headroom_process(self) -> None:
         class FakeProcess:
@@ -262,17 +174,14 @@ class HeadroomIntegrationTests(unittest.TestCase):
             "aha_cli.services.headroom_integration._headroom_health",
             side_effect=[False, False, True, True],
         ), mock.patch("aha_cli.services.headroom_integration.subprocess.Popen", side_effect=fake_popen):
-            status = prepare_headroom_codex_runtime(
+            status = ensure_headroom_proxy(
                 Path(tmp),
-                config={"integrations": {"headroom": {"enabled": True, "command": "headroom"}}},
-                task={"token_saving": {"enabled": True, "provider": "headroom"}},
-                backend_name="codex",
-                codex_config={},
+                {"enabled": True, "command": "headroom", "port": 8787, "mode": "token", "ccr_enabled": False},
+                upstream_base_url="https://openai.example/v1",
                 proxy_env={"HTTP_PROXY": "http://agent.proxy:7890", "NO_PROXY": "internal.local"},
-                run_id="run-001",
-                task_id="task-001",
-                agent_id="main",
-            )[2]
+                provider_env={},
+                scope=headroom_scope("run-001", "task-001", "main"),
+            )
             state_path = Path(tmp) / ".aha" / "runtime" / "headroom" / "run-001" / "task-001" / "main.json"
             state_path_exists = state_path.exists()
 

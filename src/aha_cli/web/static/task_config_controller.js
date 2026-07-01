@@ -40,15 +40,6 @@
       return window.AHAI18n?.t?.(key, fallback) || fallback;
     }
 
-    function headroomIntegrationEnabled() {
-      const config = getConfigData?.() || {};
-      return config?.integrations?.headroom?.enabled === true;
-    }
-
-    function tokenSavingRequiresHeadroomMessage() {
-      return t("task.token_saving_requires_headroom", "Enable Headroom in Integrations before using token saving.");
-    }
-
     function setTaskSettingsEditorTaskId(taskId) {
       taskSettingsEditorTaskId = String(taskId || "");
     }
@@ -602,18 +593,12 @@
       const task = getTaskSettingsTask();
       if (!task) return;
       const enabled = Boolean(els.selectedTaskContextAutoCompactEnabledEl?.checked);
-      if (enabled && !headroomIntegrationEnabled()) {
-        const message = tokenSavingRequiresHeadroomMessage();
-        if (els.taskContextStateEl) els.taskContextStateEl.textContent = message;
-        alertUser(message);
-        return;
-      }
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/token-saving`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(api.runScopedPayload({
           enabled,
-          provider: "headroom"
+          provider: "map"
         }))
       }, "Failed to update task token saving");
       contextEditingUntil = 0;

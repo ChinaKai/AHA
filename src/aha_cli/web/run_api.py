@@ -47,11 +47,11 @@ def request_run_id(default_run_id: str, query: dict[str, list[str]], payload: di
     return payload_run_id or query_run_id or default_run_id
 
 
-def default_api_run_id(root: Path, default_run_id: str) -> str:
+def default_api_run_id(root: Path, default_run_id: str, runs: list[dict] | None = None) -> str:
     if default_run_id and run_exists(root, default_run_id):
         return default_run_id
-    runs = list_run_summaries(root)
-    return str(runs[0]["id"]) if runs else ""
+    summaries = runs if runs is not None else list_run_summaries(root)
+    return str(summaries[0]["id"]) if summaries else ""
 
 
 def require_api_run_id(root: Path, default_run_id: str, query: dict[str, list[str]], payload: dict | None = None) -> str:
@@ -122,10 +122,11 @@ def workspace_options(roots: list[Path] | None = None, aha_home: Path | None = N
 
 
 def runs_payload(root: Path, default_run_id: str) -> dict:
+    runs = list_run_summaries(root)
     return {
-        "default_run_id": default_api_run_id(root, default_run_id),
+        "default_run_id": default_api_run_id(root, default_run_id, runs),
         "ui_state": read_global_ui_state(root),
-        "runs": list_run_summaries(root),
+        "runs": runs,
     }
 
 
@@ -160,7 +161,8 @@ def task_memo_summary(root: Path, run_id: str) -> dict:
 
 def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
     cfg = load_config(root)
-    selected_run_id = default_api_run_id(root, default_run_id)
+    runs = list_run_summaries(root)
+    selected_run_id = default_api_run_id(root, default_run_id, runs)
     return {
         "aha_home": str(root),
         "aha_version": aha_version(root),
@@ -170,7 +172,7 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "default_workspace_path": str(cwd or Path.cwd()),
         "default_run_id": selected_run_id,
         "ui_state": read_global_ui_state(root),
-        "runs": list_run_summaries(root),
+        "runs": runs,
         "memo_summary": task_memo_summary(root, selected_run_id),
         "workspaces": workspace_options(aha_home=root),
         "backends": agent_backends(),

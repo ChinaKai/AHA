@@ -60,6 +60,9 @@
     .kb-inline-actions { display: flex; flex-wrap: nowrap; overflow-x: auto; }
     .kb-inline-actions button { flex: 0 0 auto; white-space: nowrap; }
     .kb-entry-actions button { min-width: 0; }
+    .kb-modal-action-row { align-items: center; }
+    .kb-modal-action-group { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; min-width: 0; }
+    .kb-modal-action-group:empty { display: none; }
     .kb-entry-index { display: grid; gap: 12px; margin: 12px 0; min-width: 0; }
     .kb-entry-index-head {
       display: flex; align-items: center; justify-content: space-between;
@@ -194,6 +197,8 @@
     .kb-pending-body pre { white-space: pre-wrap; }
     #capture-list .kb-card { padding: 8px 10px; margin: 6px 0; gap: 4px; }
     #capture-list .kb-card h3 { font-size: 14px; }
+    .kb-cap-list-row { cursor: pointer; }
+    .kb-cap-list-row:hover { background: var(--color-surface-muted); }
     .kb-cap-preview { font-size: 12px; color: var(--color-text); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 2.8em; overflow: hidden; }
     .kb-capture-toolbar { justify-content: flex-end; margin: 0 0 8px; }
     .kb-section-title { margin: 16px 0 6px; font-size: 14px; color: var(--color-text-strong); }
@@ -242,9 +247,24 @@
     .kb-project-nav-controls { flex-wrap: nowrap; align-items: center; overflow-x: auto; }
     .kb-project-nav-controls .kb-muted { flex: 0 0 auto; white-space: nowrap; }
     .kb-project-nav-controls select { min-width: 150px; }
-    .kb-project-nav-controls #nav-workspace-select { min-width: 240px; }
+    .kb-project-nav-controls #nav-workspace-select,
+    .kb-project-nav-controls #map-workspace-select { min-width: 240px; }
     .kb-project-nav-controls #nav-model { min-width: 180px; }
     .kb-project-nav-controls button { flex: 0 0 auto; }
+    .kb-map-path { overflow-wrap: anywhere; }
+    .kb-map-file-path { overflow-wrap: anywhere; }
+    .kb-map-file-tree { display: grid; gap: 6px; }
+    .kb-map-file-link,
+    .kb-map-dir-link,
+    .kb-map-up-link { display: flex; width: fit-content; max-width: 100%; align-items: baseline; gap: 8px; color: var(--color-primary-strong); text-decoration: underline; overflow-wrap: anywhere; }
+    .kb-map-file-link:hover,
+    .kb-map-dir-link:hover,
+    .kb-map-up-link:hover { color: var(--color-primary); }
+    .kb-map-file-icon { width: 28px; color: var(--color-text-subtle); font-size: 12px; text-transform: uppercase; flex: 0 0 auto; }
+    .kb-map-file-name { overflow-wrap: anywhere; }
+    .kb-map-search-results { display: grid; gap: 12px; }
+    .kb-map-search-section { display: grid; gap: 6px; }
+    .kb-map-search-section h4 { margin: 4px 0 0; font-size: 14px; }
     .kb-toast {
       position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
       width: max-content; max-width: calc(100vw - 24px);
@@ -300,13 +320,6 @@
       .kb-entry-result-actions button {
         width: auto; flex: 0 0 auto; min-height: 28px;
       }
-      .kb-cap-actions {
-        display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px;
-      }
-      .kb-cap-actions button {
-        width: 100%; min-height: 30px; padding: 0 4px;
-        font-size: 11px; white-space: nowrap;
-      }
       .kb-pending-body { max-height: 38vh; }
       .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
       .kb-settings-card { padding: 12px; }
@@ -329,6 +342,7 @@
 
   <nav class="kb-tabs">
     <button data-tab="entries" class="button-ghost kb-tab active" type="button"><span data-i18n="knowledge.tab_entries">Entries</span></button>
+    <button data-tab="map" class="button-ghost kb-tab" type="button"><span>Map</span></button>
     <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Project navigation</span></button>
     <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
     <button data-tab="capture" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_capture">Capture</span></button>
@@ -367,6 +381,19 @@
     </div>
     <div id="nav-draft-list"></div>
     <div id="navigation-list"></div>
+  </section>
+
+  <section id="tab-map" hidden>
+    <div id="project-context-panel" class="kb-card kb-project-nav-panel">
+      <h3>Project context map</h3>
+      <div class="kb-muted">Build and inspect the generated local project map for a workspace.</div>
+      <div class="kb-row kb-project-nav-controls">
+        <select id="map-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
+        <input id="map-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
+        <button class="button-ghost" id="ctx-refresh" type="button">Generate map</button>
+      </div>
+    </div>
+    <div id="ctx-map-list"></div>
   </section>
 
   <section id="tab-pending" hidden>
@@ -438,14 +465,52 @@
     </div>
   </div>
 
+  <div id="cap-view-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-entry-ref-modal">
+      <h3 id="cap-view-title">Capture note</h3>
+      <div id="cap-view-meta" class="kb-muted"></div>
+      <div class="kb-card-actions kb-inline-actions kb-modal-action-row">
+        <div id="cap-view-actions" class="kb-modal-action-group"></div>
+        <button class="button-ghost" type="button" id="cap-view-close" data-i18n="common.close">Close</button>
+      </div>
+      <div id="cap-view-refs"></div>
+      <div id="cap-view-body" class="kb-body kb-cap-md"></div>
+    </div>
+  </div>
+
   <div id="entry-ref-modal" class="kb-modal" hidden>
     <div class="kb-modal-card kb-entry-ref-modal">
       <h3 id="entry-ref-title">Reference</h3>
       <div id="entry-ref-meta" class="kb-muted"></div>
-      <div id="entry-ref-body" class="kb-body kb-entry-body" data-entry-body="reference"></div>
-      <div class="kb-card-actions">
-        <button class="button-ghost" type="button" id="entry-ref-edit" data-i18n="knowledge.edit">Edit</button>
+      <div class="kb-card-actions kb-entry-actions kb-inline-actions kb-modal-action-row">
+        <div id="entry-ref-actions" class="kb-modal-action-group"></div>
         <button class="button-ghost" type="button" id="entry-ref-close" data-i18n="common.close">Close</button>
+      </div>
+      <div id="entry-ref-body" class="kb-body kb-entry-body" data-entry-body="reference"></div>
+    </div>
+  </div>
+
+  <div id="map-view-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-entry-ref-modal">
+      <h3 id="map-view-title">Project map</h3>
+      <div id="map-view-meta" class="kb-muted"></div>
+      <div class="kb-row kb-project-nav-controls">
+        <input id="map-view-search" type="search" placeholder="Search map records" />
+      </div>
+      <div id="map-view-files"></div>
+      <div class="kb-card-actions">
+        <button class="button-ghost" type="button" id="map-view-close" data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="map-file-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-entry-ref-modal">
+      <h3 id="map-file-title">Map file</h3>
+      <div id="map-file-meta" class="kb-muted"></div>
+      <pre id="map-file-body" class="kb-body kb-log-body"></pre>
+      <div class="kb-card-actions">
+        <button class="button-ghost" type="button" id="map-file-close" data-i18n="common.close">Close</button>
       </div>
     </div>
   </div>
@@ -587,7 +652,8 @@
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
-    const KB_TABS = ["entries", "navigation", "pending", "capture", "settings"];
+    const KB_TABS = ["entries", "map", "navigation", "pending", "capture", "settings"];
+    const ENTRIES_PAGE_LIMIT = 120;
 
     function normalizedTabName(name) {
       const tab = String(name || "").trim();
@@ -610,7 +676,7 @@
       }
     }
 
-    const state = { entries: [], entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, distillTarget: null, activeDistillLogNote: null, distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, projectContextJob: null, projectContextJobPoll: null, projectContextMaps: [], activeProjectContextMap: null, activeProjectContextPath: "", projectContextFiles: [], projectContextRoot: "", projectContextStatus: null, projectContextSearchTimer: null, projectContextSearchTerm: "", projectContextSearchResult: null, projectContextSearchError: "", projectContextSearchLoading: false, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -627,6 +693,9 @@
         if (!state.captureBackends) loadCaptureAgents();
         loadProjectNavDrafts();
         loadNavigation();
+      }
+      if (tab === "map") {
+        loadProjectContextMaps();
       }
       if (tab === "pending") loadPending();
       if (tab === "capture") loadCapture();
@@ -652,6 +721,13 @@
     function syncProjectNavCustomWorkspace() {
       const select = $("#nav-workspace-select");
       const custom = $("#nav-workspace-custom");
+      if (!select || !custom) return;
+      custom.classList.toggle("hidden", select.value !== "__custom__");
+    }
+
+    function syncProjectMapCustomWorkspace() {
+      const select = $("#map-workspace-select");
+      const custom = $("#map-workspace-custom");
       if (!select || !custom) return;
       custom.classList.toggle("hidden", select.value !== "__custom__");
     }
@@ -687,13 +763,43 @@
       syncProjectNavCustomWorkspace();
     }
 
+    function renderProjectMapWorkspaceSelect() {
+      const select = $("#map-workspace-select");
+      const customInput = $("#map-workspace-custom");
+      if (!select || !customInput) return;
+      const current = selectedProjectMapWorkspacePath();
+      const options = state.workspaces.map((workspace) => {
+        const opt = document.createElement("option");
+        opt.value = workspace.path;
+        opt.dataset.workspaceId = workspace.id || "";
+        opt.textContent = workspace.label || workspace.name || workspace.path;
+        return opt;
+      });
+      select.innerHTML = "";
+      for (const opt of options) select.appendChild(opt);
+      const customOpt = document.createElement("option");
+      customOpt.value = "__custom__";
+      customOpt.textContent = t("task.workspace_custom", "Custom...");
+      select.appendChild(customOpt);
+      const preferred = state.workspaces.find((workspace) => workspace.path === current) ||
+        state.workspaces.find((workspace) => workspace.path === state.defaultWorkspacePath) ||
+        state.workspaces[0];
+      if (preferred?.path) {
+        select.value = preferred.path;
+      } else {
+        select.value = "__custom__";
+        if (!customInput.value && state.defaultWorkspacePath) customInput.value = state.defaultWorkspacePath;
+      }
+      syncProjectMapCustomWorkspace();
+    }
+
     async function loadProjectNavWorkspaces() {
       try {
         const payload = await api("/api/workspaces");
         state.defaultWorkspacePath = payload.default_workspace_path || "";
         state.workspaces = Array.isArray(payload.workspaces) ? payload.workspaces : [];
         renderProjectNavWorkspaceSelect();
-        if (state.activeTab === "navigation") { loadProjectNavDrafts(); loadNavigation(); }
+        renderProjectMapWorkspaceSelect();
       } catch (e) {
         $("#nav-result").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message);
       }
@@ -703,6 +809,13 @@
       const select = $("#nav-workspace-select");
       if (!select) return "";
       if (select.value === "__custom__") return $("#nav-workspace-custom").value.trim();
+      return select.value.trim();
+    }
+
+    function selectedProjectMapWorkspacePath() {
+      const select = $("#map-workspace-select");
+      if (!select) return "";
+      if (select.value === "__custom__") return $("#map-workspace-custom").value.trim();
       return select.value.trim();
     }
 
@@ -717,6 +830,495 @@
       const proxyMode = $("#nav-proxy-mode")?.value || "off";
       payload.proxy_enabled = proxyMode === "on";
       return payload;
+    }
+
+    function projectContextPayload() {
+      const workspacePath = selectedProjectMapWorkspacePath();
+      const payload = { workspace_path: workspacePath || null };
+      if (pageRunId) payload.run_id = pageRunId;
+      return payload;
+    }
+
+    function projectContextFilteredMaps() {
+      return state.projectContextMaps;
+    }
+
+    function projectContextFilteredFiles() {
+      const current = String(state.activeProjectContextPath || "").replace(/^\/+|\/+$/g, "");
+      const prefix = current ? current + "/" : "";
+      return state.projectContextFiles.filter((item) => {
+        const path = String(item.path || "");
+        if (current && !path.startsWith(prefix)) return false;
+        const rest = current ? path.slice(prefix.length) : path;
+        return Boolean(rest) && !rest.includes("/");
+      });
+    }
+
+    function renderProjectContextMapListMessage(message) {
+      $("#ctx-map-list").innerHTML = `
+        <div class="kb-card">
+          <h3>Project maps</h3>
+          <p class="kb-muted">${esc(message || "No generated project maps")}</p>
+        </div>`;
+    }
+
+    function projectContextActiveJob() {
+      const job = state.projectContextJob;
+      if (!job?.id) return null;
+      return ["queued", "running", "stopping"].includes(String(job.status || "")) ? job : null;
+    }
+
+    function projectContextJobWorkspaceId(job) {
+      return String(job?.workspace_id || job?.result?.workspace_id || "").trim();
+    }
+
+    function projectContextJobCanStop(job) {
+      return ["queued", "running"].includes(String(job?.status || ""));
+    }
+
+    function projectContextMapHasActiveJob(item) {
+      const job = projectContextActiveJob();
+      if (!job) return false;
+      const workspaceId = projectContextJobWorkspaceId(job);
+      return Boolean(workspaceId && workspaceId === String(item?.workspace_id || ""));
+    }
+
+    function projectContextMapJobMatches(item) {
+      const job = projectContextActiveJob();
+      return Boolean(projectContextMapHasActiveJob(item) && projectContextJobCanStop(job));
+    }
+
+    function projectContextJobCard(job) {
+      const counts = job?.counts || job?.result?.counts || {};
+      const stopDisabled = projectContextJobCanStop(job) ? "" : " disabled";
+      return `<div class="kb-card">
+        <h3>Map refresh</h3>
+        <div class="kb-muted">${esc(job?.status || "-")} · ${esc(job?.phase || "-")} · ${esc(job?.summary || "")}</div>
+        <div class="kb-muted">job: ${esc(job?.id || "-")} · workspace: ${esc(projectContextJobWorkspaceId(job) || "-")}</div>
+        <div class="kb-muted">files ${esc(counts.files || 0)} · packages ${esc(counts.packages || 0)} · symbols ${esc(counts.symbols || 0)}</div>
+        <div class="kb-card-actions kb-entry-actions kb-inline-actions">
+          <button class="button-ghost kb-map-stop-link" type="button"${stopDisabled}>${esc(t("knowledge.stop", "Stop"))}</button>
+        </div>
+      </div>`;
+    }
+
+    function renderProjectContextMapList(data) {
+      if (data) {
+        state.projectContextMaps = Array.isArray(data.maps) ? data.maps : [];
+      }
+      const maps = projectContextFilteredMaps();
+      const activeJob = projectContextActiveJob();
+      const jobBanner = activeJob ? projectContextJobCard(activeJob) : "";
+      if (!state.projectContextMaps.length) {
+        if (jobBanner) {
+          $("#ctx-map-list").innerHTML = jobBanner;
+        } else {
+          renderProjectContextMapListMessage("No generated project maps. Select a workspace and refresh map first.");
+        }
+        return;
+      }
+      const cards = maps.map((item) => {
+        const profiles = Array.isArray(item.profiles) && item.profiles.length ? item.profiles.join(", ") : "-";
+        const counts = item.counts || {};
+        const hasActiveJob = projectContextMapHasActiveJob(item);
+        const canStop = projectContextMapJobMatches(item);
+        const disabledStop = canStop ? "" : " disabled";
+        const disabledDelete = hasActiveJob ? " disabled" : "";
+        return `<div class="kb-card">
+          <h3>${esc(item.project_key || "-")}</h3>
+          <div class="kb-muted kb-map-file-path">${esc(item.workspace || "-")}</div>
+          <div class="kb-muted">${esc(item.workspace_id || "-")} · ${esc(item.status || "generated")} · ${esc(item.generated_at || "-")}</div>
+          <div class="kb-muted">profiles: ${esc(profiles)} · files ${esc(counts.files || 0)} · packages ${esc(counts.packages || 0)} · symbols ${esc(counts.symbols || 0)}</div>
+          <div class="kb-card-actions kb-entry-actions kb-inline-actions">
+            <button class="button-ghost kb-map-open-link" type="button" data-project-key="${esc(item.project_key || "")}" data-workspace-id="${esc(item.workspace_id || "")}">${esc(t("knowledge.view", "View"))}</button>
+            <button class="button-ghost kb-map-stop-link" type="button" data-project-key="${esc(item.project_key || "")}" data-workspace-id="${esc(item.workspace_id || "")}"${disabledStop}>${esc(t("knowledge.stop", "Stop"))}</button>
+            <button class="button-ghost kb-reject kb-map-delete-link" type="button" data-project-key="${esc(item.project_key || "")}" data-workspace-id="${esc(item.workspace_id || "")}"${disabledDelete}>${esc(t("knowledge.delete", "Delete"))}</button>
+          </div>
+        </div>`;
+      }).join("");
+      $("#ctx-map-list").innerHTML = jobBanner + (cards || `<p class="kb-muted">No generated maps match the search.</p>`);
+    }
+
+    async function loadProjectContextMaps() {
+      renderProjectContextMapListMessage("Loading generated maps...");
+      try {
+        const data = await api("/api/kb/project-context-index/maps");
+        renderProjectContextMapList(data);
+      } catch (e) {
+        state.projectContextMaps = [];
+        renderProjectContextMapListMessage("Project maps unavailable.");
+      }
+    }
+
+    function projectContextFileParams(path = "") {
+      const map = state.activeProjectContextMap;
+      const params = new URLSearchParams();
+      if (map?.project_key && map?.workspace_id) {
+        params.set("project_key", map.project_key);
+        params.set("workspace_id", map.workspace_id);
+      } else {
+        const payload = projectContextPayload();
+        if (payload.workspace_path) params.set("workspace_path", payload.workspace_path);
+        if (payload.run_id) params.set("run_id", payload.run_id);
+      }
+      if (path) params.set("path", path);
+      return params;
+    }
+
+    function projectContextQueryPayload(queryText) {
+      const map = state.activeProjectContextMap;
+      const payload = { query: queryText };
+      if (map?.project_key && map?.workspace_id) {
+        payload.project_key = map.project_key;
+        payload.workspace_id = map.workspace_id;
+      } else {
+        Object.assign(payload, projectContextPayload());
+      }
+      return payload;
+    }
+
+    function clearProjectContextSearch() {
+      if (state.projectContextSearchTimer) {
+        clearTimeout(state.projectContextSearchTimer);
+        state.projectContextSearchTimer = null;
+      }
+      state.projectContextSearchTerm = "";
+      state.projectContextSearchResult = null;
+      state.projectContextSearchError = "";
+      state.projectContextSearchLoading = false;
+    }
+
+    function renderProjectContextFileTreeMessage(message) {
+      $("#map-view-files").innerHTML = `<p class="kb-muted">${esc(message || "No project map files")}</p>`;
+    }
+
+    function projectContextRecordPath(item) {
+      return String(item?.path || item?.mk_path || item?.config_path || "").trim();
+    }
+
+    function projectContextRecordLabel(item, section) {
+      return String(item?.name || item?.symbol || item?.value || item?.node || item?.path || item?.mk_path || item?.config_path || section || "-");
+    }
+
+    function projectContextRecordDetail(item, section) {
+      const parts = [];
+      if (item?.kind) parts.push(item.kind);
+      else parts.push(section);
+      if (item?.line) parts.push("line " + item.line);
+      if (item?.size) parts.push(item.size + " bytes");
+      const dependencies = Array.isArray(item?.dependencies) ? item.dependencies : [];
+      if (dependencies.length) parts.push("deps " + dependencies.slice(0, 4).join(","));
+      const enabled = Array.isArray(item?.enabled_in) ? item.enabled_in : [];
+      if (enabled.length) parts.push("enabled " + enabled.length);
+      return parts.filter(Boolean).join(" · ");
+    }
+
+    function renderProjectContextSearchSection(result, key, title) {
+      const records = Array.isArray(result?.[key]) ? result[key] : [];
+      if (!records.length) return "";
+      const rows = records.map((item) => {
+        const path = projectContextRecordPath(item);
+        const line = item?.line ? ":" + item.line : "";
+        const label = projectContextRecordLabel(item, key);
+        const detail = projectContextRecordDetail(item, key);
+        if (path) {
+          return `
+            <a class="kb-map-file-link" href="#" data-path="${esc(path)}">
+              <span class="kb-map-file-icon">${esc(key === "files" ? "file" : "hit")}</span>
+              <span class="kb-map-file-name">${esc(label)}${esc(line)} <span class="kb-muted">${esc(detail)}</span></span>
+            </a>`;
+        }
+        return `<div class="kb-muted">${esc(label)} · ${esc(detail)}</div>`;
+      }).join("");
+      return `
+        <div class="kb-map-search-section">
+          <h4>${esc(title)}</h4>
+          <div class="kb-map-file-tree">${rows}</div>
+        </div>`;
+    }
+
+    function projectContextSearchSectionOrder(queryText) {
+      const pathLike = /[/.]/.test(queryText || "");
+      if (pathLike) {
+        return [
+          ["files", "Files"],
+          ["symbols", "Symbols"],
+          ["packages", "Packages"],
+          ["configs", "Configs"],
+          ["build", "Build"],
+          ["device_tree", "Device tree"],
+          ["tests", "Tests"],
+          ["entry_points", "Entry points"],
+        ];
+      }
+      return [
+        ["packages", "Packages"],
+        ["configs", "Configs"],
+        ["build", "Build"],
+        ["device_tree", "Device tree"],
+        ["symbols", "Symbols"],
+        ["files", "Files"],
+        ["tests", "Tests"],
+        ["entry_points", "Entry points"],
+      ];
+    }
+
+    function renderProjectContextSearchResults(queryText) {
+      if (state.projectContextSearchLoading && state.projectContextSearchTerm === queryText) {
+        renderProjectContextFileTreeMessage("Searching project map...");
+        return;
+      }
+      if (state.projectContextSearchError && state.projectContextSearchTerm === queryText) {
+        renderProjectContextFileTreeMessage(state.projectContextSearchError);
+        return;
+      }
+      const result = state.projectContextSearchTerm === queryText ? state.projectContextSearchResult : null;
+      if (!result) {
+        renderProjectContextFileTreeMessage("Searching project map...");
+        return;
+      }
+      const matches = Number(result.total_matches || 0);
+      const totals = result.section_totals && typeof result.section_totals === "object"
+        ? Object.entries(result.section_totals).filter(([, value]) => Number(value || 0)).map(([key, value]) => `${key}=${value}`).join(", ")
+        : "";
+      if (!matches) {
+        $("#map-view-files").innerHTML = `
+          <div class="kb-map-search-results">
+            <div class="kb-muted kb-map-file-path">query: ${esc(queryText)}</div>
+            <p class="kb-muted">No project map matches. Refresh the map or use broader terms.</p>
+          </div>`;
+        return;
+      }
+      const sections = projectContextSearchSectionOrder(queryText)
+        .map(([key, title]) => renderProjectContextSearchSection(result, key, title))
+        .join("");
+      $("#map-view-files").innerHTML = `
+        <div class="kb-map-search-results">
+          <div class="kb-muted kb-map-file-path">query: ${esc(queryText)} · matches ${esc(matches)}${totals ? " · " + esc(totals) : ""}</div>
+          ${sections || `<p class="kb-muted">No displayable project map matches.</p>`}
+        </div>`;
+    }
+
+    function renderProjectContextFileTree(data) {
+      if (data) {
+        state.projectContextFiles = Array.isArray(data.entries) ? data.entries : [];
+        state.projectContextRoot = data.root || "";
+        state.projectContextStatus = data.map || data.status || state.projectContextStatus;
+      }
+      const query = ($("#map-view-search")?.value || "").trim();
+      if (query) {
+        renderProjectContextSearchResults(query);
+        return;
+      }
+      const entries = projectContextFilteredFiles();
+      if (!entries.length) {
+        renderProjectContextFileTreeMessage("No files in this map.");
+        return;
+      }
+      const rows = entries.map((item) => {
+        const icon = item.type === "dir" ? "dir" : "file";
+        const name = item.name || item.path || "-";
+        if (item.type === "file") {
+          const size = Number(item.bytes || 0);
+          return `
+            <a class="kb-map-file-link" href="#" data-path="${esc(item.path || "")}">
+              <span class="kb-map-file-icon">file</span>
+              <span class="kb-map-file-name">${esc(name)}</span>
+              <span class="kb-muted">${esc(size)} bytes</span>
+            </a>`;
+        }
+        return `
+          <a class="kb-map-dir-link" href="#" data-path="${esc(item.path || "")}">
+            <span class="kb-map-file-icon">${esc(icon)}</span>
+            <span class="kb-map-file-name">${esc(name)}</span>
+          </a>`;
+      }).join("");
+      const current = state.activeProjectContextPath || "/";
+      const up = state.activeProjectContextPath
+        ? `<a class="kb-map-up-link" href="#" data-path="${esc(state.activeProjectContextPath.split("/").slice(0, -1).join("/"))}">../</a>`
+        : "";
+      $("#map-view-files").innerHTML = `
+        <div class="kb-muted kb-map-file-path">${esc(current)}</div>
+        <div class="kb-map-file-tree">${up}${rows}</div>`;
+    }
+
+    async function runProjectContextSearch(queryText) {
+      const current = ($("#map-view-search")?.value || "").trim();
+      if (!queryText || current !== queryText) return;
+      state.projectContextSearchLoading = true;
+      state.projectContextSearchTerm = queryText;
+      state.projectContextSearchError = "";
+      renderProjectContextFileTree();
+      try {
+        const data = await api("/api/kb/project-context-index/query", {
+          method: "POST",
+          body: JSON.stringify(projectContextQueryPayload(queryText)),
+        });
+        if (($("#map-view-search")?.value || "").trim() !== queryText) return;
+        state.projectContextSearchLoading = false;
+        state.projectContextSearchResult = data.query || null;
+        state.projectContextSearchError = "";
+        renderProjectContextFileTree();
+      } catch (e) {
+        if (($("#map-view-search")?.value || "").trim() !== queryText) return;
+        state.projectContextSearchLoading = false;
+        state.projectContextSearchResult = null;
+        state.projectContextSearchError = formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message);
+        renderProjectContextFileTree();
+      }
+    }
+
+    function scheduleProjectContextSearch() {
+      const queryText = ($("#map-view-search")?.value || "").trim();
+      if (state.projectContextSearchTimer) {
+        clearTimeout(state.projectContextSearchTimer);
+        state.projectContextSearchTimer = null;
+      }
+      if (!queryText) {
+        clearProjectContextSearch();
+        renderProjectContextFileTree();
+        return;
+      }
+      state.projectContextSearchTerm = queryText;
+      state.projectContextSearchResult = null;
+      state.projectContextSearchError = "";
+      state.projectContextSearchLoading = true;
+      renderProjectContextFileTree();
+      state.projectContextSearchTimer = setTimeout(() => runProjectContextSearch(queryText), 250);
+    }
+
+    async function openProjectContextMap(projectKey, workspaceId) {
+      const map = state.projectContextMaps.find((item) => item.project_key === projectKey && item.workspace_id === workspaceId) || { project_key: projectKey, workspace_id: workspaceId };
+      state.activeProjectContextMap = map;
+      state.projectContextFiles = [];
+      state.projectContextRoot = "";
+      state.activeProjectContextPath = "";
+      clearProjectContextSearch();
+      $("#map-view-title").textContent = map.project_key || "Project map";
+      $("#map-view-meta").textContent = `${map.workspace || "-"} · ${map.workspace_id || "-"} · ${map.generated_at || "-"}`;
+      $("#map-view-search").value = "";
+      $("#map-view-modal").hidden = false;
+      renderProjectContextFileTreeMessage("Loading map files...");
+      try {
+        const params = projectContextFileParams();
+        const data = await api("/api/kb/project-context-index/tree?" + params.toString());
+        $("#map-view-meta").textContent = `${data.map?.workspace || map.workspace || "-"} · ${data.workspace_id || map.workspace_id || "-"} · ${data.map?.generated_at || map.generated_at || "-"}`;
+        renderProjectContextFileTree(data);
+      } catch (e) {
+        renderProjectContextFileTreeMessage("Map files unavailable.");
+      }
+    }
+
+    function closeProjectContextMapModal() {
+      $("#map-view-modal").hidden = true;
+    }
+
+    async function loadProjectContextMapFile(path) {
+      if (!path) return;
+      $("#map-file-title").textContent = path;
+      $("#map-file-meta").textContent = "Loading...";
+      $("#map-file-body").textContent = "";
+      $("#map-file-modal").hidden = false;
+      try {
+        const params = projectContextFileParams(path);
+        const data = await api("/api/kb/project-context-index/file?" + params.toString());
+        const truncated = data.truncated ? "\n\n[File is truncated in the browser view at 2 MiB.]" : "";
+        $("#map-file-title").textContent = data.path || path;
+        $("#map-file-meta").textContent = `${data.bytes || 0} bytes`;
+        $("#map-file-body").textContent = `${data.content || ""}${truncated}`;
+      } catch (e) {
+        $("#map-file-meta").textContent = "";
+        $("#map-file-body").textContent = formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message);
+      }
+    }
+
+    function closeProjectContextMapFileModal() {
+      $("#map-file-modal").hidden = true;
+    }
+
+    function renderProjectContextJob(job) {
+      if (!job) return;
+      state.projectContextJob = job;
+      renderProjectContextMapList();
+    }
+
+    function scheduleProjectContextJobPoll() {
+      if (state.projectContextJobPoll) {
+        clearTimeout(state.projectContextJobPoll);
+        state.projectContextJobPoll = null;
+      }
+      const job = state.projectContextJob;
+      if (state.activeTab !== "map" || !job?.id) return;
+      if (!["queued", "running", "stopping"].includes(String(job.status || ""))) return;
+      state.projectContextJobPoll = setTimeout(() => pollProjectContextJob(job.id), 1200);
+    }
+
+    async function loadProjectContextIndexStatus() {
+      await loadProjectContextMaps();
+    }
+
+    async function refreshProjectContextIndex() {
+      const payload = projectContextPayload();
+      if (!payload.workspace_path) {
+        toast(t("knowledge.project_nav_workspace_required", "Select a workspace first"));
+        return;
+      }
+      try {
+        const data = await api("/api/kb/project-context-index/refresh", { method: "POST", body: JSON.stringify(payload) });
+        renderProjectContextJob(data.job);
+        scheduleProjectContextJobPoll();
+        toast(`Project context map refresh started: ${data.job_id || "-"}`);
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    }
+
+    async function pollProjectContextJob(id) {
+      try {
+        const data = await api("/api/kb/project-context-index/job?id=" + encodeURIComponent(id));
+        renderProjectContextJob(data.job);
+        if (["completed", "failed", "stopped"].includes(String(data.job?.status || ""))) {
+          await loadProjectContextIndexStatus();
+        }
+        scheduleProjectContextJobPoll();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    }
+
+    async function stopProjectContextJob() {
+      const id = state.projectContextJob?.id;
+      if (!id) {
+        toast("No project context map job");
+        return;
+      }
+      try {
+        const data = await api("/api/kb/project-context-index/job/stop", { method: "POST", body: JSON.stringify({ id }) });
+        renderProjectContextJob(data.job);
+        scheduleProjectContextJobPoll();
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
+    }
+
+    async function deleteProjectContextMap(projectKey, workspaceId) {
+      const label = `${projectKey || "-"} / ${workspaceId || "-"}`;
+      if (!confirm(formatText("knowledge.confirm_delete_project_context_map", { map: label }, "Delete project map " + label + "?"))) return;
+      try {
+        await api("/api/kb/project-context-index/map", {
+          method: "DELETE",
+          body: JSON.stringify({ project_key: projectKey, workspace_id: workspaceId }),
+        });
+        if (state.activeProjectContextMap?.project_key === projectKey && state.activeProjectContextMap?.workspace_id === workspaceId) {
+          closeProjectContextMapModal();
+          closeProjectContextMapFileModal();
+          state.activeProjectContextMap = null;
+        }
+        await loadProjectContextMaps();
+        toast(t("knowledge.deleted", "Deleted"));
+      } catch (e) {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      }
     }
 
     function projectNavGenerateErrorMessage(error) {
@@ -1100,16 +1702,6 @@
 
     function renderEntryMarkdown() {
       if (!window.AHATaskMemoMarkdown) return;
-      const activeBody = document.querySelector('[data-entry-body="active"]');
-      if (activeBody && state.activeEntry) {
-        activeBody.innerHTML = "";
-        window.AHATaskMemoMarkdown.renderMarkdownPreview(activeBody, state.activeEntry.body || "", {
-          documentRef: document,
-          t,
-          linkHref: knowledgeLinkHref,
-          imageSrc: (path) => entryImageSrc(path, state.activeEntry),
-        });
-      }
       renderEntryEditMarkdown();
     }
 
@@ -1118,7 +1710,7 @@
       const ref = state.referenceEntry;
       if (!ref) {
         modal.hidden = true;
-        $("#entry-ref-edit").hidden = true;
+        $("#entry-ref-actions").innerHTML = "";
         return;
       }
       const meta = ref.meta || {};
@@ -1126,7 +1718,7 @@
       $("#entry-ref-meta").textContent = `${meta.scope || "-"}/${meta.type || "-"} · ${meta.project_key || "-"} · ${meta.slug || meta.id || "-"} · ${timeLine(meta)}`;
       const body = $("#entry-ref-body");
       body.innerHTML = "";
-      $("#entry-ref-edit").hidden = state.editingReference;
+      $("#entry-ref-actions").innerHTML = state.editingReference ? "" : renderEntryModalActions(ref);
       if (state.editingReference) {
         body.innerHTML = renderReferenceEditForm(ref);
       } else if (window.AHATaskMemoMarkdown) {
@@ -1141,6 +1733,26 @@
       }
       modal.hidden = false;
       renderEntryEditMarkdown();
+    }
+
+    function renderEntryModalActions(entry) {
+      const meta = entry?.meta || {};
+      const id = meta.id || meta.slug || "";
+      if (!id) return "";
+      const encodedId = encodeURIComponent(id);
+      const status = meta.status || entry.status || "active";
+      const isProjectNavIndex = meta.type === "navigation" && meta.slug === "index" && meta.project_key;
+      const deleteLabel = isProjectNavIndex ? t("knowledge.reset_project_nav", "Reset project nav") : t("knowledge.delete", "Delete");
+      const sourceNoteId = meta.source_note_id || entry.source_note_id || "";
+      const sourceNoteButton = sourceNoteId
+        ? `<button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(sourceNoteId))}')">${esc(t("knowledge.open_note", "Note"))}</button>`
+        : "";
+      return `
+        <button class="button-ghost" type="button" onclick="editEntryReference('${encodedId}')">${esc(t("knowledge.edit", "Edit"))}</button>
+        <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
+        <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
+        ${sourceNoteButton}
+        <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>`;
     }
 
     function closeEntryReferenceModal() {
@@ -1201,11 +1813,6 @@
       const isEditing = state.editingEntry === entryId && isActive;
       const encodedId = encodeURIComponent(entryId);
       const status = e.status || "active";
-      const isProjectNavIndex = e.type === "navigation" && e.slug === "index" && e.project_key;
-      const deleteLabel = isProjectNavIndex ? t("knowledge.reset_project_nav", "Reset project nav") : t("knowledge.delete", "Delete");
-      const sourceNoteButton = e.source_note_id && e.source_note_exists !== false
-        ? `<button class="button-ghost" type="button" onclick="openCaptureNote('${esc(encodeURIComponent(e.source_note_id))}')">${esc(t("knowledge.open_note", "Note"))}</button>`
-        : "";
       const metaLine = `${entryScopeLabel(e.scope)}/${entryTypeLabel(e.type)} · ${e.project_key || "-"} · ${entryId} · ${status}`;
       const tagHtml = (e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("");
       const compactMetaHtml = `<div class="kb-entry-result-meta">
@@ -1214,15 +1821,9 @@
         <span class="kb-entry-status">${esc(status)}</span>
       </div>`;
       const actions = `<div class="kb-card-actions kb-entry-actions${options.feed ? " kb-entry-result-actions" : ""}"${options.feed ? ' onclick="event.stopPropagation()"' : ""}>
-        <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(isActive && !isEditing ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
-        <button class="button-ghost" type="button" onclick="editEntry('${encodedId}')">${esc(isEditing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
-        <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
-        <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
-        ${sourceNoteButton}
-        <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>
+        <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(t("knowledge.view", "View"))}</button>
       </div>`;
-      const expanded = `${isActive && !isEditing ? `<div class="kb-body kb-entry-body" data-entry-body="active"></div>` : ""}
-        ${isEditing ? renderEditForm(state.activeEntry) : ""}`;
+      const expanded = isEditing ? renderEditForm(state.activeEntry) : "";
       if (options.feed) {
         return `<div class="kb-entry-index-row kb-entry-result${isActive ? " active" : ""}" data-entry-id="${esc(entryId)}" tabindex="0" role="button" aria-expanded="${isActive ? "true" : "false"}" onclick="toggleEntryRow(event, '${encodedId}')" onkeydown="entryRowKeydown(event, '${encodedId}')">
           <div class="kb-entry-result-main">
@@ -1268,6 +1869,11 @@
     function renderEntryIndex() {
       if (!state.entries.length) return state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
       const groups = groupEntries(state.entries);
+      const total = Math.max(Number(state.entriesTotal || 0), state.entries.length);
+      const hasMore = state.entries.length < total;
+      const showingText = hasMore
+        ? formatText("knowledge.entries_showing_total", { count: state.entries.length, total }, `Showing ${state.entries.length} of ${total} entries`)
+        : formatText("knowledge.entries_showing", { count: state.entries.length }, "Showing " + state.entries.length + " entries");
       const groupHtml = groups.length
         ? groups.map(([label, entries], index) => {
           const collapsed = state.collapsedEntryGroups.has(label);
@@ -1286,11 +1892,12 @@
         <div class="kb-entry-index-head">
           <div>
             <h3 class="kb-entry-index-title">${esc(t("knowledge.entries_index", "Index"))}</h3>
-            <div class="kb-muted">${esc(formatText("knowledge.entries_showing", { count: state.entries.length }, "Showing " + state.entries.length + " entries"))}</div>
+            <div class="kb-muted">${esc(showingText)}</div>
           </div>
-          <span class="kb-entry-index-count">${esc(String(state.entries.length))}</span>
+          <span class="kb-entry-index-count">${esc(String(total))}</span>
         </div>
         <div class="kb-entry-index-groups">${groupHtml}</div>
+        ${hasMore ? `<div class="kb-row"><button class="button-ghost" type="button" onclick="loadMoreEntries()">${esc(t("knowledge.load_more", "Load more"))}</button></div>` : ""}
       </div>`;
     }
 
@@ -1519,38 +2126,40 @@
       });
     };
 
-    async function loadEntries() {
+    async function loadEntries(options = {}) {
+      const append = Boolean(options.append);
       const q = new URLSearchParams();
       if ($("#f-search").value.trim()) q.set("q", $("#f-search").value.trim());
+      q.set("limit", String(ENTRIES_PAGE_LIMIT));
+      if (append) q.set("offset", String(state.entries.length));
       const data = await api("/api/kb/entries?" + q.toString());
-      state.entries = data.entries;
-      state.entryCapture = data.capture_notes || [];
-      state.activeEntry = null;
-      state.referenceEntry = null;
-      state.editingReference = false;
-      renderEntryReferenceModal();
-      renderEntries();
-    }
-
-    window.toggleEntry = async (encodedId) => {
-      const id = decodeURIComponent(encodedId);
-      const activeId = state.activeEntry?.meta?.id || state.activeEntry?.meta?.slug || "";
-      if (activeId === id) {
+      const nextEntries = Array.isArray(data.entries) ? data.entries : [];
+      state.entries = append ? [...state.entries, ...nextEntries] : nextEntries;
+      state.entriesTotal = Number(data.count || state.entries.length);
+      state.entriesOffset = Number(data.offset || 0);
+      state.entriesLimit = Number(data.limit || ENTRIES_PAGE_LIMIT);
+      if (!append) {
+        state.entryCapture = data.capture_notes || [];
         state.activeEntry = null;
         state.referenceEntry = null;
         state.editingReference = false;
         renderEntryReferenceModal();
-        state.editingEntry = null;
-        renderEntries();
-        return;
       }
-      const e = await api("/api/kb/entry?id=" + encodeURIComponent(id));
-      state.activeEntry = e;
-      state.referenceEntry = null;
-      state.editingReference = false;
-      renderEntryReferenceModal();
+      renderEntries();
+    }
+
+    window.loadMoreEntries = () => {
+      loadEntries({ append: true }).catch((e) => {
+        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      });
+    };
+
+    window.toggleEntry = async (encodedId) => {
+      const id = decodeURIComponent(encodedId);
+      state.activeEntry = null;
       state.editingEntry = null;
       renderEntries();
+      await openEntryReference(encodeURIComponent(id));
     };
 
     async function openEntryReference(encodedSlug) {
@@ -1576,18 +2185,7 @@
     };
 
     window.editEntry = async (encodedId) => {
-      const id = decodeURIComponent(encodedId);
-      if (state.editingEntry === id) {
-        state.editingEntry = null;
-        renderEntries();
-        return;
-      }
-      state.activeEntry = await api("/api/kb/entry?id=" + encodeURIComponent(id));
-      state.referenceEntry = null;
-      state.editingReference = false;
-      renderEntryReferenceModal();
-      state.editingEntry = id;
-      renderEntries();
+      await window.editEntryReference(encodedId);
     };
 
     window.cancelEdit = () => {
@@ -1621,7 +2219,11 @@
       const id = decodeURIComponent(encodedId);
       const payload = { id, status, review_after: status === "active" ? "" : undefined };
       try {
-        await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify(payload) });
+        const result = await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify(payload) });
+        if (entryRenderId(state.referenceEntry) === id) {
+          state.referenceEntry = result.entry;
+          renderEntryReferenceModal();
+        }
         toast(status === "deprecated" ? t("knowledge.deprecated", "Deprecated") : t("knowledge.restored", "Restored"));
         await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
@@ -1630,7 +2232,11 @@
     window.markEntryStale = async (encodedId) => {
       const id = decodeURIComponent(encodedId);
       try {
-        await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "stale", mark_stale: true }) });
+        const result = await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "stale", mark_stale: true }) });
+        if (entryRenderId(state.referenceEntry) === id) {
+          state.referenceEntry = result.entry;
+          renderEntryReferenceModal();
+        }
         toast(t("knowledge.marked_stale", "Marked stale"));
         await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
@@ -1639,7 +2245,11 @@
     window.markEntryReviewed = async (encodedId) => {
       const id = decodeURIComponent(encodedId);
       try {
-        await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "active", review_after: "" }) });
+        const result = await api("/api/kb/entry", { method: "PATCH", body: JSON.stringify({ id, status: "active", review_after: "" }) });
+        if (entryRenderId(state.referenceEntry) === id) {
+          state.referenceEntry = result.entry;
+          renderEntryReferenceModal();
+        }
         toast(t("knowledge.reviewed", "Reviewed"));
         await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
@@ -1701,11 +2311,6 @@
       renderEntryReferenceModal();
     };
 
-    $("#entry-ref-edit").addEventListener("click", () => {
-      if (!state.referenceEntry) return;
-      state.editingReference = true;
-      renderEntryReferenceModal();
-    });
     $("#entry-ref-close").addEventListener("click", closeEntryReferenceModal);
     $("#entry-ref-modal").addEventListener("click", (ev) => { if (ev.target.id === "entry-ref-modal") closeEntryReferenceModal(); });
 
@@ -1855,16 +2460,98 @@
 
     function renderCaptureMarkdown() {
       if (!window.AHATaskMemoMarkdown) return;
-      for (const n of state.capture) {
-        if (state.expandedNote === n.id && state.editingNote !== n.id) {
-          const el = document.querySelector(`[data-md-id="${n.id}"]`);
-          if (el) {
-            el.innerHTML = "";
-            window.AHATaskMemoMarkdown.renderMarkdownPreview(el, n.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
-          }
-        }
+      const note = state.activeCaptureNote;
+      const el = $("#cap-view-body");
+      if (note && el) {
+        el.innerHTML = "";
+        window.AHATaskMemoMarkdown.renderMarkdownPreview(el, note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
       }
     }
+
+    function renderCaptureNoteModal() {
+      const modal = $("#cap-view-modal");
+      const note = state.activeCaptureNote;
+      if (!note) {
+        modal.hidden = true;
+        $("#cap-view-body").innerHTML = "";
+        $("#cap-view-refs").innerHTML = "";
+        $("#cap-view-actions").innerHTML = "";
+        return;
+      }
+      const title = note.title || String(note.text || "").split("\n")[0] || note.id;
+      const statusLabel = t("knowledge.capture_status_" + note.status, note.status);
+      const assocText = captureAssociationSummary(note);
+      $("#cap-view-title").textContent = title.slice(0, 120);
+      $("#cap-view-meta").textContent = `${note.scope_hint || "-"} · ${statusLabel}${assocText ? " · " + assocText : ""} · ${timeLine(note)}`;
+      $("#cap-view-refs").innerHTML = renderCaptureRefs(note);
+      $("#cap-view-actions").innerHTML = state.editingNote === note.id ? "" : renderCaptureNoteActions(note);
+      const body = $("#cap-view-body");
+      body.innerHTML = "";
+      if (state.editingNote === note.id) {
+        body.innerHTML = renderCaptureNoteEditForm(note);
+      } else if (window.AHATaskMemoMarkdown) {
+        window.AHATaskMemoMarkdown.renderMarkdownPreview(body, note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
+      } else {
+        body.textContent = note.text || "";
+      }
+      modal.hidden = false;
+    }
+
+    function closeCaptureNoteModal() {
+      state.activeCaptureNote = null;
+      state.editingNote = null;
+      renderCaptureNoteModal();
+      renderCapture();
+    }
+
+    function openCaptureNoteView(id) {
+      const note = state.capture.find((item) => item.id === id);
+      if (!note) {
+        toast("Capture note unavailable");
+        return;
+      }
+      state.activeCaptureNote = note;
+      renderCaptureNoteModal();
+    }
+
+    window.openCaptureNoteView = openCaptureNoteView;
+
+    function syncActiveCaptureNote() {
+      if (!state.activeCaptureNote?.id) return;
+      state.activeCaptureNote = state.capture.find((item) => item.id === state.activeCaptureNote.id) || null;
+      renderCaptureNoteModal();
+    }
+
+    function renderCaptureNoteActions(note) {
+      const hasProducedKnowledge = (note.candidate_ids || []).length || (note.candidate_refs || []).length || (note.entry_refs || []).length;
+      const distillLabel = note.status === "distilling"
+        ? t("knowledge.capture_distilling", "Distilling…")
+        : hasProducedKnowledge ? t("knowledge.capture_redistill", "Redistill") : t("knowledge.capture_distill", "Distill");
+      return `
+        <button class="kb-approve" type="button" ${note.status === "distilling" ? "disabled" : ""} onclick="distillNote('${esc(note.id)}')">${esc(distillLabel)}</button>
+        <button class="button-ghost" type="button" onclick="showDistillLog('${esc(note.id)}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
+        <button class="button-ghost" type="button" onclick="editNote('${esc(note.id)}')">${esc(t("knowledge.edit", "Edit"))}</button>
+        <button class="kb-reject" type="button" onclick="deleteNote('${esc(note.id)}')">${esc(t("knowledge.delete", "Delete"))}</button>`;
+    }
+
+    function renderCaptureNoteEditForm(note) {
+      const uploadLabel = `<label class="kb-cap-upload">${esc(t("knowledge.capture_add_image", "+ image"))}<input type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="uploadNoteImage('${esc(note.id)}', this)" /></label>`;
+      return `<div data-capture-edit-form data-note-id="${esc(note.id)}">
+        <input class="kb-cap-edit-title" data-id="${esc(note.id)}" type="text" value="${esc(note.title || "")}" placeholder="${esc(t("knowledge.capture_title_placeholder", "Optional title"))}" />
+        <textarea class="kb-cap-edit" data-id="${esc(note.id)}" rows="8" onpaste="pasteNoteEditImage(event, '${esc(note.id)}')">${esc(note.text || "")}</textarea>
+        <div class="kb-row kb-cap-edit-tools">${uploadLabel}
+          <select class="kb-cap-edit-scope" data-id="${esc(note.id)}">${captureScopeOptions(note.scope_hint)}</select>
+          <button class="primary" type="button" onclick="saveNote('${esc(note.id)}')">${esc(t("knowledge.save_entry", "Save"))}</button>
+          <button class="button-ghost" type="button" onclick="cancelNoteEdit()">${esc(t("common.cancel", "Cancel"))}</button>
+        </div>
+      </div>`;
+    }
+
+    window.captureNoteRowKeydown = (event, id) => {
+      if (!["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      openCaptureNoteView(id);
+    };
 
     function captureAssociationSummary(note) {
       const pendingCount = (note.candidate_refs || []).length;
@@ -1903,42 +2590,10 @@
     function renderCapture() {
       $("#capture-list").innerHTML = state.capture.length
         ? state.capture.map((n) => {
-            const editing = state.editingNote === n.id;
-            const expanded = state.expandedNote === n.id;
             const full = n.text || "";
-            const statusLabel = t("knowledge.capture_status_" + n.status, n.status);
-            const assocText = captureAssociationSummary(n);
-            const infoText = n.status === "distilled"
-              ? (assocText ? " · " + assocText : "")
-              : n.status === "error" ? " · " + (n.last_error || "") : "";
-            const hasProducedKnowledge = (n.candidate_ids || []).length || (n.candidate_refs || []).length || (n.entry_refs || []).length;
-            const distillLabel = n.status === "distilling"
-              ? t("knowledge.capture_distilling", "Distilling…")
-              : hasProducedKnowledge ? t("knowledge.capture_redistill", "Redistill") : t("knowledge.capture_distill", "Distill");
-            const uploadLabel = `<label class="kb-cap-upload">${esc(t("knowledge.capture_add_image", "+ image"))}<input type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="uploadNoteImage('${esc(n.id)}', this)" /></label>`;
-            const actions = `<div class="kb-card-actions kb-cap-actions">
-                <button class="kb-approve" type="button" ${n.status === "distilling" ? "disabled" : ""} onclick="distillNote('${esc(n.id)}')">${esc(distillLabel)}</button>
-                <button class="button-ghost" type="button" onclick="showDistillLog('${esc(n.id)}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
-                <button class="button-ghost" type="button" onclick="toggleNote('${esc(n.id)}')">${esc(expanded ? t("common.close", "Close") : t("knowledge.view", "View"))}</button>
-                <button class="button-ghost" type="button" onclick="${editing ? "cancelNoteEdit()" : `editNote('${esc(n.id)}')`}">${esc(editing ? t("common.cancel", "Cancel") : t("knowledge.edit", "Edit"))}</button>
-                <button class="kb-reject" type="button" onclick="deleteNote('${esc(n.id)}')">${esc(t("knowledge.delete", "Delete"))}</button>
-              </div>`;
-            const body = editing
-              ? `<input class="kb-cap-edit-title" data-id="${esc(n.id)}" type="text" value="${esc(n.title || "")}" placeholder="${esc(t("knowledge.capture_title_placeholder", "Optional title"))}" />
-                 <textarea class="kb-cap-edit" data-id="${esc(n.id)}" rows="4" onpaste="pasteNoteEditImage(event, '${esc(n.id)}')">${esc(full)}</textarea>
-                 <div class="kb-row kb-cap-edit-tools">${uploadLabel}
-                 <select class="kb-cap-edit-scope" data-id="${esc(n.id)}">${captureScopeOptions(n.scope_hint)}</select>
-                 <button class="primary" type="button" onclick="saveNote('${esc(n.id)}')">${esc(t("knowledge.save_entry", "Save"))}</button>
-                 <button class="button-ghost" type="button" onclick="cancelNoteEdit()">${esc(t("common.cancel", "Cancel"))}</button></div>`
-              : expanded
-              ? `<div class="kb-body kb-cap-md" data-md-id="${esc(n.id)}"></div>`
-              : `<div class="kb-cap-preview">${esc(full.slice(0, 140))}</div>`;
-            return `<div class="kb-card" data-note-id="${esc(n.id)}"><h3>${esc(n.title || (full.split("\n")[0] || n.id).slice(0, 80))}</h3>
-              <div class="kb-muted">${esc(n.scope_hint)} · ${esc(statusLabel)}${esc(infoText)}</div>
-              <div class="kb-muted">${esc(timeLine(n))}</div>
-              ${actions}
-              ${renderCaptureRefs(n)}
-              ${body}
+            const title = n.title || (full.split("\n")[0] || n.id);
+            return `<div class="kb-card kb-cap-list-row" data-note-id="${esc(n.id)}" tabindex="0" role="button" onclick="openCaptureNoteView('${esc(n.id)}')" onkeydown="captureNoteRowKeydown(event, '${esc(n.id)}')">
+              <h3>${esc(title.slice(0, 120))}</h3>
               </div>`;
           }).join("")
         : `<p class="kb-muted">${esc(t("knowledge.capture_empty", "No capture notes"))}</p>`;
@@ -1949,6 +2604,7 @@
       const data = await api("/api/kb/capture");
       state.capture = data.notes || [];
       renderCapture();
+      syncActiveCaptureNote();
       if (!state.captureBackends) loadCaptureAgents();
     }
 
@@ -2060,17 +2716,26 @@
       } catch (e) { /* selectors stay empty -> distill falls back to server default */ }
     }
 
-    window.editNote = (id) => { state.editingNote = id; renderCapture(); };
-    window.cancelNoteEdit = () => { state.editingNote = null; renderCapture(); };
-    window.toggleNote = (id) => { state.expandedNote = state.expandedNote === id ? null : id; renderCapture(); };
+    window.editNote = (id) => {
+      const note = state.capture.find((item) => item.id === id);
+      if (note) state.activeCaptureNote = note;
+      state.editingNote = id;
+      renderCapture();
+      renderCaptureNoteModal();
+    };
+    window.cancelNoteEdit = () => {
+      state.editingNote = null;
+      renderCapture();
+      renderCaptureNoteModal();
+    };
+    window.toggleNote = (id) => openCaptureNoteView(id);
     window.openCaptureNote = async (encodedId) => {
       const id = decodeURIComponent(String(encodedId || ""));
       if (!id) return;
       showTab("capture");
       await loadCapture();
       state.editingNote = null;
-      state.expandedNote = id;
-      renderCapture();
+      openCaptureNoteView(id);
       setTimeout(() => scrollToDataValue("data-note-id", id), 0);
     };
     window.saveNote = async (id) => {
@@ -2086,7 +2751,11 @@
       const note = state.capture.find((n) => n.id === id);
       const title = (note?.title || String(note?.text || "").split("\n")[0] || id).slice(0, 80);
       if (!confirm(formatText("knowledge.capture_delete_confirm", { title }, "Delete note " + title + "?"))) return;
-      try { await api("/api/kb/capture", { method: "DELETE", body: JSON.stringify({ id }) }); await loadCapture(); await loadStatus(); }
+      try {
+        await api("/api/kb/capture", { method: "DELETE", body: JSON.stringify({ id }) });
+        if (state.activeCaptureNote?.id === id) closeCaptureNoteModal();
+        await loadCapture(); await loadStatus();
+      }
       catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
     function closeDistillLogModal() {
@@ -2146,6 +2815,8 @@
     };
     $("#cap-log-close").addEventListener("click", closeDistillLogModal);
     $("#cap-log-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-log-modal") closeDistillLogModal(); });
+    $("#cap-view-close").addEventListener("click", closeCaptureNoteModal);
+    $("#cap-view-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-view-modal") closeCaptureNoteModal(); });
     function readFileAsDataUrl(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -2452,6 +3123,10 @@
     $("#nav-workspace-custom").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { loadProjectNavDrafts(); loadNavigation(); }
     });
+    $("#map-workspace-select").addEventListener("change", () => { syncProjectMapCustomWorkspace(); loadProjectContextIndexStatus(); });
+    $("#map-workspace-custom").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadProjectContextIndexStatus();
+    });
     $("#nav-backend").addEventListener("change", () => { state.navLastBackend = $("#nav-backend").value; renderNavigationModels(); syncNavigationProxyMode(false); });
     $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; });
     $("#nav-proxy-mode").addEventListener("change", () => {
@@ -2466,6 +3141,44 @@
     $("#nav-agent-close").addEventListener("click", closeProjectNavAgentModal);
     $("#nav-agent-modal").addEventListener("click", (ev) => { if (ev.target.id === "nav-agent-modal") closeProjectNavAgentModal(); });
     $("#nav-agent-stop").addEventListener("click", () => { if (state.activeNavAgentDraft?.id) stopProjectNavDraft(state.activeNavAgentDraft.id); });
+    $("#ctx-refresh").addEventListener("click", refreshProjectContextIndex);
+    $("#ctx-map-list").addEventListener("click", (event) => {
+      const button = event.target.closest(".kb-map-open-link");
+      if (button) {
+        openProjectContextMap(button.dataset?.projectKey || "", button.dataset?.workspaceId || "");
+        return;
+      }
+      const stop = event.target.closest(".kb-map-stop-link");
+      if (stop && !stop.disabled) {
+        stopProjectContextJob();
+        return;
+      }
+      const deleteButton = event.target.closest(".kb-map-delete-link");
+      if (deleteButton && !deleteButton.disabled) {
+        deleteProjectContextMap(deleteButton.dataset?.projectKey || "", deleteButton.dataset?.workspaceId || "");
+      }
+    });
+    $("#map-view-files").addEventListener("click", (event) => {
+      const dir = event.target.closest(".kb-map-dir-link,.kb-map-up-link");
+      if (dir) {
+        event.preventDefault();
+        state.activeProjectContextPath = dir.dataset?.path || "";
+        $("#map-view-search").value = "";
+        clearProjectContextSearch();
+        renderProjectContextFileTree();
+        return;
+      }
+      const button = event.target.closest(".kb-map-file-link");
+      if (button) {
+        event.preventDefault();
+        loadProjectContextMapFile(button.dataset?.path || "");
+      }
+    });
+    $("#map-view-search").addEventListener("input", scheduleProjectContextSearch);
+    $("#map-view-close").addEventListener("click", closeProjectContextMapModal);
+    $("#map-view-modal").addEventListener("click", (ev) => { if (ev.target.id === "map-view-modal") closeProjectContextMapModal(); });
+    $("#map-file-close").addEventListener("click", closeProjectContextMapFileModal);
+    $("#map-file-modal").addEventListener("click", (ev) => { if (ev.target.id === "map-file-modal") closeProjectContextMapFileModal(); });
     $("#nav-generate").addEventListener("click", async () => {
       const payload = projectNavActionPayload();
       if (!payload.workspace_path) {
@@ -2522,6 +3235,7 @@
       renderProjectNavDraftModal();
       renderProjectNavAgentModal();
       renderProjectNavWorkspaceSelect();
+      renderProjectMapWorkspaceSelect();
       renderNavigationAgents();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();
@@ -2530,7 +3244,8 @@
       if (event.key === window.AHAI18n?.languageStorageKey) window.AHAI18n.setLanguage(event.newValue);
     });
     syncChromeText();
-    loadProjectNavWorkspaces(); loadStatus(); showTab(state.activeTab);
+    loadStatus();
+    loadProjectNavWorkspaces().finally(() => showTab(state.activeTab));
   </script>
 </body>
 </html>

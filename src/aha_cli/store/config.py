@@ -26,8 +26,9 @@ def _merge_backend_config(defaults: dict, loaded: dict, legacy_proxy: dict) -> d
 def _merge_knowledge_config(defaults: dict, loaded: dict) -> dict:
     if not isinstance(loaded, dict):
         return {key: (dict(value) if isinstance(value, dict) else value) for key, value in defaults.items()}
-    cfg = defaults | {key: value for key, value in loaded.items() if key not in {"git", "curation", "project_nav", "retrieval"}}
-    for nested in ("git", "curation", "project_nav", "retrieval"):
+    nested_keys = ("git", "curation", "project_nav", "retrieval", "project_context_index")
+    cfg = defaults | {key: value for key, value in loaded.items() if key not in set(nested_keys)}
+    for nested in nested_keys:
         loaded_nested = loaded.get(nested, {})
         cfg[nested] = defaults[nested] | (loaded_nested if isinstance(loaded_nested, dict) else {})
     return cfg

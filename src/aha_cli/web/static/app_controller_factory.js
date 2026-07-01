@@ -2,6 +2,9 @@
   const ahaSlashCommands = Object.freeze([
     { scope: "aha", name: "/aha kb", insert: "/aha kb ", desc: "Ask the current agent to generate knowledge-base candidates." },
     { scope: "aha", name: "/aha nav", insert: "/aha nav ", desc: "Ask the current agent to generate project navigation candidates." },
+    { scope: "aha", name: "/aha map status", insert: "/aha map status", desc: "Show local project context map status." },
+    { scope: "aha", name: "/aha map refresh", insert: "/aha map refresh", desc: "Refresh the local project context map." },
+    { scope: "aha", name: "/aha map query", insert: "/aha map query ", desc: "Query project map paths by keywords." },
     { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Mark the task completed." },
     { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
     { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." }

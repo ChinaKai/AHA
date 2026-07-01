@@ -21,12 +21,11 @@ from aha_cli.backends.codex import (
 from aha_cli.domain.models import (
     normalize_headroom_integration_config,
     normalize_integrations_config,
-    normalize_task_token_saving,
     utc_now,
 )
 from aha_cli.services.proxy import DEFAULT_NO_PROXY, apply_proxy_environment
 from aha_cli.store.io import iter_jsonl_from, read_json, write_json
-from aha_cli.store.paths import aha_home_path, event_path, plan_path
+from aha_cli.store.paths import aha_home_path, event_path
 
 HEADROOM_HOST = "127.0.0.1"
 HEADROOM_HEALTH_TIMEOUT_SECONDS = 1.0
@@ -332,23 +331,8 @@ def _headroom_usage_public_task(row: dict) -> dict:
 
 
 def _headroom_enabled_plan_tasks(root: Path, run_id: str | None) -> list[dict]:
-    if not run_id:
-        return []
-    try:
-        plan = read_json(plan_path(root, run_id))
-    except (OSError, ValueError):
-        return []
-    tasks = plan.get("tasks")
-    if not isinstance(tasks, list):
-        return []
-    enabled: list[dict] = []
-    for task in tasks:
-        if not isinstance(task, dict) or task.get("deleted_at"):
-            continue
-        policy = normalize_task_token_saving(task.get("token_saving"), task.get("context_management"))
-        if policy.get("enabled") and policy.get("provider") == "headroom":
-            enabled.append(task)
-    return enabled
+    del root, run_id
+    return []
 
 
 def _headroom_usage_task_agents(task: dict) -> list[str]:
@@ -548,13 +532,8 @@ def codex_upstream_base_url(codex_config: dict | None = None) -> str | None:
 
 
 def headroom_should_wrap_codex(config: dict | None, task: dict | None, backend_name: str) -> bool:
-    if str(backend_name or "").lower() != "codex":
-        return False
-    integration = headroom_config(config)
-    if not integration.get("enabled"):
-        return False
-    policy = normalize_task_token_saving((task or {}).get("token_saving"), (task or {}).get("context_management"))
-    return bool(policy.get("enabled") and policy.get("provider") == "headroom")
+    del config, task, backend_name
+    return False
 
 
 def prepare_headroom_codex_runtime(

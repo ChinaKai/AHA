@@ -119,24 +119,6 @@
       return String(deps.currentRunId?.() || "").trim();
     }
 
-    function headroomIntegrationEnabled() {
-      const config = deps.bootstrapConfigData?.() || {};
-      return config?.integrations?.headroom?.enabled === true;
-    }
-
-    function tokenSavingRequiresHeadroomMessage() {
-      return t("task.token_saving_requires_headroom", "Enable Headroom in Integrations before using token saving.");
-    }
-
-    function canUseTokenSaving(enabled) {
-      if (!enabled || headroomIntegrationEnabled()) return true;
-      const message = tokenSavingRequiresHeadroomMessage();
-      setDraftStatus(message);
-      alertUser(message);
-      realtimeDebug("task_create.skip", { reason: "headroom_integration_disabled" });
-      return false;
-    }
-
     function setDraftStatus(message = "") {
       if (elements.taskDraftStateEl) elements.taskDraftStateEl.textContent = message;
     }
@@ -678,7 +660,6 @@
         return;
       }
       const tokenSavingEnabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
-      if (!canUseTokenSaving(tokenSavingEnabled)) return;
       createInFlight = true;
       const description = elements.newTaskDescriptionEl?.value.trim() || "";
       const collaborationMode = elements.collaborationModeEl?.value || "auto";

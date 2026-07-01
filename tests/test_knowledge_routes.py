@@ -49,6 +49,15 @@ def _sync_project_nav_jobs(monkeypatch) -> None:
     monkeypatch.setattr(kr, "dispatch_project_nav_job", sync_dispatch)
 
 
+def _sync_project_context_jobs(monkeypatch) -> None:
+    import aha_cli.services.project_context_index_jobs as jobs
+
+    def sync_dispatch(root, job_id, *, config=None):
+        return jobs.run_project_context_refresh_job(root, job_id, config=config)
+
+    monkeypatch.setattr(jobs, "dispatch_project_context_job", sync_dispatch)
+
+
 def test_unknown_path_returns_none(tmp_path: Path):
     assert knowledge_route_response(tmp_path / ".aha", "GET", "/api/other", {}, b"", {}) is None
 
@@ -96,6 +105,109 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     # Existing kind filters are unaffected (navigation is not a solution).
     sol = _get(home, "/api/kb/entries", {"kind": ["solutions"]})
     assert sol["count"] == 1 and sol["entries"][0]["title"] == "Fix build"
+
+
+def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeypatch):
+    _sync_project_context_jobs(monkeypatch)
+    home = _setup(tmp_path)
+    workspace = tmp_path / "repo"
+    (workspace / "drivers" / "net").mkdir(parents=True)
+    (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
+
+    missing = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)]})
+    assert missing["status"]["status"] == "missing"
+    assert "index" not in missing["status"]
+
+    missing_query = _post(home, "/api/kb/project-context-index/query", {"workspace_path": str(workspace), "query": "foo"})
+    assert b"404 Not Found" in missing_query.split(b"\r\n", 1)[0]
+
+    refreshed = json_response_body(_post(home, "/api/kb/project-context-index/refresh", {"workspace_path": str(workspace)}))
+    assert refreshed["ok"] is True
+    assert refreshed["job"]["status"] == "completed"
+    assert refreshed["job"]["counts"]["files"] == 1
+    assert "index" not in refreshed["job"].get("result", {})
+
+    polled = _get(home, "/api/kb/project-context-index/job", {"id": [refreshed["job_id"]]})
+    assert polled["job"]["status"] == "completed"
+
+    queried = json_response_body(_post(home, "/api/kb/project-context-index/query", {"workspace_path": str(workspace), "query": "foo"}))
+    assert queried["ok"] is True
+    assert queried["query"]["files"][0]["path"] == "drivers/net/foo.c"
+    assert "Project map reference" in queried["reference"]
+    assert "drivers/net/foo.c" in queried["reference"]
+    assert queried["status"]["status"] == "fresh"
+    assert queried["status"]["stale_check"] == "head-only"
+    assert queried["status"]["repos"][0]["id"] == "root"
+    assert queried["status"]["storage"]["format"] == "sharded-jsonl"
+    assert queried["status"]["storage"]["sections"]["files"]["shards"][0]["path"].endswith("files.jsonl")
+    maps = _get(home, "/api/kb/project-context-index/maps")
+    assert maps["count"] == 1
+    assert maps["maps"][0]["project_key"] == refreshed["project_key"]
+    assert maps["maps"][0]["workspace_id"] == refreshed["job"]["workspace_id"]
+    tree = _get(home, "/api/kb/project-context-index/tree", {"workspace_path": [str(workspace)]})
+    tree_paths = {item["path"] for item in tree["entries"]}
+    assert "index.json" in tree_paths
+    assert "summary.md" in tree_paths
+    assert "repos/root/files.jsonl" in tree_paths
+    map_tree = _get(
+        home,
+        "/api/kb/project-context-index/tree",
+        {"project_key": [maps["maps"][0]["project_key"]], "workspace_id": [maps["maps"][0]["workspace_id"]]},
+    )
+    assert {item["path"] for item in map_tree["entries"]} == tree_paths
+    map_query = json_response_body(_post(
+        home,
+        "/api/kb/project-context-index/query",
+        {"project_key": maps["maps"][0]["project_key"], "workspace_id": maps["maps"][0]["workspace_id"], "query": "foo"},
+    ))
+    assert map_query["ok"] is True
+    assert map_query["query"]["files"][0]["path"] == "drivers/net/foo.c"
+    assert map_query["workspace_id"] == maps["maps"][0]["workspace_id"]
+    index_file = _get(home, "/api/kb/project-context-index/file", {"workspace_path": [str(workspace)], "path": ["index.json"]})
+    assert index_file["path"] == "index.json"
+    assert '"schema_version"' in index_file["content"]
+    shard_file = _get(home, "/api/kb/project-context-index/file", {"workspace_path": [str(workspace)], "path": ["repos/root/files.jsonl"]})
+    assert "drivers/net/foo.c" in shard_file["content"]
+    map_file = _get(
+        home,
+        "/api/kb/project-context-index/file",
+        {"project_key": [maps["maps"][0]["project_key"]], "workspace_id": [maps["maps"][0]["workspace_id"]], "path": ["index.json"]},
+    )
+    assert map_file["path"] == "index.json"
+    escaped = knowledge_route_response(
+        home,
+        "GET",
+        "/api/kb/project-context-index/file",
+        {"workspace_path": [str(workspace)], "path": ["../config.json"]},
+        b"",
+        {},
+    )
+    assert b"400 Bad Request" in escaped.split(b"\r\n", 1)[0]
+
+    (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 123; }\n", encoding="utf-8")
+    fast_status = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)]})
+    assert fast_status["status"]["status"] == "fresh"
+    assert fast_status["status"]["stale_check"] == "head-only"
+    assert fast_status["status"]["verified_worktree"] is False
+    deep_status = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)], "deep": ["1"]})
+    assert deep_status["status"]["status"] == "stale"
+    assert deep_status["status"]["stale_check"] == "full"
+    assert deep_status["status"]["verified_worktree"] is True
+
+    stopped = json_response_body(_post(home, "/api/kb/project-context-index/job/stop", {"id": refreshed["job_id"]}))
+    assert stopped["stopped"] is False
+    assert stopped["job"]["already_terminal"] is True
+
+    deleted = json_response_body(_delete(
+        home,
+        "/api/kb/project-context-index/map",
+        {"project_key": maps["maps"][0]["project_key"], "workspace_id": maps["maps"][0]["workspace_id"]},
+    ))
+    assert deleted["ok"] is True
+    assert deleted["deleted"] is True
+    assert not Path(deleted["path"]).exists()
+    after_delete = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)]})
+    assert after_delete["status"]["status"] == "missing"
 
 
 def _capture_sidecar(candidates_json: str) -> str:
@@ -468,6 +580,27 @@ def test_entries_support_fuzzy_project_filter_and_search(tmp_path: Path):
     by_tag = _get(home, "/api/kb/entries", {"q": ["docs"]})
     assert by_tag["count"] == 1
     assert by_tag["entries"][0]["title"] == "Write docs"
+
+
+def test_entries_support_limit_offset_without_body_scan(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    for title in ("Alpha", "Beta", "Gamma"):
+        write_entry(home, config=cfg, scope="general", kind="wiki", title=title, body=f"body {title}")
+
+    import aha_cli.web.knowledge_routes as kr
+
+    def fail_full_scan(*args, **kwargs):
+        raise AssertionError("full entry body scan should not run for unsearched listing")
+
+    monkeypatch.setattr(kr, "iter_all_entries", fail_full_scan)
+    page = _get(home, "/api/kb/entries", {"limit": ["2"], "offset": ["1"]})
+
+    assert page["count"] == 3
+    assert page["returned"] == 2
+    assert page["offset"] == 1
+    assert page["limit"] == 2
+    assert [entry["title"] for entry in page["entries"]] == ["Beta", "Gamma"]
 
 
 def test_entries_exclude_navigation_but_project_nav_api_lists_entry_points_and_can_read_children(tmp_path: Path):

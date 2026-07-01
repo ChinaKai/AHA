@@ -157,7 +157,7 @@
             <span>${escapeHtml(t("headroom.title", "Headroom"))}</span>
             <span class="checkbox-line">
               <input data-headroom-field="enabled" type="checkbox" ${headroom.enabled ? "checked" : ""} ${fieldDisabled}>
-              <span>${escapeHtml(t("headroom.enable_hint", "Required by task token saving"))}</span>
+              <span>${escapeHtml(t("headroom.enable_hint", "Optional Headroom proxy experiment"))}</span>
             </span>
           </label>
           <div class="headroom-config-grid">

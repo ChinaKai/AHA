@@ -9,9 +9,9 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main
-from aha_cli.backends.codex import codex_config_overrides
 from aha_cli.services import headroom_integration
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
+from aha_cli.services.project_context_index import build_project_context_index
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -275,7 +275,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(proxy_env["NO_PROXY"], "localhost,127.0.0.1")
         self.assertEqual(proxy_env["http_proxy"], "http://127.0.0.1:8888")
 
-    def test_codex_chat_wraps_codex_with_headroom_when_auto_context_enabled(self) -> None:
+    def test_codex_chat_does_not_wrap_codex_with_headroom_from_token_saving(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -287,8 +287,8 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Headroom chat", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="headroom")
-                append_message(root, run_id, "main", "use headroom", sender="browser", task_id="task-001", role="main")
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                append_message(root, run_id, "main", "use token saving", sender="browser", task_id="task-001", role="main")
 
                 with (
                     mock.patch.dict(os.environ, {"OPENAI_BASE_URL": "https://openai.example/v1"}, clear=True),
@@ -307,18 +307,15 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         prepare_runtime.assert_called_once()
-        ensure_proxy.assert_called_once()
-        self.assertEqual(ensure_proxy.call_args.kwargs["upstream_base_url"], "https://openai.example/v1")
-        self.assertEqual(ensure_proxy.call_args.kwargs["scope"], {"run_id": run_id, "task_id": "task-001", "agent_id": "main"})
+        ensure_proxy.assert_not_called()
         codex_config = run_agent.call_args.kwargs["codex_config"]
         self.assertEqual(codex_config["model"], "gpt-test")
-        self.assertIn('model_provider="aha_headroom"', " ".join(codex_config_overrides(codex_config)))
         proxy_env = run_agent.call_args.kwargs["proxy_env"]
-        self.assertEqual(proxy_env["OPENAI_BASE_URL"], "http://127.0.0.1:8989/v1")
-        self.assertIn("localhost", proxy_env["NO_PROXY"])
+        self.assertNotIn("OPENAI_BASE_URL", proxy_env)
         ready_events = [event for event in events if event["type"] == "headroom_integration_ready"]
-        self.assertTrue(ready_events)
-        self.assertEqual(ready_events[0]["data"]["scope"], {"run_id": run_id, "task_id": "task-001", "agent_id": "main"})
+        skipped_events = [event for event in events if event["type"] == "headroom_integration_skipped"]
+        self.assertFalse(ready_events)
+        self.assertFalse(skipped_events)
 
     def test_chat_prompt_includes_enabled_hardware_debug_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -407,6 +404,41 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("channel 2: type=telnet", sticky_prompt)
         self.assertNotIn("write=True", sticky_prompt)
         self.assertNotIn("operation skill path", sticky_prompt)
+
+    def test_chat_prompt_includes_project_map_context_when_token_saving_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            aha_root = Path(tmp) / ".aha"
+            (workspace / "drivers" / "net").mkdir(parents=True)
+            (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Map prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                build_project_context_index(aha_root, workspace)
+
+                disabled_prompt = chat_prompt(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "where is foo_probe", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+                update_task_token_saving_config(aha_root, run_id, "task-001", enabled=True, provider="map")
+                enabled_prompt = chat_prompt(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "where is foo_probe", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+
+        self.assertNotIn("Project context map:", disabled_prompt)
+        self.assertIn("Project context map:", enabled_prompt)
+        self.assertIn("- token_saving: enabled", enabled_prompt)
+        self.assertIn("- map_index:", enabled_prompt)
+        self.assertIn("/aha map query <terms>", enabled_prompt)
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

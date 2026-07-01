@@ -108,7 +108,7 @@ def parse_task_token_saving_fields(payload: dict) -> dict[str, object]:
     elif "token_saving_enabled" in payload:
         update["enabled"] = parse_optional_bool(payload.get("token_saving_enabled"), "token_saving_enabled")
     if "provider" in payload:
-        update["provider"] = str(payload.get("provider") or "headroom")
+        update["provider"] = str(payload.get("provider") or "map")
     return update
 
 

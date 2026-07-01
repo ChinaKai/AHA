@@ -90,7 +90,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
         self.assertFalse(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(status["tasks"][-1]["collaboration_mode"], "team")
         self.assertEqual(status["tasks"][-1]["workflow_template"], "fault-debug")
@@ -109,9 +109,6 @@ class WebTaskApiTests(unittest.TestCase):
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "codex")
-                cfg = read_json(config_path(root))
-                cfg.setdefault("integrations", {}).setdefault("headroom", {})["enabled"] = True
-                write_json(config_path(root), cfg)
                 code, plan_output = self.run_cli("plan", "Task token saving create config", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -126,7 +123,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "dispatch": False,
                             "token_saving": {
                                 "enabled": True,
-                                "provider": "headroom",
+                                "provider": "map",
                             },
                         },
                     )
@@ -136,7 +133,7 @@ class WebTaskApiTests(unittest.TestCase):
 
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
         self.assertEqual(status["tasks"][-1]["token_saving"], body["task"]["token_saving"])
 
     def test_api_task_create_persists_codex_default_model_for_empty_ui_model(self) -> None:
@@ -189,7 +186,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(status["tasks"][-1]["preferred_model"], CODEX_DEFAULT_MODEL)
         self.assertEqual(task_created["data"]["preferred_model"], CODEX_DEFAULT_MODEL)
 
-    def test_api_task_create_rejects_token_saving_when_headroom_is_disabled(self) -> None:
+    def test_api_task_create_accepts_token_saving_without_headroom(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -206,14 +203,16 @@ class WebTaskApiTests(unittest.TestCase):
                         payload={
                             "title": "Token saving without headroom",
                             "dispatch": False,
-                            "token_saving": {"enabled": True, "provider": "headroom"},
+                            "token_saving": {"enabled": True, "provider": "map"},
                         },
                     )
                 )
                 body = json_response_body(response)
 
-        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
-        self.assertIn("Headroom integration must be enabled", body["error"])
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["task"]["token_saving"]["enabled"])
+        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
 
     def test_api_task_create_and_update_accepts_hardware_debug_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1792,9 +1791,6 @@ class WebTaskApiTests(unittest.TestCase):
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "codex")
-                cfg = read_json(config_path(root))
-                cfg.setdefault("integrations", {}).setdefault("headroom", {})["enabled"] = True
-                write_json(config_path(root), cfg)
                 code, plan_output = self.run_cli("plan", "Token saving API", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
@@ -1807,7 +1803,7 @@ class WebTaskApiTests(unittest.TestCase):
                         method="POST",
                         payload={
                             "enabled": True,
-                            "provider": "headroom",
+                            "provider": "map",
                         },
                     )
                 )
@@ -1817,10 +1813,10 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "headroom")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
         self.assertEqual(snapshot["tasks"][0]["token_saving"], body["task"]["token_saving"])
 
-    def test_task_token_saving_api_rejects_enable_when_headroom_is_disabled(self) -> None:
+    def test_task_token_saving_api_accepts_enable_without_headroom(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -1837,16 +1833,17 @@ class WebTaskApiTests(unittest.TestCase):
                         method="POST",
                         payload={
                             "enabled": True,
-                            "provider": "headroom",
+                            "provider": "map",
                         },
                     )
                 )
                 body = json_response_body(response)
                 snapshot = status_snapshot(root, run_id)
 
-        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
-        self.assertIn("Headroom integration must be enabled", body["error"])
-        self.assertFalse(snapshot["tasks"][0]["token_saving"]["enabled"])
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["ok"])
+        self.assertTrue(snapshot["tasks"][0]["token_saving"]["enabled"])
+        self.assertEqual(snapshot["tasks"][0]["token_saving"]["provider"], "map")
 
 
 if __name__ == "__main__":

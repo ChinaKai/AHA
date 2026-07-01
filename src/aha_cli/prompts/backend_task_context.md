@@ -4,6 +4,7 @@ Task context:
 - status: $status
 - role selected by user: $role
 - workspace: $workspace
+$project_map_context
 - collaboration_mode: $collaboration_mode
 - max_sub_agents: $max_sub_agents
 $agent_context

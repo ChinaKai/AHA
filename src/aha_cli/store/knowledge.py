@@ -431,6 +431,24 @@ def read_entry(path: Path) -> dict:
     return {"meta": meta, "body": body, "path": str(path)}
 
 
+def read_entry_meta(path: Path) -> dict:
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as handle:
+        first = handle.readline()
+        if first.strip() != _FRONTMATTER_FENCE:
+            raise ValueError("entry is missing a frontmatter block")
+        lines: list[str] = []
+        for line in handle:
+            if line.strip() == _FRONTMATTER_FENCE:
+                return json.loads("".join(lines))
+            lines.append(line)
+    raise ValueError("entry frontmatter is not terminated")
+
+
+def read_entry_summary(path: Path) -> dict:
+    return {"meta": read_entry_meta(path), "path": str(path)}
+
+
 def list_entries(
     root: Path,
     *,
@@ -455,6 +473,30 @@ def list_entries(
     return entries
 
 
+def list_entry_summaries(
+    root: Path,
+    *,
+    config: dict | None,
+    scope: str,
+    kind: str,
+    project_key_value: str | None = None,
+) -> list[dict]:
+    kb_root = knowledge_root(root, config)
+    try:
+        target_dir = entry_dir(kb_root, scope, kind, project_key_value)
+    except ValueError:
+        return []
+    if not target_dir.is_dir():
+        return []
+    entries: list[dict] = []
+    for path in _iter_entry_markdown(target_dir):
+        try:
+            entries.append(read_entry_summary(path))
+        except (OSError, ValueError):
+            continue
+    return entries
+
+
 def iter_all_entries(root: Path, config: dict | None = None) -> list[dict]:
     """Return every tracked entry across all scopes and valid kinds."""
     kb_root = knowledge_root(root, config)
@@ -470,6 +512,30 @@ def iter_all_entries(root: Path, config: dict | None = None) -> list[dict]:
                 results.extend(
                     list_entries(
                         root, config=config, scope="project", kind=kind,
+                        project_key_value=proj.name,
+                    )
+                )
+    return results
+
+
+def iter_all_entry_summaries(root: Path, config: dict | None = None) -> list[dict]:
+    """Return every tracked entry summary without reading markdown bodies."""
+    kb_root = knowledge_root(root, config)
+    results: list[dict] = []
+    for kind in entry_kinds_for_scope("general"):
+        results.extend(list_entry_summaries(root, config=config, scope="general", kind=kind))
+    for kind in entry_kinds_for_scope("personal"):
+        results.extend(list_entry_summaries(root, config=config, scope="personal", kind=kind))
+    projects_root = kb_root / PROJECTS_DIR
+    if projects_root.is_dir():
+        for proj in sorted(p for p in projects_root.iterdir() if p.is_dir()):
+            for kind in entry_kinds_for_scope("project"):
+                results.extend(
+                    list_entry_summaries(
+                        root,
+                        config=config,
+                        scope="project",
+                        kind=kind,
                         project_key_value=proj.name,
                     )
                 )
@@ -577,6 +643,16 @@ def search_entries(root: Path, config: dict | None, query: str) -> list[dict]:
     return hits
 
 
+def count_stale_entries(root: Path, config: dict | None = None, now: str | None = None) -> int:
+    now = now or utc_now()
+    total = 0
+    for entry in iter_all_entry_summaries(root, config):
+        review_after = entry.get("meta", {}).get("review_after")
+        if review_after and str(review_after) <= now:
+            total += 1
+    return total
+
+
 # --------------------------------------------------------------------------- #
 # Status
 # --------------------------------------------------------------------------- #
@@ -656,7 +732,7 @@ def knowledge_status(root: Path, config: dict | None = None) -> dict:
         "personal": personal,
         "projects": projects,
         "pending": len(list_pending(root, config)),
-        "stale": len(list_stale_entries(root, config)),
+        "stale": count_stale_entries(root, config),
         "total_entries": sum(general.values())
         + sum(personal.values())
         + sum(sum(p["counts"].values()) for p in projects),
