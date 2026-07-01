@@ -569,6 +569,8 @@ Headroom should remain available, but not as the default coding policy:
 - risky for kernel/u-boot/buildroot/C tasks where exact build/config/code
   context matters
 - should be labeled as an optional experimental provider/proxy integration
+- the Headroom web panel should explicitly say it is not suitable for coding
+  workflows and that AHA does not use it yet
 - should not be selected by task token saving; task token saving now selects
   project-map prompt guidance
 

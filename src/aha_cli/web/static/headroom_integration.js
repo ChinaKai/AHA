@@ -152,6 +152,7 @@
       </div>
       ${statusGridHtml()}
       ${usageByTaskHtml()}
+      <div class="field-help headroom-coding-note">${escapeHtml(t("headroom.coding_note", "Not suitable for coding workflows; AHA does not use Headroom yet."))}</div>
       <form class="headroom-config-form" data-headroom-form>
           <label class="field-label checkbox-field">
             <span>${escapeHtml(t("headroom.title", "Headroom"))}</span>
