@@ -392,6 +392,8 @@ def test_default_capture_agent_passes_codex_runtime_config_without_env_group(tmp
 
 
 def test_distill_note_passes_effective_backend_and_model_to_agent(tmp_path: Path):
+    from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
+
     home = _home(tmp_path)
     cfg = _cfg()
     cfg["backend"] = "codex"
@@ -407,14 +409,21 @@ def test_distill_note_passes_effective_backend_and_model_to_agent(tmp_path: Path
 
     assert result["ok"]
     assert seen["backend"] == "codex"
-    assert seen["model"] == "env:openai"
+    assert seen["model"] == CODEX_DEFAULT_MODEL
     assert seen["proxy_enabled"] is False
     assert seen["distill_mode"] == "organize"
     log = read_distill_log(home, cfg, note["id"])
     assert log["backend"] == "codex"
-    assert log["model"] == "env:openai"
+    assert log["model"] == CODEX_DEFAULT_MODEL
     assert log["proxy_enabled"] is False
     assert log["distill_mode"] == "organize"
+
+    explicit_note = create_note(home, cfg, text="explicit raw", scope_hint="personal")
+    seen.clear()
+    explicit = distill_note(home, cfg, explicit_note["id"], model="env:openai", proxy_enabled=False, agent=agent)
+
+    assert explicit["ok"]
+    assert seen["model"] == "env:openai"
 
 
 def test_distill_rerun_replaces_previous_candidates(tmp_path: Path):
@@ -596,7 +605,10 @@ def test_generate_distill_mode_allows_article_generation_with_guardrails(tmp_pat
     assert seen["distill_mode"] == "generate"
     assert "当前模式：生成" in prompt
     assert "生成一篇可直接进入知识库审核的完整文章" in prompt
-    assert "基于速记推断" in prompt
+    assert "原始 note 是主题、意图和约束来源，但不是唯一信息来源" in prompt
+    assert "可以使用当前 agent 可访问的公开资料、第三方文档、网页或 API 文档" in prompt
+    assert "外部资料补充" in prompt
+    assert "不搜索、不读取知识库、不获取第三方信息" not in prompt
     assert pending[0]["meta"]["distill_mode"] == "generate"
     assert log["distill_mode"] == "generate"
 

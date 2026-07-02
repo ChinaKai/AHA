@@ -5,7 +5,6 @@
 你的任务：$distill_mode_summary
 
 通用规则：
-- 只使用下面的标题和正文，不搜索、不读取知识库。
 - 保留原文的事实、做法、约束、疑问和不确定性。
 - 可以补 Markdown 标题、列表、段落和小节，让文章更容易读。
 - 不要编造图片路径。知识库文章图片应放在条目同目录的 `assets/<entry-slug>/<filename>`，正文引用 `![alt](assets/<entry-slug>/<filename>)`；如果只是整理带图速记，AHA 批准候选时会自动把 capture 图片推广到该目录。

@@ -24,6 +24,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.domain.models import utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_distill import (
@@ -67,13 +68,14 @@ def _distill_mode_prompt_parts(mode: str) -> dict[str, str]:
     if normalize_distill_mode(mode) == "generate":
         return {
             "distill_mode_label": "生成",
-            "distill_mode_summary": "根据原始 note 生成一篇可直接进入知识库审核的完整文章。",
+            "distill_mode_summary": "围绕原始 note 拓展生成一篇可直接进入知识库审核的完整文章。",
             "distill_mode_rules": "\n".join(
                 [
-                    "- 可以主动组织结构、补足行文衔接、提炼标题、扩写步骤和解释，让文章像完整知识文档。",
-                    "- 事实依据必须来自原始 note；不要把外部知识或猜测写成事实。",
-                    "- 如果需要补充合理推断，必须在正文中明确标注“基于速记推断”或“待确认”。",
-                    "- 不要抹掉原文中的不确定性、限制条件和待办问题。",
+                    "- 原始 note 是主题、意图和约束来源，但不是唯一信息来源。",
+                    "- 可以使用当前 agent 可访问的公开资料、第三方文档、网页或 API 文档来补充背景、步骤和解释。",
+                    "- 使用原文之外的信息时，在正文中标注“外部资料补充”或给出来源名称；无法确认的内容标注“待确认”。",
+                    "- 不要把未确认的猜测写成事实，不要抹掉原文中的不确定性、限制条件和待办问题。",
+                    "- 不要读取或引用 AHA 知识库、本地私有文件作为事实来源，除非原始 note 明确提供了对应内容或路径。",
                 ]
             ),
         }
@@ -83,6 +85,7 @@ def _distill_mode_prompt_parts(mode: str) -> dict[str, str]:
         "distill_mode_rules": "\n".join(
             [
                 "- 只做整理、去重、归类和表达顺序调整，不新增原文没有的信息。",
+                "- 只使用下面的标题和正文，不搜索、不读取知识库、不获取第三方信息。",
                 "- 可以删除明显重复、口头禅和无意义闲聊，但不要删除会改变含义的信息。",
             ]
         ),
@@ -306,6 +309,8 @@ def _effective_backend(config: dict | None, backend: str | None) -> str:
 def _effective_model(config: dict | None, backend: str, model: str | None) -> str | None:
     if model:
         return model
+    if backend == "codex":
+        return CODEX_DEFAULT_MODEL
     if isinstance(config, dict):
         backend_cfg = config.get(backend)
         if isinstance(backend_cfg, dict):

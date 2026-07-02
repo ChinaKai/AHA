@@ -233,6 +233,14 @@
     .kb-cap-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--color-border, #ccc); }
     .kb-cap-thumb button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; line-height: 16px; padding: 0; border-radius: 50%; font-size: 12px; }
     .kb-cap-upload { font-size: 12px; cursor: pointer; padding: 4px 8px; border: 1px dashed var(--color-border, #ccc); border-radius: 6px; }
+    .kb-cap-distill-panel { margin: 8px 0; padding: 10px; border: 1px solid var(--color-border, #d7dce3); border-radius: 8px; background: var(--color-surface-muted, #f7f9fb); }
+    .kb-cap-distill-controls { align-items: center; gap: 8px; margin: 0; flex-wrap: nowrap; min-width: 0; }
+    .kb-cap-distill-controls span, .kb-cap-distill-controls button { flex: 0 0 auto; }
+    .kb-cap-distill-controls select { min-width: 0; max-width: 140px; }
+    .kb-cap-distill-controls #cap-distill-mode { width: 88px; }
+    .kb-cap-distill-controls #cap-backend { width: 92px; }
+    .kb-cap-distill-controls #cap-model { flex: 1 1 150px; max-width: 220px; }
+    .kb-cap-distill-controls #cap-proxy-mode { width: 100px; }
     .kb-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-text-muted); }
     .kb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
     .kb-form-grid > div { min-width: 0; display: flex; flex-direction: column; }
@@ -426,29 +434,6 @@
     </form>
   </div>
 
-  <div id="cap-distill-modal" class="kb-modal" hidden>
-    <div class="kb-modal-card">
-      <h3 data-i18n="knowledge.capture_distill">Distill</h3>
-      <div class="kb-row">
-        <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
-        <select id="cap-distill-mode" aria-label="Distill mode" data-i18n-aria-label="knowledge.capture_distill_mode">
-          <option value="organize" data-i18n="knowledge.capture_mode_organize">Organize</option>
-          <option value="generate" data-i18n="knowledge.capture_mode_generate">Generate</option>
-        </select>
-        <select id="cap-backend" aria-label="Distill backend"></select>
-        <select id="cap-model" aria-label="Distill model"></select>
-        <select id="cap-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
-          <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
-          <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
-        </select>
-      </div>
-      <div class="kb-card-actions">
-        <button class="kb-approve" type="button" id="cap-distill-go" data-i18n="knowledge.capture_distill">Distill</button>
-        <button class="button-ghost" type="button" id="cap-distill-cancel" data-i18n="common.cancel">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <div id="cap-log-modal" class="kb-modal" hidden>
     <div class="kb-modal-card kb-log-modal">
       <h3 data-i18n="knowledge.capture_agent_log">Agent log</h3>
@@ -474,6 +459,7 @@
         <button class="button-ghost" type="button" id="cap-view-close" data-i18n="common.close">Close</button>
       </div>
       <div id="cap-view-refs"></div>
+      <div id="cap-view-distill"></div>
       <div id="cap-view-body" class="kb-body kb-cap-md"></div>
     </div>
   </div>
@@ -2472,10 +2458,12 @@
       const modal = $("#cap-view-modal");
       const note = state.activeCaptureNote;
       if (!note) {
+        state.distillTarget = null;
         modal.hidden = true;
         $("#cap-view-body").innerHTML = "";
         $("#cap-view-refs").innerHTML = "";
         $("#cap-view-actions").innerHTML = "";
+        $("#cap-view-distill").innerHTML = "";
         return;
       }
       const title = note.title || String(note.text || "").split("\n")[0] || note.id;
@@ -2485,6 +2473,7 @@
       $("#cap-view-meta").textContent = `${note.scope_hint || "-"} · ${statusLabel}${assocText ? " · " + assocText : ""} · ${timeLine(note)}`;
       $("#cap-view-refs").innerHTML = renderCaptureRefs(note);
       $("#cap-view-actions").innerHTML = state.editingNote === note.id ? "" : renderCaptureNoteActions(note);
+      $("#cap-view-distill").innerHTML = state.editingNote === note.id ? "" : renderCaptureDistillPanel(note);
       const body = $("#cap-view-body");
       body.innerHTML = "";
       if (state.editingNote === note.id) {
@@ -2494,12 +2483,14 @@
       } else {
         body.textContent = note.text || "";
       }
+      syncCaptureDistillPanelControls();
       modal.hidden = false;
     }
 
     function closeCaptureNoteModal() {
       state.activeCaptureNote = null;
       state.editingNote = null;
+      state.distillTarget = null;
       renderCaptureNoteModal();
       renderCapture();
     }
@@ -2524,14 +2515,42 @@
 
     function renderCaptureNoteActions(note) {
       const hasProducedKnowledge = (note.candidate_ids || []).length || (note.candidate_refs || []).length || (note.entry_refs || []).length;
+      const distillOpen = state.distillTarget === note.id;
       const distillLabel = note.status === "distilling"
         ? t("knowledge.capture_distilling", "Distilling…")
+        : distillOpen ? t("knowledge.capture_distill_close", "Close distill")
         : hasProducedKnowledge ? t("knowledge.capture_redistill", "Redistill") : t("knowledge.capture_distill", "Distill");
       return `
-        <button class="kb-approve" type="button" ${note.status === "distilling" ? "disabled" : ""} onclick="distillNote('${esc(note.id)}')">${esc(distillLabel)}</button>
+        <button class="kb-approve" type="button" aria-expanded="${distillOpen ? "true" : "false"}" ${note.status === "distilling" ? "disabled" : ""} onclick="toggleDistillPanel('${esc(note.id)}')">${esc(distillLabel)}</button>
         <button class="button-ghost" type="button" onclick="showDistillLog('${esc(note.id)}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
         <button class="button-ghost" type="button" onclick="editNote('${esc(note.id)}')">${esc(t("knowledge.edit", "Edit"))}</button>
         <button class="kb-reject" type="button" onclick="deleteNote('${esc(note.id)}')">${esc(t("knowledge.delete", "Delete"))}</button>`;
+    }
+
+    function renderCaptureDistillModeOptions(selected) {
+      const value = selected === "generate" ? "generate" : "organize";
+      return [
+        ["organize", t("knowledge.capture_mode_organize", "Organize")],
+        ["generate", t("knowledge.capture_mode_generate", "Generate")],
+      ].map(([mode, label]) => `<option value="${mode}" ${mode === value ? "selected" : ""}>${esc(label)}</option>`).join("");
+    }
+
+    function renderCaptureDistillPanel(note) {
+      if (!note || state.distillTarget !== note.id) return "";
+      return `<div class="kb-cap-distill-panel" id="cap-distill-panel">
+        <div class="kb-row kb-cap-distill-controls">
+          <span class="kb-muted">${esc(t("knowledge.capture_agent_label", "Distill agent:"))}</span>
+          <select id="cap-distill-mode" aria-label="${esc(t("knowledge.capture_distill_mode", "Distill mode"))}">${renderCaptureDistillModeOptions(state.lastDistillMode)}</select>
+          <select id="cap-backend" aria-label="Distill backend"></select>
+          <select id="cap-model" aria-label="Distill model"></select>
+          <select id="cap-proxy-mode" aria-label="${esc(t("knowledge.proxy_mode", "Proxy mode"))}">
+            <option value="on">${esc(t("knowledge.proxy_on", "Proxy on"))}</option>
+            <option value="off">${esc(t("knowledge.proxy_off", "Proxy off"))}</option>
+          </select>
+          <button class="kb-approve" type="button" onclick="startDistillFromPanel()">${esc(t("knowledge.capture_distill", "Distill"))}</button>
+          <button class="button-ghost" type="button" onclick="toggleDistillPanel('${esc(note.id)}')">${esc(t("common.cancel", "Cancel"))}</button>
+        </div>
+      </div>`;
     }
 
     function renderCaptureNoteEditForm(note) {
@@ -2654,19 +2673,35 @@
     }
     function syncCaptureProxyMode(useLast = true) {
       const select = $("#cap-proxy-mode");
-      if (!select) return;
+      const backendEl = $("#cap-backend");
+      if (!select || !backendEl) return;
       const remembered = typeof state.lastProxyEnabled === "boolean";
-      const enabled = useLast && remembered ? state.lastProxyEnabled : captureDefaultProxyEnabled($("#cap-backend").value);
+      const enabled = useLast && remembered ? state.lastProxyEnabled : captureDefaultProxyEnabled(backendEl.value);
       select.value = enabled ? "on" : "off";
     }
     function renderCaptureModels(selectedModel) {
-      const backendName = $("#cap-backend").value;
+      const backendEl = $("#cap-backend");
+      const modelEl = $("#cap-model");
+      if (!backendEl || !modelEl) return;
+      const backendName = backendEl.value;
       const models = captureModelOptions(backendName);
-      $("#cap-model").innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
-      const values = [...$("#cap-model").options].map((opt) => opt.value);
+      modelEl.innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
+      const values = [...modelEl.options].map((opt) => opt.value);
       const requested = configString(selectedModel ?? state.lastModel ?? "");
       const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
-      if (values.includes(fallback)) $("#cap-model").value = fallback;
+      if (values.includes(fallback)) modelEl.value = fallback;
+    }
+    function syncCaptureDistillPanelControls(useLast = true) {
+      const backendEl = $("#cap-backend");
+      if (!backendEl) return;
+      backendEl.innerHTML = (state.captureBackends || []).map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
+      const backends = [...backendEl.options].map((opt) => opt.value);
+      const selectedBackend = state.lastBackend || configString(state.captureConfig?.backend, "codex");
+      if (backends.includes(selectedBackend)) backendEl.value = selectedBackend;
+      const modeEl = $("#cap-distill-mode");
+      if (modeEl) modeEl.value = state.lastDistillMode || "organize";
+      renderCaptureModels();
+      syncCaptureProxyMode(useLast);
     }
     function renderNavigationAgents() {
       const backendEl = $("#nav-backend");
@@ -2706,12 +2741,7 @@
         const data = await api("/api/bootstrap").catch(() => api("/api/backends"));
         state.captureBackends = data.backends || [];
         state.captureConfig = data.config || {};
-        $("#cap-backend").innerHTML = state.captureBackends.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
-        const backends = [...$("#cap-backend").options].map((opt) => opt.value);
-        const selectedBackend = state.lastBackend || configString(state.captureConfig?.backend, "codex");
-        if (backends.includes(selectedBackend)) $("#cap-backend").value = selectedBackend;
-        renderCaptureModels();
-        syncCaptureProxyMode(false);
+        syncCaptureDistillPanelControls(false);
         renderNavigationAgents();
       } catch (e) { /* selectors stay empty -> distill falls back to server default */ }
     }
@@ -2905,28 +2935,27 @@
       try { await api("/api/kb/capture/image", { method: "DELETE", body: JSON.stringify({ id, name }) }); await loadCapture(); }
       catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
-    // Clicking distill opens a small modal to pick backend/model (remembered).
-    window.distillNote = async (id) => {
-      state.distillTarget = id;
-      if (!state.captureBackends) await loadCaptureAgents();
-      $("#cap-distill-mode").value = state.lastDistillMode || "organize";
-      if (state.lastBackend) { $("#cap-backend").value = state.lastBackend; renderCaptureModels(); }
-      if (state.lastModel) $("#cap-model").value = state.lastModel;
-      syncCaptureProxyMode(true);
-      $("#cap-distill-modal").hidden = false;
+    window.toggleDistillPanel = async (id) => {
+      state.distillTarget = state.distillTarget === id ? null : id;
+      if (state.distillTarget && !state.activeCaptureNote) {
+        state.activeCaptureNote = state.capture.find((item) => item.id === id) || null;
+      }
+      renderCaptureNoteModal();
+      if (state.distillTarget) {
+        if (!state.captureBackends) await loadCaptureAgents();
+        syncCaptureDistillPanelControls(true);
+      }
     };
-    function closeDistillModal() { $("#cap-distill-modal").hidden = true; state.distillTarget = null; }
-    $("#cap-distill-cancel").addEventListener("click", closeDistillModal);
-    $("#cap-distill-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-distill-modal") closeDistillModal(); });
-    $("#cap-distill-go").addEventListener("click", () => {
+    window.startDistillFromPanel = () => {
       const id = state.distillTarget;
-      state.lastDistillMode = $("#cap-distill-mode").value === "generate" ? "generate" : "organize";
-      state.lastBackend = $("#cap-backend").value;
-      state.lastModel = $("#cap-model").value;
-      state.lastProxyEnabled = $("#cap-proxy-mode").value === "on";
-      closeDistillModal();
+      state.lastDistillMode = $("#cap-distill-mode")?.value === "generate" ? "generate" : "organize";
+      state.lastBackend = $("#cap-backend")?.value || "";
+      state.lastModel = $("#cap-model")?.value || "";
+      state.lastProxyEnabled = $("#cap-proxy-mode")?.value === "on";
+      state.distillTarget = null;
+      renderCaptureNoteModal();
       if (id) runDistill(id, state.lastBackend || null, state.lastModel || null, state.lastProxyEnabled, state.lastDistillMode);
-    });
+    };
 
     async function runDistill(id, backend, model, proxyEnabled, distillMode = "organize") {
       try {
@@ -3083,7 +3112,11 @@
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
       }
     });
-    $("#cap-backend").addEventListener("change", () => { renderCaptureModels(); syncCaptureProxyMode(false); });
+    document.addEventListener("change", (event) => {
+      if (event.target?.id !== "cap-backend") return;
+      renderCaptureModels();
+      syncCaptureProxyMode(false);
+    });
 
     async function loadSettings() {
       const s = await api("/api/kb/config");
