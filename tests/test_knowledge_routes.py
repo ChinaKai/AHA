@@ -295,6 +295,9 @@ def test_capture_search_and_relationship_refs(tmp_path: Path, monkeypatch):
     assert entries["entries"][0]["source_note_id"] == nid
     assert entries["entries"][0]["source_note_exists"] is False
     assert entries["capture_notes"] == []
+    entry = _get(home, "/api/kb/entry", {"id": [entries["entries"][0]["id"]]})
+    assert entry["source_note_exists"] is False
+    assert entry["meta"]["source_note_exists"] is False
 
     json_response_body(_delete(home, "/api/kb/entry", {"id": entries["entries"][0]["id"]}))
     entries_after_delete = _get(home, "/api/kb/entries", {"q": ["退避"]})

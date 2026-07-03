@@ -933,6 +933,14 @@ def knowledge_route_response(
         entry = find_entry(root, cfg, identifier)
         if entry is None:
             return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        source_note_id = str((entry.get("meta") or {}).get("source_note_id") or "").strip()
+        if source_note_id:
+            entry = dict(entry)
+            meta = dict(entry.get("meta") or {})
+            source_note_exists = capture.read_note(root, cfg, source_note_id) is not None
+            meta["source_note_exists"] = source_note_exists
+            entry["meta"] = meta
+            entry["source_note_exists"] = source_note_exists
         return _ok(method, entry)
 
     if method in {"GET", "HEAD"} and path == "/api/kb/entry/image":
