@@ -44,6 +44,7 @@ COMMANDS = {
     "claude-runner",
     "codex-chat",
     "claude-chat",
+    "observe-proxy",
     "task",
     "agent",
     "session",
@@ -535,6 +536,16 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     claude_chat_p.add_argument("--extra-arg", action="append", default=[])
     claude_chat_p.add_argument("--prompt-prefix", default=render_prompt_template("backend_prompt_prefix.md").strip())
     claude_chat_p.set_defaults(func=handlers["claude-chat"])
+
+    observe_proxy_p = sub.add_parser("observe-proxy", help=argparse.SUPPRESS)
+    observe_proxy_p.add_argument("--run-id", required=True)
+    observe_proxy_p.add_argument("--task-id", default=None)
+    observe_proxy_p.add_argument("--agent-id", default="main")
+    observe_proxy_p.add_argument("--backend", choices=["codex", "claude"], required=True)
+    observe_proxy_p.add_argument("--host", default="127.0.0.1")
+    observe_proxy_p.add_argument("--port", type=int, required=True)
+    observe_proxy_p.add_argument("--upstream-base-url", required=True)
+    observe_proxy_p.set_defaults(func=handlers["observe-proxy"])
 
     task_p = sub.add_parser("task")
     task_sub = task_p.add_subparsers(dest="task_cmd", required=True)

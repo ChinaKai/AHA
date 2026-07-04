@@ -90,9 +90,17 @@ def default_headroom_integration_config() -> dict:
     }
 
 
+def default_observe_proxy_integration_config() -> dict:
+    return {
+        "enabled": False,
+        "port": 8797,
+    }
+
+
 def default_integrations_config() -> dict:
     return {
         "headroom": default_headroom_integration_config(),
+        "observe_proxy": default_observe_proxy_integration_config(),
     }
 
 
@@ -232,10 +240,23 @@ def normalize_headroom_integration_config(value: object | None = None) -> dict:
     return config
 
 
+def normalize_observe_proxy_integration_config(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_observe_proxy_integration_config()
+    if "enabled" in raw:
+        config["enabled"] = normalize_bool(raw.get("enabled"))
+    try:
+        config["port"] = max(1, min(65535, int(raw.get("port") or config["port"])))
+    except (TypeError, ValueError):
+        pass
+    return config
+
+
 def normalize_integrations_config(value: object | None = None) -> dict:
     raw = value if isinstance(value, dict) else {}
     config = default_integrations_config()
     config["headroom"] = normalize_headroom_integration_config(raw.get("headroom"))
+    config["observe_proxy"] = normalize_observe_proxy_integration_config(raw.get("observe_proxy"))
     return config
 
 
@@ -342,6 +363,12 @@ def default_task_token_saving() -> dict:
     }
 
 
+def default_task_observe_proxy() -> dict:
+    return {
+        "enabled": False,
+    }
+
+
 def normalize_task_context_management(value: object | None = None, *, default_enabled: bool = False) -> dict:
     raw = value if isinstance(value, dict) else {}
     context = default_task_context_management()
@@ -372,6 +399,16 @@ def normalize_task_token_saving(value: object | None = None, legacy_context: obj
     provider = str(raw.get("provider") or token_saving["provider"]).strip().lower()
     token_saving["provider"] = provider if provider in TOKEN_SAVING_PROVIDERS else "map"
     return token_saving
+
+
+def normalize_task_observe_proxy(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    observe_proxy = default_task_observe_proxy()
+    if "enabled" in raw:
+        observe_proxy["enabled"] = normalize_bool(raw.get("enabled"))
+    elif "observe_proxy_enabled" in raw:
+        observe_proxy["enabled"] = normalize_bool(raw.get("observe_proxy_enabled"))
+    return observe_proxy
 
 
 def default_task_hardware_debug_permissions() -> dict:
@@ -578,6 +615,7 @@ def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict
         "supervision": normalize_task_supervision(task.get("supervision")),
         "context_management": normalize_task_context_management(task.get("context_management")),
         "token_saving": normalize_task_token_saving(task.get("token_saving"), task.get("context_management")),
+        "observe_proxy": normalize_task_observe_proxy(task.get("observe_proxy")),
         "task_skills": normalize_task_skills(task.get("task_skills")),
         "hardware_debug": normalize_task_hardware_debug(task.get("hardware_debug")),
     }
@@ -665,6 +703,7 @@ def make_task(
     supervision: dict | None = None,
     context_management: dict | None = None,
     token_saving: dict | None = None,
+    observe_proxy: dict | None = None,
     task_skills: dict | None = None,
     hardware_debug: dict | None = None,
 ) -> dict:
@@ -696,6 +735,7 @@ def make_task(
         "supervision": normalize_task_supervision(supervision),
         "context_management": normalize_task_context_management(context_management),
         "token_saving": normalize_task_token_saving(token_saving, context_management),
+        "observe_proxy": normalize_task_observe_proxy(observe_proxy),
         "task_skills": normalize_task_skills(task_skills),
         "hardware_debug": normalize_task_hardware_debug(hardware_debug),
         "status": "pending",

@@ -285,7 +285,7 @@
       if (!elements.skillsConsolePopoverEl) return;
       if (open) {
         deps.setRunMaintenanceConsoleOpen?.(false);
-        deps.setHeadroomIntegrationOpen?.(false);
+        deps.setObserveProxyOpen?.(false);
         deps.setTokenUsageOpen?.(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);

@@ -26,6 +26,13 @@
     return `${channels.length} channel${channels.length === 1 ? "" : "s"}${types ? ` (${types})` : ""}`;
   }
 
+  function observeProxyConfirmLabel(payload) {
+    const policy = payload.observe_proxy && typeof payload.observe_proxy === "object"
+      ? payload.observe_proxy
+      : {};
+    return policy.enabled === true ? "on" : "off";
+  }
+
   function taskSkillsConfirmLabel(payload) {
     const policy = payload.task_skills && typeof payload.task_skills === "object"
       ? payload.task_skills
@@ -57,6 +64,9 @@
         enabled: tokenSavingEnabled,
         provider: "map"
       },
+      observe_proxy: {
+        enabled: Boolean(input.observeProxyEnabled)
+      },
       task_skills: input.taskSkills || {},
       hardware_debug: input.hardwareDebug || {},
       dispatch: input.dispatch !== false,
@@ -86,6 +96,7 @@
       ["Host model", supervision.real_agent_enabled ? `${supervision.host_backend || "stub"} / ${hostModel}` : "-"],
       ["Host proxy", supervision.real_agent_enabled ? hostProxy : "-"],
       ["Token saving", taskTokenSavingConfirmLabel(payload)],
+      ["Observe proxy", observeProxyConfirmLabel(payload)],
       ["Skills", taskSkillsConfirmLabel(payload)],
       ["Hardware", hardwareDebugConfirmLabel(payload)],
       ["Proxy", taskProxyConfirmLabel(payload)]

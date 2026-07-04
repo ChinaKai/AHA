@@ -21,6 +21,7 @@ from aha_cli.services.chat_prompt_context import (
     model_family_for_guidance,
 )
 from aha_cli.services.headroom_integration import prepare_headroom_codex_runtime
+from aha_cli.services.observe_proxy import prepare_observe_claude_runtime, prepare_observe_codex_runtime
 from aha_cli.services.chat_supervision import (
     SUPERVISION_FAILURE_FALLBACK_STATUS,
     apply_supervision_host_decision,
@@ -810,6 +811,37 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 try:
                     runner_session = session
                     if backend_name == "claude":
+                        effective_proxy_env, observe_runtime = prepare_observe_claude_runtime(
+                            root,
+                            config=cfg,
+                            task=task,
+                            backend_name=backend_name,
+                            claude_config=claude_config,
+                            proxy_env=proxy_env,
+                            run_id=run_id,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            workspace=workspace,
+                        )
+                        if observe_runtime.get("enabled"):
+                            append_event(
+                                root,
+                                run_id,
+                                "observe_proxy_ready" if observe_runtime.get("ready") else "observe_proxy_skipped",
+                                {
+                                    "source": source_name,
+                                    "target": args.target,
+                                    "task_id": item_task_id,
+                                    "agent_id": agent_id,
+                                    "backend": backend_name,
+                                    "ready": bool(observe_runtime.get("ready")),
+                                    "reason": observe_runtime.get("reason"),
+                                    "port": observe_runtime.get("port"),
+                                    "scope": observe_runtime.get("scope"),
+                                    "upstream_base_url": observe_runtime.get("upstream_base_url"),
+                                    "local_base_url": observe_runtime.get("local_base_url"),
+                                },
+                            )
                         exit_code, reply, returned_session = run_claude_exec(
                             prompt,
                             cwd=workspace,
@@ -824,7 +856,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             source=source_name,
                             target=args.target,
                             session=session,
-                            proxy_env=proxy_env,
+                            proxy_env=effective_proxy_env,
                             claude_config=claude_config,
                             event_callback=progress_heartbeat.handle_event if progress_heartbeat else None,
                         )
@@ -858,6 +890,37 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                     "scope": headroom_runtime.get("scope"),
                                     "upstream_base_url": headroom_runtime.get("upstream_base_url"),
                                     "local_base_url": headroom_runtime.get("local_base_url"),
+                                },
+                            )
+                        effective_codex_config, effective_proxy_env, observe_runtime = prepare_observe_codex_runtime(
+                            root,
+                            config=cfg,
+                            task=task,
+                            backend_name=backend_name,
+                            codex_config=effective_codex_config,
+                            proxy_env=effective_proxy_env,
+                            run_id=run_id,
+                            task_id=item_task_id,
+                            agent_id=agent_id,
+                            workspace=workspace,
+                        )
+                        if observe_runtime.get("enabled"):
+                            append_event(
+                                root,
+                                run_id,
+                                "observe_proxy_ready" if observe_runtime.get("ready") else "observe_proxy_skipped",
+                                {
+                                    "source": source_name,
+                                    "target": args.target,
+                                    "task_id": item_task_id,
+                                    "agent_id": agent_id,
+                                    "backend": backend_name,
+                                    "ready": bool(observe_runtime.get("ready")),
+                                    "reason": observe_runtime.get("reason"),
+                                    "port": observe_runtime.get("port"),
+                                    "scope": observe_runtime.get("scope"),
+                                    "upstream_base_url": observe_runtime.get("upstream_base_url"),
+                                    "local_base_url": observe_runtime.get("local_base_url"),
                                 },
                             )
                         exit_code, reply, returned_session = run_codex_exec(

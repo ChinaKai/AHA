@@ -124,13 +124,13 @@
                 <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
                 <div class="web-service-actions">
                   <button id="skills-console" class="button-ghost" type="button" aria-controls="skills-console-popover" aria-expanded="false" data-i18n="skills.title">Skills</button>
-                  <button id="headroom-integration" class="button-ghost" type="button" aria-controls="headroom-integration-popover" aria-expanded="false" data-i18n="headroom.title">Headroom</button>
+                  <button id="observe-proxy" class="button-ghost" type="button" aria-controls="observe-proxy-popover" aria-expanded="false" data-i18n="observe_proxy.title">Observe Proxy</button>
                   <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
                   <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
                   <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
                 </div>
                 <div id="skills-console-popover" class="skills-console-popover" hidden></div>
-                <div id="headroom-integration-popover" class="headroom-integration-popover" hidden></div>
+                <div id="observe-proxy-popover" class="observe-proxy-popover" hidden></div>
                 <div id="token-usage-popover" class="token-usage-popover" hidden></div>
                 <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
                 <div id="play-console-popover" class="play-console-popover" hidden></div>
@@ -249,6 +249,18 @@
               <div class="field-help" data-i18n="task.token_saving_help">Adds existing project map guidance to this task's agent prompts.</div>
               <button type="submit" data-i18n="task.token_saving_save">Save Token Saving</button>
               <div id="task-token-saving-state" class="meta"></div>
+            </form>
+          </section>
+          <section id="task-observe-proxy-editor" class="task-detail-section task-observe-proxy-editor">
+            <h3 data-i18n="task.observe_proxy">Observe proxy</h3>
+            <form id="task-observe-proxy-form" class="context-form">
+              <label class="checkbox-line">
+                <input id="selected-task-observe-proxy-enabled" type="checkbox">
+                <span data-i18n="task.observe_proxy_capture">Capture backend request/response bodies</span>
+              </label>
+              <div class="field-help" data-i18n="task.observe_proxy_help">Observes model network I/O for this task only.</div>
+              <button type="submit" data-i18n="task.observe_proxy_save">Save Observe Proxy</button>
+              <div id="task-observe-proxy-state" class="meta"></div>
             </form>
           </section>
           <section id="task-skills-editor" class="task-detail-section task-skills-editor">
@@ -633,6 +645,14 @@
                 </span>
                 <div class="field-help" data-i18n="task.token_saving_help">Adds existing project map guidance to this task's agent prompts.</div>
               </label>
+              <label class="field-label checkbox-field">
+                <span data-i18n="task.observe_proxy">Observe proxy</span>
+                <span class="checkbox-line">
+                  <input id="task-observe-proxy-enabled" type="checkbox">
+                  <span data-i18n="task.observe_proxy_capture">Capture backend request/response bodies</span>
+                </span>
+                <div class="field-help" data-i18n="task.observe_proxy_help">Observes model network I/O for this task only.</div>
+              </label>
             </div>
             <div class="field-row task-defaults-grid task-create-context-grid">
               <div class="field-label">
@@ -929,7 +949,7 @@
   <script src="/static/prompt_metrics_popover.js"></script>
   <script src="/static/api_client.js"></script>
   <script src="/static/token_usage.js?v=usage-v8"></script>
-  <script src="/static/headroom_integration.js?v=token-saving-v6"></script>
+  <script src="/static/observe_proxy_panel.js?v=observe-proxy-v1"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>

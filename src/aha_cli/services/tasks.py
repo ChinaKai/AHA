@@ -30,6 +30,7 @@ def create_task_and_dispatch(
     supervision: dict[str, object] | None = None,
     context_management: dict[str, object] | None = None,
     token_saving: dict[str, object] | None = None,
+    observe_proxy: dict[str, object] | None = None,
     task_skills: dict[str, object] | None = None,
     hardware_debug: dict[str, object] | None = None,
     dispatch: bool = True,
@@ -58,6 +59,7 @@ def create_task_and_dispatch(
         supervision=supervision,
         context_management=context_management,
         token_saving=token_saving,
+        observe_proxy=observe_proxy,
         task_skills=task_skills,
         hardware_debug=hardware_debug,
     )

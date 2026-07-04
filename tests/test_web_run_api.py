@@ -324,25 +324,46 @@ class WebRunApiTests(unittest.TestCase):
         self.assertNotIn("no_proxy", cfg["integrations"]["headroom"])
         self.assertTrue(cfg["integrations"]["headroom"]["ccr_enabled"])
 
-    def test_api_headroom_integration_status_reports_runtime_state(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, mock.patch(
-            "aha_cli.services.headroom_integration.shutil.which",
-            return_value="/usr/bin/headroom",
-        ), mock.patch("aha_cli.services.headroom_integration._headroom_health", return_value=True):
+    def test_api_observe_proxy_status_reports_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.services.observe_proxy._health", return_value=True):
             root = Path(tmp) / ".aha"
             root.mkdir()
             (root / "config.json").write_text(
-                json.dumps({"integrations": {"headroom": {"enabled": True, "port": 8989}}}),
+                json.dumps({"integrations": {"observe_proxy": {"enabled": False, "port": 8989}}}),
                 encoding="utf-8",
             )
-            response = asyncio.run(fetch_ui_response(root, "", "/api/integrations/headroom"))
+            response = asyncio.run(fetch_ui_response(root, "", "/api/integrations/observe-proxy"))
             body = json_response_body(response)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
-        self.assertTrue(body["headroom"]["enabled"])
-        self.assertTrue(body["headroom"]["installed"])
-        self.assertTrue(body["headroom"]["running"])
-        self.assertEqual(body["headroom"]["port"], 8989)
+        self.assertFalse(body["observe_proxy"]["enabled"])
+        self.assertTrue(body["observe_proxy"]["running"])
+        self.assertEqual(body["observe_proxy"]["port"], 8989)
+        self.assertIn("usage", body["observe_proxy"])
+        self.assertEqual(body["observe_proxy"]["usage"]["recent"], [])
+
+    def test_api_observe_proxy_status_loads_recent_for_selected_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.services.observe_proxy._health", return_value=True), mock.patch(
+            "aha_cli.web.run_routes.observe_proxy_usage_summary",
+            return_value={"recent": [{"task_id": "task-001"}]},
+        ) as summary:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"observe_proxy": {"enabled": True, "port": 8989}}}),
+                encoding="utf-8",
+            )
+            response = asyncio.run(
+                fetch_ui_response(root, "", "/api/integrations/observe-proxy?task_id=task-001&recent_limit=7&preview_chars=300")
+            )
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(body["observe_proxy"]["usage"]["recent"], [{"task_id": "task-001"}])
+        self.assertTrue(summary.call_args.kwargs["include_recent"])
+        self.assertEqual(summary.call_args.kwargs["recent_task_id"], "task-001")
+        self.assertEqual(summary.call_args.kwargs["event_limit"], 7)
+        self.assertEqual(summary.call_args.kwargs["preview_chars"], 300)
 
     def test_api_bootstrap_can_select_official_claude_without_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

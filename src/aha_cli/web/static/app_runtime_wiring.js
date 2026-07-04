@@ -1,7 +1,7 @@
 const domRefs = window.AHAControllerRegistry.collectDomRefs(document);
 const {
   agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerRunConsoleEl, headerRunTitleEl, headerWorkspaceDirEl,
-  headroomIntegrationEl, headroomIntegrationPopoverEl,
+  observeProxyEl, observeProxyPopoverEl,
   mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, openRunCreateEl, panelEl, pendingMessagesEl,
   playConsoleEl, playConsolePopoverEl, renameRunNameEl, runArchiveStateEl, runCreateFormEl, runExportEl,
   runCreateDialogEl, closeRunCreateEl, cancelRunCreateEl, runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
@@ -129,6 +129,8 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   taskContextSummary,
   taskTokenSavingPolicy,
   taskTokenSavingSummary,
+  taskObserveProxyPolicy,
+  taskObserveProxySummary,
   taskSkillsPolicy,
   taskSkillsSummary,
   hardwareDebugPermissionKeys,
@@ -696,7 +698,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   selectedTask,
   selectedTaskId: () => selectedTaskId,
   setCreateProxyDefaultsFromInputs,
-  setHeadroomIntegrationOpen: value => headroomIntegrationController?.setHeadroomIntegrationOpen(value),
+  setObserveProxyOpen: value => observeProxyController?.setObserveProxyOpen(value),
   setPlayConsoleOpen,
   setRunMaintenanceConsoleOpen,
   setSelectedTaskId: value => { selectedTaskId = value || null; },
@@ -729,7 +731,7 @@ const {
   taskCreateController,
   taskMemoController
 } = featureControllers;
-headroomIntegrationController = featureControllers.headroomIntegrationController;
+observeProxyController = featureControllers.observeProxyController;
 playConsoleController = featureControllers.playConsoleController;
 skillsConsoleController = featureControllers.skillsConsoleController;
 tokenUsageController = featureControllers.tokenUsageController;
@@ -781,6 +783,8 @@ taskController = window.AHATaskController.createTaskController({
   taskContextSummary,
   taskTokenSavingPolicy,
   taskTokenSavingSummary,
+  taskObserveProxyPolicy,
+  taskObserveProxySummary,
   taskHardwareDebugPolicy,
   taskHardwareDebugSummary,
   taskDisplayStatus,
@@ -839,8 +843,8 @@ const runController = window.AHARunController.createRunController({
   appVersionEl,
   authLogoutEl,
   documentRef: document,
-  headroomIntegrationEl,
-  headroomIntegrationPopoverEl,
+  observeProxyEl,
+  observeProxyPopoverEl,
   openRunCreateEl,
   runCreateDialogEl,
   headerRunConsoleEl,
@@ -907,7 +911,7 @@ const runController = window.AHARunController.createRunController({
   loadAccessControlStatus,
   loadRuns,
   logoutAuthSession,
-  headroomIntegrationOpen: () => headroomIntegrationController.isOpen(),
+  observeProxyOpen: () => observeProxyController.isOpen(),
   playConsoleOpen: () => playConsoleController.isOpen(),
   renameCurrentRun: runActions.renameCurrentRun,
   apiUrl,
@@ -916,7 +920,7 @@ const runController = window.AHARunController.createRunController({
   fetchJson,
   formatMetricBytes,
   renderAccessControlStatus,
-  renderHeadroomIntegrationPopover: () => headroomIntegrationController.renderHeadroomIntegrationPopover(),
+  renderObserveProxyPopover: () => observeProxyController.renderObserveProxyPopover(),
   renderPlayConsolePopover,
   renderSkillsConsolePopover,
   renderTokenUsagePopover: () => tokenUsageController.renderTokenUsagePopover(),
@@ -936,7 +940,7 @@ const runController = window.AHARunController.createRunController({
   runTitleOf,
   sessionOptionLabel,
   setPlayConsoleOpen,
-  setHeadroomIntegrationOpen: value => headroomIntegrationController.setHeadroomIntegrationOpen(value),
+  setObserveProxyOpen: value => observeProxyController.setObserveProxyOpen(value),
   setSkillsConsoleOpen,
   setTokenUsageOpen: value => tokenUsageController.setTokenUsageOpen(value),
   setWeixinConsoleOpen,

@@ -1,0 +1,277 @@
+(() => {
+  function t(key, fallback = "") {
+    return window.AHAI18n?.t?.(key, fallback) || fallback;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function numberText(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return new Intl.NumberFormat("en-US").format(number);
+  }
+
+  function bytesText(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function previewHtml(label, artifact = {}) {
+    const preview = String(artifact.preview || "");
+    const ref = String(artifact.ref || "");
+    const suffix = artifact.truncated ? " ..." : "";
+    if (!preview && !ref) return "";
+    const bytes = Number(artifact.bytes || 0);
+    const body = preview || (bytes > 0 ? `(${bytesText(bytes)} captured, preview unavailable)` : "(empty)");
+    return `
+      <details class="observe-proxy-preview">
+        <summary><span>${escapeHtml(label)}</span><code>${escapeHtml(ref || "-")}</code></summary>
+        <pre>${escapeHtml(body)}${escapeHtml(suffix)}</pre>
+      </details>
+    `;
+  }
+
+  function createObserveProxyController(elements = {}, deps = {}) {
+    const button = elements.observeProxyEl;
+    const popover = elements.observeProxyPopoverEl;
+    const sessionMenu = elements.sessionMenuEl;
+    let open = false;
+    let loading = false;
+    let error = "";
+    let recentLoading = false;
+    let recentError = "";
+    let status = null;
+    let selectedTaskId = "";
+    let bound = false;
+
+    function statusLine() {
+      if (loading) return t("observe_proxy.loading", "Loading Observe Proxy...");
+      if (error) return error;
+      if (!status) return t("observe_proxy.status_unknown", "Status unknown");
+      if (status.running) return t("observe_proxy.running", "Runtime running");
+      return t("observe_proxy.ready", "Ready");
+    }
+
+    function statusGridHtml() {
+      const usage = status?.usage || {};
+      const rows = [
+        ["Runtime", status?.running ? "running" : "stopped"],
+        ["Port", status?.port || "-"],
+        ["Enabled tasks", numberText(usage.enabled_tasks)],
+        ["Ready turns", numberText(usage.ready_turns)],
+        ["Requests", numberText(usage.requests)],
+        ["Responses", numberText(usage.responses)]
+      ];
+      return `<div class="observe-proxy-status-grid">${rows.map(([label, value]) => `
+        <div><span>${escapeHtml(label)}</span><code>${escapeHtml(value)}</code></div>
+      `).join("")}</div>`;
+    }
+
+    function usageByTaskHtml() {
+      const usage = status?.usage || {};
+      const tasks = Array.isArray(usage.tasks) ? usage.tasks : [];
+      if (!tasks.length) {
+        return `<div class="observe-proxy-usage-empty">${escapeHtml(t("observe_proxy.usage_empty", "No observed task turns recorded for this run."))}</div>`;
+      }
+      const hiddenCount = Math.max(0, Number(usage.task_count || 0) - tasks.length);
+      const rows = tasks.map(task => {
+        const taskId = String(task.task_id || "run");
+        const selectedClass = taskId === selectedTaskId ? " selected" : "";
+        const agents = Array.isArray(task.agents) ? task.agents : [];
+        const agentSummary = agents.map(agent => `${agent.agent_id || "main"} ${numberText(agent.responses)} response(s)`).join(" · ");
+        return `
+          <button type="button" class="observe-proxy-usage-row${selectedClass}" data-observe-proxy-task="${escapeHtml(taskId)}" aria-pressed="${taskId === selectedTaskId}">
+            <div>
+              <strong>${escapeHtml(taskId)}</strong>
+              <span>${escapeHtml(agentSummary || (task.enabled ? t("observe_proxy.enabled_no_turns", "enabled, no turns yet") : "-"))}</span>
+            </div>
+            <code>${escapeHtml(numberText(task.requests))} / ${escapeHtml(numberText(task.responses))}</code>
+          </button>
+        `;
+      }).join("");
+      return `
+        <section class="observe-proxy-usage">
+          <div class="observe-proxy-usage-head">
+            <span>${escapeHtml(t("observe_proxy.by_task", "By task"))}</span>
+            <code>${escapeHtml(t("observe_proxy.req_res", "request / response"))}</code>
+          </div>
+          ${rows}
+          ${hiddenCount ? `<div class="observe-proxy-usage-more">${escapeHtml(t("observe_proxy.usage_more", "{count} more task(s)").replace("{count}", numberText(hiddenCount)))}</div>` : ""}
+        </section>
+      `;
+    }
+
+    function usageText(usage) {
+      if (!usage || typeof usage !== "object") return "";
+      const parts = [];
+      for (const key of ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens"]) {
+        if (usage[key] !== undefined && usage[key] !== null) parts.push(`${key}=${usage[key]}`);
+      }
+      return parts.join(" ");
+    }
+
+    function observeProxyUrl(taskId = "") {
+      const base = deps.apiUrl?.("/api/integrations/observe-proxy") || "/api/integrations/observe-proxy";
+      if (!taskId) return base;
+      const separator = base.includes("?") ? "&" : "?";
+      return `${base}${separator}task_id=${encodeURIComponent(taskId)}`;
+    }
+
+    function recentHtml() {
+      if (!selectedTaskId) {
+        return `<div class="observe-proxy-usage-empty">${escapeHtml(t("observe_proxy.select_task", "Select a task to view forwarded requests."))}</div>`;
+      }
+      if (recentLoading) {
+        return `<div class="observe-proxy-usage-empty">${escapeHtml(t("observe_proxy.loading", "Loading Observe Proxy..."))}</div>`;
+      }
+      if (recentError) {
+        return `<div class="observe-proxy-usage-empty error">${escapeHtml(recentError)}</div>`;
+      }
+      const recent = (Array.isArray(status?.usage?.recent) ? status.usage.recent : [])
+        .filter(item => String(item?.task_id || "run") === selectedTaskId);
+      if (!recent.length) {
+        return `<div class="observe-proxy-usage-empty">${escapeHtml(t("observe_proxy.recent_task_empty", "No forwarded requests for this task yet."))}</div>`;
+      }
+      return `
+        <section class="observe-proxy-recent">
+          <div class="observe-proxy-usage-head">
+            <span>${escapeHtml(t("observe_proxy.recent", "Recent forwards"))}</span>
+            <code>${escapeHtml(t("observe_proxy.recent_for_task", "For {task}").replace("{task}", selectedTaskId))}</code>
+          </div>
+          ${recent.map(item => {
+            const meta = [
+              item.task_id || "run",
+              item.agent_id || "main",
+              item.backend || "-",
+              item.status ? `status ${item.status}` : "status -",
+              item.duration_ms !== undefined && item.duration_ms !== null ? `${item.duration_ms}ms` : "",
+              `${bytesText(item.request_bytes)} -> ${bytesText(item.response_bytes)}`
+            ].filter(Boolean).join(" · ");
+            return `
+              <article class="observe-proxy-forward">
+                <div class="observe-proxy-forward-head">
+                  <strong>${escapeHtml(`${item.method || "-"} ${item.path || "-"}`)}</strong>
+                  <span>${escapeHtml(meta)}</span>
+                  ${usageText(item.usage) ? `<code>${escapeHtml(usageText(item.usage))}</code>` : ""}
+                </div>
+                ${previewHtml("Request", item.request)}
+                ${previewHtml("Response", item.response)}
+              </article>
+            `;
+          }).join("")}
+        </section>
+      `;
+    }
+
+    function renderPopover() {
+      if (!popover || !open) return;
+      const stateClass = error ? "error" : "";
+      popover.innerHTML = `<section class="observe-proxy-panel">
+        <div class="observe-proxy-head">
+          <div>
+            <h3>${escapeHtml(t("observe_proxy.title", "Observe Proxy"))}</h3>
+            <div class="meta ${stateClass}">${escapeHtml(statusLine())}</div>
+          </div>
+          <button type="button" data-observe-proxy-refresh ${loading ? "disabled" : ""}>${escapeHtml(t("common.refresh", "Refresh"))}</button>
+        </div>
+        ${statusGridHtml()}
+        ${usageByTaskHtml()}
+        ${recentHtml()}
+        <div class="field-help">${escapeHtml(t("observe_proxy.task_hint", "Enable per task in Task settings. Captured bodies are stored under the run's network_io artifacts."))}</div>
+      </section>`;
+    }
+
+    async function loadTaskRecent(taskId, options = {}) {
+      const nextTaskId = String(taskId || "").trim();
+      if (!nextTaskId) return;
+      selectedTaskId = nextTaskId;
+      recentLoading = true;
+      recentError = "";
+      if (!options.silent) renderPopover();
+      try {
+        const payload = await deps.fetchJson?.(observeProxyUrl(nextTaskId), {}, "Failed to load Observe Proxy task forwards");
+        status = payload?.observe_proxy || status;
+      } catch (err) {
+        recentError = String(err?.message || err || "Failed to load Observe Proxy task forwards");
+      } finally {
+        recentLoading = false;
+        if (open) renderPopover();
+      }
+    }
+
+    async function loadObserveProxy(options = {}) {
+      if (!options.silent) {
+        loading = true;
+        error = "";
+        renderPopover();
+      }
+      let shouldLoadSelectedTask = false;
+      try {
+        const payload = await deps.fetchJson?.(observeProxyUrl(), {}, "Failed to load Observe Proxy status");
+        status = payload?.observe_proxy || null;
+        const tasks = Array.isArray(status?.usage?.tasks) ? status.usage.tasks : [];
+        if (selectedTaskId && !tasks.some(task => String(task?.task_id || "run") === selectedTaskId)) {
+          selectedTaskId = "";
+          recentError = "";
+        }
+        shouldLoadSelectedTask = Boolean(selectedTaskId);
+      } catch (err) {
+        error = String(err?.message || err || "Failed to load Observe Proxy");
+      } finally {
+        loading = false;
+        if (open) renderPopover();
+      }
+      if (shouldLoadSelectedTask) await loadTaskRecent(selectedTaskId, { silent: options.silent });
+    }
+
+    function setOpen(value) {
+      open = Boolean(value);
+      button?.setAttribute("aria-expanded", String(open));
+      sessionMenu?.classList?.toggle("observe-proxy-open", open);
+      if (popover) popover.hidden = !open;
+      if (open) {
+        deps.setPlayConsoleOpen?.(false);
+        deps.setRunMaintenanceConsoleOpen?.(false);
+        deps.setSkillsConsoleOpen?.(false);
+        deps.setTokenUsageOpen?.(false);
+        deps.setWeixinConsoleOpen?.(false);
+        void loadObserveProxy({ silent: Boolean(status) });
+      }
+      renderPopover();
+    }
+
+    function bind() {
+      if (bound) return;
+      bound = true;
+      popover?.addEventListener("click", event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const taskButton = target?.closest("[data-observe-proxy-task]");
+        if (taskButton) {
+          void loadTaskRecent(String(taskButton.getAttribute("data-observe-proxy-task") || ""));
+          return;
+        }
+        if (target?.closest("[data-observe-proxy-refresh]")) void loadObserveProxy();
+      });
+    }
+
+    return Object.freeze({
+      bind,
+      isOpen: () => open,
+      loadObserveProxy,
+      renderObserveProxyPopover: renderPopover,
+      setObserveProxyOpen: setOpen
+    });
+  }
+
+  window.AHAObserveProxy = Object.freeze({ createObserveProxyController });
+})();

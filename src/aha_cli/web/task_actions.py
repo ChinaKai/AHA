@@ -112,6 +112,15 @@ def parse_task_token_saving_fields(payload: dict) -> dict[str, object]:
     return update
 
 
+def parse_task_observe_proxy_fields(payload: dict) -> dict[str, object]:
+    update: dict[str, object] = {}
+    if "enabled" in payload:
+        update["enabled"] = parse_optional_bool(payload.get("enabled"), "enabled")
+    elif "observe_proxy_enabled" in payload:
+        update["enabled"] = parse_optional_bool(payload.get("observe_proxy_enabled"), "observe_proxy_enabled")
+    return update
+
+
 def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
     update: dict[str, object] = {}
     if "channels" in payload:
@@ -179,6 +188,7 @@ __all__ = [
     "parse_task_proxy_fields",
     "parse_task_context_management_fields",
     "parse_task_token_saving_fields",
+    "parse_task_observe_proxy_fields",
     "parse_task_hardware_debug_fields",
     "parse_task_supervision_fields",
     "parse_task_skills_fields",

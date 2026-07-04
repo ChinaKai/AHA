@@ -215,6 +215,51 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["task"]["token_saving"]["enabled"])
         self.assertEqual(body["task"]["token_saving"]["provider"], "map")
 
+    def test_api_task_create_and_update_accepts_observe_proxy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Observe proxy config", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Observed task",
+                            "dispatch": False,
+                            "observe_proxy": {"enabled": True},
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                task_id = body["task"]["id"]
+                update_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/observe-proxy",
+                        method="POST",
+                        payload={"enabled": False},
+                    )
+                )
+                update_body = json_response_body(update_response)
+                snapshot = status_snapshot(root, run_id)
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(update_response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["task"]["observe_proxy"]["enabled"])
+        self.assertFalse(update_body["task"]["observe_proxy"]["enabled"])
+        self.assertFalse(snapshot["tasks"][-1]["observe_proxy"]["enabled"])
+        observe_events = [event for event in events if event["type"] == "task_observe_proxy_config_updated"]
+        self.assertEqual(observe_events[-1]["data"]["task_id"], task_id)
+        self.assertFalse(observe_events[-1]["data"]["enabled"])
+
     def test_api_task_create_and_update_accepts_hardware_debug_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

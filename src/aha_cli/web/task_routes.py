@@ -65,6 +65,7 @@ from aha_cli.store.filesystem import (
     update_agent_config,
     update_task_context_management_config,
     update_task_hardware_debug_config,
+    update_task_observe_proxy_config,
     update_task_proxy_config,
     update_task_skills_config,
     update_task_supervision_config,
@@ -93,6 +94,7 @@ from aha_cli.web.task_actions import (
     handle_send_payload,
     parse_task_context_management_fields,
     parse_task_hardware_debug_fields,
+    parse_task_observe_proxy_fields,
     parse_task_proxy_fields,
     parse_task_skills_fields,
     parse_task_supervision_fields,
@@ -245,6 +247,8 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
         elif action == "token-saving":
             token_saving_update = parse_task_token_saving_fields(parse_json_body(body))
             task = update_task_token_saving_config(root, run_id, task_id, **token_saving_update)
+        elif action == "observe-proxy":
+            task = update_task_observe_proxy_config(root, run_id, task_id, **parse_task_observe_proxy_fields(parse_json_body(body)))
         elif action == "skills":
             task = update_task_skills_config(root, run_id, task_id, **parse_task_skills_fields(parse_json_body(body)))
         elif action == "hardware-debug":
@@ -396,6 +400,11 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             if not isinstance(payload.get("token_saving"), dict):
                 return route_result({"error": "token_saving must be an object"}, "400 Bad Request")
             token_saving = parse_task_token_saving_fields(payload["token_saving"])
+        observe_proxy = None
+        if "observe_proxy" in payload:
+            if not isinstance(payload.get("observe_proxy"), dict):
+                return route_result({"error": "observe_proxy must be an object"}, "400 Bad Request")
+            observe_proxy = parse_task_observe_proxy_fields(payload["observe_proxy"])
         task_skills = None
         if "task_skills" in payload:
             if not isinstance(payload.get("task_skills"), dict):
@@ -431,6 +440,7 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             supervision=supervision,
             context_management=context_management,
             token_saving=token_saving,
+            observe_proxy=observe_proxy,
             task_skills=task_skills,
             hardware_debug=hardware_debug,
             dispatch=dispatch,
@@ -741,6 +751,10 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
         if "token_saving" in payload and isinstance(payload.get("token_saving"), dict):
             token_saving_update = parse_task_token_saving_fields(payload["token_saving"])
             task = update_task_token_saving_config(root, run_id, task_id, **token_saving_update)
+        elif "observe_proxy" in payload and isinstance(payload.get("observe_proxy"), dict):
+            task = update_task_observe_proxy_config(root, run_id, task_id, **parse_task_observe_proxy_fields(payload["observe_proxy"]))
+        elif "observe_proxy" in payload:
+            return route_result({"error": "observe_proxy must be an object"}, "400 Bad Request")
         elif "context_management" in payload and isinstance(payload.get("context_management"), dict):
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(payload["context_management"]))
         elif "task_skills" in payload and isinstance(payload.get("task_skills"), dict):

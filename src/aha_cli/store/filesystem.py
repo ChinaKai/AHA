@@ -11,6 +11,7 @@ from aha_cli.domain.models import (
     next_task_id,
     normalize_task_context_management,
     normalize_task_hardware_debug,
+    normalize_task_observe_proxy,
     normalize_task_skills,
     normalize_task_supervision,
     normalize_task_token_saving,
@@ -426,6 +427,7 @@ def add_task(
     supervision: dict | None = None,
     context_management: dict | None = None,
     token_saving: dict | None = None,
+    observe_proxy: dict | None = None,
     task_skills: dict | None = None,
     hardware_debug: dict | None = None,
 ) -> dict:
@@ -464,6 +466,7 @@ def add_task(
             supervision=supervision,
             context_management=context_management,
             token_saving=token_saving,
+            observe_proxy=observe_proxy,
             task_skills=task_skills,
             hardware_debug=hardware_debug,
         )
@@ -947,6 +950,37 @@ def update_task_token_saving_config(
             "task_id": task_id,
             "enabled": task["token_saving"].get("enabled"),
             "provider": task["token_saving"].get("provider"),
+        },
+    )
+    return task
+
+
+def update_task_observe_proxy_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    enabled: object = UNSET,
+) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        observe_proxy = normalize_task_observe_proxy(task.get("observe_proxy"))
+        if enabled is not UNSET:
+            observe_proxy["enabled"] = bool(enabled)
+        task["observe_proxy"] = normalize_task_observe_proxy(observe_proxy)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "task_observe_proxy_config_updated",
+        {
+            "task_id": task_id,
+            "enabled": task["observe_proxy"].get("enabled"),
         },
     )
     return task

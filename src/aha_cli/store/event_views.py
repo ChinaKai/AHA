@@ -19,6 +19,7 @@ TIMELINE_EVENT_TYPES = {
     "task_final_requested",
     "task_round_summary_requested",
     "task_proxy_config_updated",
+    "task_observe_proxy_config_updated",
     "task_reopened",
     "task_completed",
     "task_waiting_for_subagents",
@@ -31,6 +32,8 @@ TIMELINE_EVENT_TYPES = {
     "agent_message",
     "agent_prompt_metrics",
     "agent_usage",
+    "agent_network_request",
+    "agent_network_response",
     "agent_error",
     "agent_context_overflow",
     "agent_delegated",
@@ -149,7 +152,7 @@ def task_event_log_page(root: Path, run_id: str, task_id: str, limit: int = 200,
 def conversation_event_category(event_type: str) -> str:
     if event_type in {"agent_error", "agent_message"}:
         return "chat"
-    if event_type in {"agent_usage", "agent_prompt_metrics"}:
+    if event_type in {"agent_usage", "agent_prompt_metrics", "agent_network_request", "agent_network_response"}:
         return "usage"
     if event_type in {"agent_command_started", "agent_command_finished"}:
         return "commands"

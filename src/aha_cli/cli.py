@@ -28,6 +28,7 @@ from aha_cli.services.hardware_bridge import (
     task_devices,
 )
 from aha_cli.services.messages import format_event
+from aha_cli.services.observe_proxy import run_observe_proxy_server
 from aha_cli.services.onebin import build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_cleanup import cleanup_temp_runs, format_cleanup_summary
@@ -1198,6 +1199,10 @@ def cmd_claude_chat(args: argparse.Namespace) -> int:
     return claude_chat(root, run_id, args)
 
 
+def cmd_observe_proxy(args: argparse.Namespace) -> int:
+    return run_observe_proxy_server(args)
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
@@ -1601,6 +1606,7 @@ def command_handlers() -> dict[str, object]:
         "claude-runner": cmd_claude_runner,
         "codex-chat": cmd_codex_chat,
         "claude-chat": cmd_claude_chat,
+        "observe-proxy": cmd_observe_proxy,
         "task": cmd_task,
         "agent": cmd_agent,
         "session": cmd_session,

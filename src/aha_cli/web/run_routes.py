@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
 from aha_cli.domain.models import default_config, normalize_integrations_config
-from aha_cli.services.headroom_integration import headroom_status, headroom_usage_summary
+from aha_cli.services.observe_proxy import observe_proxy_status, observe_proxy_usage_summary
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
@@ -629,11 +629,23 @@ def handle_save_bootstrap(root: Path, default_run_id: str, body: bytes) -> bytes
     return json_response(bootstrap_payload(root, default_run_id), "201 Created")
 
 
-def handle_headroom_integration_status(root: Path, default_run_id: str, method: str, query: dict[str, list[str]]) -> bytes:
+def handle_observe_proxy_status(root: Path, default_run_id: str, method: str, query: dict[str, list[str]]) -> bytes:
     requested_run_id = request_run_id(default_run_id, query)
     run_id = requested_run_id if requested_run_id and run_exists(root, requested_run_id) else default_api_run_id(root, default_run_id)
-    status = headroom_status(root, load_config(root))
-    response = json_response({"headroom": {**status, "usage": headroom_usage_summary(root, run_id)}})
+    task_id = str((query.get("task_id") or query.get("taskId") or [""])[0] or "").strip()
+    recent_limit = _query_int(query, "recent_limit", 20) if task_id else 0
+    preview_chars = _query_int(query, "preview_chars", 2000) if task_id else 0
+    cfg = load_config(root)
+    status = observe_proxy_status(root, cfg)
+    usage = observe_proxy_usage_summary(
+        root,
+        run_id,
+        event_limit=recent_limit,
+        preview_chars=preview_chars,
+        include_recent=bool(task_id),
+        recent_task_id=task_id or None,
+    )
+    response = json_response({"observe_proxy": {**status, "usage": usage}})
     return head_or_response(method, response)
 
 
@@ -818,8 +830,8 @@ def handle_run_workspace_route(
         return handle_bootstrap(root, default_run_id, method, headers)
     if method == "POST" and path == "/api/bootstrap":
         return handle_save_bootstrap(root, default_run_id, body)
-    if method in {"GET", "HEAD"} and path == "/api/integrations/headroom":
-        return handle_headroom_integration_status(root, default_run_id, method, query)
+    if method in {"GET", "HEAD"} and path == "/api/integrations/observe-proxy":
+        return handle_observe_proxy_status(root, default_run_id, method, query)
     if method == "POST" and path == "/api/runs":
         return handle_create_run(root, body)
     if method in {"GET", "HEAD"} and path.startswith("/api/runs/"):

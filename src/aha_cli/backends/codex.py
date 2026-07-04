@@ -330,6 +330,31 @@ def codex_config_with_provider_override(
     return cfg
 
 
+def codex_config_with_observe_provider_override(
+    codex_config: dict | None,
+    *,
+    provider_id: str,
+    name: str,
+    base_url: str,
+    wire_api: str = CODEX_PROVIDER_DEFAULT_WIRE_API,
+    model: str | None = None,
+) -> dict:
+    cfg = codex_config_for_model(codex_config, model)
+    original = dict(_provider_override(cfg))
+    provider = {
+        "provider_id": str(provider_id or "aha_observe").strip() or "aha_observe",
+        "name": str(name or provider_id or "AHA Observe Proxy").strip() or "AHA Observe Proxy",
+        "base_url": str(base_url or "").strip(),
+        "wire_api": str(original.get("wire_api") or wire_api or CODEX_PROVIDER_DEFAULT_WIRE_API).strip() or CODEX_PROVIDER_DEFAULT_WIRE_API,
+        "requires_openai_auth": bool(original.get("requires_openai_auth")) if original else True,
+    }
+    env_key = str(original.get("env_key") or "").strip()
+    if env_key:
+        provider["env_key"] = env_key
+    cfg[CODEX_PROVIDER_OVERRIDE_KEY] = provider
+    return cfg
+
+
 def codex_config_overrides(codex_config: dict | None) -> list[str]:
     provider = _provider_override(codex_config)
     base_url = str(provider.get("base_url") or "").strip()

@@ -17,6 +17,7 @@
     let proxyEditingUntil = 0;
     let supervisionEditingUntil = 0;
     let contextEditingUntil = 0;
+    let observeProxyEditingUntil = 0;
     let hardwareEditingUntil = 0;
     let taskSettingsEditorTaskId = "";
 
@@ -348,12 +349,31 @@
         if (els.selectedTaskContextAutoCompactEnabledEl) els.selectedTaskContextAutoCompactEnabledEl.checked = false;
         if (els.taskContextStateEl) els.taskContextStateEl.textContent = "Select a task to edit token saving.";
         syncTaskContextFields();
+        renderTaskObserveProxyEditor(null, true);
         return;
       }
       const policy = helpers.taskTokenSavingPolicy?.(task) || helpers.taskContextManagementPolicy(task);
       if (els.selectedTaskContextAutoCompactEnabledEl) els.selectedTaskContextAutoCompactEnabledEl.checked = policy.enabled === true || policy.auto_compact_enabled === true;
       syncTaskContextFields();
       if (els.taskContextStateEl) els.taskContextStateEl.textContent = helpers.taskTokenSavingSummary?.(task) || helpers.taskContextSummary(task);
+      renderTaskObserveProxyEditor(task, true);
+    }
+
+    function renderTaskObserveProxyEditor(taskArg, explicit = false) {
+      const task = resolveTaskEditorTask(taskArg, explicit || arguments.length > 0);
+      if (!els.taskObserveProxyEditorEl || !els.taskObserveProxyFormEl) return;
+      const disabled = !task;
+      els.taskObserveProxyFormEl.querySelectorAll("input, button").forEach(item => {
+        item.disabled = disabled;
+      });
+      if (!task) {
+        if (els.selectedTaskObserveProxyEnabledEl) els.selectedTaskObserveProxyEnabledEl.checked = false;
+        if (els.taskObserveProxyStateEl) els.taskObserveProxyStateEl.textContent = "Select a task to edit observe proxy.";
+        return;
+      }
+      const policy = helpers.taskObserveProxyPolicy?.(task) || {};
+      if (els.selectedTaskObserveProxyEnabledEl) els.selectedTaskObserveProxyEnabledEl.checked = Boolean(policy.enabled);
+      if (els.taskObserveProxyStateEl) els.taskObserveProxyStateEl.textContent = helpers.taskObserveProxySummary?.(task) || "off";
     }
 
     function selectedTaskSkillPaths(selectEl = els.selectedTaskSkillSelectEl) {
@@ -497,6 +517,10 @@
       contextEditingUntil = Date.now() + durationMs;
     }
 
+    function markTaskObserveProxyEditing(durationMs = 10000) {
+      observeProxyEditingUntil = Date.now() + durationMs;
+    }
+
     function markTaskHardwareEditing(durationMs = 10000) {
       hardwareEditingUntil = Date.now() + durationMs;
     }
@@ -513,7 +537,9 @@
 
     function isTaskContextEditing() {
       const active = document.activeElement;
-      return Date.now() < contextEditingUntil || (active instanceof Element && Boolean(els.taskContextFormEl?.contains(active)));
+      return Date.now() < contextEditingUntil
+        || Date.now() < observeProxyEditingUntil
+        || (active instanceof Element && Boolean(els.taskContextFormEl?.contains(active) || els.taskObserveProxyFormEl?.contains(active)));
     }
 
     function isTaskHardwareEditing() {
@@ -525,6 +551,7 @@
       proxyEditingUntil = 0;
       supervisionEditingUntil = 0;
       contextEditingUntil = 0;
+      observeProxyEditingUntil = 0;
       hardwareEditingUntil = 0;
     }
 
@@ -602,6 +629,21 @@
         }))
       }, "Failed to update task token saving");
       contextEditingUntil = 0;
+      await api.loadStatus({ forceTaskContext: true });
+    }
+
+    async function saveTaskObserveProxyConfig() {
+      const task = getTaskSettingsTask();
+      if (!task) return;
+      const enabled = Boolean(els.selectedTaskObserveProxyEnabledEl?.checked);
+      await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/observe-proxy`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(api.runScopedPayload({
+          enabled
+        }))
+      }, "Failed to update task observe proxy");
+      observeProxyEditingUntil = 0;
       await api.loadStatus({ forceTaskContext: true });
     }
 
@@ -723,6 +765,18 @@
           alertUser(err?.message || String(err));
         }
       });
+      els.taskObserveProxyFormEl?.addEventListener("pointerdown", () => markTaskObserveProxyEditing());
+      els.taskObserveProxyFormEl?.addEventListener("focusin", () => markTaskObserveProxyEditing());
+      els.taskObserveProxyFormEl?.addEventListener("input", () => markTaskObserveProxyEditing());
+      els.taskObserveProxyFormEl?.addEventListener("change", () => markTaskObserveProxyEditing());
+      els.taskObserveProxyFormEl?.addEventListener("submit", async event => {
+        event.preventDefault();
+        try {
+          await saveTaskObserveProxyConfig();
+        } catch (err) {
+          alertUser(err?.message || String(err));
+        }
+      });
       els.taskSkillsFormEl?.addEventListener("pointerdown", () => markTaskHardwareEditing());
       els.taskSkillsFormEl?.addEventListener("focusin", () => markTaskHardwareEditing());
       els.taskSkillsFormEl?.addEventListener("change", () => markTaskHardwareEditing());
@@ -793,6 +847,7 @@
       isTaskProxyEditing,
       isTaskSupervisionEditing,
       markTaskContextEditing,
+      markTaskObserveProxyEditing,
       markTaskHardwareEditing,
       markTaskProxyEditing,
       markTaskSupervisionEditing,
@@ -800,6 +855,7 @@
       renderAskUserGateControls,
       renderRunProxyEditor,
       renderTaskContextEditor,
+      renderTaskObserveProxyEditor,
       renderTaskHardwareEditor,
       renderTaskSkillsEditor,
       renderTaskProxyEditor,
@@ -807,6 +863,7 @@
       renderCreateProxyDefaultsPreview,
       resetEditing,
       saveTaskContextConfig,
+      saveTaskObserveProxyConfig,
       saveTaskHardwareConfig,
       saveTaskSkillsConfig,
       saveRunProxyConfig,

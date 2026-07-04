@@ -23,6 +23,7 @@
     "task_proxy_config_updated",
     "task_supervision_config_updated",
     "task_token_saving_config_updated",
+    "task_observe_proxy_config_updated",
     "task_context_management_config_updated",
     "main_reported_to_host",
     "host_decision",
@@ -41,6 +42,8 @@
     "agent_message",
     "agent_prompt_metrics",
     "agent_usage",
+    "agent_network_request",
+    "agent_network_response",
     "agent_error",
     "agent_context_overflow",
     "agent_delegated",
@@ -285,7 +288,7 @@
 
   function conversationEventCategory(event) {
     if (event?.type === "agent_error" || event?.type === "agent_message") return "chat";
-    if (event?.type === "agent_usage" || event?.type === "agent_prompt_metrics") return "usage";
+    if (event?.type === "agent_usage" || event?.type === "agent_prompt_metrics" || event?.type === "agent_network_request" || event?.type === "agent_network_response") return "usage";
     if (event?.type === "agent_command_started" || event?.type === "agent_command_finished") return "commands";
     if (event?.type === "message") return "chat";
     return "runtime";

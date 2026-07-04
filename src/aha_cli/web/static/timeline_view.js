@@ -190,6 +190,15 @@
         const top = rows[0]?.name ? ` top=${rows[0].name}:${rows[0].chars}` : "";
         return renderTimelineStatus("prompt metrics", `chars=${total.chars ?? "-"} bytes=${total.bytes ?? "-"} lines=${total.lines ?? "-"}${top}`, "usage", eventTimeLabel(event));
       }
+      if (event.type === "agent_network_request") {
+        return renderTimelineStatus("network request", `${data.backend || "-"} ${data.method || "-"} ${data.path || "-"} bytes=${data.request_bytes ?? "-"} ref=${data.request_ref || "-"}`, "usage", eventTimeLabel(event));
+      }
+      if (event.type === "agent_network_response") {
+        const usage = data.usage && typeof data.usage === "object"
+          ? Object.entries(data.usage).filter(([, value]) => value !== null && value !== undefined).map(([key, value]) => `${key}=${value}`).join(" ")
+          : "";
+        return renderTimelineStatus("network response", `status=${data.status ?? "-"} bytes=${data.response_bytes ?? "-"} duration=${data.duration_ms ?? "-"}ms ref=${data.response_ref || "-"}${usage ? ` ${usage}` : ""}`, "usage", eventTimeLabel(event));
+      }
       if (event.type === "agent_context_overflow") return renderTimelineStatus("context overflow", data.message || data.reason || "context_window", "failed", eventTimeLabel(event));
       const ts = eventTimeLabel(event);
       if (event.type === "task_status_changed") return renderTimelineStatus(`task ${data.status}`, `exit=${data.exit_code ?? "-"}`, data.status, ts);
@@ -219,6 +228,7 @@
       if (event.type === "task_proxy_config_updated") return renderTimelineStatus("task proxy switch updated", `default=${data.proxy_enabled ? "on" : "off"}`, "session", ts);
       if (event.type === "task_supervision_config_updated") return renderTimelineStatus("task supervision updated", `${data.mode || "-"} via ${data.host_backend || "stub"} max_rounds=${data.max_rounds || "-"}`, "session", ts);
       if (event.type === "task_token_saving_config_updated") return renderTimelineStatus("task token saving updated", `${data.enabled ? "on" : "off"} provider=${data.provider || "map"}`, "session", ts);
+      if (event.type === "task_observe_proxy_config_updated") return renderTimelineStatus("task observe proxy updated", data.enabled ? "on" : "off", "session", ts);
       if (event.type === "task_context_management_config_updated") return renderTimelineStatus("legacy context updated", `${data.auto_compact_enabled ? "enabled" : "disabled"} threshold=${data.auto_compact_threshold_percent || deps.defaultTaskContextThresholdPercent?.()}%`, "session", ts);
       if (event.type === "main_reported_to_host") return renderTimelineStatus("main reported to host", `${data.host_backend || "stub"} ${data.channel || "main_only"} reply=${data.reply_chars || 0} chars`, "session", ts);
       if (event.type === "host_decision") return renderTimelineStatus("host decision", data.decision || "-", "session", ts);

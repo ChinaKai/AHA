@@ -46,6 +46,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(projection["context_management"]["auto_compact_threshold_percent"], 88)
         self.assertTrue(projection["token_saving"]["enabled"])
         self.assertEqual(projection["token_saving"]["provider"], "map")
+        self.assertFalse(projection["observe_proxy"]["enabled"])
         self.assertEqual(projection["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
         self.assertTrue(projection["hardware_debug"]["enabled"])
         hardware_channel = projection["hardware_debug"]["channels"][0]
@@ -125,6 +126,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertFalse(enriched_task["context_management"]["auto_compact_enabled"])
         self.assertFalse(enriched_task["token_saving"]["enabled"])
         self.assertEqual(enriched_task["token_saving"]["provider"], "map")
+        self.assertFalse(enriched_task["observe_proxy"]["enabled"])
         self.assertEqual(enriched_task["hardware_debug"]["channels"], [])
         self.assertEqual(enriched_task["task_skills"]["enabled_paths"], [])
         self.assertEqual(snapshot_task["workspace_id"], "ws-legacy")
@@ -132,6 +134,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(snapshot_task["preferred_sub_model"], "sonnet")
         self.assertEqual(snapshot_task["collaboration_mode"], "pair")
         self.assertEqual(snapshot_task["max_sub_agents"], 1)
+        self.assertFalse(snapshot_task["observe_proxy"]["enabled"])
 
     def test_supervision_host_uses_dedicated_model_and_proxy_switch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -312,6 +312,7 @@
           supervision_max_rounds: elements.taskSupervisionMaxRoundsEl?.value || "",
           supervision_ask_user_gates: readAskUserGates(),
           token_saving_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
+          observe_proxy_enabled: Boolean(elements.taskObserveProxyEnabledEl?.checked),
           task_skill_paths: selectedTaskSkillPaths(),
           hardware_enabled: createHardwareDebugPayload().enabled,
           hardware_channels: createHardwareDebugPayload().channels
@@ -524,6 +525,7 @@
       setInputValue(elements.taskSupervisionMaxRoundsEl, values.supervision_max_rounds);
       restoreAskUserGates(values);
       setCheckboxValue(elements.taskContextAutoCompactEnabledEl, values.token_saving_enabled ?? values.context_auto_compact_enabled);
+      setCheckboxValue(elements.taskObserveProxyEnabledEl, values.observe_proxy_enabled);
       syncCreateTaskContextFields();
       renderTaskSkillOptions(values.task_skill_paths || []);
       setHardwareChannelValues(values.hardware_channels || [], {
@@ -547,6 +549,7 @@
         max_sub_agents: memo.max_sub_agents ?? "",
         supervision_mode: "manual",
         token_saving_enabled: false,
+        observe_proxy_enabled: false,
         task_skill_paths: [],
         hardware_channels: [],
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
@@ -660,6 +663,7 @@
         return;
       }
       const tokenSavingEnabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
+      const observeProxyEnabled = Boolean(elements.taskObserveProxyEnabledEl?.checked);
       createInFlight = true;
       const description = elements.newTaskDescriptionEl?.value.trim() || "";
       const collaborationMode = elements.collaborationModeEl?.value || "auto";
@@ -693,6 +697,7 @@
         preferredSubBackend: elements.taskBackendEl.value,
         supervision,
         tokenSavingEnabled,
+        observeProxyEnabled,
         taskSkills: createTaskSkillsPayload(),
         hardwareDebug: createHardwareDebugPayload(),
         dispatch: true

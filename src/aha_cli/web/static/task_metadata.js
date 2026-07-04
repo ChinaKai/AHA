@@ -180,6 +180,17 @@
     return policy.enabled ? `${policy.provider} on` : "off";
   }
 
+  function taskObserveProxyPolicy(task) {
+    const policy = task?.observe_proxy && typeof task.observe_proxy === "object" ? task.observe_proxy : {};
+    return {
+      enabled: Boolean(policy.enabled)
+    };
+  }
+
+  function taskObserveProxySummary(task) {
+    return taskObserveProxyPolicy(task).enabled ? "on" : "off";
+  }
+
   function defaultHardwareDebugPermissions() {
     return {
       read: true,
@@ -308,6 +319,8 @@
     taskContextSummary,
     taskTokenSavingPolicy,
     taskTokenSavingSummary,
+    taskObserveProxyPolicy,
+    taskObserveProxySummary,
     defaultHardwareDebugPermissions,
     normalizeHardwareDebugPermissions,
     normalizeHardwareDebugChannel,

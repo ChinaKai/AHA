@@ -120,7 +120,7 @@ let bootstrapController = null;
 let timelineView = null;
 let optimisticEvents = null;
 let accessControlController = null;
-let headroomIntegrationController = null;
+let observeProxyController = null;
 let playConsoleController = null;
 let skillsConsoleController = null;
 let tokenUsageController = null;
@@ -191,6 +191,8 @@ const {
   taskContextSummary,
   taskTokenSavingPolicy,
   taskTokenSavingSummary,
+  taskObserveProxyPolicy,
+  taskObserveProxySummary,
   taskSkillsPolicy,
   taskSkillsSummary,
   hardwareDebugPermissionKeys,
@@ -443,7 +445,7 @@ appBridge = window.AHAAppBridge.createAppBridge({
   bootstrapController: () => bootstrapController,
   compactResetController: () => compactResetController,
   conversationController: () => conversationController,
-  headroomIntegrationController: () => headroomIntegrationController,
+  observeProxyController: () => observeProxyController,
   optimisticEvents: () => optimisticEvents,
   panelController: () => panelController,
   playConsoleController: () => playConsoleController,
@@ -609,6 +611,7 @@ const realtimeStatusRefreshEventTypes = new Set([
   "backend_stopped",
   "task_completed",
   "task_token_saving_config_updated",
+  "task_observe_proxy_config_updated",
   "task_context_management_config_updated",
   "task_created",
   "task_reopened",
@@ -706,6 +709,8 @@ const turnEventTypes = new Set([
   "agent_error",
   "agent_prompt_metrics",
   "agent_usage",
+  "agent_network_request",
+  "agent_network_response",
   "agent_context_overflow",
   "agent_thread",
   "agent_finished",
@@ -716,6 +721,8 @@ const backendSessionRefreshEventTypes = new Set([
   "agent_started",
   "agent_prompt_metrics",
   "agent_usage",
+  "agent_network_request",
+  "agent_network_response",
   "agent_context_overflow",
   "backend_started",
   "agent_backend_switched",
