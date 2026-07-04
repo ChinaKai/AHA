@@ -387,6 +387,8 @@ class ObserveProxyTests(unittest.TestCase):
         self.assertEqual(summary["responses"], 1)
         self.assertEqual(summary["recent"][0]["request"]["preview"], '{"input": "hello"}')
         self.assertIn('"ok": true', summary["recent"][0]["response"]["preview"])
+        self.assertEqual(summary["recent"][0]["request_ts"], events[0]["ts"])
+        self.assertEqual(summary["recent"][0]["response_ts"], events[1]["ts"])
         self.assertEqual(summary_without_recent["recent"], [])
         self.assertEqual(summary_for_task["recent"][0]["task_id"], "task-001")
         self.assertEqual(summary_for_other_task["recent"], [])

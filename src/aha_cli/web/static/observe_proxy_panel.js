@@ -26,6 +26,23 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  function localTimeText(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) return text;
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZoneName: "short"
+    }).format(date);
+  }
+
   function formatJsonText(text) {
     const value = String(text || "").trim();
     if (!value) return "";
@@ -94,6 +111,7 @@
     let recentError = "";
     let status = null;
     let selectedTaskId = "";
+    let selectedForwardId = "";
     let bound = false;
     const taskRecentCache = new Map();
     const detailBodyCache = new Map();
@@ -218,11 +236,13 @@
       const targetId = String(taskId || "");
       if (!status) status = {};
       const usage = status.usage && typeof status.usage === "object" ? status.usage : {};
+      const taskRecent = (Array.isArray(recent) ? recent : []).filter(item => String(item?.task_id || "run") === targetId);
+      if (selectedForwardId && !taskRecent.some(item => String(item?.request_id || "") === selectedForwardId)) selectedForwardId = "";
       status = {
         ...status,
         usage: {
           ...usage,
-          recent: (Array.isArray(recent) ? recent : []).filter(item => String(item?.task_id || "run") === targetId)
+          recent: taskRecent
         }
       };
     }
@@ -366,23 +386,28 @@
             <code>${escapeHtml(t("observe_proxy.recent_for_task", "For {task}").replace("{task}", selectedTaskId))}</code>
           </div>
           ${recent.map(item => {
+            const requestId = String(item.request_id || "");
+            const selected = requestId && requestId === selectedForwardId;
+            const requestTime = localTimeText(item.request_ts || item.ts);
             const meta = [
-              item.task_id || "run",
               item.agent_id || "main",
               item.backend || "-",
+              requestTime ? `${t("observe_proxy.request_time", "request")} ${requestTime}` : "",
               item.status ? `status ${item.status}` : "status -",
               item.duration_ms !== undefined && item.duration_ms !== null ? `${item.duration_ms}ms` : "",
               `${bytesText(item.request_bytes)} -> ${bytesText(item.response_bytes)}`
             ].filter(Boolean).join(" · ");
             return `
-              <article class="observe-proxy-forward">
-                <div class="observe-proxy-forward-head">
+              <article class="observe-proxy-forward${selected ? " selected" : ""}">
+                <button type="button" class="observe-proxy-forward-row" data-observe-proxy-forward="${escapeHtml(requestId)}" aria-expanded="${selected ? "true" : "false"}">
                   <strong>${escapeHtml(`${item.method || "-"} ${item.path || "-"}`)}</strong>
                   <span>${escapeHtml(meta)}</span>
                   ${usageText(item.usage) ? `<code>${escapeHtml(usageText(item.usage))}</code>` : ""}
-                </div>
-                ${previewHtml("Request", item.request, item)}
-                ${previewHtml("Response", item.response, item)}
+                </button>
+                ${selected ? `<div class="observe-proxy-forward-body">
+                  ${previewHtml("Request", item.request, item)}
+                  ${previewHtml("Response", item.response, item)}
+                </div>` : ""}
               </article>
             `;
           }).join("")}
@@ -411,6 +436,7 @@
     async function loadTaskRecent(taskId, options = {}) {
       const nextTaskId = String(taskId || "").trim();
       if (!nextTaskId) return;
+      if (selectedTaskId !== nextTaskId) selectedForwardId = "";
       selectedTaskId = nextTaskId;
       const cachedRecent = options.force ? null : cachedRecentForTask(nextTaskId);
       if (cachedRecent) {
@@ -427,6 +453,7 @@
         const payload = await deps.fetchJson?.(observeProxyUrl(nextTaskId), {}, "Failed to load Observe Proxy task forwards");
         status = payload?.observe_proxy || status;
         rememberRecentForTask(nextTaskId);
+        if (selectedForwardId && !recentItems().some(item => String(item?.request_id || "") === selectedForwardId)) selectedForwardId = "";
       } catch (err) {
         recentError = String(err?.message || err || "Failed to load Observe Proxy task forwards");
       } finally {
@@ -448,6 +475,7 @@
         const tasks = Array.isArray(status?.usage?.tasks) ? status.usage.tasks : [];
         if (selectedTaskId && !tasks.some(task => String(task?.task_id || "run") === selectedTaskId)) {
           selectedTaskId = "";
+          selectedForwardId = "";
           recentError = "";
         }
         if (selectedTaskId) {
@@ -491,6 +519,13 @@
         const taskButton = target?.closest("[data-observe-proxy-task]");
         if (taskButton) {
           void loadTaskRecent(String(taskButton.getAttribute("data-observe-proxy-task") || ""));
+          return;
+        }
+        const forwardButton = target?.closest("[data-observe-proxy-forward]");
+        if (forwardButton) {
+          const requestId = String(forwardButton.getAttribute("data-observe-proxy-forward") || "");
+          selectedForwardId = selectedForwardId === requestId ? "" : requestId;
+          renderPopover();
           return;
         }
         const detailButton = target?.closest("[data-observe-proxy-detail]");

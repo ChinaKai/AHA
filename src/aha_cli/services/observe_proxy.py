@@ -494,6 +494,8 @@ def observe_proxy_usage_summary(
                         "response_bytes": response_data.get("response_bytes"),
                         "usage": response_data.get("usage"),
                         "ts": response_event.get("ts") or request_event.get("ts"),
+                        "request_ts": request_event.get("ts"),
+                        "response_ts": response_event.get("ts"),
                         "request": _artifact_preview(
                             root,
                             str(run_id),

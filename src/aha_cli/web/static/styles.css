@@ -989,31 +989,55 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
 }
 .observe-proxy-forward {
   display: grid;
-  gap: 8px;
   min-width: 0;
-  padding: 10px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
   background: #ffffff;
+  overflow: hidden;
 }
-.observe-proxy-forward-head {
+.observe-proxy-forward.selected {
+  border-color: #93c5fd;
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+.observe-proxy-forward-row {
   display: grid;
+  width: 100%;
   gap: 3px;
   min-width: 0;
+  padding: 9px 10px;
+  border: 0;
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
 }
-.observe-proxy-forward-head strong,
-.observe-proxy-forward-head span,
-.observe-proxy-forward-head code {
+.observe-proxy-forward-row:hover,
+.observe-proxy-forward-row:focus-visible {
+  background: #f8fafc;
+}
+.observe-proxy-forward.selected .observe-proxy-forward-row {
+  background: #eff6ff;
+}
+.observe-proxy-forward-row strong,
+.observe-proxy-forward-row span,
+.observe-proxy-forward-row code {
   overflow-wrap: anywhere;
   white-space: normal;
 }
-.observe-proxy-forward-head strong {
+.observe-proxy-forward-row strong {
   color: var(--color-text);
   font-size: 12px;
 }
-.observe-proxy-forward-head span {
+.observe-proxy-forward-row span {
   color: var(--color-text-muted);
   font-size: 11px;
+}
+.observe-proxy-forward-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--color-border-subtle);
 }
 .observe-proxy-preview {
   min-width: 0;
