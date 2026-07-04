@@ -2997,7 +2997,7 @@ body.auth-required.knowledge-home .knowledge-home-page {
 }
 .token-summary-line {
   display: grid;
-  grid-template-columns: 1.25fr repeat(3, minmax(90px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 0;
   padding-top: 8px;
   border-top: 1px solid #eef2f6;

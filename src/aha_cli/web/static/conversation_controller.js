@@ -307,10 +307,11 @@
       const contextPercent = deps.contextPressurePercent(contextPressure);
       const contextInputTokens = contextPressure?.input_tokens ?? contextPressure?.prompt_tokens;
       const contextWindowTokens = contextPressure?.context_window;
+      const formatTokenCount = value => deps.formatMetricNumber(value);
       const contextWindowUsedTotalLabel = contextInputTokens != null && contextWindowTokens != null
         ? `${deps.formatMetricCompact(contextInputTokens)} / ${deps.formatMetricCompact(contextWindowTokens)}`
         : contextInputTokens != null
-          ? deps.formatMetricCompact(contextInputTokens)
+          ? formatTokenCount(contextInputTokens)
           : contextWindowTokens != null
             ? `window ${deps.formatMetricCompact(contextWindowTokens)}`
             : "";
@@ -319,17 +320,17 @@
       const sessionActionButton = backendSession?.id
         ? `<button type="button" class="compact-reset-primary" data-session-action="compact-reset"${resetState ? " disabled" : ""}>${deps.escapeHtml(resetState?.buttonLabel || "Compact")}</button>`
         : "";
-      const mainSource = ledger?.largest?.label || (ledger.backendInputTokens ? "Backend input" : "Waiting");
-      const mainValue = ledger?.largest?.value ? deps.formatMetricCompact(ledger.largest.value) : "--";
+      const countValue = value => value ? formatTokenCount(value) : "--";
       const mainDetail = ledgerVerdict.detail || "waiting for usage";
-      const contextValue = contextPercent || (contextInputTokens != null ? deps.formatMetricCompact(contextInputTokens) : "--");
+      const totalValue = countValue(ledger.totalTokens);
+      const inputValue = countValue(ledger.backendInputTokens);
+      const cachedValue = countValue(ledger.cachedTokens);
+      const contextValue = contextPercent || (contextInputTokens != null ? formatTokenCount(contextInputTokens) : "--");
       const contextDetail = contextWindowUsedTotalLabel || contextStatus.label || "context unknown";
-      const outputValue = ledger.outputTokens ? deps.formatMetricCompact(ledger.outputTokens) : "--";
-      const outputDetail = ledger.reasoningOutputTokens
-        ? `reasoning ${deps.formatMetricCompact(ledger.reasoningOutputTokens)}`
-        : "model output";
-      const ahaValue = ledger.ahaPromptTokens ? deps.formatMetricCompact(ledger.ahaPromptTokens) : "--";
+      const outputValue = countValue(ledger.outputTokens);
+      const ahaValue = countValue(ledger.ahaPromptTokens);
       const ahaDetail = totalChars ? `${deps.formatMetricCompact(totalChars)} chars` : "AHA prompt";
+      const cachedDetail = "agent usage";
       const actionText = resetState?.label || compactAdviceText || (
         ledgerVerdict.className === "history"
           ? "Compact when the history gets in the way."
@@ -338,11 +339,6 @@
             : "No action needed."
       );
       const rawDetails = [
-        contextInputTokens == null && ledger.backendInputTokens
-          ? { label: "Backend input", value: deps.formatMetricCompact(ledger.backendInputTokens), detail: "tokens" }
-          : null,
-        ledger.cacheReadTokens ? { label: "Cache read", value: deps.formatMetricCompact(ledger.cacheReadTokens), detail: "tokens" } : null,
-        ledger.cacheCreationTokens ? { label: "Cache write", value: deps.formatMetricCompact(ledger.cacheCreationTokens), detail: "tokens" } : null,
         backendSession?.exists && Number.isFinite(sessionSize) ? { label: "Session", value: deps.formatMetricBytes(sessionSize), detail: "backend session file" } : null,
         contextPressure?.model ? { label: "Model", value: String(contextPressure.model), detail: "context window" } : null,
         source ? { label: "Source", value: String(source), detail: "usage event" } : null
@@ -362,10 +358,12 @@
             </div>
           </div>
           <div class="token-summary-line">
-            ${renderTokenSummaryItem("Main cost", mainValue, mainSource, "token-summary-primary")}
-            ${renderTokenSummaryItem("Context", contextValue, contextDetail)}
-            ${renderTokenSummaryItem("Output", outputValue, outputDetail)}
+            ${renderTokenSummaryItem("Total", totalValue, "input + output", "token-summary-primary")}
+            ${renderTokenSummaryItem("Input", inputValue, "agent usage")}
+            ${renderTokenSummaryItem("Cached", cachedValue, cachedDetail)}
+            ${renderTokenSummaryItem("Output", outputValue, "model output")}
             ${renderTokenSummaryItem("AHA", ahaValue, ahaDetail)}
+            ${renderTokenSummaryItem("Context", contextValue, contextDetail)}
           </div>
           ${detailsHtml}
           <div class="token-summary-action">
@@ -717,12 +715,14 @@
     function invalidateRealtimeTaskDetails(events) {
       const finalTaskIds = new Set();
       const sessionRefreshes = new Map();
+      let usageUpdatedCurrent = false;
       events.forEach(event => {
         const taskId = deps.eventTaskId(event);
         if (deps.finalDetailInvalidatingEvents.has(event.type) && taskId) finalTaskIds.add(taskId);
         if (deps.backendSessionRefreshEventTypes.has(event.type) && taskId) {
           const target = backendTarget();
           if (isCurrentConversationTarget(taskId, target) && deps.eventMatchesAgent(event, target)) {
+            if (event.type === "agent_usage") usageUpdatedCurrent = true;
             const reason = event.type === "agent_prompt_metrics" || event.type === "agent_usage" || event.type === "agent_context_overflow"
               ? "metrics-event"
               : "session-lifecycle";
@@ -749,6 +749,7 @@
             panelEl.innerHTML = `<pre>${deps.escapeHtml(String(err))}</pre>`;
           });
       }
+      if (usageUpdatedCurrent && getActiveTab() === "conversation") deps.renderPanel?.();
       for (const { taskId, target, reason } of sessionRefreshes.values()) {
         if (getActiveTab() !== "conversation" || getSelectedTaskId() !== taskId || backendTarget() !== target) continue;
         refreshConversationBackendSession(taskId, target, { render: true, showError: reason === "compact-reset", reason });
