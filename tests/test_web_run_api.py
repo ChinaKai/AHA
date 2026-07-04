@@ -365,6 +365,30 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(summary.call_args.kwargs["event_limit"], 7)
         self.assertEqual(summary.call_args.kwargs["preview_chars"], 300)
 
+    def test_api_observe_proxy_status_loads_full_recent_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.services.observe_proxy._health", return_value=True), mock.patch(
+            "aha_cli.web.run_routes.observe_proxy_usage_summary",
+            return_value={"recent": [{"task_id": "task-001", "request_id": "req-001"}]},
+        ) as summary:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"observe_proxy": {"enabled": True, "port": 8989}}}),
+                encoding="utf-8",
+            )
+            response = asyncio.run(
+                fetch_ui_response(root, "", "/api/integrations/observe-proxy?task_id=task-001&request_id=req-001&full=1")
+            )
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(body["observe_proxy"]["usage"]["recent"], [{"task_id": "task-001", "request_id": "req-001"}])
+        self.assertTrue(summary.call_args.kwargs["include_recent"])
+        self.assertEqual(summary.call_args.kwargs["recent_task_id"], "task-001")
+        self.assertEqual(summary.call_args.kwargs["recent_request_id"], "req-001")
+        self.assertEqual(summary.call_args.kwargs["event_limit"], 1)
+        self.assertIsNone(summary.call_args.kwargs["preview_chars"])
+
     def test_api_bootstrap_can_select_official_claude_without_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"

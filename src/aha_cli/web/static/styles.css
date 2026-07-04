@@ -1021,20 +1021,35 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   border-radius: 6px;
   background: var(--color-surface-muted);
 }
-.observe-proxy-preview summary {
+.observe-proxy-preview-trigger {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
+  width: 100%;
   padding: 7px 8px;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   color: var(--color-text-muted);
+  font: inherit;
   font-size: 11px;
+  text-align: left;
 }
-.observe-proxy-preview summary code {
+.observe-proxy-preview-trigger:hover,
+.observe-proxy-preview-trigger:focus-visible {
+  background: #eef2f7;
+}
+.observe-proxy-preview-trigger code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.observe-proxy-preview-trigger em {
+  grid-column: 1 / -1;
+  color: #2563eb;
+  font-style: normal;
+  font-weight: 650;
 }
 .observe-proxy-preview pre {
   max-height: 240px;
@@ -1048,6 +1063,77 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   color: #111827;
   font-size: 11px;
   line-height: 1.45;
+}
+.observe-proxy-detail-root[hidden] {
+  display: none;
+}
+.observe-proxy-detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+.observe-proxy-detail-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(980px, calc(100vw - 32px));
+  max-height: min(88vh, 820px);
+  overflow: hidden;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--dialog-shadow);
+}
+.observe-proxy-detail-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.observe-proxy-detail-head h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 15px;
+}
+.observe-proxy-detail-head span {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.observe-proxy-detail-head button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--color-text-muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.observe-proxy-detail-dialog pre {
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.observe-proxy-detail-dialog pre.error {
+  background: #fff7ed;
+  color: #9a3412;
 }
 .observe-proxy-config-form {
   display: grid;
@@ -7126,6 +7212,14 @@ body.empty-run .panel {
     left: 0;
     right: 0;
     width: auto;
+  }
+  .observe-proxy-detail-backdrop {
+    align-items: stretch;
+    padding: 12px;
+  }
+  .observe-proxy-detail-dialog {
+    width: 100%;
+    max-height: calc(var(--app-viewport-height) - 24px);
   }
   .token-usage-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));

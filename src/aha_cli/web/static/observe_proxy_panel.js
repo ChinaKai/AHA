@@ -26,18 +26,60 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  function previewHtml(label, artifact = {}) {
+  function formatJsonText(text) {
+    const value = String(text || "").trim();
+    if (!value) return "";
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function formatSseText(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const events = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload) continue;
+      if (payload === "[DONE]") {
+        events.push("[DONE]");
+        continue;
+      }
+      try {
+        events.push(JSON.parse(payload));
+      } catch (_err) {
+        events.push(payload);
+      }
+    }
+    return events.length ? JSON.stringify(events, null, 2) : "";
+  }
+
+  function formatObservedBody(text) {
+    const value = String(text || "");
+    return formatJsonText(value) || formatSseText(value) || value;
+  }
+
+  function previewHtml(label, artifact = {}, item = {}) {
     const preview = String(artifact.preview || "");
     const ref = String(artifact.ref || "");
+    const requestId = String(item.request_id || "");
+    const kind = String(label || "").toLowerCase();
     const suffix = artifact.truncated ? " ..." : "";
     if (!preview && !ref) return "";
     const bytes = Number(artifact.bytes || 0);
     const body = preview || (bytes > 0 ? `(${bytesText(bytes)} captured, preview unavailable)` : "(empty)");
     return `
-      <details class="observe-proxy-preview">
-        <summary><span>${escapeHtml(label)}</span><code>${escapeHtml(ref || "-")}</code></summary>
+      <div class="observe-proxy-preview">
+        <button type="button" class="observe-proxy-preview-trigger" data-observe-proxy-detail="${escapeHtml(kind)}" data-observe-proxy-request-id="${escapeHtml(requestId)}">
+          <span>${escapeHtml(label)}</span>
+          <code>${escapeHtml(ref || "-")}</code>
+          <em>${escapeHtml(t("observe_proxy.open_full", "Open full"))}</em>
+        </button>
         <pre>${escapeHtml(body)}${escapeHtml(suffix)}</pre>
-      </details>
+      </div>
     `;
   }
 
@@ -53,6 +95,19 @@
     let status = null;
     let selectedTaskId = "";
     let bound = false;
+    const taskRecentCache = new Map();
+    const detailBodyCache = new Map();
+    let detailEl = null;
+    let detailState = {
+      open: false,
+      loading: false,
+      error: "",
+      title: "",
+      subtitle: "",
+      body: "",
+      requestId: "",
+      kind: ""
+    };
 
     function statusLine() {
       if (loading) return t("observe_proxy.loading", "Loading Observe Proxy...");
@@ -120,11 +175,173 @@
       return parts.join(" ");
     }
 
-    function observeProxyUrl(taskId = "") {
+    function observeProxyUrl(taskId = "", options = {}) {
       const base = deps.apiUrl?.("/api/integrations/observe-proxy") || "/api/integrations/observe-proxy";
-      if (!taskId) return base;
+      const params = [];
+      if (taskId) params.push(`task_id=${encodeURIComponent(taskId)}`);
+      if (options.requestId) params.push(`request_id=${encodeURIComponent(options.requestId)}`);
+      if (options.full) params.push("full=1");
+      if (options.previewChars !== undefined) params.push(`preview_chars=${encodeURIComponent(options.previewChars)}`);
+      if (!params.length) return base;
       const separator = base.includes("?") ? "&" : "?";
-      return `${base}${separator}task_id=${encodeURIComponent(taskId)}`;
+      return `${base}${separator}${params.join("&")}`;
+    }
+
+    function recentItems() {
+      return Array.isArray(status?.usage?.recent) ? status.usage.recent : [];
+    }
+
+    function findRecentItem(requestId) {
+      return recentItems().find(item => String(item?.request_id || "") === String(requestId || "")) || null;
+    }
+
+    function taskTotals(taskId) {
+      const targetId = String(taskId || "");
+      const task = (Array.isArray(status?.usage?.tasks) ? status.usage.tasks : [])
+        .find(item => String(item?.task_id || "run") === targetId);
+      if (!task) return null;
+      return {
+        requests: Number(task.requests || 0),
+        responses: Number(task.responses || 0)
+      };
+    }
+
+    function cachedRecentForTask(taskId) {
+      const cache = taskRecentCache.get(String(taskId || ""));
+      const totals = taskTotals(taskId);
+      if (!cache || !totals) return null;
+      if (cache.requests !== totals.requests || cache.responses !== totals.responses) return null;
+      return cache.recent;
+    }
+
+    function setRecentItemsForTask(taskId, recent) {
+      const targetId = String(taskId || "");
+      if (!status) status = {};
+      const usage = status.usage && typeof status.usage === "object" ? status.usage : {};
+      status = {
+        ...status,
+        usage: {
+          ...usage,
+          recent: (Array.isArray(recent) ? recent : []).filter(item => String(item?.task_id || "run") === targetId)
+        }
+      };
+    }
+
+    function rememberRecentForTask(taskId) {
+      const totals = taskTotals(taskId);
+      if (!totals) return;
+      const targetId = String(taskId || "");
+      taskRecentCache.set(targetId, {
+        requests: totals.requests,
+        responses: totals.responses,
+        recent: recentItems().filter(item => String(item?.task_id || "run") === targetId)
+      });
+    }
+
+    function detailSubtitle(item, kind, artifact) {
+      const parts = [
+        item?.task_id || selectedTaskId || "run",
+        item?.agent_id || "main",
+        item?.backend || "-",
+        item?.status ? `status ${item.status}` : "",
+        artifact?.bytes !== undefined ? bytesText(artifact.bytes) : "",
+        artifact?.ref || ""
+      ].filter(Boolean);
+      return `${kind} · ${parts.join(" · ")}`;
+    }
+
+    function ensureDetailEl() {
+      if (detailEl) return detailEl;
+      const doc = deps.documentRef || document;
+      detailEl = doc.createElement("div");
+      detailEl.className = "observe-proxy-detail-root";
+      detailEl.hidden = true;
+      doc.body.appendChild(detailEl);
+      detailEl.addEventListener("click", event => {
+        event.stopPropagation();
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("[data-observe-proxy-detail-close]") || target?.classList?.contains("observe-proxy-detail-backdrop")) {
+          closeDetail();
+        }
+      });
+      doc.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || !detailState.open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeDetail();
+      }, true);
+      return detailEl;
+    }
+
+    function renderDetail() {
+      const root = ensureDetailEl();
+      root.hidden = !detailState.open;
+      if (!detailState.open) {
+        root.innerHTML = "";
+        return;
+      }
+      const body = detailState.loading
+        ? t("observe_proxy.detail_loading", "Loading full body...")
+        : (detailState.error || detailState.body || "(empty)");
+      root.innerHTML = `
+        <div class="observe-proxy-detail-backdrop">
+          <section class="observe-proxy-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="observe-proxy-detail-title">
+            <div class="observe-proxy-detail-head">
+              <div>
+                <h3 id="observe-proxy-detail-title">${escapeHtml(detailState.title || t("observe_proxy.detail_title", "Observed body"))}</h3>
+                <span>${escapeHtml(detailState.subtitle || "")}</span>
+              </div>
+              <button type="button" data-observe-proxy-detail-close aria-label="${escapeHtml(t("common.close", "Close"))}">×</button>
+            </div>
+            <pre class="${detailState.error ? "error" : ""}">${escapeHtml(body)}</pre>
+          </section>
+        </div>
+      `;
+    }
+
+    function closeDetail() {
+      detailState = { ...detailState, open: false, loading: false };
+      renderDetail();
+    }
+
+    async function openDetail(requestId, kind) {
+      const item = findRecentItem(requestId);
+      const normalizedKind = kind === "response" ? "response" : "request";
+      const artifact = item?.[normalizedKind] || {};
+      const taskId = String(item?.task_id || selectedTaskId || "").trim();
+      const cacheKey = `${String(requestId || "")}:${normalizedKind}`;
+      detailState = {
+        open: true,
+        loading: !detailBodyCache.has(cacheKey),
+        error: "",
+        title: normalizedKind === "response" ? t("observe_proxy.response_body", "Response body") : t("observe_proxy.request_body", "Request body"),
+        subtitle: detailSubtitle(item, normalizedKind, artifact),
+        body: detailBodyCache.get(cacheKey) || "",
+        requestId: String(requestId || ""),
+        kind: normalizedKind
+      };
+      renderDetail();
+      if (detailBodyCache.has(cacheKey)) return;
+      try {
+        const payload = await deps.fetchJson?.(
+          observeProxyUrl(taskId, { requestId: String(requestId || ""), full: true }),
+          {},
+          "Failed to load full observed body"
+        );
+        const fullItem = (Array.isArray(payload?.observe_proxy?.usage?.recent) ? payload.observe_proxy.usage.recent : [])
+          .find(entry => String(entry?.request_id || "") === String(requestId || "")) || item;
+        const fullArtifact = fullItem?.[normalizedKind] || artifact;
+        detailState = {
+          ...detailState,
+          loading: false,
+          subtitle: detailSubtitle(fullItem, normalizedKind, fullArtifact),
+          body: formatObservedBody(fullArtifact?.preview || "")
+        };
+        detailBodyCache.set(cacheKey, detailState.body);
+      } catch (err) {
+        detailState = { ...detailState, loading: false, error: String(err?.message || err || "Failed to load full observed body") };
+      }
+      renderDetail();
     }
 
     function recentHtml() {
@@ -137,7 +354,7 @@
       if (recentError) {
         return `<div class="observe-proxy-usage-empty error">${escapeHtml(recentError)}</div>`;
       }
-      const recent = (Array.isArray(status?.usage?.recent) ? status.usage.recent : [])
+      const recent = recentItems()
         .filter(item => String(item?.task_id || "run") === selectedTaskId);
       if (!recent.length) {
         return `<div class="observe-proxy-usage-empty">${escapeHtml(t("observe_proxy.recent_task_empty", "No forwarded requests for this task yet."))}</div>`;
@@ -164,8 +381,8 @@
                   <span>${escapeHtml(meta)}</span>
                   ${usageText(item.usage) ? `<code>${escapeHtml(usageText(item.usage))}</code>` : ""}
                 </div>
-                ${previewHtml("Request", item.request)}
-                ${previewHtml("Response", item.response)}
+                ${previewHtml("Request", item.request, item)}
+                ${previewHtml("Response", item.response, item)}
               </article>
             `;
           }).join("")}
@@ -195,12 +412,21 @@
       const nextTaskId = String(taskId || "").trim();
       if (!nextTaskId) return;
       selectedTaskId = nextTaskId;
+      const cachedRecent = options.force ? null : cachedRecentForTask(nextTaskId);
+      if (cachedRecent) {
+        recentError = "";
+        recentLoading = false;
+        setRecentItemsForTask(nextTaskId, cachedRecent);
+        if (open) renderPopover();
+        return;
+      }
       recentLoading = true;
       recentError = "";
       if (!options.silent) renderPopover();
       try {
         const payload = await deps.fetchJson?.(observeProxyUrl(nextTaskId), {}, "Failed to load Observe Proxy task forwards");
         status = payload?.observe_proxy || status;
+        rememberRecentForTask(nextTaskId);
       } catch (err) {
         recentError = String(err?.message || err || "Failed to load Observe Proxy task forwards");
       } finally {
@@ -224,7 +450,14 @@
           selectedTaskId = "";
           recentError = "";
         }
-        shouldLoadSelectedTask = Boolean(selectedTaskId);
+        if (selectedTaskId) {
+          const cachedRecent = cachedRecentForTask(selectedTaskId);
+          if (cachedRecent) {
+            setRecentItemsForTask(selectedTaskId, cachedRecent);
+          } else {
+            shouldLoadSelectedTask = true;
+          }
+        }
       } catch (err) {
         error = String(err?.message || err || "Failed to load Observe Proxy");
       } finally {
@@ -258,6 +491,14 @@
         const taskButton = target?.closest("[data-observe-proxy-task]");
         if (taskButton) {
           void loadTaskRecent(String(taskButton.getAttribute("data-observe-proxy-task") || ""));
+          return;
+        }
+        const detailButton = target?.closest("[data-observe-proxy-detail]");
+        if (detailButton) {
+          void openDetail(
+            String(detailButton.getAttribute("data-observe-proxy-request-id") || ""),
+            String(detailButton.getAttribute("data-observe-proxy-detail") || "")
+          );
           return;
         }
         if (target?.closest("[data-observe-proxy-refresh]")) void loadObserveProxy();

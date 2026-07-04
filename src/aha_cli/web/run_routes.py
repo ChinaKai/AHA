@@ -633,8 +633,10 @@ def handle_observe_proxy_status(root: Path, default_run_id: str, method: str, qu
     requested_run_id = request_run_id(default_run_id, query)
     run_id = requested_run_id if requested_run_id and run_exists(root, requested_run_id) else default_api_run_id(root, default_run_id)
     task_id = str((query.get("task_id") or query.get("taskId") or [""])[0] or "").strip()
-    recent_limit = _query_int(query, "recent_limit", 20) if task_id else 0
-    preview_chars = _query_int(query, "preview_chars", 2000) if task_id else 0
+    request_id = str((query.get("request_id") or query.get("requestId") or [""])[0] or "").strip()
+    full_body = parse_optional_bool(str((query.get("full") or ["false"])[0] or "false"), "full")
+    recent_limit = 1 if request_id else (_query_int(query, "recent_limit", 20) if task_id else 0)
+    preview_chars = None if full_body and task_id else (_query_int(query, "preview_chars", 2000) if task_id else 0)
     cfg = load_config(root)
     status = observe_proxy_status(root, cfg)
     usage = observe_proxy_usage_summary(
@@ -644,6 +646,7 @@ def handle_observe_proxy_status(root: Path, default_run_id: str, method: str, qu
         preview_chars=preview_chars,
         include_recent=bool(task_id),
         recent_task_id=task_id or None,
+        recent_request_id=request_id or None,
     )
     response = json_response({"observe_proxy": {**status, "usage": usage}})
     return head_or_response(method, response)

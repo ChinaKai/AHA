@@ -366,6 +366,14 @@ class ObserveProxyTests(unittest.TestCase):
             summary_without_recent = observe_proxy_usage_summary(root, run_id, include_recent=False)
             summary_for_task = observe_proxy_usage_summary(root, run_id, recent_task_id="task-001")
             summary_for_other_task = observe_proxy_usage_summary(root, run_id, recent_task_id="task-other")
+            summary_truncated = observe_proxy_usage_summary(root, run_id, recent_task_id="task-001", preview_chars=5)
+            summary_full = observe_proxy_usage_summary(
+                root,
+                run_id,
+                recent_task_id="task-001",
+                recent_request_id=events[0]["data"]["request_id"],
+                preview_chars=None,
+            )
 
         self.assertTrue(response_payload["ok"])
         self.assertEqual(upstream_paths, ["/v1/responses"])
@@ -382,6 +390,11 @@ class ObserveProxyTests(unittest.TestCase):
         self.assertEqual(summary_without_recent["recent"], [])
         self.assertEqual(summary_for_task["recent"][0]["task_id"], "task-001")
         self.assertEqual(summary_for_other_task["recent"], [])
+        self.assertTrue(summary_truncated["recent"][0]["request"]["truncated"])
+        self.assertEqual(len(summary_full["recent"]), 1)
+        self.assertEqual(summary_full["recent"][0]["request_id"], events[0]["data"]["request_id"])
+        self.assertEqual(summary_full["recent"][0]["request"]["preview"], '{"input": "hello"}')
+        self.assertFalse(summary_full["recent"][0]["request"]["truncated"])
 
     def test_proxy_maps_codex_chatgpt_upstream_without_v1_prefix(self) -> None:
         upstream_paths: list[str] = []

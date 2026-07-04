@@ -326,8 +326,8 @@ def _decompress_preview_data(data: bytes, encoding: str) -> tuple[bytes | None, 
     return decoded, ""
 
 
-def _text_or_binary_preview(data: bytes, *, limit: int) -> tuple[str, bool]:
-    preview_bytes = data[: max(0, int(limit))]
+def _text_or_binary_preview(data: bytes, *, limit: int | None) -> tuple[str, bool]:
+    preview_bytes = data if limit is None else data[: max(0, int(limit))]
     text = preview_bytes.decode("utf-8", errors="replace")
     if not preview_bytes:
         return "", False
@@ -336,10 +336,10 @@ def _text_or_binary_preview(data: bytes, *, limit: int) -> tuple[str, bool]:
     non_text_count = sum(1 for char in text if (ord(char) < 32 and char not in allowed_controls) or char == "\ufffd")
     if replacement_count > 0 or non_text_count / max(1, len(text)) > 0.05:
         return f"[binary body, {len(data)} B; preview unavailable]", False
-    return text, len(data) > max(0, int(limit))
+    return text, limit is not None and len(data) > max(0, int(limit))
 
 
-def _artifact_preview(root: Path, run_id: str, ref: object, *, limit: int = 2000, content_encoding: str | None = None) -> dict:
+def _artifact_preview(root: Path, run_id: str, ref: object, *, limit: int | None = 2000, content_encoding: str | None = None) -> dict:
     ref_text = str(ref or "").strip()
     encoding = str(content_encoding or "").strip()
     result = {"ref": ref_text, "bytes": 0, "preview": "", "truncated": False, "content_encoding": encoding}
@@ -369,9 +369,10 @@ def observe_proxy_usage_summary(
     *,
     task_limit: int = 8,
     event_limit: int = 20,
-    preview_chars: int = 2000,
+    preview_chars: int | None = 2000,
     include_recent: bool = True,
     recent_task_id: str | None = None,
+    recent_request_id: str | None = None,
 ) -> dict:
     summary = {
         "run_id": str(run_id or ""),
@@ -399,6 +400,7 @@ def observe_proxy_usage_summary(
 
     events_file = event_path(root, run_id)
     requested_task_id = str(recent_task_id or "").strip()
+    requested_request_id = str(recent_request_id or "").strip()
     if events_file.exists():
         events, _ = iter_jsonl_from(events_file, 0)
         for event in events:
@@ -440,32 +442,35 @@ def observe_proxy_usage_summary(
         if include_recent and event_limit > 0:
             recent_by_id: dict[str, dict] = {}
             recent_order: list[str] = []
+            target_limit = 1 if requested_request_id else max(0, int(event_limit))
             scanned = 0
             for _offset, event in iter_jsonl_reverse(events_file) or ():
                 scanned += 1
                 event_type = str(event.get("type") or "")
                 if event_type not in {"agent_network_request", "agent_network_response"}:
-                    if len(recent_order) >= event_limit and scanned > event_limit * 20:
+                    if len(recent_order) >= target_limit and scanned > max(1, target_limit) * 20:
                         break
                     continue
                 data = event.get("data") if isinstance(event.get("data"), dict) else {}
                 request_id = str(data.get("request_id") or "").strip()
                 if not request_id:
                     continue
+                if requested_request_id and request_id != requested_request_id:
+                    continue
                 if event_type == "agent_network_response":
                     event_task_id = str(data.get("task_id") or "").strip() or "run"
                     if requested_task_id and event_task_id != requested_task_id:
                         continue
-                    if request_id not in recent_by_id and len(recent_order) < max(0, int(event_limit)):
+                    if request_id not in recent_by_id and len(recent_order) < target_limit:
                         recent_by_id[request_id] = {"request_id": request_id, "response_event": event}
                         recent_order.append(request_id)
                     elif request_id in recent_by_id and "response_event" not in recent_by_id[request_id]:
                         recent_by_id[request_id]["response_event"] = event
                 elif request_id in recent_by_id:
                     recent_by_id[request_id]["request_event"] = event
-                if recent_order and len(recent_order) >= event_limit and all("request_event" in recent_by_id[item] for item in recent_order):
+                if recent_order and len(recent_order) >= target_limit and all("request_event" in recent_by_id[item] for item in recent_order):
                     break
-                if len(recent_order) >= event_limit and scanned > event_limit * 40:
+                if len(recent_order) >= target_limit and scanned > max(1, target_limit) * 40:
                     break
 
             recent = []
