@@ -220,6 +220,7 @@ def reset_backend_session_for_fresh_scope(
             task_id,
             agent_id,
             backend_session_id=old_backend_session_id,
+            backend=session.get("backend"),
             history=history,
         )
         history.append(archive)

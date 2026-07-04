@@ -17,7 +17,7 @@ from aha_cli.store.filesystem import (
     set_task_status,
     status_snapshot,
 )
-from aha_cli.store.sessions import backend_session_usage_archive_fields
+from aha_cli.store.sessions import backend_session_usage_archive_fields, usage_token_summary
 from tests.helpers import append_jsonl_records, write_plan_statuses
 
 
@@ -29,6 +29,25 @@ def run_cli(*args: str) -> tuple[int, str]:
 
 
 class StoreStateTests(unittest.TestCase):
+    def test_usage_token_summary_uses_backend_specific_total_formula(self) -> None:
+        usage = {
+            "input_tokens": 200,
+            "cache_read_input_tokens": 25,
+            "cache_creation_input_tokens": 40,
+            "output_tokens": 75,
+            "total_tokens": 999,
+        }
+
+        codex_summary = usage_token_summary(usage, backend="codex")
+        claude_summary = usage_token_summary(usage, backend="claude")
+
+        self.assertEqual(codex_summary["total_tokens"], 275)
+        self.assertEqual(codex_summary["total_formula"], "input + output")
+        self.assertEqual(codex_summary["cache_creation_tokens"], 40)
+        self.assertEqual(claude_summary["total_tokens"], 300)
+        self.assertEqual(claude_summary["total_formula"], "input + cache_read + output")
+        self.assertEqual(claude_summary["cache_read_tokens"], 25)
+
     def test_backend_session_usage_archive_uses_current_session_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -80,11 +99,60 @@ class StoreStateTests(unittest.TestCase):
                     "task-001",
                     "main",
                     backend_session_id="session-b",
+                    backend="codex",
                     history=history,
                 )
 
         self.assertEqual(without_current_usage, {})
         self.assertEqual(current_unscoped_usage["token_summary"]["total_tokens"], 48)
+
+    def test_backend_session_usage_archive_sums_claude_turn_usage_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = run_cli("plan", "Claude usage", "--agents", "0")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for usage in (
+                    {"input_tokens": 10, "cache_read_input_tokens": 2, "cache_creation_input_tokens": 7, "output_tokens": 3},
+                    {"input_tokens": 5, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 4, "output_tokens": 7},
+                ):
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_usage",
+                        {
+                            "task_id": "task-001",
+                            "target": "main",
+                            "backend_session_id": "claude-session",
+                            "usage": usage,
+                        },
+                    )
+                claude_usage = backend_session_usage_archive_fields(
+                    root,
+                    run_id,
+                    "task-001",
+                    "main",
+                    backend_session_id="claude-session",
+                    backend="claude",
+                )
+                codex_usage = backend_session_usage_archive_fields(
+                    root,
+                    run_id,
+                    "task-001",
+                    "main",
+                    backend_session_id="claude-session",
+                    backend="codex",
+                )
+
+        self.assertEqual(claude_usage["last_usage"]["input_tokens"], 15)
+        self.assertEqual(claude_usage["last_usage"]["cache_read_input_tokens"], 3)
+        self.assertEqual(claude_usage["last_usage"]["cache_creation_input_tokens"], 11)
+        self.assertEqual(claude_usage["last_usage"]["output_tokens"], 10)
+        self.assertEqual(claude_usage["token_summary"]["total_tokens"], 28)
+        self.assertEqual(codex_usage["last_usage"]["input_tokens"], 5)
+        self.assertEqual(codex_usage["token_summary"]["total_tokens"], 12)
 
     def test_running_status_keeps_original_task_start_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

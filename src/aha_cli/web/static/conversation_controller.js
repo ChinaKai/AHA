@@ -107,6 +107,32 @@
       return latestTurnEvent(taskId, "agent_usage", target) || (events.length ? events[events.length - 1] : null);
     }
 
+    function agentUsageEventsAfterReset(taskId, target = backendTarget(), backendSession = null) {
+      const sessionId = String(backendSession?.id || "");
+      return eventsAfterSessionReset(
+        promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_usage"),
+        taskId,
+        target
+      ).filter(event => {
+        if (!sessionId) return true;
+        const eventSessionId = String(deps.eventData(event || {}).backend_session_id || "");
+        return !eventSessionId || eventSessionId === sessionId;
+      });
+    }
+
+    function agentUsageState(taskId, target = backendTarget(), backendSession = null) {
+      const events = agentUsageEventsAfterReset(taskId, target, backendSession);
+      const usageEvent = latestTurnEvent(taskId, "agent_usage", target) || (events.length ? events[events.length - 1] : null);
+      const latestData = deps.eventData(usageEvent || {});
+      const source = latestData.source || "backend";
+      const backendText = String(backendSession?.backend || source || "").toLowerCase();
+      const isClaude = backendText.includes("claude");
+      const usage = isClaude
+        ? deps.aggregateUsageRecords?.(events.map(event => deps.eventData(event || {}).usage || {})) || {}
+        : latestData.usage || {};
+      return { source, usage, usageEvent };
+    }
+
     function usageMetricsStatus(taskId, usageEvent, target = backendTarget()) {
       const startOrder = latestTurnStartOrder(taskId, target);
       if (!usageEvent) {
@@ -264,8 +290,6 @@
     function promptMetricsState(taskId) {
       const target = backendTarget();
       const metricsEvent = latestPromptMetricsEvent(taskId, target);
-      const usageEvent = latestAgentUsageEvent(taskId, target);
-      const usageStatus = usageMetricsStatus(taskId, usageEvent, target);
       const ahaInputStatus = ahaInputMetricsStatus(taskId, metricsEvent, target);
       const overflowEvent = latestContextOverflowEvent(taskId, target);
       const data = deps.eventData(metricsEvent || {});
@@ -275,9 +299,12 @@
       const largest = rows[0];
       const overflow = Boolean(overflowEvent && (!metricsEvent || deps.conversationEventOrder(overflowEvent) >= deps.conversationEventOrder(metricsEvent)));
       const backendSession = conversationBackendSession(taskId);
+      const usageState = agentUsageState(taskId, target, backendSession);
+      const usageEvent = usageState.usageEvent;
+      const usageStatus = usageMetricsStatus(taskId, usageEvent, target);
       const sessionStatus = backendSessionStatus(backendSession, overflow);
       const contextPressure = backendSession?.context_pressure || null;
-      return { ahaInputStatus, backendSession, contextPressure, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usageEvent, usageStatus };
+      return { ahaInputStatus, backendSession, contextPressure, data, largest, metricsEvent, overflow, overflowEvent, rows, sessionStatus, total, totalChars, usage: usageState.usage, usageEvent, usageSource: usageState.source, usageStatus };
     }
 
     function renderTokenSummaryItem(label, value, detail = "", className = "") {
@@ -303,7 +330,7 @@
     function renderPromptMetricsPanel(taskId, options = {}) {
       const includeDetails = options.includeDetails !== false;
       const metrics = promptMetricsState(taskId);
-      const { backendSession, contextPressure, data, metricsEvent, overflow, overflowEvent, sessionStatus, total, totalChars, usageEvent } = metrics;
+      const { backendSession, contextPressure, data, metricsEvent, overflow, overflowEvent, sessionStatus, total, totalChars, usage, usageEvent, usageSource } = metrics;
       const resetState = compactResetState(taskId);
       const displayedSessionStatus = resetState
         ? { label: resetState.label, className: resetState.className }
@@ -322,9 +349,8 @@
         `;
       }
 
-      const source = data.source || deps.eventData(overflowEvent || {}).source || "backend";
-      const usage = deps.eventData(usageEvent || {}).usage || {};
-      const ledger = deps.tokenLedgerFromMetrics?.({ usage, contextPressure, total, backendSession }) || {};
+      const source = usageSource || data.source || deps.eventData(usageEvent || {}).source || deps.eventData(overflowEvent || {}).source || "backend";
+      const ledger = deps.tokenLedgerFromMetrics?.({ usage, contextPressure, total, backendSession, source }) || {};
       const ledgerVerdict = deps.tokenLedgerVerdict?.(ledger) || { label: "Token summary", detail: "", className: "unknown" };
       const contextStatus = deps.contextPressureStatus(contextPressure);
       const contextPercent = deps.contextPressurePercent(contextPressure);
@@ -343,22 +369,38 @@
       const sessionActionButton = backendSession?.id
         ? `<button type="button" class="compact-reset-primary" data-session-action="compact-reset"${resetState ? " disabled" : ""}>${deps.escapeHtml(resetState?.buttonLabel || "Compact")}</button>`
         : "";
-      const countValue = value => value ? formatTokenCount(value) : "--";
+      const countValue = (value, present = false) => value || present ? formatTokenCount(value || 0) : "--";
       const mainDetail = ledgerVerdict.detail || "waiting for usage";
-      const totalValue = countValue(ledger.totalTokens);
+      const hasUsageTokenFields = Boolean(
+        ledger.hasInputTokens ||
+        ledger.hasOutputTokens ||
+        ledger.hasCacheReadTokens ||
+        ledger.hasCacheCreationTokens ||
+        ledger.hasReasoningOutputTokens
+      );
+      const totalValue = countValue(ledger.totalTokens, hasUsageTokenFields);
       const totalDetail = ledger.historySessionTokens
         ? ledger.currentTotalTokens
-          ? "history + current"
+          ? `history + current (${ledger.currentTotalFormula || "input + output"})`
           : "history total"
-        : "input + output";
-      const inputValue = countValue(ledger.backendInputTokens);
-      const cachedValue = countValue(ledger.cachedTokens);
+        : ledger.currentTotalFormula || "input + output";
+      const inputValue = countValue(ledger.backendInputTokens, ledger.hasInputTokens);
+      const cachedValue = countValue(ledger.cacheSummaryTokens ?? ledger.cachedTokens, ledger.isClaude ? ledger.hasCacheReadTokens : (ledger.hasCachedInputTokens || ledger.hasCacheReadTokens));
       const contextValue = contextPercent || (contextInputTokens != null ? formatTokenCount(contextInputTokens) : "--");
       const contextDetail = contextWindowUsedTotalLabel || contextStatus.label || "context unknown";
-      const outputValue = countValue(ledger.outputTokens);
+      const outputValue = countValue(ledger.outputTokens, ledger.hasOutputTokens);
       const ahaValue = countValue(ledger.ahaPromptTokens);
       const ahaDetail = totalChars ? `${deps.formatMetricCompact(totalChars)} chars` : "AHA prompt";
-      const cachedDetail = "agent usage";
+      const cachedDetail = ledger.cacheSummaryDetail || "agent usage";
+      const backendUsageItems = [
+        renderTokenSummaryItem("Total", totalValue, totalDetail, "token-summary-primary"),
+        (ledger.hasInputTokens || ledger.backendInputTokens) ? renderTokenSummaryItem("Input", inputValue, "agent usage") : "",
+        ledger.isClaude && ledger.hasCacheReadTokens ? renderTokenSummaryItem("Cache read", cachedValue, cachedDetail) : "",
+        ledger.isClaude && ledger.hasCacheCreationTokens ? renderTokenSummaryItem("Cache create", countValue(ledger.cacheCreationTokens, true), "not counted") : "",
+        !ledger.isClaude && (ledger.hasCachedInputTokens || ledger.hasCacheReadTokens || ledger.cachedTokens) ? renderTokenSummaryItem(ledger.cacheSummaryLabel || "Cached", cachedValue, cachedDetail) : "",
+        (ledger.hasOutputTokens || ledger.outputTokens) ? renderTokenSummaryItem("Output", outputValue, "model output") : "",
+        ledger.hasReasoningOutputTokens ? renderTokenSummaryItem("Reasoning", countValue(ledger.reasoningOutputTokens, true), "subset of output") : ""
+      ].filter(Boolean).join("");
       const actionText = resetState?.label || compactAdviceText || (
         ledgerVerdict.className === "history"
           ? "Compact when the history gets in the way."
@@ -386,10 +428,7 @@
             </div>
           </div>
           <div class="token-summary-line">
-            ${renderTokenSummaryItem("Total", totalValue, totalDetail, "token-summary-primary")}
-            ${renderTokenSummaryItem("Input", inputValue, "agent usage")}
-            ${renderTokenSummaryItem("Cached", cachedValue, cachedDetail)}
-            ${renderTokenSummaryItem("Output", outputValue, "model output")}
+            ${backendUsageItems}
             ${renderTokenSummaryItem("AHA", ahaValue, ahaDetail)}
             ${renderTokenSummaryItem("Context", contextValue, contextDetail)}
           </div>
@@ -406,12 +445,14 @@
       const metrics = promptMetricsState(taskId);
       const hasHistory = Array.isArray(metrics.backendSession?.history) && metrics.backendSession.history.length > 0;
       const hasMetrics = Boolean(metrics.metricsEvent || metrics.usageEvent || metrics.contextPressure || metrics.overflowEvent || metrics.backendSession?.id || metrics.backendSession?.exists || hasHistory || metrics.backendSession?.compact_summary);
-      const usage = deps.eventData(metrics.usageEvent || {}).usage || {};
+      const usage = metrics.usage || {};
+      const source = metrics.usageSource || deps.eventData(metrics.metricsEvent || {}).source || deps.eventData(metrics.usageEvent || {}).source || deps.eventData(metrics.overflowEvent || {}).source || "backend";
       const ledger = deps.tokenLedgerFromMetrics?.({
         usage,
         contextPressure: metrics.contextPressure,
         total: metrics.total,
-        backendSession: metrics.backendSession
+        backendSession: metrics.backendSession,
+        source
       }) || {};
       const ledgerVerdict = deps.tokenLedgerVerdict?.(ledger) || { label: "Prompt metrics unavailable" };
       const sessionSize = Number(metrics.backendSession?.size_bytes);

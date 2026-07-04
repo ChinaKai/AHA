@@ -108,6 +108,62 @@
       `;
     }
 
+    function eventMatchesUsageScope(event, data, currentOrder, sessionId, target) {
+      if (event?.type !== "agent_usage") return false;
+      if (deps.conversationEventOrder?.(event) > currentOrder) return false;
+      const eventData = deps.eventData?.(event) || {};
+      if (data.task_id && eventData.task_id !== data.task_id) return false;
+      const eventTarget = String(eventData.target || eventData.agent_id || "");
+      if (target && eventTarget && eventTarget !== target) return false;
+      const eventSessionId = String(eventData.backend_session_id || "");
+      return !sessionId || !eventSessionId || eventSessionId === sessionId;
+    }
+
+    function usageScopeEvents(data, target) {
+      const candidates = [
+        ...(deps.conversationSourceEvents?.(data.task_id, target || deps.backendTarget?.()) || []),
+        ...(deps.taskEvents?.(data.task_id) || [])
+      ];
+      const seen = new Set();
+      return candidates.filter(item => {
+        const key = deps.eventIdentity?.(item) || `${item?.type || ""}:${item?.ts || ""}:${JSON.stringify(deps.eventData?.(item) || {})}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function renderUsageSummary(event, data) {
+      const usage = data.usage || {};
+      const breakdown = deps.usageTokenBreakdown?.(usage, { source: data.source || data.backend || "" }) || {};
+      const currentOrder = deps.conversationEventOrder?.(event) ?? Number.POSITIVE_INFINITY;
+      const sessionId = String(data.backend_session_id || "");
+      const target = String(data.target || data.agent_id || "");
+      const scopedEvents = breakdown.isClaude
+        ? usageScopeEvents(data, target).filter(item => eventMatchesUsageScope(item, data, currentOrder, sessionId, target))
+        : [];
+      const displayUsage = scopedEvents.length
+        ? deps.aggregateUsageRecords?.(scopedEvents.map(item => deps.eventData?.(item)?.usage || {})) || usage
+        : usage;
+      const displayBreakdown = deps.usageTokenBreakdown?.(displayUsage, { source: data.source || data.backend || "" }) || breakdown;
+      const parts = [];
+      const addPart = (label, value, present) => {
+        if (present) parts.push(`${label}=${value || 0}`);
+      };
+      addPart("input", displayBreakdown.inputTokens, displayBreakdown.hasInputTokens);
+      if (displayBreakdown.isClaude) {
+        addPart("cache_read", displayBreakdown.cacheReadTokens, displayBreakdown.hasCacheReadTokens);
+        addPart("cache_create", displayBreakdown.cacheCreationTokens, displayBreakdown.hasCacheCreationTokens);
+      } else {
+        addPart("cached", displayBreakdown.cacheReadTokens, displayBreakdown.hasCacheReadTokens);
+        addPart("cache_create", displayBreakdown.cacheCreationTokens, displayBreakdown.hasCacheCreationTokens);
+      }
+      addPart("output", displayBreakdown.outputTokens, displayBreakdown.hasOutputTokens);
+      addPart("reasoning", displayBreakdown.reasoningOutputTokens, displayBreakdown.hasReasoningOutputTokens);
+      if (parts.length) parts.push(`total=${displayBreakdown.totalTokens || 0}`);
+      return parts.join(" ") || "no token fields";
+    }
+
     function renderTimelineEvent(event) {
       const data = deps.eventData?.(event) || {};
       if (event.type === "message") {
@@ -126,8 +182,7 @@
       }
       if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey, { markdown: false });
       if (event.type === "agent_usage") {
-        const usage = data.usage || {};
-        return renderTimelineStatus("usage", `input=${usage.input_tokens ?? "-"} cached=${usage.cached_input_tokens ?? "-"} output=${usage.output_tokens ?? "-"} reasoning=${usage.reasoning_output_tokens ?? "-"}`, "usage", eventTimeLabel(event));
+        return renderTimelineStatus("usage", renderUsageSummary(event, data), "usage", eventTimeLabel(event));
       }
       if (event.type === "agent_prompt_metrics") {
         const total = data.total || {};

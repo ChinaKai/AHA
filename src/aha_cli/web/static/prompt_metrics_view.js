@@ -14,6 +14,35 @@
     const formatMetricBytes = options.formatMetricBytes || (value => String(value || 0));
     const usageCacheReadTokens = options.usageCacheReadTokens || (() => 0);
     const usageCacheCreationTokens = options.usageCacheCreationTokens || (() => 0);
+    const usageTokenBreakdown = options.usageTokenBreakdown || ((usage, { backend = "", source = "", contextPressure = null } = {}) => {
+      const resolvedBackend = String(backend || contextPressure?.backend || source || "").toLowerCase().includes("claude") ? "claude" : "";
+      const hasField = key => Object.prototype.hasOwnProperty.call(usage || {}, key) && usage?.[key] != null;
+      const inputTokens = Number(usage?.input_tokens || 0);
+      const cacheReadTokens = usageCacheReadTokens(usage || {});
+      const cacheCreationTokens = usageCacheCreationTokens(usage || {});
+      const outputTokens = Number(usage?.output_tokens || 0);
+      const reasoningOutputTokens = Number(usage?.reasoning_output_tokens || 0);
+      const totalTokens = inputTokens + outputTokens + (resolvedBackend === "claude" ? cacheReadTokens : 0);
+      return {
+        backend: resolvedBackend,
+        cacheCreationTokens,
+        cacheReadTokens,
+        cachedTokens: cacheReadTokens + cacheCreationTokens,
+        hasCacheCreationTokens: hasField("cache_creation_input_tokens"),
+        hasCachedInputTokens: hasField("cached_input_tokens"),
+        hasCacheReadTokens: hasField("cache_read_input_tokens") || hasField("cached_input_tokens"),
+        hasInputTokens: hasField("input_tokens"),
+        hasOutputTokens: hasField("output_tokens"),
+        hasReasoningOutputTokens: hasField("reasoning_output_tokens"),
+        inputTokens,
+        isCodex: resolvedBackend === "codex",
+        isClaude: resolvedBackend === "claude",
+        outputTokens,
+        reasoningOutputTokens,
+        totalFormula: resolvedBackend === "claude" ? "input + cache read + output" : "input + output",
+        totalTokens
+      };
+    });
     const contextPressurePercent = options.contextPressurePercent || (() => "");
     const metricMapRows = options.metricMapRows || (() => []);
 
@@ -109,26 +138,29 @@
     }
 
     function renderUsageBreakdown(usage, usageStatus, source, contextPressure = null) {
-      const isClaude = String(source || "").includes("claude");
-      const inputTokens = Number(usage.input_tokens || 0);
-      const cachedTokens = usageCacheReadTokens(usage);
-      const cacheCreationTokens = usageCacheCreationTokens(usage);
-      const outputTokens = Number(usage.output_tokens || 0);
+      const tokenBreakdown = usageTokenBreakdown(usage, { source, contextPressure });
+      const inputTokens = tokenBreakdown.inputTokens;
+      const cacheReadTokens = tokenBreakdown.cacheReadTokens;
+      const cacheCreationTokens = tokenBreakdown.cacheCreationTokens;
+      const outputTokens = tokenBreakdown.outputTokens;
       const reasoningTokens = Number(usage.reasoning_output_tokens || 0);
-      const effectiveInputTokens = isClaude ? inputTokens + cachedTokens + cacheCreationTokens : inputTokens;
-      const uncachedInputTokens = usage.cached_input_tokens != null ? Math.max(0, inputTokens - cachedTokens) : inputTokens;
-      const cacheRatio = effectiveInputTokens > 0 ? `${(cachedTokens / effectiveInputTokens * 100).toFixed(1)}% cached` : "";
-      const rows = [
-        ["input_tokens", inputTokens],
-        [usage.cached_input_tokens != null ? "cached_input_tokens" : "cache_read_input_tokens", cachedTokens],
-        ["cache_creation_input_tokens", cacheCreationTokens],
-        ["uncached_input_tokens", uncachedInputTokens],
-        ["effective_input_tokens", effectiveInputTokens],
-        ["output_tokens", outputTokens],
-        ["reasoning_output_tokens", reasoningTokens],
-        ["visible_output_tokens", Math.max(0, outputTokens - reasoningTokens)],
-        ["total_reported_tokens", effectiveInputTokens + outputTokens]
-      ];
+      const cacheRatioBase = inputTokens + cacheReadTokens + cacheCreationTokens;
+      const cacheRatio = cacheRatioBase > 0 ? `${(cacheReadTokens / cacheRatioBase * 100).toFixed(1)}% cache read` : "";
+      const rows = [];
+      const addRow = (name, value, present) => {
+        if (present) rows.push([name, value]);
+      };
+      addRow("input_tokens", inputTokens, tokenBreakdown.hasInputTokens);
+      if (tokenBreakdown.isClaude) {
+        addRow("cache_read_input_tokens", cacheReadTokens, tokenBreakdown.hasCacheReadTokens);
+        addRow("cache_creation_input_tokens", cacheCreationTokens, tokenBreakdown.hasCacheCreationTokens);
+      } else {
+        addRow(tokenBreakdown.hasCachedInputTokens ? "cached_input_tokens" : "cache_read_input_tokens", cacheReadTokens, tokenBreakdown.hasCacheReadTokens);
+        addRow("cache_creation_input_tokens", cacheCreationTokens, tokenBreakdown.hasCacheCreationTokens);
+      }
+      addRow("output_tokens", outputTokens, tokenBreakdown.hasOutputTokens);
+      addRow("reasoning_output_tokens", reasoningTokens, tokenBreakdown.hasReasoningOutputTokens);
+      if (rows.length) rows.push(["total_reported_tokens", tokenBreakdown.totalTokens]);
       const contextRows = [
         ["model", contextPressure?.model || "-"],
         ["input_tokens", contextPressure?.input_tokens ?? "-"],
@@ -153,6 +185,8 @@
       const flags = [
         `status ${usageStatus.label}`,
         source ? `source ${source}` : "",
+        tokenBreakdown.backend ? `backend ${tokenBreakdown.backend}` : "",
+        `formula ${tokenBreakdown.totalFormula}`,
         cacheRatio,
         usage.total_cost_usd != null ? `cost $${Number(usage.total_cost_usd || 0).toFixed(6)}` : "",
         usage.duration_ms != null ? `duration ${formatMetricNumber(usage.duration_ms)}ms` : "",

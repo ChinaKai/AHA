@@ -304,6 +304,8 @@ const {
   metricMapRows,
   usageCacheReadTokens,
   usageCacheCreationTokens,
+  aggregateUsageRecords,
+  usageTokenBreakdown,
   tokenLedgerFromMetrics,
   tokenLedgerVerdict,
   componentMetricRows,
@@ -316,6 +318,7 @@ const promptMetricsView = window.AHAPromptMetricsView.createPromptMetricsView({
   formatMetricBytes,
   usageCacheReadTokens,
   usageCacheCreationTokens,
+  usageTokenBreakdown,
   contextPressurePercent,
   metricMapRows
 });
@@ -332,6 +335,7 @@ const conversationMetadata = window.AHAConversationMetadata;
 const {
   conversationFilterOptions,
   eventData,
+  eventIdentity,
   ahaActionEnvelopePayload,
   isAhaActionEnvelopeText,
   eventTaskId,
@@ -343,7 +347,6 @@ const {
   messageDisplayTarget,
   messageTimelineDisplay,
   dedupeConversationEvents,
-  eventIdentity,
   conversationEventOrder,
   mergeConversationEvents,
   parseConversationKey,
@@ -765,6 +768,7 @@ timelineView = window.AHATimelineView.createTimelineView({
   agentLifecycleDisplay,
   agentUpdateBody,
   agentUpdateTitle,
+  aggregateUsageRecords,
   backendTarget,
   componentMetricRows,
   conversationKey,
@@ -781,5 +785,9 @@ timelineView = window.AHATimelineView.createTimelineView({
   renderMarkdownHtml: window.AHATaskMemoMarkdown?.renderMarkdownHtml,
   renderPromptMetricsPopover,
   t: window.AHAI18n?.t,
-  tasks: () => statusData?.tasks || []
+  taskEvents,
+  tasks: () => statusData?.tasks || [],
+  conversationEventOrder,
+  conversationSourceEvents,
+  usageTokenBreakdown
 });

@@ -92,43 +92,140 @@
     return Number.isFinite(number) && number > 0 ? number : 0;
   }
 
-  function usageTotalTokens(usage = {}) {
-    const inputTokens = metricNumberValue(usage?.input_tokens);
-    const outputTokens = metricNumberValue(usage?.output_tokens);
-    return inputTokens + outputTokens || metricNumberValue(usage?.total_tokens);
+  function usageHasField(usage, key) {
+    return Object.prototype.hasOwnProperty.call(usage || {}, key) && usage?.[key] != null;
   }
 
-  function historySessionTokenTotal(history = []) {
+  const usageSumKeys = [
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+    "duration_ms",
+    "duration_api_ms",
+    "num_turns"
+  ];
+  const usageFloatSumKeys = ["total_cost_usd"];
+
+  function normalizedUsageBackend(value) {
+    const text = String(value || "").trim().toLowerCase();
+    return text.endsWith("-chat") ? text.slice(0, -5) : text;
+  }
+
+  function usageBackendFromSource(source) {
+    const text = String(source || "").trim().toLowerCase();
+    if (text.includes("claude")) return "claude";
+    if (text.includes("codex")) return "codex";
+    return "";
+  }
+
+  function resolveUsageBackend({ backend = "", source = "", backendSession = null, contextPressure = null } = {}) {
+    return normalizedUsageBackend(
+      backend ||
+      backendSession?.backend ||
+      contextPressure?.backend ||
+      usageBackendFromSource(source)
+    );
+  }
+
+  function usageTotalFormula(backend) {
+    return normalizedUsageBackend(backend) === "claude" ? "input + cache read + output" : "input + output";
+  }
+
+  function usageTokenBreakdown(usage = {}, { backend = "", source = "", backendSession = null, contextPressure = null } = {}) {
+    const resolvedBackend = resolveUsageBackend({ backend, source, backendSession, contextPressure });
+    const inputTokens = metricNumberValue(usage?.input_tokens);
+    const outputTokens = metricNumberValue(usage?.output_tokens);
+    const reasoningOutputTokens = metricNumberValue(usage?.reasoning_output_tokens);
+    const cacheReadTokens = metricNumberValue(usage?.cached_input_tokens ?? usage?.cache_read_input_tokens);
+    const cacheCreationTokens = metricNumberValue(usage?.cache_creation_input_tokens);
+    const isClaude = resolvedBackend === "claude";
+    const isCodex = resolvedBackend === "codex";
+    const hasCachedInputTokens = usageHasField(usage, "cached_input_tokens");
+    const hasCacheReadTokens = usageHasField(usage, "cache_read_input_tokens") || hasCachedInputTokens;
+    const hasCacheCreationTokens = usageHasField(usage, "cache_creation_input_tokens");
+    const hasInputTokens = usageHasField(usage, "input_tokens");
+    const hasOutputTokens = usageHasField(usage, "output_tokens");
+    const hasReasoningOutputTokens = usageHasField(usage, "reasoning_output_tokens");
+    const calculatedTotal = inputTokens + outputTokens + (isClaude ? cacheReadTokens : 0);
+    return {
+      backend: resolvedBackend,
+      cacheCreationTokens,
+      cacheReadTokens,
+      cachedTokens: cacheReadTokens + cacheCreationTokens,
+      hasCacheCreationTokens,
+      hasCachedInputTokens,
+      hasCacheReadTokens,
+      hasInputTokens,
+      hasOutputTokens,
+      hasReasoningOutputTokens,
+      inputTokens,
+      isCodex,
+      isClaude,
+      outputTokens,
+      reasoningOutputTokens,
+      totalFormula: usageTotalFormula(resolvedBackend),
+      totalTokens: calculatedTotal || metricNumberValue(usage?.total_tokens)
+    };
+  }
+
+  function aggregateUsageRecords(usages = []) {
+    const usageItems = (Array.isArray(usages) ? usages : []).filter(usage => usage && typeof usage === "object");
+    if (!usageItems.length) return {};
+    const aggregate = { ...usageItems[usageItems.length - 1] };
+    for (const key of usageSumKeys) {
+      if (usageItems.some(usage => usageHasField(usage, key))) {
+        aggregate[key] = usageItems.reduce((sum, usage) => sum + metricNumberValue(usage?.[key]), 0);
+      }
+    }
+    for (const key of usageFloatSumKeys) {
+      if (usageItems.some(usage => usageHasField(usage, key))) {
+        aggregate[key] = Number(usageItems.reduce((sum, usage) => sum + metricNumberValue(usage?.[key]), 0).toFixed(12));
+      }
+    }
+    return aggregate;
+  }
+
+  function usageTotalTokens(usage = {}, backend = "") {
+    return usageTokenBreakdown(usage, { backend }).totalTokens;
+  }
+
+  function historySessionTokenTotal(history = [], fallbackBackend = "") {
     if (!Array.isArray(history)) return 0;
     return history.reduce((sum, session) => {
       const summary = session?.token_summary || {};
       const summaryTotal = metricNumberValue(summary.total_tokens ?? summary.totalTokens);
       if (summaryTotal) return sum + summaryTotal;
-      return sum + usageTotalTokens(session?.last_usage || session?.usage || {});
+      return sum + usageTotalTokens(session?.last_usage || session?.usage || {}, session?.backend || fallbackBackend);
     }, 0);
   }
 
-  function tokenLedgerFromMetrics({ usage = {}, contextPressure = null, total = {}, backendSession = null } = {}) {
+  function tokenLedgerFromMetrics({ usage = {}, contextPressure = null, total = {}, backendSession = null, source = "" } = {}) {
     const ahaPromptTokens = metricNumberValue(
       contextPressure?.aha_prompt_tokens ??
       contextPressure?.prompt_estimate_tokens ??
       total?.tokens
     );
-    const historySessionTokens = historySessionTokenTotal(backendSession?.history);
+    const ledgerBackend = resolveUsageBackend({ source, backendSession, contextPressure });
+    const historySessionTokens = historySessionTokenTotal(backendSession?.history, ledgerBackend);
     const usageIsCurrent = !historySessionTokens || !backendSession || Boolean(backendSession?.id || backendSession?.exists);
-    const backendInputTokens = usageIsCurrent ? metricNumberValue(usage?.input_tokens) : 0;
+    const usageBreakdown = usageIsCurrent ? usageTokenBreakdown(usage, { backend: ledgerBackend, source, backendSession, contextPressure }) : usageTokenBreakdown({}, { backend: ledgerBackend });
+    const backendInputTokens = usageIsCurrent ? usageBreakdown.inputTokens : 0;
     const estimatedHistoryTokens = metricNumberValue(
       contextPressure?.estimated_backend_history_tokens ??
       (backendInputTokens && ahaPromptTokens ? Math.max(0, backendInputTokens - ahaPromptTokens) : 0)
     );
     const reasoningOutputTokens = usageIsCurrent ? metricNumberValue(usage?.reasoning_output_tokens) : 0;
-    const cacheReadTokens = usageIsCurrent ? usageCacheReadTokens(usage) : 0;
-    const cacheCreationTokens = usageIsCurrent ? usageCacheCreationTokens(usage) : 0;
-    const cachedTokens = cacheReadTokens + cacheCreationTokens;
+    const cacheReadTokens = usageIsCurrent ? usageBreakdown.cacheReadTokens : 0;
+    const cacheCreationTokens = usageIsCurrent ? usageBreakdown.cacheCreationTokens : 0;
+    const cachedTokens = usageIsCurrent ? usageBreakdown.cachedTokens : 0;
     const sessionBytes = metricNumberValue(backendSession?.size_bytes);
     const contextPercent = contextPressurePercent(contextPressure);
-    const outputTokens = usageIsCurrent ? metricNumberValue(usage?.output_tokens) : 0;
-    const currentTotalTokens = backendInputTokens + outputTokens;
+    const outputTokens = usageIsCurrent ? usageBreakdown.outputTokens : 0;
+    const currentTotalTokens = usageIsCurrent ? usageBreakdown.totalTokens : 0;
     const totalTokens = historySessionTokens + currentTotalTokens;
     const trackedTokens = totalTokens;
     const rows = [
@@ -140,17 +237,37 @@
     ];
     const comparable = rows.filter(row => row.key !== "backend_input" && row.value > 0);
     const largest = comparable.sort((left, right) => right.value - left.value)[0] || null;
+    const hasUsageFields = Boolean(
+      usageBreakdown.hasInputTokens ||
+      usageBreakdown.hasOutputTokens ||
+      usageBreakdown.hasCacheReadTokens ||
+      usageBreakdown.hasCacheCreationTokens ||
+      usageBreakdown.hasReasoningOutputTokens
+    );
     return {
       ahaPromptTokens,
       backendInputTokens,
+      backend: ledgerBackend,
       cacheCreationTokens,
       cacheReadTokens,
+      cacheSummaryDetail: usageBreakdown.isClaude ? "counted in total" : "agent usage",
+      cacheSummaryLabel: usageBreakdown.isClaude ? "Cache read" : "Cached",
+      cacheSummaryTokens: usageBreakdown.isClaude ? cacheReadTokens : cachedTokens,
       cachedTokens,
       contextPercent,
       currentTotalTokens,
+      currentTotalFormula: usageBreakdown.totalFormula,
       estimatedHistoryTokens,
+      hasCacheCreationTokens: usageBreakdown.hasCacheCreationTokens,
+      hasCachedInputTokens: usageBreakdown.hasCachedInputTokens,
+      hasCacheReadTokens: usageBreakdown.hasCacheReadTokens,
       historySessionTokens,
-      hasData: Boolean(totalTokens || backendInputTokens || outputTokens || ahaPromptTokens || sessionBytes),
+      hasInputTokens: usageBreakdown.hasInputTokens,
+      hasOutputTokens: usageBreakdown.hasOutputTokens,
+      hasReasoningOutputTokens: usageBreakdown.hasReasoningOutputTokens,
+      hasData: Boolean(totalTokens || backendInputTokens || outputTokens || ahaPromptTokens || sessionBytes || hasUsageFields),
+      isCodex: usageBreakdown.isCodex,
+      isClaude: usageBreakdown.isClaude,
       largest,
       outputTokens,
       reasoningOutputTokens,
@@ -252,6 +369,11 @@
     metricMapRows,
     usageCacheReadTokens,
     usageCacheCreationTokens,
+    aggregateUsageRecords,
+    normalizedUsageBackend,
+    resolveUsageBackend,
+    usageTokenBreakdown,
+    usageTotalFormula,
     tokenLedgerFromMetrics,
     tokenLedgerVerdict,
     componentMetricRows,

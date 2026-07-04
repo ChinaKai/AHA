@@ -1366,6 +1366,7 @@ def cmd_session(args: argparse.Namespace) -> int:
                             session.get("task_id"),
                             args.agent_id,
                             backend_session_id=old_backend_session_id,
+                            backend=session.get("backend"),
                             history=history,
                         )
                     )

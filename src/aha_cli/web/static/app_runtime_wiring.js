@@ -232,6 +232,7 @@ conversationController = window.AHAConversationController.createConversationCont
   backendSessionRefreshEventTypes,
   backendSessionCompactBytes: BACKEND_SESSION_COMPACT_BYTES,
   backendSessionWatchBytes: BACKEND_SESSION_WATCH_BYTES,
+  aggregateUsageRecords,
   componentMetricRows,
   contextPressurePercent,
   contextPressureStatus,

@@ -8,6 +8,26 @@ from aha_cli.store.io import iter_jsonl_reverse, read_json, write_json
 from aha_cli.store.paths import event_path, run_dir, session_path
 
 SESSION_RESET_EVENT_TYPES = {"backend_session_reset", "backend_session_compact_reset"}
+USAGE_SUM_KEYS = {
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+    "duration_ms",
+    "duration_api_ms",
+    "num_turns",
+}
+USAGE_FLOAT_SUM_KEYS = {"total_cost_usd"}
+
+
+def _normalized_backend(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text.endswith("-chat"):
+        text = text[:-5]
+    return text
 
 
 def _non_negative_int(value: object) -> int:
@@ -18,23 +38,42 @@ def _non_negative_int(value: object) -> int:
     return parsed if parsed > 0 else 0
 
 
-def usage_token_summary(usage: dict | None) -> dict:
+def _non_negative_float(value: object) -> float:
+    try:
+        parsed = float(str(value).replace("_", "").replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed > 0 else 0.0
+
+
+def usage_token_summary(usage: dict | None, *, backend: object = None) -> dict:
     usage = usage if isinstance(usage, dict) else {}
+    normalized_backend = _normalized_backend(backend)
     input_tokens = _non_negative_int(usage.get("input_tokens"))
     output_tokens = _non_negative_int(usage.get("output_tokens"))
-    cached_tokens = (
-        _non_negative_int(usage.get("cached_input_tokens") or usage.get("cache_read_input_tokens"))
-        + _non_negative_int(usage.get("cache_creation_input_tokens"))
-    )
-    total_tokens = input_tokens + output_tokens
+    cache_read_tokens = _non_negative_int(usage.get("cached_input_tokens") or usage.get("cache_read_input_tokens"))
+    cache_creation_tokens = _non_negative_int(usage.get("cache_creation_input_tokens"))
+    cached_tokens = cache_read_tokens + cache_creation_tokens
+    if normalized_backend == "claude":
+        total_tokens = input_tokens + cache_read_tokens + output_tokens
+        total_formula = "input + cache_read + output"
+    else:
+        total_tokens = input_tokens + output_tokens
+        total_formula = "input + output"
     if not total_tokens:
         total_tokens = _non_negative_int(usage.get("total_tokens"))
-    return {
+    summary = {
         "input_tokens": input_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
         "cached_tokens": cached_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
+        "total_formula": total_formula,
     }
+    if normalized_backend:
+        summary["backend"] = normalized_backend
+    return summary
 
 
 def _event_data(event: dict) -> dict:
@@ -62,7 +101,10 @@ def _history_has_usage(history: list | None) -> bool:
         summary = item.get("token_summary") if isinstance(item.get("token_summary"), dict) else {}
         if _non_negative_int(summary.get("total_tokens")):
             return True
-        if usage_token_summary(item.get("last_usage") if isinstance(item.get("last_usage"), dict) else {}).get("total_tokens"):
+        if usage_token_summary(
+            item.get("last_usage") if isinstance(item.get("last_usage"), dict) else {},
+            backend=item.get("backend"),
+        ).get("total_tokens"):
             return True
     return False
 
@@ -70,6 +112,20 @@ def _history_has_usage(history: list | None) -> bool:
 def _usage_from_data(data: dict) -> dict:
     usage = data.get("usage")
     return usage if isinstance(usage, dict) else {}
+
+
+def _aggregate_usage(usages: list[dict]) -> dict:
+    usage_items = [usage for usage in usages if isinstance(usage, dict)]
+    if not usage_items:
+        return {}
+    aggregate = dict(usage_items[-1])
+    for key in USAGE_SUM_KEYS:
+        if any(key in usage for usage in usage_items):
+            aggregate[key] = sum(_non_negative_int(usage.get(key)) for usage in usage_items)
+    for key in USAGE_FLOAT_SUM_KEYS:
+        if any(key in usage for usage in usage_items):
+            aggregate[key] = round(sum(_non_negative_float(usage.get(key)) for usage in usage_items), 12)
+    return aggregate
 
 
 def _event_starts_backend_session(event: dict, backend_session_id: str) -> bool:
@@ -83,6 +139,7 @@ def latest_agent_usage(
     agent_id: str,
     *,
     backend_session_id: str | None = None,
+    backend: object = None,
     history: list | None = None,
 ) -> dict:
     path = event_path(root, run_id)
@@ -118,7 +175,7 @@ def latest_agent_usage(
     return {}
 
 
-def backend_session_usage_archive_fields(
+def aggregated_agent_usage(
     root: Path,
     run_id: str,
     task_id: str | None,
@@ -127,12 +184,56 @@ def backend_session_usage_archive_fields(
     backend_session_id: str | None = None,
     history: list | None = None,
 ) -> dict:
-    usage = latest_agent_usage(root, run_id, task_id, agent_id, backend_session_id=backend_session_id, history=history)
+    path = event_path(root, run_id)
+    if not path.exists():
+        return {}
+    session_id = str(backend_session_id or "").strip()
+    legacy_global_fallback = not session_id or not _history_has_usage(history)
+    usage_items: list[dict] = []
+    unscoped_items: list[dict] = []
+    for _offset, event in iter_jsonl_reverse(path) or ():
+        data = _event_data(event)
+        if not _event_matches_agent(data, task_id, agent_id):
+            continue
+        event_type = event.get("type")
+        if event_type == "agent_usage":
+            usage_session_id = _event_backend_session_id(data)
+            if session_id and usage_session_id:
+                if usage_session_id == session_id:
+                    usage_items.append(_usage_from_data(data))
+                continue
+            if session_id:
+                unscoped_items.append(_usage_from_data(data))
+            else:
+                usage_items.append(_usage_from_data(data))
+            continue
+        if session_id and _event_starts_backend_session(event, session_id):
+            break
+        if event_type in SESSION_RESET_EVENT_TYPES:
+            break
+    usages = list(reversed((usage_items + unscoped_items) if usage_items else (unscoped_items if legacy_global_fallback else [])))
+    return _aggregate_usage(usages)
+
+
+def backend_session_usage_archive_fields(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    agent_id: str,
+    *,
+    backend_session_id: str | None = None,
+    backend: object = None,
+    history: list | None = None,
+) -> dict:
+    if _normalized_backend(backend) == "claude":
+        usage = aggregated_agent_usage(root, run_id, task_id, agent_id, backend_session_id=backend_session_id, history=history)
+    else:
+        usage = latest_agent_usage(root, run_id, task_id, agent_id, backend_session_id=backend_session_id, backend=backend, history=history)
     if not usage:
         return {}
     return {
         "last_usage": usage,
-        "token_summary": usage_token_summary(usage),
+        "token_summary": usage_token_summary(usage, backend=backend),
     }
 
 
@@ -171,6 +272,7 @@ def ensure_session(
                         task_id,
                         agent_id,
                         backend_session_id=previous_backend_session_id,
+                        backend=session.get("backend"),
                         history=history,
                     )
                 )

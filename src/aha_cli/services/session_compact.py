@@ -112,6 +112,7 @@ def build_compact_summary(root: Path, run_id: str, task_id: str, agent_id: str, 
         task_id,
         agent_id,
         backend_session_id=session.get("backend_session_id"),
+        backend=session.get("backend"),
         history=session.get("history_backend_sessions") if isinstance(session.get("history_backend_sessions"), list) else [],
     ).get("last_usage", {})
     metrics = latest_event_payload(root, run_id, task_id, agent_id, "agent_prompt_metrics")
@@ -198,6 +199,7 @@ def compact_reset_backend_session(
         task_id,
         agent_id,
         backend_session_id=old_backend_session_id,
+        backend=session.get("backend"),
         history=session.get("history_backend_sessions") if isinstance(session.get("history_backend_sessions"), list) else [],
     )
     latest_usage = usage_archive_fields.get("last_usage", {})
@@ -214,7 +216,7 @@ def compact_reset_backend_session(
         "jsonl_path": jsonl.get("path"),
         "size_bytes": jsonl.get("size_bytes"),
         "last_usage": latest_usage,
-        "token_summary": usage_archive_fields.get("token_summary", usage_token_summary(latest_usage)),
+        "token_summary": usage_archive_fields.get("token_summary", usage_token_summary(latest_usage, backend=session.get("backend"))),
         "metrics_snapshot": latest_metrics,
     }
     result = {

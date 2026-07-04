@@ -174,6 +174,7 @@ def switch_agent_backend(
                 task_id,
                 agent_id,
                 backend_session_id=session.get("backend_session_id"),
+                backend=session.get("backend"),
                 history=history,
             )
         )
