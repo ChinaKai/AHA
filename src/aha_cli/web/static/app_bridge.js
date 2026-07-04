@@ -327,12 +327,33 @@
       return Boolean(nextId || previousId) && nextId !== previousId;
     }
 
+    function contextPressureSource(pressure) {
+      return String(pressure?.pressure_source || "").trim();
+    }
+
+    function contextPressureIsRuntime(pressure) {
+      return contextPressureSource(pressure).startsWith("runtime.");
+    }
+
+    function contextPressureIsPromptEstimate(pressure) {
+      return contextPressureSource(pressure).startsWith("prompt_metrics.");
+    }
+
+    function shouldKeepPreviousContextPressure(nextSession, previousSession) {
+      if (backendSessionIdsDiffer(nextSession, previousSession)) return false;
+      const previousPressure = previousSession?.context_pressure;
+      if (!deps.contextPressureHasPercent?.(previousPressure)) return false;
+      const nextPressure = nextSession?.context_pressure;
+      if (!deps.contextPressureHasPercent?.(nextPressure)) return true;
+      return contextPressureIsRuntime(previousPressure) && contextPressureIsPromptEstimate(nextPressure);
+    }
+
     function backendSessionWithPreviousContextPressure(nextSession, previousSession) {
       if (!nextSession) return previousSession || null;
-      if (deps.contextPressureHasPercent?.(nextSession.context_pressure)) return nextSession;
-      if (backendSessionIdsDiffer(nextSession, previousSession)) return nextSession;
-      if (!deps.contextPressureHasPercent?.(previousSession?.context_pressure)) return nextSession;
-      return { ...nextSession, context_pressure: previousSession.context_pressure };
+      if (shouldKeepPreviousContextPressure(nextSession, previousSession)) {
+        return { ...nextSession, context_pressure: previousSession.context_pressure };
+      }
+      return nextSession;
     }
 
     function promptMetricsKey(taskId, target = backendTarget()) {
