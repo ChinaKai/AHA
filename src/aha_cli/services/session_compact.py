@@ -21,6 +21,7 @@ from aha_cli.store.filesystem import (
     session_path,
     task_snapshot,
 )
+from aha_cli.store.sessions import backend_session_usage_archive_fields, usage_token_summary
 
 
 def compact_summary_dir(root: Path, run_id: str, task_id: str) -> Path:
@@ -105,7 +106,14 @@ def build_compact_summary(root: Path, run_id: str, task_id: str, agent_id: str, 
     messages = _latest_task_messages(root, run_id, task_id)
     events = _latest_task_events(root, run_id, task_id, agent_id)
     jsonl = session_jsonl_snapshot(session)
-    usage = latest_event_payload(root, run_id, task_id, agent_id, "agent_usage").get("usage") or {}
+    usage = backend_session_usage_archive_fields(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        backend_session_id=session.get("backend_session_id"),
+        history=session.get("history_backend_sessions") if isinstance(session.get("history_backend_sessions"), list) else [],
+    ).get("last_usage", {})
     metrics = latest_event_payload(root, run_id, task_id, agent_id, "agent_prompt_metrics")
 
     task_journal = "\n".join(
@@ -184,7 +192,15 @@ def compact_reset_backend_session(
     summary_path = summary_dir / f"{summary_id}.md"
     meta_path = summary_dir / f"{summary_id}.json"
     jsonl = session_jsonl_snapshot(session)
-    latest_usage = latest_event_payload(root, run_id, task_id, agent_id, "agent_usage").get("usage") or {}
+    usage_archive_fields = backend_session_usage_archive_fields(
+        root,
+        run_id,
+        task_id,
+        agent_id,
+        backend_session_id=old_backend_session_id,
+        history=session.get("history_backend_sessions") if isinstance(session.get("history_backend_sessions"), list) else [],
+    )
+    latest_usage = usage_archive_fields.get("last_usage", {})
     latest_metrics = latest_event_payload(root, run_id, task_id, agent_id, "agent_prompt_metrics")
     archive = {
         "backend_session_id": old_backend_session_id,
@@ -198,6 +214,7 @@ def compact_reset_backend_session(
         "jsonl_path": jsonl.get("path"),
         "size_bytes": jsonl.get("size_bytes"),
         "last_usage": latest_usage,
+        "token_summary": usage_archive_fields.get("token_summary", usage_token_summary(latest_usage)),
         "metrics_snapshot": latest_metrics,
     }
     result = {

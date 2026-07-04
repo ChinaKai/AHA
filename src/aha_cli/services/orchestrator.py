@@ -52,6 +52,7 @@ from aha_cli.store.filesystem import (
     run_dir,
     write_json,
 )
+from aha_cli.store.sessions import backend_session_usage_archive_fields
 
 REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
@@ -213,7 +214,14 @@ def reset_backend_session_for_fresh_scope(
             "assignment_id": assignment_id,
             "scope_id": scope_id,
             "detail": reason,
-        }
+        } | backend_session_usage_archive_fields(
+            root,
+            run_id,
+            task_id,
+            agent_id,
+            backend_session_id=old_backend_session_id,
+            history=history,
+        )
         history.append(archive)
     session["backend"] = backend
     session["model"] = model

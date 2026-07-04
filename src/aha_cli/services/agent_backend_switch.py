@@ -11,7 +11,7 @@ from aha_cli.store.filesystem import append_event, append_message, task_snapshot
 from aha_cli.store.io import write_json
 from aha_cli.store.paths import run_dir
 from aha_cli.store.runs import locked_plan, require_plan, save_plan
-from aha_cli.store.sessions import ensure_session, save_session
+from aha_cli.store.sessions import backend_session_usage_archive_fields, ensure_session, save_session
 
 UNSET = object()
 
@@ -168,6 +168,14 @@ def switch_agent_backend(
                 "archived_at": switched_at,
                 "reason": "model_changed",
             }
+            | backend_session_usage_archive_fields(
+                root,
+                run_id,
+                task_id,
+                agent_id,
+                backend_session_id=session.get("backend_session_id"),
+                history=history,
+            )
         )
         session["history_backend_sessions"] = history
         session["backend_session_id"] = None

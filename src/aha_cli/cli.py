@@ -106,6 +106,7 @@ from aha_cli.store.knowledge import (
     type_for_kind as knowledge_type_for_kind,
     write_entry as knowledge_write_entry,
 )
+from aha_cli.store.sessions import backend_session_usage_archive_fields
 from aha_cli.services.knowledge_git import auto_commit_after_change as knowledge_auto_commit
 from aha_cli.web.server import run_ui_server
 from aha_cli.web.task_command_actions import complete_selected_task
@@ -1344,6 +1345,32 @@ def cmd_session(args: argparse.Namespace) -> int:
         sessions = list_sessions(root, run_id, args.task_id)
         for session in sessions:
             if session["agent_id"] == args.agent_id:
+                old_backend_session_id = session.get("backend_session_id")
+                if old_backend_session_id:
+                    history = session.get("history_backend_sessions")
+                    if not isinstance(history, list):
+                        history = []
+                    reset_at = utc_now()
+                    history.append(
+                        {
+                            "backend_session_id": old_backend_session_id,
+                            "backend": session.get("backend"),
+                            "model": session.get("model"),
+                            "started_at": session.get("created_at"),
+                            "archived_at": reset_at,
+                            "reason": "manual_reset",
+                        }
+                        | backend_session_usage_archive_fields(
+                            root,
+                            run_id,
+                            session.get("task_id"),
+                            args.agent_id,
+                            backend_session_id=old_backend_session_id,
+                            history=history,
+                        )
+                    )
+                    session["history_backend_sessions"] = history
+                    session["updated_at"] = reset_at
                 session["backend_session_id"] = None
                 session["status"] = "reset"
                 save_session(root, session)

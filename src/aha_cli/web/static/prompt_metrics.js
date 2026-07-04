@@ -92,25 +92,44 @@
     return Number.isFinite(number) && number > 0 ? number : 0;
   }
 
+  function usageTotalTokens(usage = {}) {
+    const inputTokens = metricNumberValue(usage?.input_tokens);
+    const outputTokens = metricNumberValue(usage?.output_tokens);
+    return inputTokens + outputTokens || metricNumberValue(usage?.total_tokens);
+  }
+
+  function historySessionTokenTotal(history = []) {
+    if (!Array.isArray(history)) return 0;
+    return history.reduce((sum, session) => {
+      const summary = session?.token_summary || {};
+      const summaryTotal = metricNumberValue(summary.total_tokens ?? summary.totalTokens);
+      if (summaryTotal) return sum + summaryTotal;
+      return sum + usageTotalTokens(session?.last_usage || session?.usage || {});
+    }, 0);
+  }
+
   function tokenLedgerFromMetrics({ usage = {}, contextPressure = null, total = {}, backendSession = null } = {}) {
     const ahaPromptTokens = metricNumberValue(
       contextPressure?.aha_prompt_tokens ??
       contextPressure?.prompt_estimate_tokens ??
       total?.tokens
     );
-    const backendInputTokens = metricNumberValue(usage?.input_tokens);
+    const historySessionTokens = historySessionTokenTotal(backendSession?.history);
+    const usageIsCurrent = !historySessionTokens || !backendSession || Boolean(backendSession?.id || backendSession?.exists);
+    const backendInputTokens = usageIsCurrent ? metricNumberValue(usage?.input_tokens) : 0;
     const estimatedHistoryTokens = metricNumberValue(
       contextPressure?.estimated_backend_history_tokens ??
       (backendInputTokens && ahaPromptTokens ? Math.max(0, backendInputTokens - ahaPromptTokens) : 0)
     );
-    const reasoningOutputTokens = metricNumberValue(usage?.reasoning_output_tokens);
-    const cacheReadTokens = usageCacheReadTokens(usage);
-    const cacheCreationTokens = usageCacheCreationTokens(usage);
+    const reasoningOutputTokens = usageIsCurrent ? metricNumberValue(usage?.reasoning_output_tokens) : 0;
+    const cacheReadTokens = usageIsCurrent ? usageCacheReadTokens(usage) : 0;
+    const cacheCreationTokens = usageIsCurrent ? usageCacheCreationTokens(usage) : 0;
     const cachedTokens = cacheReadTokens + cacheCreationTokens;
     const sessionBytes = metricNumberValue(backendSession?.size_bytes);
     const contextPercent = contextPressurePercent(contextPressure);
-    const outputTokens = metricNumberValue(usage?.output_tokens);
-    const totalTokens = backendInputTokens + outputTokens;
+    const outputTokens = usageIsCurrent ? metricNumberValue(usage?.output_tokens) : 0;
+    const currentTotalTokens = backendInputTokens + outputTokens;
+    const totalTokens = historySessionTokens + currentTotalTokens;
     const trackedTokens = totalTokens;
     const rows = [
       { key: "backend_input", label: "Backend input", value: backendInputTokens, unit: "tok", className: "input" },
@@ -128,7 +147,9 @@
       cacheReadTokens,
       cachedTokens,
       contextPercent,
+      currentTotalTokens,
       estimatedHistoryTokens,
+      historySessionTokens,
       hasData: Boolean(totalTokens || backendInputTokens || outputTokens || ahaPromptTokens || sessionBytes),
       largest,
       outputTokens,

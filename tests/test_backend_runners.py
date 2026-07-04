@@ -33,7 +33,7 @@ from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path, chat_prompt, save_chat_offset
 from aha_cli.services.session_compact import compact_reset_backend_session
-from aha_cli.store.filesystem import append_jsonl, inbox_path, iter_jsonl_from, read_json, run_dir
+from aha_cli.store.filesystem import append_event, append_jsonl, inbox_path, iter_jsonl_from, read_json, run_dir
 from aha_cli.web.server import backend_session_jsonl_info
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -617,9 +617,20 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 target="main",
                 session=session,
             )
+            handle_codex_event(
+                json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3}}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="codex-chat",
+                target="main",
+                session=session,
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(session["backend_session_id"], "new-codex-session")
         self.assertEqual(session["status"], "active")
+        self.assertEqual(rows[-1]["data"]["backend_session_id"], "new-codex-session")
 
     def test_codex_context_overflow_event_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -763,11 +774,13 @@ class BackendRunnerSessionTests(unittest.TestCase):
             [row["type"] for row in rows],
             ["agent_thread", "agent_message", "agent_command_started", "agent_command_finished", "agent_usage"],
         )
+        self.assertEqual(rows[0]["data"]["backend_session_id"], "claude-session")
         self.assertEqual(rows[1]["data"]["text"], "hello")
         self.assertEqual(rows[2]["data"]["command"], "pwd")
         self.assertEqual(rows[3]["data"]["output_tail"], "ok")
         self.assertEqual(rows[3]["data"]["output_chars"], 2)
         self.assertNotIn("output_ref", rows[3]["data"])
+        self.assertEqual(rows[4]["data"]["backend_session_id"], "claude-session")
         self.assertEqual(rows[4]["data"]["usage"]["input_tokens"], 1)
         self.assertEqual(text_result["events"][0][0], "agent_message")
         self.assertEqual(started_result["events"][0][0], "agent_command_started")
@@ -1002,6 +1015,16 @@ class BackendRunnerSessionTests(unittest.TestCase):
                     {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "old prompt"}]}},
                 )
                 append_message(aha_root, run_id, "main", "previous request", sender="browser", task_id="task-001", role="main")
+                append_event(
+                    aha_root,
+                    run_id,
+                    "agent_usage",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "usage": {"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 30, "total_tokens": 999},
+                    },
+                )
 
                 with mock.patch("aha_cli.services.session_compact.Path.home", return_value=home):
                     payload = compact_reset_backend_session(aha_root, run_id, "task-001", "main", reason="manual")
@@ -1022,6 +1045,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(payload["old_backend_session_id"], session_id)
         self.assertIsNone(updated["backend_session_id"])
         self.assertEqual(updated["history_backend_sessions"][0]["backend_session_id"], session_id)
+        self.assertEqual(updated["history_backend_sessions"][0]["last_usage"]["input_tokens"], 120)
+        self.assertEqual(updated["history_backend_sessions"][0]["token_summary"]["total_tokens"], 150)
+        self.assertEqual(updated["history_backend_sessions"][0]["token_summary"]["cached_tokens"], 20)
         self.assertEqual(updated["compact_summary"]["archived_backend_session_id"], session_id)
         self.assertTrue(summary_exists)
         self.assertEqual(offset["offset"], inbox_size)

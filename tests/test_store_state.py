@@ -10,12 +10,14 @@ from unittest import mock
 from aha_cli.cli import main, task_snapshot
 from aha_cli.store.filesystem import (
     add_agent,
+    append_event,
     iter_jsonl_from,
     reopen_task,
     set_agent_status,
     set_task_status,
     status_snapshot,
 )
+from aha_cli.store.sessions import backend_session_usage_archive_fields
 from tests.helpers import append_jsonl_records, write_plan_statuses
 
 
@@ -27,6 +29,63 @@ def run_cli(*args: str) -> tuple[int, str]:
 
 
 class StoreStateTests(unittest.TestCase):
+    def test_backend_session_usage_archive_uses_current_session_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = run_cli("plan", "Repeat reset usage", "--agents", "0")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                history = [{"backend_session_id": "session-a", "token_summary": {"total_tokens": 150}}]
+                append_event(
+                    root,
+                    run_id,
+                    "agent_usage",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "backend_session_id": "session-a",
+                        "usage": {"input_tokens": 120, "output_tokens": 30},
+                    },
+                )
+
+                without_current_usage = backend_session_usage_archive_fields(
+                    root,
+                    run_id,
+                    "task-001",
+                    "main",
+                    backend_session_id="session-b",
+                    history=history,
+                )
+                append_event(
+                    root,
+                    run_id,
+                    "backend_session_reset",
+                    {"task_id": "task-001", "agent_id": "main", "old_backend_session_id": "session-a"},
+                )
+                append_event(
+                    root,
+                    run_id,
+                    "agent_usage",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "usage": {"input_tokens": 40, "output_tokens": 8},
+                    },
+                )
+                current_unscoped_usage = backend_session_usage_archive_fields(
+                    root,
+                    run_id,
+                    "task-001",
+                    "main",
+                    backend_session_id="session-b",
+                    history=history,
+                )
+
+        self.assertEqual(without_current_usage, {})
+        self.assertEqual(current_unscoped_usage["token_summary"]["total_tokens"], 48)
+
     def test_running_status_keeps_original_task_start_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

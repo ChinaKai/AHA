@@ -13,6 +13,7 @@ from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
     add_agent,
+    append_event,
     complete_task,
     inbox_path,
     iter_jsonl_from,
@@ -1215,6 +1216,16 @@ class WebTaskApiTests(unittest.TestCase):
                 session = ensure_session(root, run_id, "task-001", sub["id"], "codex", model="gpt-5.5")
                 session["backend_session_id"] = "old-codex-session"
                 save_session(root, session)
+                append_event(
+                    root,
+                    run_id,
+                    "agent_usage",
+                    {
+                        "task_id": "task-001",
+                        "target": sub["id"],
+                        "usage": {"input_tokens": 200, "cache_creation_input_tokens": 40, "output_tokens": 75},
+                    },
+                )
 
                 with (
                     mock.patch("aha_cli.services.agent_backend_switch.backend_status", return_value={"status": "running", "pid": 123}),
@@ -1247,6 +1258,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertIsNone(updated_session["backend_session_id"])
         self.assertEqual(updated_session["history_backend_sessions"][-1]["backend_session_id"], "old-codex-session")
         self.assertEqual(updated_session["history_backend_sessions"][-1]["reason"], "backend_changed")
+        self.assertEqual(updated_session["history_backend_sessions"][-1]["token_summary"]["total_tokens"], 275)
+        self.assertEqual(updated_session["history_backend_sessions"][-1]["token_summary"]["cached_tokens"], 40)
         self.assertEqual(updated_session["compact_summary"]["reason"], "backend_switch")
         handoff_message = next(message.get("message", "") for message in messages if message.get("coordination") == "backend_switch")
         self.assertIn("previous backend: codex", handoff_message)

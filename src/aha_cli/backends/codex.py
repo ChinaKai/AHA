@@ -395,6 +395,9 @@ def handle_codex_event(
             append_event_to_file(events_file, run_id, "agent_context_overflow", data | {"reason": "context_window"})
     elif raw_type == "turn.completed":
         usage = event.get("usage", {})
+        backend_session_id = str(event.get("thread_id") or (session or {}).get("backend_session_id") or "").strip()
+        if backend_session_id:
+            data["backend_session_id"] = backend_session_id
         data["usage"] = usage if isinstance(usage, dict) else {}
         append_event_to_file(events_file, run_id, "agent_usage", data)
     elif raw_type in {"item.started", "item.completed"}:

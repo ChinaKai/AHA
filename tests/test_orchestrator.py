@@ -22,6 +22,7 @@ from aha_cli.store.event_views import conversation_events_page
 from aha_cli.store.io import write_json
 from aha_cli.store.filesystem import (
     add_agent,
+    append_event,
     complete_task,
     ensure_session,
     event_path,
@@ -162,6 +163,16 @@ class OrchestratorTests(unittest.TestCase):
                 session["backend_session_id"] = "old-thread"
                 session["status"] = "active"
                 save_session(root, session)
+                append_event(
+                    root,
+                    run_id,
+                    "agent_usage",
+                    {
+                        "task_id": "task-001",
+                        "target": sub["id"],
+                        "usage": {"input_tokens": 33, "cache_read_input_tokens": 11, "output_tokens": 12},
+                    },
+                )
                 reply = json.dumps(
                     {
                         "actions": [
@@ -210,6 +221,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(sub_session["history_backend_sessions"][-1]["backend_session_id"], "old-thread")
         self.assertEqual(sub_session["history_backend_sessions"][-1]["assignment_id"], f"{sub['id']}:gen-001")
         self.assertEqual(sub_session["history_backend_sessions"][-1]["scope_id"], f"{sub['id']}:gen-001")
+        self.assertEqual(sub_session["history_backend_sessions"][-1]["token_summary"]["total_tokens"], 45)
+        self.assertEqual(sub_session["history_backend_sessions"][-1]["token_summary"]["cached_tokens"], 11)
         self.assertEqual(len([item for item in detail["agents"] if item.get("role") == "sub"]), 3)
         self.assertEqual(messages[-1]["message"], "Recover and inspect issue 02")
         self.assertEqual([item["message"] for item in new_messages], ["Recover and inspect issue 02"])

@@ -65,22 +65,45 @@
       return null;
     }
 
+    function latestSessionResetOrder(taskId, target = backendTarget()) {
+      const resetEvents = promptMetricCandidateEvents(taskId, target).filter(event => (
+        event.type === "backend_session_reset" || event.type === "backend_session_compact_reset"
+      ));
+      return resetEvents.length ? deps.conversationEventOrder(resetEvents[resetEvents.length - 1]) : null;
+    }
+
+    function eventsAfterSessionReset(events, taskId, target = backendTarget()) {
+      const resetOrder = latestSessionResetOrder(taskId, target);
+      if (resetOrder == null) return events;
+      return events.filter(event => deps.conversationEventOrder(event) > resetOrder);
+    }
+
     function latestTurnEvent(taskId, type, target = backendTarget()) {
       const startOrder = latestTurnStartOrder(taskId, target);
+      const resetOrder = latestSessionResetOrder(taskId, target);
       const events = promptMetricCandidateEvents(taskId, target).filter(event => (
         event.type === type &&
-        (startOrder == null || deps.conversationEventOrder(event) >= startOrder)
+        (startOrder == null || deps.conversationEventOrder(event) >= startOrder) &&
+        (resetOrder == null || deps.conversationEventOrder(event) > resetOrder)
       ));
       return events.length ? events[events.length - 1] : null;
     }
 
     function latestPromptMetricsEvent(taskId, target = backendTarget()) {
-      const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_prompt_metrics");
+      const events = eventsAfterSessionReset(
+        promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_prompt_metrics"),
+        taskId,
+        target
+      );
       return latestTurnEvent(taskId, "agent_prompt_metrics", target) || (events.length ? events[events.length - 1] : null);
     }
 
     function latestAgentUsageEvent(taskId, target = backendTarget()) {
-      const events = promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_usage");
+      const events = eventsAfterSessionReset(
+        promptMetricCandidateEvents(taskId, target).filter(event => event.type === "agent_usage"),
+        taskId,
+        target
+      );
       return latestTurnEvent(taskId, "agent_usage", target) || (events.length ? events[events.length - 1] : null);
     }
 
@@ -323,6 +346,11 @@
       const countValue = value => value ? formatTokenCount(value) : "--";
       const mainDetail = ledgerVerdict.detail || "waiting for usage";
       const totalValue = countValue(ledger.totalTokens);
+      const totalDetail = ledger.historySessionTokens
+        ? ledger.currentTotalTokens
+          ? "history + current"
+          : "history total"
+        : "input + output";
       const inputValue = countValue(ledger.backendInputTokens);
       const cachedValue = countValue(ledger.cachedTokens);
       const contextValue = contextPercent || (contextInputTokens != null ? formatTokenCount(contextInputTokens) : "--");
@@ -358,7 +386,7 @@
             </div>
           </div>
           <div class="token-summary-line">
-            ${renderTokenSummaryItem("Total", totalValue, "input + output", "token-summary-primary")}
+            ${renderTokenSummaryItem("Total", totalValue, totalDetail, "token-summary-primary")}
             ${renderTokenSummaryItem("Input", inputValue, "agent usage")}
             ${renderTokenSummaryItem("Cached", cachedValue, cachedDetail)}
             ${renderTokenSummaryItem("Output", outputValue, "model output")}

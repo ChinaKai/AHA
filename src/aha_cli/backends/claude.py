@@ -193,6 +193,8 @@ def handle_claude_event(
     if raw_type == "system" and event.get("subtype") == "init":
         session_id = event.get("session_id")
         data["thread_id"] = session_id
+        if session_id:
+            data["backend_session_id"] = session_id
         if session is not None and session_id:
             if not session.get("backend_session_id"):
                 session["backend_session_id"] = session_id
@@ -301,7 +303,13 @@ def handle_claude_event(
         for key in ("duration_ms", "duration_api_ms", "total_cost_usd", "num_turns", "subtype"):
             if key in event:
                 usage[key] = event.get(key)
-        append_event_to_file(events_file, run_id, "agent_usage", data | {"usage": usage})
+        backend_session_id = str(session_id or (session or {}).get("backend_session_id") or "").strip()
+        append_event_to_file(
+            events_file,
+            run_id,
+            "agent_usage",
+            data | {"usage": usage, **({"backend_session_id": backend_session_id} if backend_session_id else {})},
+        )
         if event.get("result"):
             result["result_text"] = str(event.get("result") or "")
     return result

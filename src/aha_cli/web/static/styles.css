@@ -3031,11 +3031,11 @@ body.auth-required.knowledge-home .knowledge-home-page {
   white-space: nowrap;
 }
 .token-summary-item code {
-  overflow: hidden;
   color: #667085;
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .token-summary-primary {
   background: transparent;
