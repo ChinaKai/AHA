@@ -60,10 +60,14 @@ layer:
 ```text
 Knowledge navigation
   Human/agent-readable route map stored in KB navigation markdown.
+  It is the semantic bridge from natural-language task descriptions to project
+  concepts, modules, flows, subsystems, and likely code areas.
 
 Project Context Index
   Machine-generated local cache with files, symbols, build rules, config keys,
   device-tree entries, tests, and entry points.
+  It is the code locator from those concepts, modules, symbols, configs, and
+  build clues to concrete paths.
 
 Repository profiles
   Repo-type-aware generation, budgeting, ranking, and reference formatting.
@@ -74,6 +78,20 @@ Prompt injection
   Compact map capability note containing the local map entry point and rules
   for focused query/read flow.
 ```
+
+The intended lookup chain is:
+
+```text
+natural-language request
+  -> navigation semantic routing
+  -> map query using module/code-domain terms
+  -> exact source/config/build/DTS paths
+  -> targeted file reads
+```
+
+Navigation and map should not compete. Navigation answers "where in this
+project should I think first?" Map answers "which concrete files/records should
+I open now?"
 
 Suggested module:
 
@@ -545,6 +563,99 @@ Project-nav generation can also use the generated index as evidence to produce
 better curated navigation candidates. In that case, the durable nav docs should
 keep only stable, useful routes such as key files, build/config entry points,
 diagnostic paths, and caveats, not raw symbol dumps or cache links.
+
+## Nav + Map Integration Target
+
+Current reality:
+
+- Navigation is the durable semantic router. It lives in reviewed KB markdown
+  under `projects/<project-key>/navigation/`, and the task prompt injects only
+  the `navigation/index` path plus the rule to read the smallest relevant
+  module/flow docs before broad search.
+- Map is the generated code locator. It lives under
+  `runtime/project_context/<project-key>/<workspace-id>/`, stores sharded
+  machine records, and the task prompt injects only the map entry point and
+  usage rule when task token saving is enabled.
+- Current map query already supports tokenization, substring matching, path
+  segment matching, and lightweight fuzzy scoring. The missing part is not
+  basic fuzzy search; it is natural-language intent routing.
+
+Target flow:
+
+```text
+user natural-language request
+  -> nav route resolver chooses likely modules/flows/subsystems
+  -> resolver extracts code-domain terms, path hints, profile hints, and aliases
+  -> map query ranks concrete files/symbols/configs/build/DTS records
+  -> agent reads exact source/config/build files by path
+```
+
+Implementation should add a small resolver layer instead of making NAV and MAP
+compete:
+
+1. Parse the navigation index and first-hop module/flow docs for titles,
+   summaries, links, `related_files`, headings, code spans, and stable path
+   mentions.
+2. Score nav docs against the task title, description, current user message,
+   and recent conversation using the same CJK/code-token-aware term extraction
+   style as KB retrieval.
+3. Build one or more focused map queries from the matched nav docs:
+   natural-language terms + nav titles + module names + path segments + symbol
+   and config-looking tokens from the nav docs.
+4. Pass optional ranking hints to map query, such as preferred path prefixes,
+   matched nav paths, active profiles, and source-owner promotion for exact
+   symbol/config/build hits.
+5. Return diagnostics that explain the chain:
+
+```text
+nav route: modules/knowledge.md -> modules/prompt-pipeline.md
+map terms: knowledge navigation project_context token_saving prompt
+map hits: src/aha_cli/services/knowledge_retrieval.py, ...
+```
+
+This resolver should be deterministic first. A model-assisted version can be
+added later for hard natural-language cases, but the first implementation
+should be testable with fixture nav docs and fixture map shards.
+
+Prompt behavior should remain conservative until ranking is stable:
+
+- Initial task prompt continues to inject only nav/map capabilities and paths.
+- Agent can use the nav rule to pick a route, then use `/aha map query` or a
+  future internal map-query action with resolver-expanded terms.
+- No-match map queries should not inject reference text.
+- Automatic query-result injection can be considered later, after historical
+  task tests show the resolver improves natural-language accuracy.
+
+First implemented slice:
+
+- `project_context_resolver` deterministically reads `navigation/index.md` and
+  first-hop linked module/flow docs for the current project.
+- MAP cache queries now resolve natural-language input through NAV when a
+  matching nav route exists, while direct map file queries still work as a
+  fallback when no workspace is available.
+- Resolver output includes expanded query terms and path hints from nav
+  `related_files` and code spans. MAP ranking uses those path hints as a
+  deterministic boost.
+- NAV routing has a minimum score gate. Weak incidental body matches should
+  fall back to ordinary MAP search instead of expanding the query with unrelated
+  module terms.
+- MAP scoring now treats compact symbol/config names as strong matches, so
+  queries such as `context_token`, `IQ_SERVER_DEBUG`, and
+  `nightvision_get_mode` survive underscore/camel/acronym normalization better.
+- Exact symbol/config/build/DTS/package hits promote their owning file into the
+  files result set, so agents see the source/config file to open even when the
+  file path itself did not match many query words.
+- Slash query output, Web map search output, and compact map references expose
+  the selected nav route and expanded terms for debugging.
+- No automatic query-result prompt injection was added.
+
+Still pending:
+
+- task title/description/recent-conversation expansion beyond the current query
+  string
+- embedded synonym/alias tables for boards, chips, peripherals, and product
+  feature names
+- model-assisted route selection for difficult natural-language requests
 
 ## Metrics-Driven Context Strategy
 
@@ -1160,6 +1271,73 @@ token saving is enabled; refresh remains an explicit map action.
 
 - Add Go, TypeScript/JavaScript, Rust, Docker/Kubernetes/Terraform/CI support
   after the embedded path proves useful.
+
+## Historical Task Query Baseline
+
+2026-07-03 baseline: sampled real task titles/descriptions from AHA run
+history and queried the existing maps for `fw_omni_builder` and AHA itself.
+
+Important product finding: most real coding tasks arrive as natural-language
+problem descriptions, not as "open this exact file/path/symbol" requests. A map
+that only works well for exact paths, exact symbols, or exact config names is
+not sufficient for the common AHA workflow. Natural-language intent support is
+a first-class requirement for map accuracy, especially for embedded tasks such
+as "APP binding fails", "soft reboot hangs", "add white-light control", "memory
+is tight", or "support a new motor chip".
+
+Strong hits:
+
+- `platform sigmastar 306d vega defconfig` found the relevant
+  `platform/sigmastar/.../defconfig` and package records in the first screen.
+- `wyzeCamera sample_main trigger_event cloud storage` found
+  `app_source/wyze_app/wyzeCamera/sample_main.c` and
+  `trigger_alarm_simulation`.
+- `sgs_det_algo sgs_mdt_algo dual handle` found the expected
+  `sgs_det_algo.c`, `sgs_mdt_algo.c`, related SGS libraries, configs, and
+  build records.
+- `BR2_PACKAGE_FW_LOCALSDK_IQ_SERVER_DEBUG` found the exact Config.in,
+  defconfig values, and `fw_localsdk.mk` build variables.
+- `custom_start burn pvo ini private pem` found the expected
+  `platform/sigmastar/.../scripts/custom_start.sh`.
+- AHA queries such as `knowledge navigation project map build`,
+  `memo paste image attachment`, `backend prompt templates hardcoded`, and
+  `hardware debug uart telnet username password` found the correct feature
+  files.
+
+Observed misses/noise:
+
+- Queries with common words can swamp a strong domain term. Example:
+  `weixin context_token notification` ranked generic `backend_*context*.md`
+  prompt templates over `services/weixin.py` and
+  `services/weixin_notifications.py`; querying just `weixin notification`
+  worked. Ranking needs better multi-term coverage and underscore/token
+  handling.
+- File-section results and symbol-section results are not coupled. Example:
+  `nightvision_get_mode app function protocol` found the exact symbol in
+  `nightvision.c`, but file results were dominated by unrelated
+  `GetFunctionList` test files. Exact symbol hits should promote their owning
+  source file.
+- Large vendor/upstream trees still leak into unrelated sections. Examples:
+  `buildroot-dist`, old `ingenic` U-Boot DTS paths, and generic packages such
+  as `enlightenment` appear for `hardwaredebug white light ptz siren`.
+- Natural-language hardware tasks need profile-specific synonyms and path
+  preference. Example: `8152c motor i2c` found motor/I2C code, but mostly
+  `tmi8160i` paths; this may be a real absence or a synonym/alias gap that
+  needs source confirmation.
+
+Remaining ranking priorities after the first resolver/ranking slice:
+
+1. Expand beyond the current query string by also using task title,
+   description, and recent conversation when available.
+2. Reward records that cover more query terms, not only high-frequency common
+   terms.
+3. Apply profile path penalties to upstream/vendor noise
+   (`buildroot-dist`, old platform BSPs) unless the query explicitly targets
+   them.
+4. Add embedded synonym/alias handling for board/chip/peripheral names after
+   checking real source layout.
+5. Consider model-assisted route selection for hard natural-language cases
+   after deterministic behavior is measurable.
 
 ## Tests
 

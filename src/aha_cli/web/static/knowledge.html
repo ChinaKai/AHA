@@ -658,7 +658,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, projectContextJob: null, projectContextJobPoll: null, projectContextMaps: [], activeProjectContextMap: null, activeProjectContextPath: "", projectContextFiles: [], projectContextRoot: "", projectContextStatus: null, projectContextSearchTimer: null, projectContextSearchTerm: "", projectContextSearchResult: null, projectContextSearchError: "", projectContextSearchLoading: false, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, projectContextJob: null, projectContextJobPoll: null, projectContextMaps: [], activeProjectContextMap: null, activeProjectContextPath: "", projectContextFiles: [], projectContextRoot: "", projectContextStatus: null, projectContextSearchTimer: null, projectContextSearchTerm: "", projectContextSearchResult: null, projectContextSearchError: "", projectContextSearchLoading: false, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -1063,10 +1063,18 @@
       const totals = result.section_totals && typeof result.section_totals === "object"
         ? Object.entries(result.section_totals).filter(([, value]) => Number(value || 0)).map(([key, value]) => `${key}=${value}`).join(", ")
         : "";
+      const resolution = result.resolution && typeof result.resolution === "object" ? result.resolution : {};
+      const navRoutes = Array.isArray(resolution.nav_routes) ? resolution.nav_routes : [];
+      const navRouteText = navRoutes.map((item) => item?.slug || item?.title || "").filter(Boolean).slice(0, 3).join(" -> ");
+      const expandedTerms = Array.isArray(resolution.expanded_terms) ? resolution.expanded_terms.slice(0, 12).join(", ") : "";
+      const resolutionLine = resolution.used_navigation
+        ? `<div class="kb-muted kb-map-file-path">nav route: ${esc(navRouteText || "-")}${expandedTerms ? " · expanded: " + esc(expandedTerms) : ""}</div>`
+        : "";
       if (!matches) {
         $("#map-view-files").innerHTML = `
           <div class="kb-map-search-results">
             <div class="kb-muted kb-map-file-path">query: ${esc(queryText)}</div>
+            ${resolutionLine}
             <p class="kb-muted">No project map matches. Refresh the map or use broader terms.</p>
           </div>`;
         return;
@@ -1077,6 +1085,7 @@
       $("#map-view-files").innerHTML = `
         <div class="kb-map-search-results">
           <div class="kb-muted kb-map-file-path">query: ${esc(queryText)} · matches ${esc(matches)}${totals ? " · " + esc(totals) : ""}</div>
+          ${resolutionLine}
           ${sections || `<p class="kb-muted">No displayable project map matches.</p>`}
         </div>`;
     }
@@ -1761,7 +1770,23 @@
         <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', ${isProjectNavIndex ? "true" : "false"})">${esc(deleteLabel)}</button>`;
     }
 
+    function entryMatchesId(entry, id) {
+      const meta = entry?.meta || {};
+      return Boolean(id && (id === meta.id || id === meta.slug || id === entry?.id || id === entry?.slug));
+    }
+
+    function clearEntryReferenceStack() {
+      state.referenceEntryStack = [];
+    }
+
     function closeEntryReferenceModal() {
+      if (state.referenceEntryStack.length) {
+        const previous = state.referenceEntryStack.pop();
+        state.referenceEntry = previous?.entry || null;
+        state.editingReference = Boolean(previous?.editingReference);
+        renderEntryReferenceModal();
+        return;
+      }
       state.referenceEntry = null;
       state.editingReference = false;
       renderEntryReferenceModal();
@@ -2164,17 +2189,28 @@
       const id = decodeURIComponent(encodedId);
       state.activeEntry = null;
       state.editingEntry = null;
+      clearEntryReferenceStack();
       renderEntries();
       await openEntryReference(encodeURIComponent(id));
     };
 
-    async function openEntryReference(encodedSlug) {
+    async function openEntryReference(encodedSlug, options = {}) {
       const slug = decodeURIComponent(encodedSlug);
+      let pushedHistory = false;
       try {
+        const pushHistory = Boolean(options.pushHistory && state.referenceEntry && !entryMatchesId(state.referenceEntry, slug));
+        if (pushHistory) {
+          state.referenceEntryStack.push({
+            entry: state.referenceEntry,
+            editingReference: state.editingReference,
+          });
+          pushedHistory = true;
+        }
         state.referenceEntry = await api("/api/kb/entry?id=" + encodeURIComponent(slug));
         state.editingReference = false;
         renderEntryReferenceModal();
       } catch (e) {
+        if (pushedHistory) state.referenceEntryStack.pop();
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
       }
     }
@@ -2281,6 +2317,7 @@
           ? formatText("knowledge.project_nav_reset_done", { count: result.deleted_count || 0 }, "Project nav reset: " + (result.deleted_count || 0) + " entries")
           : t("knowledge.deleted", "Deleted"));
         state.activeEntry = null; state.referenceEntry = null; state.editingEntry = null; state.editingReference = false;
+        clearEntryReferenceStack();
         renderEntryReferenceModal();
         await loadEntries(); await loadNavigation(); await loadStatus();
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
@@ -2324,7 +2361,9 @@
       const link = ev.target.closest?.('a[href^="#kb-entry:"]');
       if (!link) return;
       ev.preventDefault();
-      openEntryReference(link.getAttribute("href").slice("#kb-entry:".length));
+      openEntryReference(link.getAttribute("href").slice("#kb-entry:".length), {
+        pushHistory: Boolean(link.closest("#entry-ref-modal") && state.referenceEntry),
+      });
     });
 
     function appendRunId(url, runId) {

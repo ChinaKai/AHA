@@ -1215,7 +1215,18 @@ def knowledge_route_response(
                 manifest = {}
             if not isinstance(manifest, dict):
                 manifest = {}
-            query_result = query_project_context_index_file(base / "index.json", query_text)
+            workspace_text = str(manifest.get("workspace") or "").strip()
+            query_result = None
+            if workspace_text and Path(workspace_text).expanduser().exists():
+                query_result = query_project_context_index_cache(
+                    root,
+                    Path(workspace_text),
+                    query_text,
+                    project_key_value=ref_project_key,
+                    config=cfg,
+                )
+            if query_result is None:
+                query_result = query_project_context_index_file(base / "index.json", query_text)
             if query_result is None:
                 return json_response({
                     "ok": False,

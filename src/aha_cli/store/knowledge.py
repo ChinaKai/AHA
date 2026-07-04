@@ -370,6 +370,212 @@ def write_entry(
     return path
 
 
+_NAVIGATION_MERGE_LIST_SECTIONS = {
+    "关键源文件",
+    "入口 / 调用方",
+    "入口 / 关键流程",
+    "常用排查路径",
+    "修改注意",
+    "相关测试",
+    "盲区 / 待补充",
+    "模块索引",
+    "下级入口",
+}
+
+
+def _merge_unique_items(existing: object, additions: object) -> list:
+    merged = list(existing or []) if isinstance(existing, list) else []
+    seen = {json.dumps(item, ensure_ascii=False, sort_keys=True) for item in merged}
+    if isinstance(additions, list):
+        for item in additions:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+            if key not in seen:
+                merged.append(item)
+                seen.add(key)
+    return merged
+
+
+def _markdown_h1(body: str, fallback: str) -> str:
+    for line in str(body or "").splitlines():
+        clean = line.strip()
+        if clean.startswith("# "):
+            return clean[2:].strip() or fallback
+    return fallback
+
+
+def _split_h2_sections(body: str) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    preamble: list[str] = []
+    sections: list[tuple[str, list[str]]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+    for line in str(body or "").splitlines():
+        match = re.match(r"^##\s+(.+?)\s*$", line)
+        if match:
+            if current_title is None:
+                preamble = current_lines
+            else:
+                sections.append((current_title, current_lines))
+            current_title = match.group(1).strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_title is None:
+        preamble = current_lines
+    else:
+        sections.append((current_title, current_lines))
+    return preamble, sections
+
+
+def _trim_blank_lines(lines: list[str]) -> list[str]:
+    start = 0
+    end = len(lines)
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return lines[start:end]
+
+
+def _section_text(lines: list[str]) -> str:
+    return "\n".join(_trim_blank_lines(lines)).strip()
+
+
+def _merge_navigation_list_lines(existing: list[str], additions: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for line in _trim_blank_lines(existing) + _trim_blank_lines(additions):
+        clean = line.strip()
+        if not clean or clean == "-":
+            continue
+        key = clean.casefold()
+        if key not in seen:
+            merged.append(line)
+            seen.add(key)
+    return merged or ["-"]
+
+
+def _merge_navigation_section(title: str, existing: list[str], additions: list[str]) -> list[str]:
+    existing_text = _section_text(existing)
+    addition_text = _section_text(additions)
+    if not existing_text or existing_text == "-":
+        return _trim_blank_lines(additions) or ["-"]
+    if not addition_text or addition_text == "-":
+        return _trim_blank_lines(existing) or ["-"]
+    if title in _NAVIGATION_MERGE_LIST_SECTIONS:
+        return _merge_navigation_list_lines(existing, additions)
+    if addition_text in existing_text:
+        return _trim_blank_lines(existing)
+    if existing_text in addition_text:
+        return _trim_blank_lines(additions)
+    return _trim_blank_lines(existing) + [""] + _trim_blank_lines(additions)
+
+
+def _merge_navigation_body(existing_body: str, update_body: str, *, title: str) -> str:
+    existing_preamble, existing_sections = _split_h2_sections(existing_body)
+    update_preamble, update_sections = _split_h2_sections(update_body)
+    h1 = _markdown_h1(update_body, _markdown_h1(existing_body, title))
+    result: list[str] = [f"# {h1}", ""]
+    existing_by_title = {section_title: lines for section_title, lines in existing_sections}
+    update_by_title = {section_title: lines for section_title, lines in update_sections}
+    ordered_titles = [section_title for section_title, _ in existing_sections]
+    for section_title, _ in update_sections:
+        if section_title not in ordered_titles:
+            ordered_titles.append(section_title)
+
+    if not ordered_titles:
+        merged_preamble = _merge_navigation_section("", existing_preamble, update_preamble)
+        return "\n".join(result + merged_preamble).strip() + "\n"
+
+    for section_title in ordered_titles:
+        result.append(f"## {section_title}")
+        result.extend(_merge_navigation_section(
+            section_title,
+            existing_by_title.get(section_title, []),
+            update_by_title.get(section_title, []),
+        ))
+        result.append("")
+    return "\n".join(result).strip() + "\n"
+
+
+def _merge_navigation_meta(existing_meta: dict, update_meta: dict) -> dict:
+    merged = dict(existing_meta or {})
+    merged.update(update_meta or {})
+    for key in ("tags", "related_files", "diagnostic_paths", "source_tasks", "source_memos", "assets"):
+        merged[key] = _merge_unique_items(existing_meta.get(key), update_meta.get(key))
+    return merged
+
+
+def _merge_existing_navigation_update(
+    root: Path,
+    config: dict | None,
+    *,
+    scope: str,
+    kind: str,
+    project_key_value: str | None,
+    slug: str,
+    title: str,
+    body: str,
+    meta: dict,
+) -> tuple[str, str, dict]:
+    if scope != "project" or kind != "navigation" or not slug:
+        return title, body, meta
+    existing_path = entry_path_for(root, config, scope, kind, project_key_value, slug)
+    if not existing_path:
+        return title, body, meta
+    try:
+        existing = read_entry(existing_path)
+    except (OSError, ValueError):
+        return title, body, meta
+    existing_meta = dict(existing.get("meta") or {})
+    merged_meta = _merge_navigation_meta(existing_meta, meta)
+    merged_title = str(title or merged_meta.get("title") or existing_meta.get("title") or "").strip()
+    merged_body = _merge_navigation_body(existing.get("body", ""), body, title=merged_title)
+    return merged_title, merged_body, merged_meta
+
+
+def write_entry_preserving_navigation(
+    root: Path,
+    *,
+    config: dict | None,
+    scope: str,
+    kind: str,
+    title: str,
+    body: str,
+    project_key_value: str | None = None,
+    meta: dict | None = None,
+    slug: str | None = None,
+) -> Path:
+    """Write an entry while merging project navigation updates by slug.
+
+    Navigation docs are routers that accumulate module/file/flow knowledge over
+    time. A candidate focused on one new topic must not erase older routing
+    details for the same slug.
+    """
+    normalized_slug = normalize_entry_slug(slug) if slug else slugify(title)
+    title, body, merged_meta = _merge_existing_navigation_update(
+        root,
+        config,
+        scope=scope,
+        kind=kind,
+        project_key_value=project_key_value,
+        slug=normalized_slug,
+        title=title,
+        body=body,
+        meta=dict(meta or {}),
+    )
+    return write_entry(
+        root,
+        config=config,
+        scope=scope,
+        kind=kind,
+        title=title,
+        body=body,
+        project_key_value=project_key_value,
+        meta=merged_meta,
+        slug=normalized_slug,
+    )
+
+
 def entry_id(scope: str, kind: str, project_key_value: str | None, slug: str) -> str:
     """Stable entry id derived from its identity (scope/kind/project/slug)."""
     basis = f"{scope}/{kind}/{project_key_value or ''}/{slug}"
@@ -1081,7 +1287,7 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
         body = task_memo_promo["body"]
         meta["assets"] = _merge_entry_assets(meta.get("assets"), task_memo_promo["assets"])
 
-    entry_path = write_entry(
+    entry_path = write_entry_preserving_navigation(
         root,
         config=config,
         scope=scope,

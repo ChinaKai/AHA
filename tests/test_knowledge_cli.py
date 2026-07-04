@@ -10,9 +10,11 @@ from aha_cli.domain.models import default_knowledge_config
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import (
     _legacy_candidate_identity,
+    approve_candidate,
     enqueue_candidate,
     init_knowledge_base,
     list_pending,
+    read_entry,
     write_entry,
 )
 from aha_cli.store.paths import config_path
@@ -171,6 +173,95 @@ def test_kb_approve_dedup_updates_existing(tmp_path: Path):
     rc, out = _run(home, "approve", json.loads(second.read_text())["id"], "--json")
     assert rc == 0
     assert json.loads(out)["action"] == "updated"
+
+
+def test_kb_approve_navigation_update_preserves_existing_module_doc(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    existing_path = write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="git-abc",
+        title="wyze_app 媒体业务入口",
+        slug="modules/wyze-app-media",
+        body="\n".join([
+            "# wyze_app 媒体业务入口",
+            "",
+            "## 模块职责",
+            "负责 iCamera 的媒体业务接入、视频通道生命周期和原有直播入口。",
+            "",
+            "## 关键源文件",
+            "- app_source/wyze_app/Stormcore_Abyss_V3/icamera/productservices/media/media_vi.c",
+            "",
+            "## 入口 / 调用方",
+            "- media_vi_channel_setup",
+            "",
+            "## 常用排查路径",
+            "- 查业务是否按 variant 的 video_param 创建通道。",
+        ]),
+        meta={
+            "type": "navigation",
+            "tags": ["navigation", "module"],
+            "related_files": [
+                "app_source/wyze_app/Stormcore_Abyss_V3/icamera/productservices/media/media_vi.c"
+            ],
+            "source_tasks": ["run-old/task-001"],
+            "diagnostic_paths": ["查业务是否按 variant 的 video_param 创建通道。"],
+            "navigation_role": "module",
+        },
+    )
+    cand = enqueue_candidate(home, cfg, {
+        "kind": "navigation",
+        "scope": "project",
+        "project_key": "git-abc",
+        "slug": "modules/wyze-app-media",
+        "title": "wyze_app RTSP Media Entry",
+        "body": "\n".join([
+            "# wyze_app RTSP Media Entry",
+            "",
+            "## 模块职责",
+            "RTSP 正式入口在 media_rtsp.c，不应另起 fw_localsdk helper。",
+            "",
+            "## 关键源文件",
+            "- app_source/wyze_app/Stormcore_Abyss_V3/icamera/productservices/media/media_rtsp.c",
+            "",
+            "## 入口 / 调用方",
+            "- g_rtsp_streams[]",
+            "",
+            "## 常用排查路径",
+            "- 新增 RTSP URL 优先改 media_rtsp.c。",
+        ]),
+        "meta": {
+            "type": "navigation",
+            "tags": ["navigation", "module"],
+            "related_files": [
+                "app_source/wyze_app/Stormcore_Abyss_V3/icamera/productservices/media/media_rtsp.c"
+            ],
+            "source_tasks": ["run-new/task-143"],
+            "diagnostic_paths": ["新增 RTSP URL 优先改 media_rtsp.c。"],
+            "navigation_role": "module",
+        },
+        "source": {"run_id": "run-new", "task_id": "task-143"},
+    })
+
+    entry_path = approve_candidate(home, cfg, json.loads(cand.read_text())["id"])
+    assert entry_path == existing_path
+    entry = read_entry(entry_path)
+    body = entry["body"]
+    meta = entry["meta"]
+    assert "原有直播入口" in body
+    assert "RTSP 正式入口在 media_rtsp.c" in body
+    assert "media_vi_channel_setup" in body
+    assert "g_rtsp_streams[]" in body
+    assert any(item.endswith("media_vi.c") for item in meta["related_files"])
+    assert any(item.endswith("media_rtsp.c") for item in meta["related_files"])
+    assert meta["source_tasks"] == ["run-old/task-001", "run-new/task-143"]
+    assert meta["diagnostic_paths"] == [
+        "查业务是否按 variant 的 video_param 创建通道。",
+        "新增 RTSP URL 优先改 media_rtsp.c。",
+    ]
 
 
 def test_pending_identity_keeps_legacy_same_title_without_chinese_slug_collision(tmp_path: Path):

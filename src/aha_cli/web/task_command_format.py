@@ -137,6 +137,15 @@ def _format_map_query(result: dict, status: dict) -> str:
         f"- status: {status.get('status') or 'unknown'}",
         f"- matches: {result.get('total_matches', 0)}",
     ]
+    resolution = result.get("resolution") if isinstance(result.get("resolution"), dict) else {}
+    if resolution.get("used_navigation"):
+        routes = resolution.get("nav_routes") if isinstance(resolution.get("nav_routes"), list) else []
+        route_text = " -> ".join(str(item.get("slug") or item.get("title") or "-") for item in routes[:3] if isinstance(item, dict))
+        terms = resolution.get("expanded_terms") if isinstance(resolution.get("expanded_terms"), list) else []
+        if route_text:
+            lines.append(f"- nav route: {route_text}")
+        if terms:
+            lines.append(f"- expanded terms: {', '.join(str(term) for term in terms[:12])}")
     if section_totals:
         totals = ", ".join(f"{key}={value}" for key, value in sorted(section_totals.items()) if value)
         lines.append(f"- by section: {totals or '-'}")

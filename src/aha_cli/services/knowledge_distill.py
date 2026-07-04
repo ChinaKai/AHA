@@ -38,7 +38,7 @@ from aha_cli.store.knowledge import (
     read_entry,
     slugify,
     type_for_kind,
-    write_entry,
+    write_entry_preserving_navigation,
 )
 
 Distiller = Callable[[dict], list[dict]]
@@ -1058,7 +1058,7 @@ def distill_and_enqueue(
     if gate == "auto":
         written = []
         for cand in candidates:
-            path = write_entry(
+            path = write_entry_preserving_navigation(
                 root,
                 config=config,
                 scope=cand.get("scope", "project"),

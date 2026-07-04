@@ -265,6 +265,79 @@ def test_auto_gate_writes_entry_directly(tmp_path: Path):
     assert res["git"].get("skipped")
 
 
+def test_auto_gate_navigation_update_preserves_existing_module_doc(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg("auto")
+    init_knowledge_base(root, cfg)
+    write_entry(
+        root,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="git-abc123",
+        title="项目导航",
+        slug="index",
+        body="## 模块索引\n- [wyze_app 媒体业务入口](modules/wyze-app-media.md)",
+        meta={"type": "navigation", "navigation_role": "index"},
+    )
+    write_entry(
+        root,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="git-abc123",
+        title="wyze_app 媒体业务入口",
+        slug="modules/wyze-app-media",
+        body="\n".join([
+            "# wyze_app 媒体业务入口",
+            "",
+            "## 模块职责",
+            "负责原有媒体业务入口。",
+            "",
+            "## 关键源文件",
+            "- media_vi.c",
+        ]),
+        meta={
+            "type": "navigation",
+            "related_files": ["media_vi.c"],
+            "source_tasks": ["run-old/task-001"],
+            "navigation_role": "module",
+        },
+    )
+
+    res = distill_and_enqueue(root, cfg, _context(), candidates=[{
+        "kind": "navigation",
+        "scope": "project",
+        "project_key": "git-abc123",
+        "slug": "modules/wyze-app-media",
+        "title": "wyze_app RTSP Media Entry",
+        "body": "\n".join([
+            "# wyze_app RTSP Media Entry",
+            "",
+            "## 模块职责",
+            "RTSP 正式入口在 media_rtsp.c。",
+            "",
+            "## 关键源文件",
+            "- media_rtsp.c",
+        ]),
+        "meta": {
+            "type": "navigation",
+            "related_files": ["media_rtsp.c"],
+            "source_tasks": ["run-new/task-143"],
+            "navigation_role": "module",
+        },
+    }])
+
+    assert res["gate"] == "auto"
+    entry = next(item for item in list_entries(
+        root, config=cfg, scope="project", kind="navigation", project_key_value="git-abc123",
+    ) if item["meta"]["slug"] == "modules/wyze-app-media")
+    assert "负责原有媒体业务入口。" in entry["body"]
+    assert "RTSP 正式入口在 media_rtsp.c。" in entry["body"]
+    assert entry["meta"]["related_files"] == ["media_vi.c", "media_rtsp.c"]
+    assert entry["meta"]["source_tasks"] == ["run-old/task-001", "run-new/task-143"]
+
+
 def test_gate_off_and_disabled_skip(tmp_path: Path):
     root = tmp_path / ".aha"
     assert distill_and_enqueue(root, _cfg("off"), _context())["candidates"] == 0

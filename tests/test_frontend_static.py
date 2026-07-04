@@ -317,6 +317,11 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("window.saveEntryReference", html)
         self.assertIn("window.cancelEntryReferenceEdit", html)
         self.assertIn("state.editingReference", html)
+        self.assertIn("referenceEntryStack: []", html)
+        self.assertIn("clearEntryReferenceStack", html)
+        self.assertIn("state.referenceEntryStack.push", html)
+        self.assertIn("state.referenceEntryStack.pop", html)
+        self.assertIn('pushHistory: Boolean(link.closest("#entry-ref-modal") && state.referenceEntry)', html)
         self.assertIn("closeEntryReferenceModal", html)
         self.assertNotIn("kb-nav-ref", html)
         self.assertIn('id="cap-new-open"', html)
@@ -4306,7 +4311,8 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('return String(session?.id || session?.backend_session_id || "").trim();', script)
         self.assertIn("return Boolean(nextId || previousId) && nextId !== previousId;", script)
-        self.assertIn("if (backendSessionIdsDiffer(nextSession, previousSession)) return nextSession;", script)
+        self.assertIn("function shouldKeepPreviousContextPressure(nextSession, previousSession)", script)
+        self.assertIn("if (backendSessionIdsDiffer(nextSession, previousSession)) return false;", script)
 
     def test_conversation_show_filter_only_renders_on_conversation_tab(self) -> None:
         root = Path(__file__).resolve().parents[1]

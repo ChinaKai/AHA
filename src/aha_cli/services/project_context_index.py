@@ -1740,14 +1740,19 @@ def _record_score(item: dict, terms: list[str]) -> int:
     score = 0
     matched_terms = 0
     name = str(item.get("name") or "").lower()
+    compact_name = re.sub(r"[^a-z0-9]+", "", name)
     path = str(item.get("path") or "").lower()
     path_segments = {segment for segment in re.split(r"[/._+-]+", path) if segment}
     for term in terms:
         term_score = 0
         if term == name:
             term_score += 20
+        elif term and term == compact_name:
+            term_score += 20
         elif term and term in name:
             term_score += 8
+        elif len(term) >= 4 and term in compact_name:
+            term_score += 6
         if term in path_segments:
             term_score += 6
         elif any(segment.startswith(term) or term.startswith(segment) for segment in path_segments if len(segment) >= 3):
@@ -1768,9 +1773,48 @@ def _record_score(item: dict, terms: list[str]) -> int:
     return score
 
 
+def _record_primary_path(record: dict) -> str:
+    return str(record.get("path") or record.get("mk_path") or record.get("config_path") or "")
+
+
+def _rank_hint_paths(rank_hints: dict | None) -> list[str]:
+    if not isinstance(rank_hints, dict):
+        return []
+    hints = rank_hints.get("path_hints")
+    if not isinstance(hints, list):
+        return []
+    out: list[str] = []
+    for hint in hints:
+        value = str(hint or "").strip().replace("\\", "/").strip("/")
+        if value and value not in out:
+            out.append(value)
+    return out[:24]
+
+
+def _record_path_hint_score(record: dict, rank_hints: dict | None) -> int:
+    hints = _rank_hint_paths(rank_hints)
+    if not hints:
+        return 0
+    path = _record_primary_path(record).replace("\\", "/").strip("/")
+    if not path:
+        return 0
+    score = 0
+    for hint in hints:
+        if path == hint:
+            score += 60
+        elif path.startswith(hint.rstrip("/") + "/"):
+            score += 32
+        elif hint in path:
+            score += 18
+        elif path in hint:
+            score += 24
+    return score
+
+
 def _ranked_sort_key(item: tuple[int, dict], profiles: list[str] | tuple[str, ...] | None = None) -> tuple[int, int, str]:
     score, record = item
-    return (-score, _path_priority(str(record.get("path") or ""), profiles), str(record.get("path") or ""))
+    path = _record_primary_path(record)
+    return (-score, _path_priority(path, profiles), path)
 
 
 def _rank_records(
@@ -1779,10 +1823,11 @@ def _rank_records(
     *,
     limit: int,
     profiles: list[str] | tuple[str, ...] | None = None,
+    rank_hints: dict | None = None,
 ) -> tuple[list[dict], int]:
     ranked: list[tuple[int, dict]] = []
     for item in records:
-        score = _record_score(item, terms)
+        score = _record_score(item, terms) + _record_path_hint_score(item, rank_hints)
         if score > 0:
             ranked.append((score, item))
     ranked.sort(key=lambda item: _ranked_sort_key(item, profiles))
@@ -1876,13 +1921,14 @@ def _rank_sharded_section(
     *,
     limit: int,
     profiles: list[str] | tuple[str, ...] | None = None,
+    rank_hints: dict | None = None,
 ) -> tuple[list[dict], int]:
     ranked: list[tuple[int, dict]] = []
     total = 0
     keep = max(0, limit)
     trim_threshold = max(keep * 8, 128)
     for record in _iter_sharded_section_candidates(root_dir, manifest, section, terms) or ():
-        score = _record_score(record, terms)
+        score = _record_score(record, terms) + _record_path_hint_score(record, rank_hints)
         if score <= 0:
             continue
         total += 1
@@ -1896,18 +1942,88 @@ def _rank_sharded_section(
     return [record for _score, record in ranked[:keep]], total
 
 
-def query_project_context_index(index: dict, query: str, *, max_files: int = 8, max_records: int = 8) -> dict:
+def _record_owner_paths(record: dict) -> list[str]:
+    paths: list[str] = []
+    for key in ("path", "mk_path", "config_path"):
+        value = str(record.get(key) or "").strip()
+        if value and value not in paths:
+            paths.append(value)
+    return paths
+
+
+def _owner_paths_from_sections(section_matches: dict[str, list[dict]]) -> list[str]:
+    paths: list[str] = []
+    for section in ("symbols", "configs", "build", "device_tree", "entry_points", "packages"):
+        for record in section_matches.get(section) or []:
+            for path in _record_owner_paths(record):
+                if path not in paths:
+                    paths.append(path)
+    return paths[:24]
+
+
+def _promote_owner_files(
+    matched_files: list[dict],
+    owner_files: list[dict],
+    *,
+    limit: int,
+) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for record in [*owner_files, *matched_files]:
+        path = str(record.get("path") or "").strip()
+        if not path or path in seen:
+            continue
+        merged.append(record)
+        seen.add(path)
+        if len(merged) >= max(0, limit):
+            break
+    return merged
+
+
+def _file_records_by_owner_paths(files: list[dict], owner_paths: list[str]) -> list[dict]:
+    wanted = set(owner_paths)
+    found: dict[str, dict] = {}
+    for record in files:
+        path = str(record.get("path") or "").strip()
+        if path in wanted and path not in found:
+            found[path] = record
+    return [found[path] for path in owner_paths if path in found]
+
+
+def _sharded_file_records_by_owner_paths(root_dir: Path, manifest: dict, owner_paths: list[str]) -> list[dict]:
+    wanted = set(owner_paths)
+    found: dict[str, dict] = {}
+    for record in _iter_sharded_section_records(root_dir, manifest, "files") or ():
+        path = str(record.get("path") or "").strip()
+        if path in wanted and path not in found:
+            found[path] = record
+            if len(found) >= len(wanted):
+                break
+    return [found[path] for path in owner_paths if path in found]
+
+
+def query_project_context_index(
+    index: dict,
+    query: str,
+    *,
+    max_files: int = 8,
+    max_records: int = 8,
+    rank_hints: dict | None = None,
+) -> dict:
     terms = _query_terms(query)
     profiles = index.get("profiles") if isinstance(index.get("profiles"), list) else []
     files = index.get("files") if isinstance(index.get("files"), list) else []
-    matched_files, total_files = _rank_records(files, terms, limit=max_files, profiles=profiles)
+    matched_files, total_files = _rank_records(files, terms, limit=max_files, profiles=profiles, rank_hints=rank_hints)
     section_matches: dict[str, list[dict]] = {}
     section_totals: dict[str, int] = {"files": total_files}
     for section in ("packages", "symbols", "configs", "build", "device_tree", "tests", "entry_points"):
         records = index.get(section) if isinstance(index.get(section), list) else []
-        matched, total = _rank_records(records, terms, limit=max_records, profiles=profiles)
+        matched, total = _rank_records(records, terms, limit=max_records, profiles=profiles, rank_hints=rank_hints)
         section_matches[section] = matched
         section_totals[section] = total
+    owner_paths = _owner_paths_from_sections(section_matches)
+    owner_files = _file_records_by_owner_paths(files, owner_paths)
+    matched_files = _promote_owner_files(matched_files, owner_files, limit=max_files)
     return {
         "query": query,
         "terms": terms,
@@ -1925,18 +2041,44 @@ def _query_project_context_index_manifest(
     *,
     max_files: int = 8,
     max_records: int = 8,
+    rank_hints: dict | None = None,
 ) -> dict:
     if _storage_format(manifest) != SHARD_STORAGE_FORMAT:
-        return query_project_context_index(manifest, query, max_files=max_files, max_records=max_records)
+        return query_project_context_index(
+            manifest,
+            query,
+            max_files=max_files,
+            max_records=max_records,
+            rank_hints=rank_hints,
+        )
     terms = _query_terms(query)
     profiles = manifest.get("profiles") if isinstance(manifest.get("profiles"), list) else []
-    matched_files, total_files = _rank_sharded_section(root_dir, manifest, "files", terms, limit=max_files, profiles=profiles)
+    matched_files, total_files = _rank_sharded_section(
+        root_dir,
+        manifest,
+        "files",
+        terms,
+        limit=max_files,
+        profiles=profiles,
+        rank_hints=rank_hints,
+    )
     section_matches: dict[str, list[dict]] = {}
     section_totals: dict[str, int] = {"files": total_files}
     for section in ("packages", "symbols", "configs", "build", "device_tree", "tests", "entry_points"):
-        matched, total = _rank_sharded_section(root_dir, manifest, section, terms, limit=max_records, profiles=profiles)
+        matched, total = _rank_sharded_section(
+            root_dir,
+            manifest,
+            section,
+            terms,
+            limit=max_records,
+            profiles=profiles,
+            rank_hints=rank_hints,
+        )
         section_matches[section] = matched
         section_totals[section] = total
+    owner_paths = _owner_paths_from_sections(section_matches)
+    owner_files = _sharded_file_records_by_owner_paths(root_dir, manifest, owner_paths)
+    matched_files = _promote_owner_files(matched_files, owner_files, limit=max_files)
     return {
         "query": query,
         "terms": terms,
@@ -1953,6 +2095,7 @@ def query_project_context_index_file(
     *,
     max_files: int = 8,
     max_records: int = 8,
+    rank_hints: dict | None = None,
 ) -> dict | None:
     index_path = Path(index_path).expanduser().resolve()
     if not index_path.exists():
@@ -1969,6 +2112,7 @@ def query_project_context_index_file(
         query,
         max_files=max_files,
         max_records=max_records,
+        rank_hints=rank_hints,
     )
 
 
@@ -1982,12 +2126,37 @@ def query_project_context_index_cache(
     max_files: int = 8,
     max_records: int = 8,
 ) -> dict | None:
-    del config
     workspace = Path(workspace).expanduser().resolve()
     key = project_key_value or derive_project_key(workspace)
     workspace_id = workspace_id_for(workspace)
     index_path = project_context_index_paths(root, key, workspace_id)["index"]
-    return query_project_context_index_file(index_path, query, max_files=max_files, max_records=max_records)
+    resolved_query = str(query or "")
+    resolution: dict | None = None
+    try:
+        from aha_cli.services.project_context_resolver import resolve_project_context_query
+
+        resolution = resolve_project_context_query(
+            root,
+            workspace,
+            resolved_query,
+            config=config,
+            project_key_value=key,
+        )
+        resolved_query = str(resolution.get("query") or resolved_query)
+    except (Exception, SystemExit):
+        resolution = None
+    result = query_project_context_index_file(
+        index_path,
+        resolved_query,
+        max_files=max_files,
+        max_records=max_records,
+        rank_hints=resolution,
+    )
+    if result is not None and resolution and resolution.get("used_navigation"):
+        result["query"] = query
+        result["resolved_query"] = resolved_query
+        result["resolution"] = resolution
+    return result
 
 
 def _record_location(record: dict) -> str:
@@ -2017,6 +2186,16 @@ def format_project_context_reference(result: dict, *, budget_chars: int = 1200) 
         "Project map reference:",
         f"- query: {query}",
     ]
+    resolution = result.get("resolution") if isinstance(result.get("resolution"), dict) else {}
+    if resolution.get("used_navigation"):
+        routes = resolution.get("nav_routes") if isinstance(resolution.get("nav_routes"), list) else []
+        route_text = " -> ".join(
+            str(item.get("slug") or item.get("title") or "-")
+            for item in routes[:3]
+            if isinstance(item, dict)
+        )
+        if route_text:
+            _append_reference_line(lines, f"- nav route: {route_text}", budget_chars)
     packages = result.get("packages") if isinstance(result.get("packages"), list) else []
     files = result.get("files") if isinstance(result.get("files"), list) else []
     has_location = bool(files) or any(_record_location(item) for item in packages)

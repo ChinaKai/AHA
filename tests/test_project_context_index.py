@@ -18,6 +18,7 @@ from aha_cli.services.project_context_index import (
     query_project_context_index_cache,
     run_project_context_extractors,
 )
+from aha_cli.store.knowledge import init_knowledge_base, write_entry
 
 
 class ProjectContextIndexTests(unittest.TestCase):
@@ -185,6 +186,128 @@ class ProjectContextIndexTests(unittest.TestCase):
         self.assertIn("Project map reference", reference)
         self.assertIn("sigmastar_wyze_app", reference)
         self.assertIn("Read exact files by path", reference)
+
+    def test_cache_query_expands_natural_language_through_navigation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "home"
+            workspace = Path(tmp) / "repo"
+            service_dir = workspace / "src" / "app" / "services"
+            service_dir.mkdir(parents=True)
+            (service_dir / "weixin.py").write_text(
+                "def refresh_access_token():\n    return 'ok'\n",
+                encoding="utf-8",
+            )
+            (service_dir / "weixin_notifications.py").write_text(
+                "def send_weixin_notification():\n    return True\n",
+                encoding="utf-8",
+            )
+            (service_dir / "prompt_context.py").write_text(
+                "def context_token_budget():\n    return 0\n",
+                encoding="utf-8",
+            )
+
+            result = build_project_context_index(root, workspace)
+            raw = query_project_context_index(result["index"], "通知失效")
+            project_key = result["index"]["project_key"]
+            init_knowledge_base(root, {})
+            write_entry(
+                root,
+                config={},
+                scope="project",
+                kind="navigation",
+                project_key_value=project_key,
+                title="项目导航",
+                slug="index",
+                body="## 模块索引\n- [微信通知](modules/weixin.md)\n",
+            )
+            write_entry(
+                root,
+                config={},
+                scope="project",
+                kind="navigation",
+                project_key_value=project_key,
+                title="微信通知模块",
+                slug="modules/weixin",
+                body=(
+                    "处理微信通知、通知失效和 access token 刷新。\n"
+                    "关键文件 `src/app/services/weixin.py` "
+                    "`src/app/services/weixin_notifications.py`。\n"
+                ),
+            )
+
+            query = query_project_context_index_cache(root, workspace, "通知失效", config={})
+            reference = format_project_context_reference(query or {}, budget_chars=700)
+
+        self.assertEqual(raw["total_matches"], 0)
+        self.assertIsNotNone(query)
+        self.assertTrue(query["resolution"]["used_navigation"])
+        self.assertIn("modules/weixin", [item["slug"] for item in query["resolution"]["nav_routes"]])
+        self.assertIn("src/app/services/weixin.py", query["resolution"]["path_hints"])
+        self.assertIn("src/app/services/weixin.py", [item["path"] for item in query["files"]])
+        self.assertIn("nav route: modules/weixin", reference)
+
+    def test_exact_symbol_match_promotes_owning_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "home"
+            workspace = Path(tmp) / "repo"
+            (workspace / "src" / "camera").mkdir(parents=True)
+            (workspace / "src" / "camera" / "control.c").write_text(
+                "int nightvision_get_mode(void) { return 0; }\n",
+                encoding="utf-8",
+            )
+            (workspace / "tests" / "app" / "function_protocol").mkdir(parents=True)
+            (workspace / "tests" / "app" / "function_protocol" / "GetFunctionList.c").write_text(
+                "int unrelated_protocol_function(void) { return 0; }\n",
+                encoding="utf-8",
+            )
+            build_project_context_index(root, workspace)
+
+            query = query_project_context_index_cache(
+                root,
+                workspace,
+                "nightvision_get_mode app function protocol",
+                max_files=1,
+            )
+
+        self.assertIsNotNone(query)
+        self.assertIn("nightvision_get_mode", [item["name"] for item in query["symbols"]])
+        self.assertEqual([item["path"] for item in query["files"]], ["src/camera/control.c"])
+
+    def test_weak_navigation_match_does_not_expand_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "home"
+            workspace = Path(tmp) / "repo"
+            workspace.mkdir(parents=True)
+            (workspace / "map_service.py").write_text("def map_status():\n    return None\n", encoding="utf-8")
+
+            result = build_project_context_index(root, workspace)
+            project_key = result["index"]["project_key"]
+            init_knowledge_base(root, {})
+            write_entry(
+                root,
+                config={},
+                scope="project",
+                kind="navigation",
+                project_key_value=project_key,
+                title="无关模块",
+                slug="index",
+                body="## 模块索引\n- [无关模块](modules/unrelated.md)\n",
+            )
+            write_entry(
+                root,
+                config={},
+                scope="project",
+                kind="navigation",
+                project_key_value=project_key,
+                title="无关模块",
+                slug="modules/unrelated",
+                body="这个模块正文里偶然提到 map 一次，但没有相关文件。",
+            )
+
+            query = query_project_context_index_cache(root, workspace, "map 搜索自然语言", config={})
+
+        self.assertIsNotNone(query)
+        self.assertNotIn("resolution", query)
 
     def test_query_scoring_weights_names_and_paths_over_weak_values(self) -> None:
         terms = ["snapshot"]

@@ -342,7 +342,7 @@ def test_navigation_sidecar_writeback_updates_existing_map(tmp_path: Path):
     assert "## 项目结构 / 核心 Nav" in updated["body"]
     assert "new — fresh role" in updated["body"] and "updated overview" in updated["body"]
     assert "[new](modules/new.md)" not in updated["body"]
-    assert "**old**" not in updated["body"]
+    assert "**old**" in updated["body"]
 
 
 def test_sidecar_navigation_kind_is_normalized(tmp_path: Path):
