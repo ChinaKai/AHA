@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main
+from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.services import headroom_integration
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
 from aha_cli.services.project_context_index import build_project_context_index
@@ -539,6 +540,116 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("then update or create the project navigation entry with the verified files", prompt)
         self.assertNotIn("CH340 USB 电磁继电器串口控制协议", prompt)
         self.assertNotIn("串口模块也会输出状态", prompt)
+
+    def test_context_pack_includes_compact_prior_task_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            (workspace / "src").mkdir(parents=True)
+            (workspace / "src" / "new_api.py").write_text("def new_api():\n    return True\n", encoding="utf-8")
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Context evidence recap", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                build_project_context_index(root, workspace)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "type": "project_map_query",
+                        "agent_id": "main",
+                        "map": {"query": "legacy api", "total_matches": 0, "files": []},
+                    },
+                )
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "type": "context_evidence_result",
+                        "agent_id": "main",
+                        "signals": ["map_miss", "map_coverage_gap"],
+                        "actual_files": ["src/new_api.py"],
+                        "referenced_files": ["src/old_api.py"],
+                        "map_diagnostics": {
+                            "gap_signals": ["map_coverage_gap"],
+                            "missing_files": ["src/new_api.py"],
+                            "stale_path_hints": ["src/old_api.py"],
+                        },
+                        "routing_health": {
+                            "status": "needs_repair",
+                            "downrank_paths": ["src/old_api.py"],
+                            "prioritize_paths": ["src/new_api.py"],
+                        },
+                        "kb_scope_policy": {
+                            "project_navigation": "direct_edit_approved_markdown_with_task_evidence",
+                            "general_personal_wiki": "manual_candidate_review_only",
+                        },
+                        "maintenance_suggestions": [
+                            {
+                                "action": "update",
+                                "target": "project_navigation",
+                                "reason": "map_miss",
+                                "files": ["src/new_api.py"],
+                            }
+                        ],
+                        "maintenance_plan": [
+                            {
+                                "action": "update",
+                                "target": "project_navigation",
+                                "target_path": "projects/demo/navigation/flows/token-saving.md",
+                                "reason": "map_miss",
+                                "write_policy": "direct_project_navigation_update",
+                                "source_files": ["src/new_api.py"],
+                                "validation": ["python3 -m pytest tests/test_context_evidence.py -q"],
+                            }
+                        ],
+                    },
+                )
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "continue token saving",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertIn("Current task evidence recap:", prompt)
+        self.assertIn("- signals: map_miss, map_coverage_gap", prompt)
+        self.assertIn("- actual_files: src/new_api.py", prompt)
+        self.assertIn("- referenced_files: src/old_api.py", prompt)
+        self.assertIn("- map_gap_signals: map_coverage_gap", prompt)
+        self.assertIn("- map_missing_files: src/new_api.py", prompt)
+        self.assertIn("- stale_path_hints: src/old_api.py", prompt)
+        self.assertIn("routing_health: needs_repair downrank=src/old_api.py prioritize=src/new_api.py", prompt)
+        self.assertIn("kb_scope_policy: project_navigation=direct_edit_approved_markdown_with_task_evidence", prompt)
+        self.assertIn("recent_map_queries: legacy api (0 matches)", prompt)
+        self.assertIn(
+            "maintenance_plan: update project_navigation -> projects/demo/navigation/flows/token-saving.md",
+            prompt,
+        )
+        self.assertIn("policy=direct_project_navigation_update", prompt)
+        self.assertIn("maintenance_suggestions: update project_navigation (map_miss) files=src/new_api.py", prompt)
+        self.assertIn("Re-check current source before edits.", prompt)
+        pack_evidence = metrics["context_pack_evidence"]
+        self.assertEqual(pack_evidence["task_evidence"]["signals"], ["map_miss", "map_coverage_gap"])
+        self.assertEqual(pack_evidence["task_evidence"]["actual_files"], ["src/new_api.py"])
+        self.assertEqual(pack_evidence["task_evidence"]["map_queries"][0]["query"], "legacy api")
+        self.assertEqual(
+            pack_evidence["task_evidence"]["maintenance_plan"][0]["target_path"],
+            "projects/demo/navigation/flows/token-saving.md",
+        )
+        self.assertEqual(pack_evidence["task_evidence"]["routing_health"]["status"], "needs_repair")
+        self.assertEqual(
+            pack_evidence["task_evidence"]["kb_scope_policy"]["general_personal_wiki"],
+            "manual_candidate_review_only",
+        )
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

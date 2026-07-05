@@ -202,13 +202,164 @@
       `;
     }
 
+    function evidenceListHtml(values = [], { limit = 8, empty = "none", code = false } = {}) {
+      const items = Array.isArray(values) ? values.filter(Boolean).slice(0, limit) : [];
+      if (!items.length) return `<span class="task-evidence-muted">${escapeHtml(empty)}</span>`;
+      if (code) {
+        return items.map(value => `<code title="${escapeHtml(value)}">${escapeHtml(value)}</code>`).join("");
+      }
+      return items.map(value => `<span class="task-evidence-chip">${escapeHtml(value)}</span>`).join("");
+    }
+
+    function renderEvidenceSuggestions(suggestions = []) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const items = Array.isArray(suggestions) ? suggestions.filter(item => item && typeof item === "object").slice(0, 8) : [];
+      if (!items.length) {
+        return `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_suggestions", "No maintenance suggestions."))}</div>`;
+      }
+      return items.map(item => {
+        const label = [item.action, item.target, item.reason].filter(Boolean).join(" / ");
+        const targetPath = item.target_path
+          ? `<div class="task-evidence-line">${evidenceListHtml([item.target_path], { limit: 1, empty: "-", code: true })}</div>`
+          : "";
+        const policy = item.write_policy
+          ? `<div class="task-evidence-line">${escapeHtml(item.write_policy)}</div>`
+          : "";
+        const validation = Array.isArray(item.validation) && item.validation.length
+          ? `<div class="task-evidence-line">${evidenceListHtml(item.validation, { limit: 3, empty: "-", code: true })}</div>`
+          : "";
+        const execution = item.execution || {};
+        const executionLine = execution.state || execution.next_step
+          ? `<div class="task-evidence-line">${escapeHtml([execution.state, execution.next_step].filter(Boolean).join(" · "))}</div>`
+          : "";
+        return `
+          <div class="task-evidence-suggestion">
+            <strong>${escapeHtml(label || "-")}</strong>
+            ${targetPath}
+            ${policy}
+            ${executionLine}
+            <div>${evidenceListHtml(item.source_files || item.files || [], { limit: 6, empty: "-", code: true })}</div>
+            ${validation}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderRoutingHealth(health = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      if (!health || typeof health !== "object" || !health.status) {
+        return `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_routing_health", "No routing health yet."))}</div>`;
+      }
+      return `
+        <div class="task-evidence-line">${evidenceListHtml([health.status], { limit: 1, empty: "-" })}</div>
+        <div class="task-evidence-line">${evidenceListHtml(health.downrank_paths || [], { limit: 6, empty: "-", code: true })}</div>
+        <div class="task-evidence-line">${evidenceListHtml(health.prioritize_paths || [], { limit: 6, empty: "-", code: true })}</div>
+      `;
+    }
+
+    function renderEvidenceQueries(payload = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const records = Array.isArray(payload.records) ? payload.records : [];
+      const queries = records
+        .filter(item => item?.type === "project_map_query")
+        .slice(-6)
+        .reverse();
+      if (!queries.length) {
+        return `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_queries", "No map queries recorded."))}</div>`;
+      }
+      return queries.map(item => {
+        const map = item.map || {};
+        return `
+          <div class="task-evidence-query">
+            <strong>${escapeHtml(map.query || "-")}</strong>
+            <span>${escapeHtml(String(map.total_matches ?? 0))} matches</span>
+            <div>${evidenceListHtml(map.files || [], { limit: 6, empty: "-", code: true })}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderContextEvidencePanelHtml(detail = null) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      if (!detail) return `<div class="empty">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
+      if (detail.error) return `<div class="empty">${escapeHtml(detail.error)}</div>`;
+      if (detail.loading) return `<div class="empty">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
+      const payload = detail.payload || { records: [], latest_result: null, maintenance_suggestions: [], maintenance_plan: [] };
+      const latest = payload.latest_result || {};
+      const diagnostics = latest.map_diagnostics || {};
+      const routingHealth = payload.routing_health || latest.routing_health || {};
+      const count = Number(payload.count || 0);
+      const maintenanceItems = Array.isArray(payload.maintenance_plan) && payload.maintenance_plan.length
+        ? payload.maintenance_plan
+        : payload.maintenance_suggestions || [];
+      if (!count) {
+        return `
+          <div class="context-evidence-view">
+            <div class="task-evidence-head">
+              <h3>${escapeHtml(t("task.context_evidence", "Context evidence"))}</h3>
+              <button type="button" data-context-evidence-refresh>${escapeHtml(t("common.refresh", "Refresh"))}</button>
+            </div>
+            <div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_empty", "No context evidence yet."))}</div>
+          </div>
+        `;
+      }
+      return `
+        <div class="context-evidence-view">
+          <div class="task-evidence-head">
+            <div>
+              <h3>${escapeHtml(t("task.context_evidence", "Context evidence"))}</h3>
+              <div class="meta">${escapeHtml(t("task.context_evidence_count", "{count} evidence records").replace("{count}", String(count)))}</div>
+            </div>
+            <button type="button" data-context-evidence-refresh>${escapeHtml(t("common.refresh", "Refresh"))}</button>
+          </div>
+          <div class="task-evidence-grid">
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_signals", "Signals"))}</span>
+              <div>${evidenceListHtml(latest.signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
+            </div>
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_actions", "Actions"))}</span>
+              <div>${evidenceListHtml(latest.crud_actions || [], { empty: t("task.context_evidence_none", "none") })}</div>
+            </div>
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_actual", "Actual files"))}</span>
+              <div>${evidenceListHtml(latest.actual_files || diagnostics.actual_files || [], { limit: 8, empty: "-", code: true })}</div>
+            </div>
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_referenced", "Referenced files"))}</span>
+              <div>${evidenceListHtml(latest.referenced_files || diagnostics.referenced_files || [], { limit: 8, empty: "-", code: true })}</div>
+            </div>
+          </div>
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_suggestions", "Maintenance suggestions"))}</strong>
+            ${renderEvidenceSuggestions(maintenanceItems)}
+          </div>
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_routing", "Routing health"))}</strong>
+            ${renderRoutingHealth(routingHealth)}
+          </div>
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_map", "Map diagnostics"))}</strong>
+            <div class="task-evidence-line">${evidenceListHtml(diagnostics.gap_signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
+            <div class="task-evidence-line">${evidenceListHtml(diagnostics.missing_files || [], { limit: 8, empty: "-", code: true })}</div>
+            <div class="task-evidence-line">${evidenceListHtml(diagnostics.stale_path_hints || [], { limit: 8, empty: "-", code: true })}</div>
+          </div>
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_queries", "Map queries"))}</strong>
+            ${renderEvidenceQueries(payload)}
+          </div>
+        </div>
+      `;
+    }
+
     return Object.freeze({
       renderConversationFiltersHtml,
       renderConversationPanelHtml,
       renderFinalPanelHtml,
       renderHardwareIoPanelHtml,
       renderLogsPanelHtml,
-      renderContextPanelHtml
+      renderContextPanelHtml,
+      renderContextEvidencePanelHtml
     });
   }
 

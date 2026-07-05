@@ -2,6 +2,7 @@
   function createConversationController(state = {}, deps = {}) {
     const allEvents = state.allEvents || [];
     const contextDetails = state.contextDetails || new Map();
+    const contextEvidenceDetails = state.contextEvidenceDetails || new Map();
     const conversationFilters = state.conversationFilters || {};
     const conversationStates = state.conversationStates || new Map();
     const conversationSessionRefreshes = state.conversationSessionRefreshes || new Map();
@@ -507,12 +508,37 @@
       return detail;
     }
 
+    async function loadContextEvidenceDetail(taskId, force = false) {
+      if (!taskId) return null;
+      if (!force && contextEvidenceDetails.has(taskId)) return contextEvidenceDetails.get(taskId);
+      const previous = contextEvidenceDetails.get(taskId);
+      contextEvidenceDetails.set(taskId, { loading: true, payload: previous?.payload || null });
+      try {
+        const payload = await deps.fetchJson(
+          deps.apiUrl(`/api/task/${encodeURIComponent(taskId)}/context-evidence`, { limit: 50 }),
+          {},
+          "Failed to load context evidence"
+        );
+        const detail = { payload };
+        contextEvidenceDetails.set(taskId, detail);
+        return detail;
+      } catch (err) {
+        const detail = { error: err?.message || String(err) };
+        contextEvidenceDetails.set(taskId, detail);
+        return detail;
+      }
+    }
+
     function finalDetail(taskId) {
       return finalDetails.get(taskId);
     }
 
     function contextDetail(taskId) {
       return contextDetails.get(taskId);
+    }
+
+    function contextEvidenceDetail(taskId) {
+      return contextEvidenceDetails.get(taskId);
     }
 
     function logState(taskId) {
@@ -588,6 +614,8 @@
           loadContextDetail(selectedTaskId),
           loadConversationPage(selectedTaskId, backendTarget())
         ]);
+      } else if (activeTab === "context-evidence") {
+        await loadContextEvidenceDetail(selectedTaskId);
       }
     }
 
@@ -1108,6 +1136,7 @@
       captureContextScrollState,
       compactResetLooksComplete,
       contextDetail,
+      contextEvidenceDetail,
       conversationBackendSession,
       ensureActiveTabData,
       ensureConversationLoaded,
@@ -1115,6 +1144,7 @@
       initializeEventTailOffset,
       latestKnownEventOrder,
       loadContextDetail,
+      loadContextEvidenceDetail,
       loadHardwareIoPage,
       loadConversationPage,
       loadFinalDetail,

@@ -119,6 +119,12 @@
         handlers.openTaskCreateDialog();
         return;
       }
+      const contextEvidenceRefresh = target?.closest("[data-context-evidence-refresh]");
+      if (contextEvidenceRefresh) {
+        event.preventDefault();
+        handlers.refreshContextEvidence?.();
+        return;
+      }
       const bridgeToggle = target?.closest("[data-hardware-bridge-action]");
       if (bridgeToggle) {
         event.preventDefault();

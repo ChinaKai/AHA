@@ -221,7 +221,8 @@
       ...(taskHardwareDebugEnabled(task)
         ? [["hardware", t("conversation.hardware", "Hardware"), t("conversation.hardware", "Hardware")]]
         : []),
-      ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")]
+      ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")],
+      ["context-evidence", t("conversation.context_evidence_short", "Evd"), t("conversation.context_evidence", "Context evidence")]
     ];
     return `
       <div class="task-view-switcher tabs" role="group" aria-label="${escapeHtml(t("task.view_switcher", "Task view"))}">

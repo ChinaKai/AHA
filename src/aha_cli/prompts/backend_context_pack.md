@@ -23,6 +23,8 @@ $knowledge_reference
 
 $map_reference
 
+$evidence_reference
+
 Agent workflow:
 - For broad project orientation, read navigation/index first when it exists, then choose the smallest relevant modules/* or flows/* docs yourself.
 - Use Project Map or `/aha map query <terms>` only when it helps locate concrete files, symbols, configs, build records, DTS, tests, or entry points.

@@ -7,6 +7,8 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import main
+from aha_cli.services.context_evidence import list_task_context_evidence
+from aha_cli.store.filesystem import update_task_token_saving_config
 from aha_cli.web.task_command_format import (
     finalization_prompt,
     format_agent_command,
@@ -45,7 +47,9 @@ class TaskCommandFormatTests(unittest.TestCase):
                 (root / "drivers" / "net").mkdir(parents=True)
                 (root / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
                 map_refresh_text = format_aha_command(root, run_id, "task-001", "/aha map refresh")
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
                 map_query_text = format_aha_command(root, run_id, "task-001", "/aha map query foo")
+                map_query_evidence = list_task_context_evidence(root, run_id, "task-001")
                 done_text = format_aha_command(root, run_id, "task-001", "/aha done")
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
@@ -70,6 +74,9 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertIn("foo_probe", map_query_text)
         self.assertIn("Reference preview:", map_query_text)
         self.assertIn("Project map reference", map_query_text)
+        self.assertEqual(map_query_evidence[-1]["type"], "project_map_query")
+        self.assertEqual(map_query_evidence[-1]["map"]["query"], "foo")
+        self.assertIn("drivers/net/foo.c", map_query_evidence[-1]["map"]["files"])
         for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, done_text, unknown_text):
             self.assertIn("Unsupported AHA command", text)
 

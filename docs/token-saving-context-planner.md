@@ -1,6 +1,6 @@
 # AHA Token Saving Context Planner 设计
 
-> 状态：草案，持续讨论中。
+> 状态：Context Planner MVP 已接入；Phase 3/4 继续推进。
 > 最后更新：2026-07-05。
 > 维护规则：讨论过程中只要形成明确结论，就更新本文档对应章节，并在「进展日志」记录。没有结论的问题放到「开放问题」，不要只留在聊天记录里。
 
@@ -62,7 +62,7 @@ Codex/Claude 这类 agent 后端没有真正的远端连接态记忆。每一轮
 - `Project Context Index`：生成式本地项目上下文索引，缓存到 AHA runtime，不是人工审核的长期知识条目。
 - `/aha map status|refresh|query <terms>`：查看、刷新、查询项目 map。
 - Web Knowledge Map tab：查看生成的 project map、文件树和搜索结果。
-- task token saving/project map 开关：在 prompt 中注入 compact map capability，而不是自动注入全部 map 查询结果。
+- task token saving/project map 开关：在 prompt 中注入 KB/Map Pull Contract；旧 compact map capability block 只作为兼容/兜底，不自动注入全部 map 查询结果。
 
 因此本文档里的 `map` 默认指 **现有 Project Context Index / `/aha map` 查询能力**，不是要新增一个独立 KB 类型。需要人工维护的“流程关系图”优先落到 project navigation 的 `flows/*.md`。
 
@@ -139,7 +139,7 @@ runtime/project_context/<project-key>/<workspace-id>/
 - nav/entry 是否被证明准确、缺失或过时。
 - 验证是否成功，以及最终关键路径是什么。
 
-这些观测应自动生成 `context_hit_ok`、`nav_stale`、`map_miss`、`entry_wrong`、`missing_nav`、`missing_entry` 等信号。普通任务链路不再把这些信号转成 pending candidate；它们用于提示 agent 在有当前任务证据时直接维护项目级 approved KB Markdown，并用于后续度量和降权判断。
+这些观测应自动生成 `context_hit_ok`、`nav_stale`、`map_miss`、`entry_wrong`、`missing_nav`、`missing_entry` 等信号，并给出 advisory `maintenance_suggestions`。普通任务链路不再把这些信号转成 pending candidate；它们用于提示 agent 在有当前任务证据时直接维护项目级 approved KB Markdown，并用于后续度量和降权判断。
 
 当前仍存在的 `task final / memo report sidecar` 只能视为历史兼容或补充入口，不再作为新设计的主生产链路。后续设计和验收不能依赖 agent 在 final 里主动总结知识，因为这会把自增长能力退化成人工/模型自觉行为。
 
@@ -187,22 +187,24 @@ runtime/project_context/<project-key>/<workspace-id>/
 
    `chat_prompt_context.py` 会用 fingerprint 记录已经交付过的知识/能力块。sticky session 里，如果 KB context 或 Project Map capability 没变，不会每轮重复注入同一段固定上下文。
 
-3. **Project Map capability block**
+3. **Context Pack 与 Project Map capability block**
 
-   当 task token saving 启用且 provider 为 `map`，并且当前 workspace 已有 map cache 时，prompt 只注入 `backend_project_map_context.md` 这类能力说明：
+   当 task token saving 启用且 provider 为 `map` 时，普通用户消息前会先尝试生成 `backend_context_pack.md` 这类 KB/Map Pull Contract。它只注入入口、使用边界和 evidence 协议，不自动注入关键词 KB 命中或 map query 结果。
+
+   当 Context Pack 不可用、但当前 workspace 已有 map cache 时，`backend_project_map_context.md` 这类旧能力说明仍可作为兼容/兜底块：
 
    - map index 路径。
    - project key / workspace id。
    - generated_at / counts / flavors / profiles。
    - 要求用聚焦 terms 执行 `/aha map query <terms>` 或检查 map cache。
 
-   这里不会自动注入 map query 结果。也就是说当前实现是“告诉 agent 有 map 可用”，不是“每轮替 agent 自动查 map 并塞结果”。
+   两条路径都不会自动注入 map query 结果。也就是说当前实现是“告诉 agent 有 KB/map 入口可用”，不是“每轮替 agent 自动查 map 并塞结果”。
 
 4. **`/aha map` 和 Web Knowledge UI**
 
    `/aha map status|refresh|query <terms>` 由 AHA 本地处理，不路由给后端 agent。`query_project_context_index_cache()` 会读取已有 runtime map，返回 files/packages/symbols/configs/build/device_tree/entry_points 等命中，并用 `format_project_context_reference()` 生成紧凑引用。
 
-   `project_context_resolver.py` 已经实现了 deterministic nav -> map query 扩展：先读 `navigation/index.md` 和第一跳 module/flow docs，按自然语言 query 打分，命中后提取 `related_files`、code spans、路径片段等作为 expanded terms/path hints，再交给 Project Map 排序。Slash query 和 Web map search 会显示 nav route、expanded terms 这类诊断信息。
+   `project_context_resolver.py` 已经实现了 deterministic nav -> map query 扩展：先读 `navigation/index.md` 和第一跳 module/flow docs，按自然语言 query 打分，命中后提取 `related_files`、code spans、路径片段等作为 expanded terms/path hints，再交给 Project Map 排序。不存在的 nav path hint 会从正向 hint 中剔除并作为 `stale_path_hints` 暴露；`project_context_index.py` 会对这些 stale hint 降权，避免旧导航路径继续推高结果。Slash query 和 Web map search 会显示 nav route、expanded terms、stale path hint 这类诊断信息。
 
    map 的边界要分两层：runtime cache 原文不能手改；但生成和查询逻辑必须能自增长、自修复。当前任务证据如果证明 map stale、extractor 漏抓、schema 不够、query expansion 选错 nav hint、ranking 把关键文件排丢，AHA 应记录结构化 gap，agent 在 AHA/map 相关任务里可以直接修 `project_context_index.py`、`project_context_resolver.py` 或相关测试。
 
@@ -246,10 +248,10 @@ sidecar/capture/bootstrap
 - task prompt 只注入有限引用和短摘要；完整正文需要 agent 按 path 读取。
 - `navigation/index` 置顶，但 module/flow detail 默认不全量注入。
 - Project Map 已有自然语言经 nav 扩展的查询能力，但触发点仍是 `/aha map query` 或 Web 查询。
-- 当前 task prompt 不会在每个自然语言 turn 前自动执行 planner/map query。
+- task token saving 启用且 provider 为 `map` 时，普通用户消息前已会生成 Context Pack；但不会自动执行 planner 之外的 map query。
 - Project Map 不会在普通 prompt 生成时自动 build/refresh；refresh 是显式动作。
 - 当前自增长/自修复已经从“自动生成候选”改为“记录 evidence + 在任务提示词中要求 agent 直接维护项目 KB 原文”；是否真正写入取决于 agent 本轮是否有足够证据。
-- 当前自修复还没有完整的自动 stale 降权闭环；普通任务链路优先窄范围 repair/deprecate 项目 KB 原文，不做全库重建。
+- 当前已具备本轮 query/evidence 级 stale hint 暴露与降权：resolver 输出 `stale_path_hints`，ranking 记录 downrank，evidence/API/UI 暴露 `routing_health`、`gap_reasons` 和 stale path diagnostics。跨任务长期统计降权仍未自动化；普通任务链路优先窄范围 repair/deprecate 项目 KB 原文，不做全库重建。
 - `task final` 不再作为新设计主链路；即使代码里保留兼容 hook，也不能把它当成自增长能力的核心。
 
 ### 4.6 对 Context Planner 的设计约束
@@ -265,12 +267,12 @@ sidecar/capture/bootstrap
   -> 手动 /aha nav、/aha kb、capture/bootstrap 仍走 sidecar/pending/approve
 ```
 
-这意味着后续讨论重点应该落在四个缺口上：
+这意味着后续讨论重点已经从“是否注入 planner”转向两个闭环：
 
-1. 自然语言 turn 进入后端 agent 前，是否增加 AHA 内部 planner step。
-2. AHA 如何把现有 nav/map/entry 的入口和使用方法交给 agent，而不是用关键词替 agent 选内容。
-3. agent 执行过程中如何把“读了什么 / 跳过什么 / 缺什么 / 哪些过期”记录成 evidence，并驱动本任务窄范围 KB 原文维护。
-4. 需求完成后如何 reset/compact，让下一需求重新从 durable KB + Context Pack 启动。
+1. 已落地：自然语言 turn 进入后端 agent 前生成 KB/Map Pull Contract。
+2. 已落地：AHA 把现有 nav/map/entry 的入口和使用方法交给 agent，而不是用关键词替 agent 选内容。
+3. 待推进：agent 执行过程中如何把“读了什么 / 跳过什么 / 缺什么 / 哪些过期”记录成更可用的 evidence，并驱动本任务窄范围 KB 原文维护。
+4. 待推进：需求完成后如何 reset/compact，让下一需求重新从 durable KB + Context Pack 启动。
 
 ## 5. 最难的问题：准确知识库
 
@@ -401,7 +403,7 @@ Context Planner 在调用后端 agent 前运行。它把用户请求转换成有
 
 触发策略：
 
-- 每次用户消息进 agent 前都经过 Planner。
+- task token saving 启用且 provider 为 `map` 时，普通用户消息进 agent 前经过 Planner；final/memo 和 `/agent` command 不走这条普通 turn planner。
 - 新需求注入完整 Pull Contract：KB root、project key、navigation index、Project Map 使用方法、evidence 回写协议。
 - 同需求 follow-up 使用轻量 Pull Contract 或 sticky delta：只补充入口/能力变化，不重复塞 KB 内容。
 - 是否为新需求由 AHA 内部判断，不能把判断负担交给用户；但知识相关性由 agent 根据任务语义判断。
@@ -437,7 +439,7 @@ agent 反馈策略：
 自修复边界：
 
 - 普通任务 evidence 不自动生成 pending。
-- 可以自动记录命中失败、降低本轮排序权重，并提示 agent 做窄范围修复。
+- 可以自动记录命中失败、降低本轮排序权重，并通过 advisory `maintenance_suggestions` 和结构化 `maintenance_plan` 提示 agent 做窄范围修复；建议/计划本身不自动写 KB。
 - project navigation 和 project solutions 可以由 agent 直接改 approved Markdown 原文；general/personal/wiki 默认仍要求用户显式确认或走 `/aha kb`。
 - 不扫描/重建完整知识库；只根据当前任务的 Pull Contract、agent 实际读取的 KB/nav/map、实际读写路径、命令、验证和回复摘录做增量维护。
 - “删除”第一阶段只表达为 stale/deprecate/repair，不自动物理删除 KB 文件。
@@ -632,14 +634,14 @@ Observe Proxy 是这个设计的度量层。
 - 能从真实任务沉淀有用项目导航。
 - 手动 reset 后能看到无关上下文减少。
 
-### Phase 2：Context Planner MVP
+### Phase 2：Context Planner MVP（第一刀已完成）
 
 - 后端调用前增加 planner step。
 - 生成小型 KB/Map Pull Contract。
 - 只注入入口说明、使用方法、信任优先级和当前任务级 evidence 回写协议。
 - 不自动检索 nav/entry/wiki 并塞入 prompt。
 - 不自动执行 project map query 并塞入结果。
-- 记录 agent 本轮实际读取、采用、跳过或发现缺失的知识/路径。
+- 记录 Context Pack 交付证据；更细的实际读取、采用、跳过或发现缺失路径归入 Phase 3。
 - 第一刀绑定现有 task token saving `provider=map` 开关：未启用时不改变 prompt。
 - 第一刀只读取已有 map cache，不自动 refresh/build。
 - 第一刀只输出入口和约束，不启动额外 agent 做检索。
@@ -683,12 +685,32 @@ Observe Proxy 是这个设计的度量层。
 - 纯命中场景只记录 evidence，不制造无价值 pending；miss/stale/wrong/missing 驱动窄范围 KB 原文维护或 map 生成/查询逻辑修复。
 - 更新后的知识能改善下一次同类任务。
 
-### Phase 4：生命周期自动化
+当前实现切片：
+
+- 新增 `src/aha_cli/services/context_evidence.py`，会把 Context Pack 交付和 turn 后推断结果写入 `tasks/<task-id>/context_evidence.jsonl`。
+- `chat.py` 在 prompt metrics 后记录 `context_pack_recorded`，并在普通 agent turn 结束后调用 evidence distill。
+- 已有信号包括 `context_hit_ok`、`nav_stale`、`map_miss`、`map_stale_cache`、`map_extractor_gap`、`map_query_expansion_gap`、`map_ranking_gap`、`map_coverage_gap`、`entry_wrong`、`missing_nav`、`missing_entry`。
+- 目前 evidence 记录 signals、crud_actions、commands、actual_files、map_diagnostics、routing_health、kb_scope_policy、advisory maintenance_suggestions 和结构化 maintenance_plan，不自动改 project navigation/project solutions。
+- `map_diagnostics` 会暴露 `gap_reasons`、`stale_path_hints` 等更细原因；`routing_health` 汇总本轮需要 downrank/prioritize 的路径和 score 调整，帮助后续修 nav 或 map logic。
+- `kb_scope_policy` 明确 project navigation 可基于当前任务证据直写，general/personal/wiki 默认走 manual candidate review；普通任务不把非项目级 wiki 当作自动直写目标。
+- `maintenance_plan` 在旧 suggestions 之上补充 `target_path`、`target_kind`、`signals`、`source_files`、`validation`、`write_policy` 和 `execution`：project navigation 可基于当前任务证据直写 approved Markdown；project solutions 默认 advisory；generated map cache 只能 refresh/status，不能手改；map logic gap 指向 `project_context_index.py`/`project_context_resolver.py` 等源码和测试。
+- `GET /api/task/<task-id>/context-evidence` 可以读取最近 task-scoped evidence、latest result、routing health、KB scope policy、聚合后的 maintenance suggestions 和 maintenance plan；任务列表的 `Chat / Logs / Ctx / Evidence` 视图里已有只读 Context evidence 页面展示这些数据，移动端入口收在 `+` 操作面板里。
+- 后续 turn 的 Context Pack 会在已有 task evidence 时追加 compact “Current task evidence recap”，包含最近 signals、actual/referenced files、map gap、stale path hints、routing health、KB scope policy、map query、maintenance plan 和 maintenance suggestions。这个 recap 是 task-local hints，不替代源文件验证；只有存在 evidence 时才把预算提高到 4000 chars 硬上限，避免关键 source-check 提醒被裁掉。
+- agent-pull 入口契约本身不带具体 `map.files`；这种 entrypoint-only pack 即使本轮读取了源码，也不应被误判成 `missing_nav` 或 `missing_entry`。
+- 真实 `/aha map query` 和 Web Knowledge Map query 结果会记录为 `project_map_query` evidence，并在同一 agent turn 的 prompt 之后发生时并入 `context_evidence_result`。
+
+### Phase 4：生命周期 reset/compact
 
 - 判断需求完成。
 - 生成 compact task summary。
 - 在无关新需求前自动 reset/compact。
 - 新需求只从 Context Planner + durable task state 启动。
+
+当前实现切片：
+
+- Web 侧已丢弃 `/aha final` / finalization 作为常规完成路径，因此它不作为 token-saving lifecycle 触发点。
+- 自动 reset/compact 暂不推进，避免误判新旧需求边界并破坏 sticky session 连续性。
+- reset/compact 保持手动，由用户自己决定何时执行；现有手动入口是 `POST /api/task/<task-id>/session/compact-reset` / UI compact-reset 动作。
 
 验收：
 
@@ -714,27 +736,36 @@ Observe Proxy 是这个设计的度量层。
 
 ## 14. 开放问题
 
-- Context Pack 的默认 token/字符预算是多少。
-- map query 结果默认给多少条、多少字符。
 - map gap 信号如何进一步精确归因：哪些是 stale cache，哪些是 extractor/schema 缺口，哪些是 query expansion/nav hint/ranking 问题。
-- 哪些完成信号足够可靠，可以触发自动 reset。
+- 是否存在足够可靠的新旧需求边界信号，可以在未来重新考虑自动 reset。
 - 新需求开始时 reset 是否默认执行，还是先询问用户。
-- 多条 nav/map/entry 冲突时如何排序和降权。
-- stale 知识如何检测、展示、修复。
-- 自然语言检索第一版用什么组合：关键词、结构化字段、向量、历史命中反馈。
+- 多条 nav/map/entry 冲突时如何做跨任务长期排序和降权。
+- stale 知识的跨任务统计、展示和自动 repair/deprecate 工作流如何收敛。
+- 如果未来重新引入 AHA 内部自然语言检索，使用什么组合：关键词、结构化字段、向量、历史命中反馈。
 - 非项目级知识自修复何时允许直写，何时必须走 `/aha kb` 候选链路。
 
 ## 15. 进展日志
 
 - 2026-07-05：初版设计文档创建，覆盖 Context Planner、nav/map/entry、知识更新、observer 度量和 reset/compact 生命周期。
 - 2026-07-05：根据讨论更新为中文文档，并把“准确知识库”列为核心难点：知识库必须具备自增长、自修复，以及从自然语言精准定位 nav/map/entry 的能力。
-- 2026-07-05：确认产品边界：用户只负责自然语言需求，不负责检索知识库。AHA 内部检索和重排是主路径，agent 自主检索只作为 Context Pack 低置信或失配时的兜底。
+- 2026-07-05：确认产品边界：用户只负责自然语言需求，不负责检索知识库。后续修正为 agent-pull 主路径：AHA 提供入口和规则，agent 判断语义相关性。
 - 2026-07-05：修正 map 设计基线：当前 AHA 已有通用 Project Context Index 和 `/aha map status|refresh|query`。本文档后续讨论基于现有 generated project map；人工维护的流程关系优先写入 `navigation/flows/*.md`，不在第一版新增独立 KB map 类型。
 - 2026-07-05：补齐当前 AHA 知识库实现基线：长期 KB 存储模型、task final/`/aha kb`/`/aha nav`/capture/project-nav bootstrap/project-map refresh 等生产者，task prompt、sticky delta、Project Map capability、`/aha map`/Web UI 等消费者，以及 pending/approve/manual gate 的审核写入路径。
-- 2026-07-05：确认 Context Planner MVP 设计：每次用户消息进 agent 前经过 planner；新需求完整规划、follow-up 轻量补差异；预算控制在 4000-6000 chars 目标、8000 chars 硬上限；普通任务 evidence 不自动生成 pending；map 只作为代码定位器，不写长期 KB。
+- 2026-07-05：确认 Context Planner MVP 设计：token saving provider=map 的普通用户消息经过 planner；Pull Contract 预算目标 1200-2500 chars、硬上限 4000 chars；普通任务 evidence 不自动生成 pending；map 只作为代码定位器，不写长期 KB。
 - 2026-07-05：完成 Context Planner MVP 第一刀：接入 full prompt 和 sticky delta prompt；只注入 KB/Map Pull Contract，不自动注入关键词 KB 命中或 map query 结果；只读取已有 map cache，不自动 refresh。
 - 2026-07-05：纠正知识生产主链路：`task final` 不再作为新设计主生产者，只能视为历史兼容/补充入口。自动观测驱动的自增长、自修复是 token saving 方案核心；手动 `/aha nav`、`/aha kb`、capture 只作为辅助。
 - 2026-07-05：明确自增长/自修复的实现边界：只对当前任务证据做增量 CRUD，由 agent 直接维护 project navigation/project solutions 原文；不扫描或重建完整知识库，也不自动删除长期 KB 文件。
 - 2026-07-05：根据 task-151 首轮 prompt 问题修正设计：AHA 关键词检索不再作为自然语言到 KB 的主链路；Context Pack 改为 KB/Map Pull Contract，只注入入口说明、使用方法、信任优先级和当前任务级 evidence 协议，语义相关性由 agent 主动判断。
 - 2026-07-05：根据用户确认修正写入策略：普通任务 evidence 不进入 pending candidate；项目 navigation/solutions/map 使用权交给 agent，其中 generated map 只能 query/refresh，稳定路线写回 navigation。手动 `/aha kb`、`/aha nav`、capture/bootstrap 才是候选审核路径。
 - 2026-07-05：细化 map 自增长/自修复边界：generated map cache 不能手改，但 extractor、schema、resolver、query expansion、ranking、refresh 逻辑必须能被当前任务 evidence 驱动修复；新增 map gap 信号用于区分 stale cache、extractor gap、query expansion gap、ranking gap 和 coverage gap。
+- 2026-07-05：同步当前实现状态：Phase 2 第一刀已接入 `context_planner.py`/`backend_context_pack.md`/sticky delta；Phase 3 已有 `context_evidence.py` 的记录和信号推断，但自动 KB 原文维护、stale 展示/降权和 Phase 4 生命周期 reset/compact 仍待推进。
+- 2026-07-05：收紧 Phase 3 signal 判断：Context Pack 只有 KB/map 入口、没有具体 referenced files 时，本轮实际读源码不再自动产生 `missing_nav`/`missing_entry` 假阳性；只有实际 map query observed 或 navigation index 明确缺失等场景才触发 missing-nav 类信号。
+- 2026-07-05：接入 `/aha map query` evidence：slash query 成功后记录紧凑 `project_map_query`，并在同一 agent turn 的 prompt 之后发生时合并进 `context_evidence_result`，用于 `context_hit_ok`、`map_miss` 和 map gap 判断。
+- 2026-07-05：接入 Web Knowledge Map query evidence：`/api/kb/project-context-index/query` 在能由 `run_id`/`task_id` 或唯一 workspace task 关联到 task 时记录 `project_map_query`；前端打开已有 map 查询时也随 payload 传递 `run_id`。
+- 2026-07-05：补充 `maintenance_suggestions`：context evidence 会把 miss/stale/wrong/missing 信号转成 advisory create/update/repair/refresh/deprecate 建议，用于指导 agent 窄范围维护 project navigation、project solutions 或 map 生成/查询逻辑；普通任务仍不自动生成 pending、不自动写 KB。
+- 2026-07-05：补充 task-scoped evidence 只读 API：`GET /api/task/<task-id>/context-evidence` 返回最近 evidence、latest context result 和聚合后的 maintenance suggestions，方便后续 UI 展示和调试，不改变 KB 写入策略。
+- 2026-07-05：接入 Web 只读展示：任务列表 view switcher 新增 Evidence 视图，移动端 `+` 操作面板新增 Evidence 入口，展示 signals、crud actions、actual/referenced files、maintenance suggestions、map diagnostics 和最近 map query；面板只调用只读 API，不触发 KB 写入。
+- 2026-07-05：Context Planner 后续 turn 接入 compact task evidence recap：当 task 已有 context evidence 时，在 KB/Map Pull Contract 中携带最近 signals/files/map query/suggestions，减少重复定位；该 recap 仅作 task-local hints，仍要求重新验证当前源文件。
+- 2026-07-05：补齐结构化 `maintenance_plan`：turn 后 evidence 会把泛化 suggestions 扩展为可执行计划，包含目标 KB/source/cache 路径、写入策略、来源文件、触发信号和验证命令；API、Evidence 面板和后续 Context Pack recap 都会优先暴露该计划，但仍不自动写 KB 或手改 generated map cache。
+- 2026-07-05：根据 Web 已丢弃 `/aha final` 的现状，撤回 finalization lifecycle advice；Phase 4 暂时保持手动 compact/reset，由用户决定何时清 backend session。
+- 2026-07-05：补齐剩余 Phase 3 闭环：resolver 输出 stale path hints 并从正向 hint 剔除，map ranking 对 stale hints 降权，context evidence 增加 `gap_reasons`、`routing_health`、`kb_scope_policy` 和 maintenance plan `execution`，API/UI/后续 Context Pack recap 同步展示；evidence recap 预算提升到 4000 硬上限以保留 source-check 边界。

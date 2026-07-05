@@ -1791,10 +1791,23 @@ def _rank_hint_paths(rank_hints: dict | None) -> list[str]:
     return out[:24]
 
 
+def _stale_rank_hint_paths(rank_hints: dict | None) -> list[str]:
+    if not isinstance(rank_hints, dict):
+        return []
+    hints = rank_hints.get("stale_path_hints")
+    if not isinstance(hints, list):
+        return []
+    out: list[str] = []
+    for hint in hints:
+        value = str(hint or "").strip().replace("\\", "/").strip("/")
+        if value and value not in out:
+            out.append(value)
+    return out[:24]
+
+
 def _record_path_hint_score(record: dict, rank_hints: dict | None) -> int:
     hints = _rank_hint_paths(rank_hints)
-    if not hints:
-        return 0
+    stale_hints = _stale_rank_hint_paths(rank_hints)
     path = _record_primary_path(record).replace("\\", "/").strip("/")
     if not path:
         return 0
@@ -1808,6 +1821,13 @@ def _record_path_hint_score(record: dict, rank_hints: dict | None) -> int:
             score += 18
         elif path in hint:
             score += 24
+    for hint in stale_hints:
+        if path == hint:
+            score -= 80
+        elif path.startswith(hint.rstrip("/") + "/"):
+            score -= 48
+        elif hint in path:
+            score -= 24
     return score
 
 

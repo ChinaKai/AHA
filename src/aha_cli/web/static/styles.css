@@ -2757,6 +2757,102 @@ body.auth-required .login-view:not(.hidden) {
 .task-hardware-editor {
   background: var(--color-surface);
 }
+.context-evidence-view {
+  display: grid;
+  gap: 10px;
+}
+.task-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.task-evidence-head h3 {
+  margin: 0;
+}
+.task-evidence-head button {
+  min-height: 26px;
+  padding: 0 8px;
+  border-color: var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: 11px;
+}
+.task-evidence-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.task-evidence-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+}
+.context-evidence-view .task-evidence-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.task-evidence-grid > div,
+.task-evidence-block {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.task-evidence-grid span,
+.task-evidence-block strong {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.task-evidence-chip {
+  display: inline-flex;
+  max-width: 100%;
+  margin: 0 4px 4px 0;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.task-evidence-body code,
+.context-evidence-view code {
+  display: block;
+  max-width: 100%;
+  padding: 2px 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-evidence-muted,
+.task-evidence-empty,
+.task-evidence-query span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.task-evidence-suggestion,
+.task-evidence-query {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+}
+.task-evidence-suggestion strong,
+.task-evidence-query strong {
+  min-width: 0;
+  color: var(--color-text-strong);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.task-evidence-line {
+  min-width: 0;
+}
 .task-settings-danger-zone {
   background: var(--color-surface);
   border-color: #fecaca;
@@ -3075,7 +3171,7 @@ body.auth-required.knowledge-home .knowledge-home-page {
 }
 .task-view-switcher.tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(36px, 1fr));
   gap: 4px;
   margin-top: var(--space-2);
   padding: 0;

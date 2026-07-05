@@ -217,7 +217,7 @@
         openTaskCreateDialog();
         return;
       }
-      if (["conversation", "final", "logs", "hardware", "context"].includes(action)) {
+      if (["conversation", "final", "logs", "hardware", "context", "context-evidence"].includes(action)) {
         await deps.activateTab?.(action);
       }
     }

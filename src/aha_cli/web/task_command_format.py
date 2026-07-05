@@ -11,7 +11,6 @@ SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha na
 
 
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
-    del target
     parts = command.split()
     name = parts[1] if len(parts) > 1 else ""
     if not name:
@@ -27,7 +26,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
     if name == "nav":
         return "Use `/aha nav <message>` from the selected task conversation to ask the current agent to emit project navigation candidates from its sticky session context."
     if name == "map":
-        return format_aha_map_command(root, run_id, task_id, command)
+        return format_aha_map_command(root, run_id, task_id, command, target=target)
     if name == "complete":
         return "Use `/aha complete` from the selected task conversation to mark the task completed."
     if name == "reopen":
@@ -186,7 +185,7 @@ def _format_map_query(result: dict, status: dict) -> str:
     return "\n".join(lines)
 
 
-def format_aha_map_command(root: Path, run_id: str, task_id: str | None, command: str) -> str:
+def format_aha_map_command(root: Path, run_id: str, task_id: str | None, command: str, *, target: str = "main") -> str:
     parts = _command_parts(command)
     subcommand = parts[2].lower() if len(parts) > 2 else ""
     if subcommand not in {"status", "refresh", "query"}:
@@ -230,6 +229,17 @@ def format_aha_map_command(root: Path, run_id: str, task_id: str | None, command
         query_result = query_project_context_index_cache(root, workspace_path, query, config=config)
         if not query_result:
             return _format_map_status(status)
+        from aha_cli.services.context_evidence import record_project_map_query_result
+
+        record_project_map_query_result(
+            root,
+            run_id,
+            task_id=task_id,
+            agent_id=target,
+            command=command,
+            query_result=query_result,
+            status=status,
+        )
         reference = format_project_context_reference(query_result)
         text = _format_map_query(query_result, status)
         if reference:

@@ -8,6 +8,7 @@ import unittest
 
 from aha_cli.services.project_context_index import (
     ProjectContextExtractor,
+    _record_path_hint_score,
     _record_score,
     build_project_context_index,
     discover_project_repos,
@@ -231,7 +232,9 @@ class ProjectContextIndexTests(unittest.TestCase):
                 body=(
                     "处理微信通知、通知失效和 access token 刷新。\n"
                     "关键文件 `src/app/services/weixin.py` "
-                    "`src/app/services/weixin_notifications.py`。\n"
+                    "`src/app/services/weixin_notifications.py` "
+                    "`src/app/services/deleted.py`。\n"
+                    "入口符号 `WeixinClient.refresh_token` 不是文件路径。\n"
                 ),
             )
 
@@ -243,8 +246,22 @@ class ProjectContextIndexTests(unittest.TestCase):
         self.assertTrue(query["resolution"]["used_navigation"])
         self.assertIn("modules/weixin", [item["slug"] for item in query["resolution"]["nav_routes"]])
         self.assertIn("src/app/services/weixin.py", query["resolution"]["path_hints"])
+        self.assertNotIn("src/app/services/deleted.py", query["resolution"]["path_hints"])
+        self.assertIn("src/app/services/deleted.py", query["resolution"]["stale_path_hints"])
+        self.assertNotIn("WeixinClient.refresh_token", query["resolution"]["stale_path_hints"])
         self.assertIn("src/app/services/weixin.py", [item["path"] for item in query["files"]])
         self.assertIn("nav route: modules/weixin", reference)
+
+    def test_stale_path_hints_downrank_records(self) -> None:
+        active = {"path": "src/app/services/weixin.py", "kind": "python", "name": "weixin"}
+        stale = {"path": "src/app/services/deleted.py", "kind": "python", "name": "deleted"}
+        hints = {
+            "path_hints": ["src/app/services/weixin.py"],
+            "stale_path_hints": ["src/app/services/deleted.py"],
+        }
+
+        self.assertGreater(_record_path_hint_score(active, hints), 0)
+        self.assertLess(_record_path_hint_score(stale, hints), 0)
 
     def test_exact_symbol_match_promotes_owning_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,6 +14,7 @@ from aha_cli.services.hardware_bridge import (
     ensure_bridge,
     task_devices,
 )
+from aha_cli.services.context_evidence import list_task_context_evidence
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
 
@@ -163,6 +164,82 @@ def task_final_view_snapshot(root: Path, run_id: str, task_id: str) -> dict:
     return detail
 
 
+def _query_int(query: dict[str, list[str]], name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = str(query.get(name, [""])[0] or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    return max(minimum, min(maximum, value))
+
+
+def task_context_evidence_payload(root: Path, run_id: str, task_id: str, query: dict[str, list[str]]) -> dict:
+    task_snapshot(root, run_id, task_id)
+    limit = _query_int(query, "limit", 50, minimum=1, maximum=200)
+    record_type = str(query.get("type", [""])[0] or "").strip()
+    records = list_task_context_evidence(root, run_id, task_id)
+    if record_type:
+        records = [record for record in records if str(record.get("type") or "") == record_type]
+    total = len(records)
+    visible = records[-limit:]
+    result_records = [record for record in records if record.get("type") == "context_evidence_result"]
+    latest_result = result_records[-1] if result_records else None
+    suggestions: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    maintenance_plan: list[dict] = []
+    plan_seen: set[tuple[str, str, str, str]] = set()
+    for record in reversed(result_records):
+        for item in record.get("maintenance_plan") or []:
+            if len(maintenance_plan) >= 20:
+                break
+            if not isinstance(item, dict):
+                continue
+            plan_key = (
+                str(item.get("action") or ""),
+                str(item.get("target") or ""),
+                str(item.get("reason") or ""),
+                str(item.get("target_path") or ""),
+            )
+            if plan_key in plan_seen:
+                continue
+            plan_seen.add(plan_key)
+            maintenance_plan.append(item)
+            if len(maintenance_plan) >= 20:
+                break
+        for item in record.get("maintenance_suggestions") or []:
+            if len(suggestions) >= 20:
+                break
+            if not isinstance(item, dict):
+                continue
+            key = (
+                str(item.get("action") or ""),
+                str(item.get("target") or ""),
+                str(item.get("reason") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            suggestions.append(item)
+            if len(suggestions) >= 20:
+                break
+        if len(suggestions) >= 20 and len(maintenance_plan) >= 20:
+            break
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "count": total,
+        "limit": limit,
+        "records": visible,
+        "latest_result": latest_result,
+        "routing_health": latest_result.get("routing_health") if isinstance(latest_result, dict) else {},
+        "kb_scope_policy": latest_result.get("kb_scope_policy") if isinstance(latest_result, dict) else {},
+        "maintenance_suggestions": suggestions,
+        "maintenance_plan": maintenance_plan,
+    }
+
+
 def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str, query: dict[str, list[str]]) -> dict:
     if detail_name == "logs":
         limit = int(query.get("limit", ["200"])[0] or "200")
@@ -195,6 +272,8 @@ def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str,
         return task_final_view_snapshot(root, run_id, task_id)
     if detail_name == "context":
         return task_context_snapshot(root, run_id, task_id)
+    if detail_name == "context-evidence":
+        return task_context_evidence_payload(root, run_id, task_id, query)
     if detail_name == "steward":
         return steward_decision_snapshot(root, run_id, task_id)
     if not detail_name:
@@ -210,6 +289,8 @@ def handle_task_detail_route(root: Path, run_id: str, path: str, query: dict[str
         return route_result(task_detail_payload(root, run_id, task_id, detail_name, query))
     except KeyError:
         return route_result({"error": "task not found"}, "404 Not Found")
+    except ValueError as exc:
+        return route_result({"error": str(exc)}, "400 Bad Request")
     except LookupError:
         return route_result({"error": "task detail not found"}, "404 Not Found")
 
@@ -824,6 +905,7 @@ __all__ = [
     "handle_task_config_route",
     "handle_task_detail_route",
     "route_task_agent_request",
+    "task_context_evidence_payload",
     "task_detail_payload",
     "task_final_view_snapshot",
 ]

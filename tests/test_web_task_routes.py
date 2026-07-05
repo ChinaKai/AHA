@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import main
+from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.web.task_routes import route_task_agent_request
 
 
@@ -18,9 +19,17 @@ class WebTaskRouteTests(unittest.TestCase):
             code = main(list(args))
         return code, out.getvalue()
 
-    def route(self, root: Path, run_id: str, method: str, path: str, payload: dict | None = None) -> dict:
+    def route(
+        self,
+        root: Path,
+        run_id: str,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        query: dict[str, list[str]] | None = None,
+    ) -> dict:
         body = json.dumps(payload or {}).encode("utf-8")
-        return route_task_agent_request(root, run_id, method, path, {}, body)
+        return route_task_agent_request(root, run_id, method, path, query or {}, body)
 
     def test_task_agent_routes_return_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,6 +80,129 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertTrue(task_config["payload"]["task"]["preferred_proxy_enabled"])
         self.assertEqual(sent["payload"]["message"]["message"], "hello")
         self.assertTrue(hidden["payload"]["task"]["hidden"])
+
+    def test_task_context_evidence_route_returns_recent_records_and_suggestions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Context evidence route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {"type": "context_pack", "agent_id": "main", "evidence": {"text_sha": "pack"}},
+                )
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "type": "context_evidence_result",
+                        "agent_id": "main",
+                        "signals": ["map_miss"],
+                        "maintenance_suggestions": [
+                            {"action": "update", "target": "project_navigation", "reason": "map_miss"}
+                        ],
+                        "maintenance_plan": [
+                            {
+                                "action": "update",
+                                "target": "project_navigation",
+                                "target_path": "navigation/index.md",
+                                "reason": "map_miss",
+                                "write_policy": "direct_project_navigation_update",
+                            }
+                        ],
+                    },
+                )
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "type": "context_evidence_result",
+                        "agent_id": "main",
+                        "signals": ["nav_stale"],
+                        "routing_health": {
+                            "status": "stale",
+                            "downrank_paths": ["docs/old-guide.md"],
+                            "prioritize_paths": ["docs/new-guide.md"],
+                        },
+                        "kb_scope_policy": {
+                            "project_navigation": "direct_edit_approved_markdown_with_task_evidence",
+                            "general_personal_wiki": "manual_candidate_review_only",
+                        },
+                        "maintenance_suggestions": [
+                            {"action": "repair", "target": "project_navigation", "reason": "nav_stale"},
+                            {"action": "update", "target": "project_navigation", "reason": "map_miss"},
+                        ],
+                        "maintenance_plan": [
+                            {
+                                "action": "repair",
+                                "target": "project_navigation",
+                                "target_path": "navigation/index.md",
+                                "reason": "nav_stale",
+                                "write_policy": "direct_project_navigation_update",
+                                "execution": {"state": "ready", "mode": "direct_edit"},
+                            },
+                            {
+                                "action": "update",
+                                "target": "project_navigation",
+                                "target_path": "navigation/index.md",
+                                "reason": "map_miss",
+                                "write_policy": "direct_project_navigation_update",
+                                "execution": {"state": "ready", "mode": "direct_edit"},
+                            },
+                        ],
+                    },
+                )
+                response = self.route(root, run_id, "GET", "/api/task/task-001/context-evidence", query={"limit": ["2"]})
+                result_only = self.route(
+                    root,
+                    run_id,
+                    "GET",
+                    "/api/task/task-001/context-evidence",
+                    query={"type": ["context_evidence_result"]},
+                )
+                invalid_limit = self.route(
+                    root,
+                    run_id,
+                    "GET",
+                    "/api/task/task-001/context-evidence",
+                    query={"limit": ["abc"]},
+                )
+
+        self.assertEqual(response["status"], "200 OK")
+        payload = response["payload"]
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["task_id"], "task-001")
+        self.assertEqual(payload["count"], 3)
+        self.assertEqual(payload["limit"], 2)
+        self.assertEqual([record["type"] for record in payload["records"]], ["context_evidence_result", "context_evidence_result"])
+        self.assertEqual(payload["latest_result"]["signals"], ["nav_stale"])
+        self.assertEqual(
+            [(item["action"], item["target"], item["reason"]) for item in payload["maintenance_suggestions"]],
+            [
+                ("repair", "project_navigation", "nav_stale"),
+                ("update", "project_navigation", "map_miss"),
+            ],
+        )
+        self.assertEqual(
+            [(item["action"], item["target"], item["target_path"], item["reason"]) for item in payload["maintenance_plan"]],
+            [
+                ("repair", "project_navigation", "navigation/index.md", "nav_stale"),
+                ("update", "project_navigation", "navigation/index.md", "map_miss"),
+            ],
+        )
+        self.assertEqual(payload["routing_health"]["status"], "stale")
+        self.assertEqual(payload["routing_health"]["downrank_paths"], ["docs/old-guide.md"])
+        self.assertEqual(payload["kb_scope_policy"]["general_personal_wiki"], "manual_candidate_review_only")
+        self.assertEqual(result_only["payload"]["count"], 2)
+        self.assertTrue(all(record["type"] == "context_evidence_result" for record in result_only["payload"]["records"]))
+        self.assertEqual(invalid_limit["status"], "400 Bad Request")
+        self.assertIn("limit must be an integer", invalid_limit["payload"]["error"])
 
     def test_ui_server_runs_task_routes_off_event_loop(self) -> None:
         root = Path(__file__).resolve().parents[1]

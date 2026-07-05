@@ -15,10 +15,12 @@
     const renderLogsPanelHtml = deps.renderLogsPanelHtml || (() => "");
     const renderHardwareIoPanelHtml = deps.renderHardwareIoPanelHtml || (() => "");
     const renderContextPanelHtml = deps.renderContextPanelHtml || (() => "");
+    const renderContextEvidencePanelHtml = deps.renderContextEvidencePanelHtml || (() => "");
     const logState = deps.logState || (() => ({}));
     const hardwareIoState = deps.hardwareIoState || (() => ({}));
     const finalDetail = deps.finalDetail || (() => null);
     const contextDetail = deps.contextDetail || (() => null);
+    const contextEvidenceDetail = deps.contextEvidenceDetail || (() => null);
     const promptMetricsState = deps.promptMetricsState || (() => ({}));
     const renderRawPromptSection = deps.renderRawPromptSection || (() => "");
     const renderPromptMetricsPanel = deps.renderPromptMetricsPanel || (() => "");
@@ -136,7 +138,7 @@
         }
         const keybar = panelEl.querySelector(".hardware-keybar-keys");
         if (keybar && keybarScrollLeft) keybar.scrollLeft = keybarScrollLeft;
-      } else {
+      } else if (tab === "context") {
         const detail = contextDetail(task.id);
         if (!detail) {
           panelEl.innerHTML = '<div class="empty">Loading context...</div>';
@@ -151,6 +153,10 @@
           promptMetricsHtml: renderPromptMetricsPanel(task.id)
         });
         restoreContextScrollState(contextScrollState);
+      } else if (tab === "context-evidence") {
+        panelEl.innerHTML = renderContextEvidencePanelHtml(contextEvidenceDetail(task.id));
+      } else {
+        panelEl.innerHTML = '<div class="empty">Unknown task view.</div>';
       }
     }
 

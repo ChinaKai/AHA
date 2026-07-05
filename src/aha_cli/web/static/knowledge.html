@@ -953,6 +953,7 @@
       if (map?.project_key && map?.workspace_id) {
         payload.project_key = map.project_key;
         payload.workspace_id = map.workspace_id;
+        if (pageRunId) payload.run_id = pageRunId;
       } else {
         Object.assign(payload, projectContextPayload());
       }

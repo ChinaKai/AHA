@@ -59,6 +59,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   collaborationModeOptions,
   configString,
   contextDetail: taskId => conversationController.contextDetail(taskId),
+  contextEvidenceDetail: taskId => conversationController.contextEvidenceDetail(taskId),
   conversationAutoFollow: () => conversationAutoFollow,
   conversationSourceEvents,
   copyTextByKey,
@@ -92,6 +93,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   parseTimestamp,
   promptMetricsState,
   renderContextPanelHtml,
+  renderContextEvidencePanelHtml,
   renderConversation,
   renderConversationFilters,
   renderFinalPanelHtml,
@@ -1129,6 +1131,11 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   realtimeDebug,
   removeBootstrapConfigRow,
   removePendingMessage,
+  refreshContextEvidence: async () => {
+    if (!selectedTaskId) return;
+    await conversationController.loadContextEvidenceDetail(selectedTaskId, true);
+    if (activeTab === "context-evidence") renderPanel();
+  },
   renderAskUserGateControls,
   renderModelOptions: () => runtimeOptions.renderModelOptions(),
   renderPanel,

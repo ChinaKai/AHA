@@ -15,6 +15,24 @@ from aha_cli.store.knowledge import (
 
 _NAV_LINK_RE = re.compile(r"!?\[[^\]]+\]\(([^)#?]+)(?:#[^)]*)?\)")
 _CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+_PATH_HINT_SUFFIXES = (
+    ".cfg",
+    ".css",
+    ".h",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".rst",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".yaml",
+    ".yml",
+)
 _STOP = {
     "and",
     "are",
@@ -209,7 +227,14 @@ def _code_terms_from_doc(doc: dict) -> list[str]:
     return _ordered_unique(terms, limit=32)
 
 
-def _path_hints_from_doc(doc: dict) -> list[str]:
+def _looks_like_path_hint(value: str) -> bool:
+    normalized = str(value or "").replace("\\", "/").strip("/")
+    if "/" in normalized:
+        return True
+    return normalized.lower().endswith(_PATH_HINT_SUFFIXES)
+
+
+def _path_hints_from_doc(doc: dict, workspace: Path | None = None) -> tuple[list[str], list[str]]:
     values: list[str] = []
     values.extend(str(item) for item in (doc.get("related_files") or []))
     for span in _CODE_SPAN_RE.findall(str(doc.get("body") or "")):
@@ -217,18 +242,24 @@ def _path_hints_from_doc(doc: dict) -> list[str]:
         if "/" in span or "." in span:
             values.append(span)
     hints: list[str] = []
+    stale: list[str] = []
+    workspace_path = Path(workspace).expanduser() if workspace is not None else None
     for value in values:
         normalized = value.strip().strip(".,;:")
         if not normalized or normalized.startswith(("http://", "https://")):
             continue
-        if "/" not in normalized and "." not in normalized:
+        if not _looks_like_path_hint(normalized):
             continue
-        hints.append(normalized)
+        target = normalized.replace("\\", "/").strip("/")
+        if workspace_path is not None and not (workspace_path / target).exists():
+            stale.append(target)
+            continue
+        hints.append(target)
         if "/" in normalized:
-            parent = normalized.rsplit("/", 1)[0]
+            parent = target.rsplit("/", 1)[0]
             if parent:
                 hints.append(parent)
-    return _ordered_unique(hints, limit=24)
+    return _ordered_unique(hints, limit=24), _ordered_unique(stale, limit=24)
 
 
 def resolve_project_context_query(
@@ -259,6 +290,7 @@ def resolve_project_context_query(
             "nav_routes": [],
             "expanded_terms": [],
             "path_hints": [],
+            "stale_path_hints": [],
         }
     docs = _navigation_docs(root, config, Path(workspace).expanduser(), project_key_value)
     scored = [(_doc_score(doc, query_terms), doc) for doc in docs]
@@ -278,15 +310,11 @@ def resolve_project_context_query(
             "nav_routes": [],
             "expanded_terms": [],
             "path_hints": [],
+            "stale_path_hints": [],
         }
-    path_hints = _ordered_unique(
-        [
-            hint
-            for _score, doc in selected
-            for hint in _path_hints_from_doc(doc)
-        ],
-        limit=24,
-    )
+    hint_pairs = [_path_hints_from_doc(doc, workspace) for _score, doc in selected]
+    path_hints = _ordered_unique([hint for hints, _stale in hint_pairs for hint in hints], limit=24)
+    stale_path_hints = _ordered_unique([hint for _hints, stale in hint_pairs for hint in stale], limit=24)
     expanded_terms = _ordered_unique(
         [
             *query_terms,
@@ -306,6 +334,7 @@ def resolve_project_context_query(
         "used_navigation": True,
         "expanded_terms": [term for term in expanded_terms if term not in query_terms],
         "path_hints": path_hints,
+        "stale_path_hints": stale_path_hints,
         "nav_routes": [
             {
                 "slug": str(doc.get("slug") or ""),

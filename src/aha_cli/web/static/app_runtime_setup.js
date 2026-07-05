@@ -376,7 +376,8 @@ const {
   renderFinalPanelHtml,
   renderHardwareIoPanelHtml,
   renderLogsPanelHtml,
-  renderContextPanelHtml
+  renderContextPanelHtml,
+  renderContextEvidencePanelHtml
 } = conversationPanelHelpers;
 const taskTimingHelpers = window.AHATaskTiming;
 const {

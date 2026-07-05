@@ -55,6 +55,7 @@ SAMPLE_VALUES = {
     "enabled_channel_count": "1",
     "enabled_paths": "  - /tmp/SKILL.md",
     "error_text": "missing Generated-by",
+    "evidence_reference": "Current task evidence recap.",
     "expected_generated_by": "AHA Codex GPT-5",
     "field_name": "round_id",
     "final_context": "Final source range.",

@@ -11,6 +11,7 @@ from aha_cli.store.runs import require_plan
 
 DEFAULT_CONTEXT_PACK_TARGET_CHARS = 2500
 DEFAULT_CONTEXT_PACK_HARD_LIMIT = 4000
+DEFAULT_CONTEXT_PACK_WITH_EVIDENCE_TARGET_CHARS = DEFAULT_CONTEXT_PACK_HARD_LIMIT
 
 
 def task_context_planner_enabled(task: dict | None) -> bool:
@@ -66,15 +67,28 @@ def context_pack_payload_for_turn(
         config = load_config(root)
         knowledge = _knowledge_pull_reference(root, run_id, task or {}, config, workspace)
         project_map = _map_pull_reference(root, workspace, config)
-        if not knowledge.get("text") and not project_map.get("text"):
+        task_evidence = _task_evidence_reference(root, run_id, task or {})
+        if not knowledge.get("text") and not project_map.get("text") and not task_evidence.get("text"):
             return {}
         text = render_prompt_template(
             "backend_context_pack.md",
             request=_clip_single_line(message, 360),
             knowledge_reference=knowledge.get("text") or "",
             map_reference=project_map.get("text") or "",
+            evidence_reference=task_evidence.get("text") or "",
         ).rstrip()
-        budget = max(1, min(int(target_chars or DEFAULT_CONTEXT_PACK_TARGET_CHARS), int(hard_limit or DEFAULT_CONTEXT_PACK_HARD_LIMIT)))
+        budget = max(
+            1,
+            min(
+                int(target_chars or DEFAULT_CONTEXT_PACK_TARGET_CHARS),
+                int(hard_limit or DEFAULT_CONTEXT_PACK_HARD_LIMIT),
+            ),
+        )
+        if task_evidence.get("text"):
+            budget = min(
+                int(hard_limit or DEFAULT_CONTEXT_PACK_HARD_LIMIT),
+                max(budget, DEFAULT_CONTEXT_PACK_WITH_EVIDENCE_TARGET_CHARS),
+            )
         text = _clip_block(text, budget)
         return {
             "text": text,
@@ -82,6 +96,7 @@ def context_pack_payload_for_turn(
             "text_sha": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
             "knowledge": {key: value for key, value in knowledge.items() if key != "text"},
             "map": {key: value for key, value in project_map.items() if key != "text"},
+            "task_evidence": {key: value for key, value in task_evidence.items() if key != "text"},
         }
     except (Exception, SystemExit):
         return {}
@@ -135,6 +150,28 @@ def _clip_block(text: str, limit: int) -> str:
         return clean
     suffix = "\n\n(Context Pack clipped to budget.)"
     return clean[: max(0, limit - len(suffix))].rstrip() + suffix
+
+
+def _ordered_unique(values: list[str], *, limit: int) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        clean = _clean_text(value)
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        out.append(clean)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _compact_list(values: list[str], *, limit: int = 8, item_chars: int = 96) -> list[str]:
+    return [_clip_single_line(value, item_chars) for value in _ordered_unique(values, limit=limit)]
+
+
+def _format_compact_list(values: list[str], *, empty: str = "-") -> str:
+    return ", ".join(values) if values else empty
 
 
 def _plan_goal(root: Path, run_id: str) -> str | None:
@@ -228,6 +265,246 @@ def _map_pull_reference(root: Path, workspace: Path, config: dict) -> dict:
         }
     except (Exception, SystemExit):
         return {}
+
+
+def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        return {}
+    try:
+        from aha_cli.services.context_evidence import list_task_context_evidence
+
+        records = list_task_context_evidence(root, run_id, task_id)
+    except (Exception, SystemExit):
+        return {}
+    if not records:
+        return {}
+    result_records = [record for record in records if record.get("type") == "context_evidence_result"]
+    query_records = [record for record in records if record.get("type") == "project_map_query"]
+    latest = result_records[-1] if result_records else {}
+    recent_results = result_records[-4:]
+    signals = _compact_list(
+        [
+            str(signal)
+            for record in recent_results
+            for signal in (record.get("signals") or [])
+            if signal
+        ],
+        limit=10,
+        item_chars=48,
+    )
+    actual_files = _compact_list(
+        [
+            str(path)
+            for record in recent_results
+            for path in (record.get("actual_files") or [])
+            if path
+        ],
+        limit=8,
+    )
+    referenced_files = _compact_list(
+        [
+            str(path)
+            for record in recent_results
+            for path in (record.get("referenced_files") or [])
+            if path
+        ],
+        limit=8,
+    )
+    diagnostics = latest.get("map_diagnostics") if isinstance(latest.get("map_diagnostics"), dict) else {}
+    gap_signals = _compact_list([str(item) for item in (diagnostics.get("gap_signals") or [])], limit=8, item_chars=48)
+    missing_files = _compact_list([str(item) for item in (diagnostics.get("missing_files") or [])], limit=8)
+    stale_hints = _compact_list([str(item) for item in (diagnostics.get("stale_path_hints") or [])], limit=6)
+    routing_health = _compact_routing_health(latest)
+    kb_scope_policy = _compact_kb_scope_policy(latest)
+    suggestions = _compact_suggestions(recent_results)
+    maintenance_plan = _compact_maintenance_plan(recent_results)
+    map_queries = _compact_map_queries(query_records)
+    if not any([
+        signals,
+        actual_files,
+        referenced_files,
+        gap_signals,
+        missing_files,
+        stale_hints,
+        routing_health,
+        kb_scope_policy,
+        suggestions,
+        maintenance_plan,
+        map_queries,
+    ]):
+        return {}
+    lines = ["Current task evidence recap:"]
+    if signals:
+        lines.append(f"- signals: {_format_compact_list(signals)}")
+    if actual_files:
+        lines.append(f"- actual_files: {_format_compact_list(actual_files)}")
+    if referenced_files:
+        lines.append(f"- referenced_files: {_format_compact_list(referenced_files)}")
+    if gap_signals:
+        lines.append(f"- map_gap_signals: {_format_compact_list(gap_signals)}")
+    if missing_files:
+        lines.append(f"- map_missing_files: {_format_compact_list(missing_files)}")
+    if stale_hints:
+        lines.append(f"- stale_path_hints: {_format_compact_list(stale_hints)}")
+    if routing_health:
+        lines.append(f"- routing_health: {routing_health['summary']}")
+    if kb_scope_policy:
+        lines.append(f"- kb_scope_policy: {kb_scope_policy['summary']}")
+    if map_queries:
+        lines.append(f"- recent_map_queries: {' | '.join(item['summary'] for item in map_queries)}")
+    if maintenance_plan:
+        lines.append(f"- maintenance_plan: {' | '.join(item['summary'] for item in maintenance_plan)}")
+    if suggestions:
+        lines.append(f"- maintenance_suggestions: {' | '.join(item['summary'] for item in suggestions)}")
+    lines.append("- Treat this as task-local observation, not source truth. Re-check current source before edits.")
+    return {
+        "text": "\n".join(lines).rstrip(),
+        "signals": signals,
+        "actual_files": actual_files,
+        "referenced_files": referenced_files,
+        "map_gap_signals": gap_signals,
+        "map_missing_files": missing_files,
+        "stale_path_hints": stale_hints,
+        "routing_health": routing_health,
+        "kb_scope_policy": kb_scope_policy,
+        "map_queries": map_queries,
+        "maintenance_plan": maintenance_plan,
+        "maintenance_suggestions": suggestions,
+    }
+
+
+def _compact_suggestions(result_records: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str, str]] = set()
+    suggestions: list[dict] = []
+    for record in reversed(result_records):
+        for item in record.get("maintenance_suggestions") or []:
+            if not isinstance(item, dict):
+                continue
+            action = _clip_single_line(str(item.get("action") or ""), 32)
+            target = _clip_single_line(str(item.get("target") or ""), 64)
+            reason = _clip_single_line(str(item.get("reason") or ""), 96)
+            key = (action, target, reason)
+            if not action or not target or key in seen:
+                continue
+            seen.add(key)
+            files = _compact_list([str(path) for path in (item.get("files") or [])], limit=4)
+            file_text = f" files={_format_compact_list(files)}" if files else ""
+            summary = _clip_single_line(f"{action} {target} ({reason}){file_text}", 180)
+            suggestions.append({
+                "action": action,
+                "target": target,
+                "reason": reason,
+                "files": files,
+                "summary": summary,
+            })
+            if len(suggestions) >= 4:
+                return suggestions
+    return suggestions
+
+
+def _compact_maintenance_plan(result_records: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str, str, str]] = set()
+    plans: list[dict] = []
+    for record in reversed(result_records):
+        for item in record.get("maintenance_plan") or []:
+            if not isinstance(item, dict):
+                continue
+            action = _clip_single_line(str(item.get("action") or ""), 32)
+            target = _clip_single_line(str(item.get("target") or ""), 64)
+            target_path = _clip_single_line(str(item.get("target_path") or ""), 120)
+            policy = _clip_single_line(str(item.get("write_policy") or ""), 72)
+            reason = _clip_single_line(str(item.get("reason") or ""), 96)
+            key = (action, target, target_path, reason)
+            if not action or not target or key in seen:
+                continue
+            seen.add(key)
+            source_files = _compact_list([str(path) for path in (item.get("source_files") or item.get("files") or [])], limit=3)
+            validations = _compact_list([str(command) for command in (item.get("validation") or [])], limit=2, item_chars=110)
+            execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
+            execution_state = _clip_single_line(str(execution.get("state") or ""), 48)
+            target_text = f" -> {target_path}" if target_path else ""
+            policy_text = f" policy={policy}" if policy else ""
+            execution_text = f" state={execution_state}" if execution_state else ""
+            file_text = f" files={_format_compact_list(source_files)}" if source_files else ""
+            summary = _clip_single_line(
+                f"{action} {target}{target_text} ({reason}){policy_text}{execution_text}{file_text}",
+                180,
+            )
+            plans.append({
+                "action": action,
+                "target": target,
+                "target_path": target_path,
+                "write_policy": policy,
+                "execution_state": execution_state,
+                "reason": reason,
+                "source_files": source_files,
+                "validation": validations,
+                "summary": summary,
+            })
+            if len(plans) >= 4:
+                return plans
+    return plans
+
+
+def _compact_routing_health(latest_result: dict) -> dict:
+    health = latest_result.get("routing_health") if isinstance(latest_result.get("routing_health"), dict) else {}
+    if not health:
+        return {}
+    status = _clip_single_line(str(health.get("status") or ""), 48)
+    downrank = _compact_list([str(path) for path in (health.get("downrank_paths") or [])], limit=4)
+    prioritize = _compact_list([str(path) for path in (health.get("prioritize_paths") or [])], limit=4)
+    parts = [status or "unknown"]
+    if downrank:
+        parts.append(f"downrank={_format_compact_list(downrank)}")
+    if prioritize:
+        parts.append(f"prioritize={_format_compact_list(prioritize)}")
+    return {
+        "status": status,
+        "downrank_paths": downrank,
+        "prioritize_paths": prioritize,
+        "summary": _clip_single_line(" ".join(parts), 180),
+    }
+
+
+def _compact_kb_scope_policy(latest_result: dict) -> dict:
+    policy = latest_result.get("kb_scope_policy") if isinstance(latest_result.get("kb_scope_policy"), dict) else {}
+    if not policy:
+        return {}
+    non_project_policy = str(policy.get("general_personal_wiki") or "")
+    non_project_summary = "manual_review" if non_project_policy == "manual_candidate_review_only" else non_project_policy
+    summary = "; ".join(
+        [
+            f"project_navigation={policy.get('project_navigation') or '-'}",
+            f"non_project={non_project_summary or '-'}",
+        ]
+    )
+    return {
+        "project_navigation": str(policy.get("project_navigation") or ""),
+        "general_personal_wiki": str(policy.get("general_personal_wiki") or ""),
+        "summary": _clip_single_line(summary, 200),
+    }
+
+
+def _compact_map_queries(query_records: list[dict]) -> list[dict]:
+    queries: list[dict] = []
+    for record in query_records[-4:]:
+        project_map = record.get("map") if isinstance(record.get("map"), dict) else {}
+        query = _clip_single_line(str(project_map.get("query") or project_map.get("resolved_query") or ""), 80)
+        if not query:
+            continue
+        files = _compact_list([str(path) for path in (project_map.get("files") or [])], limit=4)
+        matches = project_map.get("total_matches")
+        match_text = "unknown" if matches is None else str(matches)
+        file_text = f" files={_format_compact_list(files)}" if files else ""
+        summary = _clip_single_line(f"{query} ({match_text} matches){file_text}", 180)
+        queries.append({
+            "query": query,
+            "total_matches": matches,
+            "files": files,
+            "summary": summary,
+        })
+    return queries
 
 
 __all__ = ["context_pack_for_turn", "context_pack_payload_for_turn", "task_context_planner_enabled"]

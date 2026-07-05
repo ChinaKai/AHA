@@ -26,6 +26,7 @@ from aha_cli.services.knowledge_navigation import (
     prepare_project_navigation,
     validate_navigation_candidates,
 )
+from aha_cli.services.context_evidence import record_project_map_query_result
 from aha_cli.services.project_context_index import (
     format_project_context_reference,
     project_context_index_dir,
@@ -808,6 +809,74 @@ def _resolve_project_context_file(base: Path, relpath: str) -> Path:
     return target
 
 
+def _matching_project_context_task_id(root: Path, run_id: str, explicit_task_id: str | None, workspace_text: str | None) -> str | None:
+    if explicit_task_id:
+        return explicit_task_id
+    if not run_id:
+        return None
+    try:
+        plan = require_plan(root, run_id)
+    except SystemExit:
+        return None
+    target_workspace = ""
+    if workspace_text:
+        try:
+            target_workspace = str(Path(workspace_text).expanduser().resolve())
+        except OSError:
+            target_workspace = str(Path(workspace_text).expanduser())
+    matches: list[str] = []
+    for task in plan.get("tasks", []):
+        if task.get("deleted_at"):
+            continue
+        task_workspace = str(task.get("workspace_path") or "").strip()
+        if not task_workspace:
+            continue
+        if target_workspace:
+            try:
+                resolved_task_workspace = str(Path(task_workspace).expanduser().resolve())
+            except OSError:
+                resolved_task_workspace = str(Path(task_workspace).expanduser())
+            if resolved_task_workspace != target_workspace:
+                continue
+        task_id = str(task.get("id") or "").strip()
+        if task_id:
+            matches.append(task_id)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _record_project_context_web_query(
+    root: Path,
+    run_id: str,
+    payload: dict,
+    query: dict[str, list[str]],
+    *,
+    query_result: dict,
+    status: dict,
+    workspace_text: str | None,
+) -> None:
+    request_run_id = _payload_value(payload, query, "run_id", "run") or run_id
+    task_id = _matching_project_context_task_id(
+        root,
+        request_run_id,
+        _payload_value(payload, query, "task_id", "task") or None,
+        workspace_text,
+    )
+    if not task_id:
+        return
+    agent_id = _payload_value(payload, query, "agent_id", "target", "to_agent") or "main"
+    command = f"Web Knowledge Map query: {query_result.get('query') or _payload_value(payload, query, 'query', 'q', 'terms')}"
+    record_project_map_query_result(
+        root,
+        request_run_id,
+        task_id=task_id,
+        agent_id=agent_id,
+        command=command,
+        query_result=query_result,
+        status=status,
+        source="web-knowledge-map",
+    )
+
+
 def _query_int_param(query: dict[str, list[str]], key: str, default: int) -> int:
     raw = str(query.get(key, [""])[0] or "").strip()
     if not raw:
@@ -1251,6 +1320,15 @@ def knowledge_route_response(
                 "generated_at": manifest.get("generated_at"),
                 "stale_check": "not-checked",
             }
+            _record_project_context_web_query(
+                root,
+                _payload_value(payload, query, "run_id", "run"),
+                payload,
+                query,
+                query_result=query_result,
+                status=status,
+                workspace_text=str(manifest.get("workspace") or "").strip() or None,
+            )
             return json_response({
                 "ok": True,
                 "query": query_result,
@@ -1291,6 +1369,15 @@ def knowledge_route_response(
                 "workspace_path": context["workspace_path"],
                 "project_key": project_key_value,
             }, "404 Not Found")
+        _record_project_context_web_query(
+            root,
+            _payload_value(payload, query, "run_id", "run"),
+            payload,
+            query,
+            query_result=query_result,
+            status=status,
+            workspace_text=str(context["workspace_path"]),
+        )
         return json_response({
             "ok": True,
             "query": query_result,

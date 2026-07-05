@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 
 from aha_cli.domain.models import default_knowledge_config
+from aha_cli.services.context_evidence import list_task_context_evidence
 from aha_cli.store.config import load_config
 from aha_cli.store import knowledge_nav_drafts as nav_drafts
-from aha_cli.store.filesystem import create_plan
+from aha_cli.store.filesystem import create_plan, update_task_token_saving_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, list_entries, list_pending, project_key, write_entry
 from aha_cli.store.paths import config_path
@@ -113,15 +114,17 @@ def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeyp
     workspace = tmp_path / "repo"
     (workspace / "drivers" / "net").mkdir(parents=True)
     (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
+    plan = create_plan(home, "Map evidence", 1, "research", ["Map evidence task"], [], backend="stub", workspace_path=str(workspace))
+    update_task_token_saving_config(home, plan["id"], "task-001", enabled=True, provider="map")
 
-    missing = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)]})
+    missing = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)], "run_id": [plan["id"]]})
     assert missing["status"]["status"] == "missing"
     assert "index" not in missing["status"]
 
-    missing_query = _post(home, "/api/kb/project-context-index/query", {"workspace_path": str(workspace), "query": "foo"})
+    missing_query = _post(home, "/api/kb/project-context-index/query", {"workspace_path": str(workspace), "run_id": plan["id"], "query": "foo"})
     assert b"404 Not Found" in missing_query.split(b"\r\n", 1)[0]
 
-    refreshed = json_response_body(_post(home, "/api/kb/project-context-index/refresh", {"workspace_path": str(workspace)}))
+    refreshed = json_response_body(_post(home, "/api/kb/project-context-index/refresh", {"workspace_path": str(workspace), "run_id": plan["id"]}))
     assert refreshed["ok"] is True
     assert refreshed["job"]["status"] == "completed"
     assert refreshed["job"]["counts"]["files"] == 1
@@ -130,7 +133,7 @@ def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeyp
     polled = _get(home, "/api/kb/project-context-index/job", {"id": [refreshed["job_id"]]})
     assert polled["job"]["status"] == "completed"
 
-    queried = json_response_body(_post(home, "/api/kb/project-context-index/query", {"workspace_path": str(workspace), "query": "foo"}))
+    queried = json_response_body(_post(home, "/api/kb/project-context-index/query", {"workspace_path": str(workspace), "run_id": plan["id"], "query": "foo"}))
     assert queried["ok"] is True
     assert queried["query"]["files"][0]["path"] == "drivers/net/foo.c"
     assert "Project map reference" in queried["reference"]
@@ -140,11 +143,16 @@ def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeyp
     assert queried["status"]["repos"][0]["id"] == "root"
     assert queried["status"]["storage"]["format"] == "sharded-jsonl"
     assert queried["status"]["storage"]["sections"]["files"]["shards"][0]["path"].endswith("files.jsonl")
+    evidence = list_task_context_evidence(home, plan["id"], "task-001")
+    assert evidence[-1]["type"] == "project_map_query"
+    assert evidence[-1]["source"] == "web-knowledge-map"
+    assert evidence[-1]["map"]["query"] == "foo"
+    assert "drivers/net/foo.c" in evidence[-1]["map"]["files"]
     maps = _get(home, "/api/kb/project-context-index/maps")
     assert maps["count"] == 1
     assert maps["maps"][0]["project_key"] == refreshed["project_key"]
     assert maps["maps"][0]["workspace_id"] == refreshed["job"]["workspace_id"]
-    tree = _get(home, "/api/kb/project-context-index/tree", {"workspace_path": [str(workspace)]})
+    tree = _get(home, "/api/kb/project-context-index/tree", {"workspace_path": [str(workspace)], "run_id": [plan["id"]]})
     tree_paths = {item["path"] for item in tree["entries"]}
     assert "index.json" in tree_paths
     assert "summary.md" in tree_paths
@@ -158,15 +166,19 @@ def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeyp
     map_query = json_response_body(_post(
         home,
         "/api/kb/project-context-index/query",
-        {"project_key": maps["maps"][0]["project_key"], "workspace_id": maps["maps"][0]["workspace_id"], "query": "foo"},
+        {"project_key": maps["maps"][0]["project_key"], "workspace_id": maps["maps"][0]["workspace_id"], "run_id": plan["id"], "query": "foo"},
     ))
     assert map_query["ok"] is True
     assert map_query["query"]["files"][0]["path"] == "drivers/net/foo.c"
     assert map_query["workspace_id"] == maps["maps"][0]["workspace_id"]
-    index_file = _get(home, "/api/kb/project-context-index/file", {"workspace_path": [str(workspace)], "path": ["index.json"]})
+    evidence = list_task_context_evidence(home, plan["id"], "task-001")
+    assert [record["type"] for record in evidence[-2:]] == ["project_map_query", "project_map_query"]
+    assert evidence[-1]["map"]["query"] == "foo"
+    assert "drivers/net/foo.c" in evidence[-1]["map"]["files"]
+    index_file = _get(home, "/api/kb/project-context-index/file", {"workspace_path": [str(workspace)], "run_id": [plan["id"]], "path": ["index.json"]})
     assert index_file["path"] == "index.json"
     assert '"schema_version"' in index_file["content"]
-    shard_file = _get(home, "/api/kb/project-context-index/file", {"workspace_path": [str(workspace)], "path": ["repos/root/files.jsonl"]})
+    shard_file = _get(home, "/api/kb/project-context-index/file", {"workspace_path": [str(workspace)], "run_id": [plan["id"]], "path": ["repos/root/files.jsonl"]})
     assert "drivers/net/foo.c" in shard_file["content"]
     map_file = _get(
         home,
@@ -178,18 +190,18 @@ def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeyp
         home,
         "GET",
         "/api/kb/project-context-index/file",
-        {"workspace_path": [str(workspace)], "path": ["../config.json"]},
+        {"workspace_path": [str(workspace)], "run_id": [plan["id"]], "path": ["../config.json"]},
         b"",
         {},
     )
     assert b"400 Bad Request" in escaped.split(b"\r\n", 1)[0]
 
     (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 123; }\n", encoding="utf-8")
-    fast_status = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)]})
+    fast_status = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)], "run_id": [plan["id"]]})
     assert fast_status["status"]["status"] == "fresh"
     assert fast_status["status"]["stale_check"] == "head-only"
     assert fast_status["status"]["verified_worktree"] is False
-    deep_status = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)], "deep": ["1"]})
+    deep_status = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)], "run_id": [plan["id"]], "deep": ["1"]})
     assert deep_status["status"]["status"] == "stale"
     assert deep_status["status"]["stale_check"] == "full"
     assert deep_status["status"]["verified_worktree"] is True
@@ -206,7 +218,7 @@ def test_project_context_index_api_refresh_job_and_query(tmp_path: Path, monkeyp
     assert deleted["ok"] is True
     assert deleted["deleted"] is True
     assert not Path(deleted["path"]).exists()
-    after_delete = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)]})
+    after_delete = _get(home, "/api/kb/project-context-index", {"workspace_path": [str(workspace)], "run_id": [plan["id"]]})
     assert after_delete["status"]["status"] == "missing"
 
 
