@@ -27,6 +27,7 @@ from aha_cli.store.filesystem import (
     update_task_token_saving_config,
     write_json,
 )
+from aha_cli.store.knowledge import write_entry
 from aha_cli.store.paths import config_path
 
 
@@ -405,7 +406,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("write=True", sticky_prompt)
         self.assertNotIn("operation skill path", sticky_prompt)
 
-    def test_chat_prompt_includes_project_map_context_when_token_saving_enabled(self) -> None:
+    def test_chat_prompt_uses_context_pack_without_duplicate_project_map_context_when_token_saving_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "repo"
             aha_root = Path(tmp) / ".aha"
@@ -435,10 +436,106 @@ class ChatPromptTests(unittest.TestCase):
                 )
 
         self.assertNotIn("Project context map:", disabled_prompt)
-        self.assertIn("Project context map:", enabled_prompt)
-        self.assertIn("- token_saving: enabled", enabled_prompt)
+        self.assertNotIn("Project context map:", enabled_prompt)
         self.assertIn("- map_index:", enabled_prompt)
-        self.assertIn("/aha map query <terms>", enabled_prompt)
+        self.assertIn("/aha map query <focused natural-language terms>", enabled_prompt)
+        self.assertIn("AHA Knowledge/Map Pull Contract:", enabled_prompt)
+        self.assertIn("Project map entrypoints:", enabled_prompt)
+        self.assertIn("agent-pull", enabled_prompt)
+        self.assertIn("directly edit the approved KB Markdown files", enabled_prompt)
+        self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", enabled_prompt)
+        self.assertIn("Do not hand-edit generated Project Map cache files", enabled_prompt)
+        self.assertIn("repair the extractor, schema, resolver, query expansion, ranking, or refresh logic", enabled_prompt)
+        self.assertNotIn("Project map reference:", enabled_prompt)
+        self.assertNotIn("drivers/net/foo.c", enabled_prompt)
+
+    def test_sticky_delta_includes_context_pack_for_plain_turn_when_map_hits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            (workspace / "drivers" / "net").mkdir(parents=True)
+            (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Sticky map context pack", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                build_project_context_index(root, workspace)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "disabled",
+                }
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "where is foo_probe",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("AHA sticky-session delta turn", prompt)
+        self.assertIn("AHA Knowledge/Map Pull Contract:", prompt)
+        self.assertIn("Project map entrypoints:", prompt)
+        self.assertIn("agent-pull", prompt)
+        self.assertIn("directly edit the approved KB Markdown files", prompt)
+        self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", prompt)
+        self.assertIn("Do not hand-edit generated Project Map cache files", prompt)
+        self.assertIn("repair the extractor, schema, resolver, query expansion, ranking, or refresh logic", prompt)
+        self.assertNotIn("Project map reference:", prompt)
+        self.assertNotIn("drivers/net/foo.c", prompt)
+        self.assertIn("context_pack", metrics["components"])
+
+    def test_context_pack_does_not_inject_keyword_matched_knowledge_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            (workspace / "src").mkdir(parents=True)
+            (workspace / "src" / "ui.js").write_text("export const output = true;\n", encoding="utf-8")
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "AHA dialog output refresh", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                build_project_context_index(root, workspace)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                cfg = read_json(config_path(root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(root), cfg)
+                write_entry(
+                    root,
+                    config=cfg,
+                    scope="general",
+                    kind="wiki",
+                    title="CH340 USB 电磁继电器串口控制协议",
+                    body="串口模块也会输出状态。",
+                    meta={"tags": ["serial", "output"]},
+                )
+                prompt = chat_prompt(
+                    root,
+                    run_id,
+                    "main",
+                    {"sender": "browser", "message": "AHA 对话框输出刷新后折叠状态丢失", "task_id": "task-001", "role": "main"},
+                    "",
+                )
+
+        self.assertIn("AHA Knowledge/Map Pull Contract:", prompt)
+        self.assertIn("Knowledge base entrypoints:", prompt)
+        self.assertIn("navigation_index:", prompt)
+        self.assertIn("directly edit the approved KB Markdown files", prompt)
+        self.assertNotIn("CH340 USB 电磁继电器串口控制协议", prompt)
+        self.assertNotIn("串口模块也会输出状态", prompt)
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -4569,13 +4569,87 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("if (button) handlers.loadOlderConversation();", event_bindings_script)
         self.assertNotIn("if (panelEl.scrollTop < 48) loadOlderConversation();", script)
         self.assertIn("function expandedMessageStateKey", timeline_view_script)
+        self.assertIn("function stableStringHash", timeline_view_script)
+        self.assertIn("function timelineMessageStableIdentity", timeline_view_script)
+        self.assertIn("function timelineMessageKey", timeline_view_script)
+        self.assertIn("const stableIdentity = timelineMessageStableIdentity(event);", timeline_view_script)
+        self.assertIn("if (stableIdentity) return `message-${stableStringHash(stableIdentity)}`;", timeline_view_script)
+        self.assertIn("timelineMessageKey(event)", timeline_view_script)
         self.assertIn("function syncExpandedMessageKeysFromDom", app_bridge_script)
         self.assertIn("syncExpandedMessageKeysFromDom();", panel_controller_script)
+        self.assertIn("eventTaskId,", script)
         self.assertIn("data-message-context-key", frontend_scripts)
         self.assertIn("state.expandedMessageKeys?.has(expandedMessageStateKey(key, contextKey))", timeline_view_script)
         self.assertIn('event.target.closest(".collapsed-message > summary")', event_bindings_script)
         self.assertIn("handlers.setExpandedMessageKey(details.dataset.messageKey, !details.open, details.dataset.messageContextKey);", event_bindings_script)
         self.assertIn("handlers.setExpandedMessageKey(key, details.open, details.dataset.messageContextKey);", event_bindings_script)
+
+    def test_frontend_message_expansion_key_survives_event_source_refresh(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        timeline_view_path = static_root() / "timeline_view.js"
+        node_script = r"""
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+const expandedMessageKeys = new Set();
+const view = window.AHATimelineView.createTimelineView({
+  collapsedMessageCharLimit: 5,
+  collapsedMessageLineLimit: 1,
+  copyTextByKey: new Map(),
+  expandedMessageKeys
+}, {
+  conversationKey: () => "task-001::main",
+  escapeHtml,
+  agentUpdateBody: data => data.text || "",
+  agentUpdateTitle: data => `agent update (${data.target || "main"})`,
+  backendTarget: () => "main",
+  eventData: event => event.data || {},
+  eventIdentity: event => `${event.ts || ""}|${event.type || ""}|${JSON.stringify(event.data || {})}`,
+  eventTaskId: event => event.data?.task_id || "",
+  formatLocalTimestamp: value => value || "",
+  messageTimelineDisplay: data => ({ displaySender: data.sender || "-", displayTarget: data.target || "-", className: "" })
+});
+const liveEvent = {
+  ts: "2026-07-05T00:00:00+00:00",
+  type: "agent_message",
+  _uiKey: "event-100-agent-message",
+  data: { task_id: "task-001", target: "main", text: "line one\nline two" }
+};
+const firstHtml = view.renderTimelineEvent(liveEvent);
+const firstKey = firstHtml.match(/data-message-key="([^"]+)"/)?.[1];
+if (!firstKey) throw new Error("first render did not collapse message");
+view.setExpandedMessageKey(firstKey, true, "task-001::main");
+const refreshedHtml = view.renderTimelineEvent({
+  ts: "2026-07-05T00:00:04+00:00",
+  type: "message",
+  _uiKey: "conversation-20-message",
+  data: { task_id: "task-001", sender: "main", target: "browser", message: "line one\nline two" }
+});
+const refreshedKey = refreshedHtml.match(/data-message-key="([^"]+)"/)?.[1];
+if (refreshedKey !== firstKey) throw new Error(`message key changed: ${firstKey} -> ${refreshedKey}`);
+if (!/class="message-body collapsed-message"[^>]* open>/.test(refreshedHtml)) {
+  throw new Error("expanded state was not preserved after source refresh");
+}
+"""
+        result = subprocess.run(
+            [node, "-e", node_script, str(timeline_view_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_frontend_pending_messages_wait_for_agent_blockers(self) -> None:
         root = Path(__file__).resolve().parents[1]

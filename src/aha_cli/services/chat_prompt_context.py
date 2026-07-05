@@ -16,6 +16,7 @@ from aha_cli.services.chat_supervision import (
     task_supervision_host_id,
 )
 from aha_cli.services.commit_policy import commit_message_policy_prompt
+from aha_cli.services.context_planner import context_pack_payload_for_turn
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.task_skills import task_skills_context_for_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
@@ -111,6 +112,7 @@ ATTACHMENT_OUTPUT_INTENT_TERMS = (
     "显示图片",
 )
 CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY = "context_fingerprint_updates"
+CONTEXT_PACK_EVIDENCE_METRIC_KEY = "context_pack_evidence"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
 IMAGE_FIELD_KEYS = ("image", "images")
 
@@ -318,13 +320,8 @@ def _knowledge_enabled_for_prompt(root: Path) -> bool:
 
 
 def _knowledge_context_delta_for_prompt(root: Path, run_id: str, task: dict) -> str:
-    try:
-        from aha_cli.services.knowledge_retrieval import knowledge_context_for_task
-
-        context = knowledge_context_for_task(root, run_id, task).rstrip()
-    except (Exception, SystemExit):
-        context = ""
-    return context or render_prompt_template("backend_knowledge_enabled_empty.md").rstrip()
+    del root, run_id, task
+    return render_prompt_template("backend_knowledge_enabled_empty.md").rstrip()
 
 
 def _attachment_output_guidance_for_prompt(root: Path, run_id: str) -> str:
@@ -455,17 +452,21 @@ def _project_map_context_for_prompt(root: Path, task: dict | None) -> str:
     ).rstrip()
 
 
+def _context_pack_payload_for_prompt(root: Path, run_id: str, task: dict | None, item: dict) -> dict:
+    return context_pack_payload_for_turn(root, run_id, task, item.get("message"))
+
+
 def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, include_attachment_output: bool = True) -> dict[str, str]:
     if not task:
         return {}
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
     skills_context = task_skills_context_for_prompt(task).rstrip()
-    project_map_context = _project_map_context_for_prompt(root, task).rstrip()
     fingerprints = {
         "hardware_debug": _context_fingerprint(hardware_context),
         "task_skills": _context_fingerprint(skills_context),
         "knowledge_enabled": "enabled" if _knowledge_enabled_for_prompt(root) else "disabled",
     }
+    project_map_context = "" if _token_saving_map_enabled(task) else _project_map_context_for_prompt(root, task).rstrip()
     if project_map_context:
         fingerprints["project_map_context"] = _context_fingerprint(project_map_context)
     if include_attachment_output:
@@ -497,7 +498,11 @@ def _sticky_context_delta_for_prompt(
     skills_context = task_skills_context_for_prompt(task).rstrip()
     if current_fingerprints.get("task_skills") and delivered.get("task_skills") != current_fingerprints.get("task_skills"):
         sections.append(skills_context)
-    if current_fingerprints.get("knowledge_enabled") == "enabled" and delivered.get("knowledge_enabled") != "enabled":
+    if (
+        not _token_saving_map_enabled(task)
+        and current_fingerprints.get("knowledge_enabled") == "enabled"
+        and delivered.get("knowledge_enabled") != "enabled"
+    ):
         sections.append(_knowledge_context_delta_for_prompt(root, run_id, task))
     project_map_context = _project_map_context_for_prompt(root, task).rstrip()
     if current_fingerprints.get("project_map_context") and delivered.get("project_map_context") != current_fingerprints.get("project_map_context"):
@@ -889,6 +894,7 @@ def _fill_prompt_metrics(
     event_limit: int | None = None,
     prompt_mode: str = "full",
     context_fingerprint_updates: dict[str, str] | None = None,
+    context_pack_evidence: dict | None = None,
 ) -> None:
     if metrics is None:
         return
@@ -909,6 +915,8 @@ def _fill_prompt_metrics(
         metrics["event_limit"] = event_limit
     if context_fingerprint_updates:
         metrics[CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY] = dict(context_fingerprint_updates)
+    if context_pack_evidence:
+        metrics[CONTEXT_PACK_EVIDENCE_METRIC_KEY] = dict(context_pack_evidence)
 
 
 def chat_prompt_with_metrics(
@@ -998,6 +1006,8 @@ def chat_prompt(
     if input_image_guidance:
         components["input_image_guidance"] = input_image_guidance
     task_context = ""
+    context_pack = ""
+    context_pack_evidence: dict = {}
     context_fingerprint_updates: dict[str, str] = {}
     if task_id:
         try:
@@ -1023,7 +1033,19 @@ def chat_prompt(
                     detail["task"],
                     include_attachment_output=_prompt_needs_attachment_output_guidance(item, sticky_delta=sticky_delta),
                 )
-            if sticky_delta and item.get("plain_sticky") and not components["recovery_context"].strip() and not input_image_guidance:
+                if not is_agent_command:
+                    context_pack_payload = _context_pack_payload_for_prompt(root, run_id, detail["task"], item)
+                    context_pack = str(context_pack_payload.get("text") or "").rstrip()
+                    if context_pack:
+                        context_pack_evidence = {key: value for key, value in context_pack_payload.items() if key != "text"}
+                        components["context_pack"] = context_pack
+            if (
+                sticky_delta
+                and item.get("plain_sticky")
+                and not components["recovery_context"].strip()
+                and not input_image_guidance
+                and not context_pack
+            ):
                 prompt = str(item.get("message") or "")
                 _fill_prompt_metrics(
                     metrics,
@@ -1035,6 +1057,7 @@ def chat_prompt(
                     is_agent_command=is_agent_command,
                     event_limit=0,
                     prompt_mode="sticky_delta",
+                    context_pack_evidence=context_pack_evidence,
                 )
                 return prompt
             if is_agent_command:
@@ -1076,6 +1099,7 @@ def chat_prompt(
                     components=components,
                     is_finalization=is_finalization,
                     is_agent_command=is_agent_command,
+                    context_pack_evidence=context_pack_evidence,
                 )
                 return prompt
             final_context = ""
@@ -1123,7 +1147,7 @@ def chat_prompt(
             )
             coordination_policy = _coordination_policy_for_prompt(coordination_policy_needed)
             action_contract = _action_contract_for_prompt(coordination_policy_needed)
-            project_map_context = _project_map_context_for_prompt(root, detail["task"]).rstrip()
+            project_map_context = "" if context_pack else _project_map_context_for_prompt(root, detail["task"]).rstrip()
             visible_agent_constraints = [_agent_constraints_for_prompt(entry) for entry in visible_agents]
             current_agent_constraints = _agent_constraints_for_prompt(agent)
             agent_context = _agent_context_for_prompt(
@@ -1139,9 +1163,10 @@ def chat_prompt(
                     "commit_policy": commit_policy,
                     "coordination_policy": coordination_policy,
                     "compact_summary": compact_context,
-                    "project_map_context": project_map_context,
                 }
             )
+            if project_map_context:
+                components["project_map_context"] = project_map_context
             if is_result_request:
                 task_context = render_prompt_template(
                     "backend_task_context_minimal.md",
@@ -1189,6 +1214,8 @@ def chat_prompt(
                     coordination_policy=coordination_policy,
                     commit_policy=commit_policy,
                 )
+            if context_pack and not sticky_delta and not is_result_request:
+                task_context = f"{task_context.rstrip()}\n\n{context_pack}\n"
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):
                 host_notes = _host_notes_for_prompt(root, run_id, str(task_id), target, item)
                 supervision_context = supervision_host_context(
@@ -1262,6 +1289,9 @@ def chat_prompt(
         if context_delta:
             sticky_context_parts.append(context_delta)
             components["context_delta"] = context_delta
+        if context_pack:
+            sticky_context_parts.append(context_pack)
+            components["context_pack"] = context_pack
         if input_image_guidance:
             sticky_context_parts.append(input_image_guidance)
             components["input_image_guidance"] = input_image_guidance
@@ -1324,6 +1354,7 @@ def chat_prompt(
                 event_limit=0,
                 prompt_mode="sticky_delta",
                 context_fingerprint_updates=context_fingerprint_updates,
+                context_pack_evidence=context_pack_evidence,
             )
             return prompt
         sticky_context = render_prompt_template(
@@ -1379,6 +1410,7 @@ def chat_prompt(
             event_limit=event_limit,
             prompt_mode="sticky_delta",
             context_fingerprint_updates=context_fingerprint_updates,
+            context_pack_evidence=context_pack_evidence,
         )
         return prompt
     if is_result_request:
@@ -1426,12 +1458,14 @@ def chat_prompt(
         is_agent_command=is_agent_command,
         event_limit=event_limit,
         context_fingerprint_updates=context_fingerprint_updates,
+        context_pack_evidence=context_pack_evidence,
     )
     return prompt
 
 
 __all__ = [
     "CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY",
+    "CONTEXT_PACK_EVIDENCE_METRIC_KEY",
     "chat_prompt",
     "chat_prompt_with_metrics",
     "compact_summary_context",

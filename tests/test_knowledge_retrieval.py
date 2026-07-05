@@ -430,7 +430,7 @@ def test_task_assignment_prompt_embeds_context():
     assert "collaboration_mode" in task_assignment_prompt({"title": "T"}, "")
 
 
-def test_dispatch_injects_knowledge_into_prompt(tmp_path: Path):
+def test_dispatch_does_not_inject_retrieved_knowledge_into_assignment(tmp_path: Path):
     home = tmp_path / ".aha"
     assert main(["--home", str(home), "init"]) == 0
     out = io.StringIO()
@@ -449,5 +449,6 @@ def test_dispatch_injects_knowledge_into_prompt(tmp_path: Path):
 
     dispatch_task_to_main(home, run_id, task)
     inbox_text = inbox_path(home, run_id, "main").read_text(encoding="utf-8")
-    assert "项目已知经验" in inbox_text
-    assert "Known pitfall" in inbox_text
+    assert "项目已知经验" not in inbox_text
+    assert "Known pitfall" not in inbox_text
+    assert "Task:" in inbox_text

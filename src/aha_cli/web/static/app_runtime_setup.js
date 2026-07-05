@@ -784,6 +784,8 @@ timelineView = window.AHATimelineView.createTimelineView({
   documentRef: document,
   escapeHtml,
   eventData,
+  eventIdentity,
+  eventTaskId,
   formatClock,
   formatDuration,
   formatLocalTimestamp,

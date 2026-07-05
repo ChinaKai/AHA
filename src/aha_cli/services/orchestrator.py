@@ -95,14 +95,11 @@ def task_assignment_prompt(task: dict, knowledge_context: str = "") -> str:
 
 
 def dispatch_task_to_main(root: Path, run_id: str, task: dict) -> dict:
-    # Lazy import avoids a cycle (knowledge_retrieval -> store) at module load.
-    from aha_cli.services.knowledge_retrieval import knowledge_context_for_task
-
     payload = append_message(
         root,
         run_id,
         "main",
-        task_assignment_prompt(task, knowledge_context_for_task(root, run_id, task)),
+        task_assignment_prompt(task),
         sender="system",
         task_id=task["id"],
         role="main",

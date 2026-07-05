@@ -22,6 +22,45 @@
       return `${contextKey}::${messageKey}`;
     }
 
+    function stableStringHash(value) {
+      let hash = 2166136261;
+      const text = String(value || "");
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(36);
+    }
+
+    function timelineMessageStableIdentity(event) {
+      const data = deps.eventData?.(event) || {};
+      const taskId = deps.eventTaskId?.(event) || data.task_id || "";
+      if (event?.type === "agent_message") {
+        const body = deps.agentUpdateBody?.(data) || data.text || "";
+        if (!String(body || "").trim()) return "";
+        return `agent-reply:${data.target || data.agent_id || deps.backendTarget?.() || "main"}:${taskId}:${stableStringHash(body)}`;
+      }
+      if (event?.type === "message") {
+        const body = data.message || "";
+        if (!String(body || "").trim()) return "";
+        const sender = String(data.display_sender || data.sender || data.from_agent || "").trim();
+        const target = String(data.display_target || data.target || data.to_agent || "").trim();
+        const role = sender && sender !== "browser" && target === "browser"
+          ? `agent-reply:${sender}`
+          : `message:${sender || "-"}:${target || "-"}`;
+        return `${role}:${taskId}:${stableStringHash(body)}`;
+      }
+      return "";
+    }
+
+    function timelineMessageKey(event) {
+      const stableIdentity = timelineMessageStableIdentity(event);
+      if (stableIdentity) return `message-${stableStringHash(stableIdentity)}`;
+      const identity = deps.eventIdentity?.(event);
+      if (identity) return `event-${event?.type || "event"}-${stableStringHash(identity)}`;
+      return event?._uiKey || "";
+    }
+
     function setExpandedMessageKey(key, open, contextKey = deps.conversationKey?.()) {
       const stateKey = expandedMessageStateKey(key, contextKey);
       if (!stateKey) return;
@@ -168,19 +207,19 @@
       const data = deps.eventData?.(event) || {};
       if (event.type === "message") {
         const { displaySender, displayTarget, className } = deps.messageTimelineDisplay?.(data) || {};
-        return renderTimelineCard(`${displaySender} -> ${displayTarget}`, data.message || "", eventTimeLabel(event), className, event._uiKey);
+        return renderTimelineCard(`${displaySender} -> ${displayTarget}`, data.message || "", eventTimeLabel(event), className, timelineMessageKey(event));
       }
-      if (event.type === "agent_message") return renderTimelineCard(deps.agentUpdateTitle?.(data), deps.agentUpdateBody?.(data), eventTimeLabel(event), "agent-update", event._uiKey);
-      if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", event._uiKey, { markdown: false });
+      if (event.type === "agent_message") return renderTimelineCard(deps.agentUpdateTitle?.(data), deps.agentUpdateBody?.(data), eventTimeLabel(event), "agent-update", timelineMessageKey(event));
+      if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", timelineMessageKey(event), { markdown: false });
       if (event.type === "agent_command_finished") {
         const output = data.output_tail
           ? `\n\nOutput tail:\n${data.output_tail}`
           : data.output_tail_omitted
             ? `\n\nOutput tail omitted (${data.output_tail_chars || 0} chars).`
             : "";
-        return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", event._uiKey, { markdown: false });
+        return renderTimelineCard(`command finished (${data.target || "main"}) exit=${data.exit_code ?? "-"}`, `${data.command || ""}${output}`, eventTimeLabel(event), data.exit_code === 0 ? "agent-command" : "event-error", timelineMessageKey(event), { markdown: false });
       }
-      if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", event._uiKey, { markdown: false });
+      if (event.type === "agent_error") return renderTimelineCard(`agent error (${data.target || "main"})`, data.message || JSON.stringify(data), eventTimeLabel(event), "event-error", timelineMessageKey(event), { markdown: false });
       if (event.type === "agent_usage") {
         return renderTimelineStatus("usage", renderUsageSummary(event, data), "usage", eventTimeLabel(event));
       }

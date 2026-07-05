@@ -30,6 +30,10 @@ from aha_cli.services.chat_supervision import (
 )
 from aha_cli.services.action_payloads import action_response_text, extract_action_payload, extract_action_payload_result, invalid_action_schema_reason
 from aha_cli.services.commit_policy import generated_by_for_backend_model, validate_commit_message
+from aha_cli.services.context_evidence import (
+    distill_context_evidence_after_turn,
+    record_context_pack_from_prompt_metrics,
+)
 from aha_cli.services.orchestrator import (
     append_visible_sub_agent_result,
     apply_supervision_stub,
@@ -793,7 +797,17 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     prompt_metrics["prompt_ref"] = save_prompt_artifact(root, run_id, item_task_id, args.target, prompt)
                 except OSError as exc:
                     prompt_metrics["prompt_ref_error"] = str(exc)
-                append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
+                prompt_event = append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
+                record_context_pack_from_prompt_metrics(
+                    root,
+                    run_id,
+                    task_id=item_task_id,
+                    agent_id=agent_id,
+                    source=source_name,
+                    user_message=original_message,
+                    prompt_event=prompt_event,
+                    prompt_metrics=prompt_metrics,
+                )
                 gate_model_family = model_family_for_guidance(backend_name, requested_model, resolved_model)
                 git_before = _git_workspace_snapshot(workspace) if gate_model_family else None
                 progress_heartbeat = (
@@ -1422,6 +1436,19 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             reply=reply,
                             role=item.get("role") or "main",
                         )
+                if item_task_id and not is_agent_command and not is_kb_command and not is_nav_command and not is_memo_report:
+                    distill_context_evidence_after_turn(
+                        root,
+                        run_id,
+                        task_id=item_task_id,
+                        agent_id=agent_id,
+                        source=source_name,
+                        prompt_event=prompt_event,
+                        prompt_metrics=prompt_metrics,
+                        reply=reply,
+                        exit_code=exit_code,
+                        workspace=workspace,
+                    )
                 if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset, target=args.target):
                     exit_after_message = True
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
