@@ -305,6 +305,7 @@ sidecar/capture/bootstrap
 - 形成可复用修复经验或验证流程 -> 新增/更新 `entry`。
 - 发现现有 map 缺失重要文件/符号/配置 -> 触发/建议 map refresh，或把稳定入口写入 project navigation；不手改 generated map cache。
 - 发现 map 反复查不到已验证的关键路径 -> 记录 `map_stale_cache`、`map_extractor_gap`、`map_query_expansion_gap`、`map_ranking_gap` 或 `map_coverage_gap`，必要时修生成/查询逻辑。
+- 如果 nav/map 没有定位到真实代码，或指向 stale/wrong 路径，agent 不能只绕过去完成任务；找到并验证真实源码路径后，必须新增或修正 project navigation，写入 verified files、entrypoints、flow 和验证命令。
 
 这条自动链路不是全库重建，也不是把所有探索都写入长期知识。只有本任务已经读源码、跑命令或完成验证的项目事实才允许直接写入。手动 `/aha kb`、`/aha nav`、capture 仍是补充渠道，并继续走 pending/approve。
 
@@ -431,6 +432,7 @@ agent 反馈策略：
 - AHA 需要记录 `context_hit_ok`、`nav_stale`、`map_miss`、`entry_wrong`、`missing_nav`、`missing_entry` 这类结构化信号。
 - 第一阶段尽量从实际行为推断：agent 读了哪些文件、map 结果是否被采用、最后改了哪些文件、验证是否通过。
 - agent final 可以补充反馈，但不强迫每轮输出长报告。
+- 如果 nav/map 没有把 agent 带到正确代码，agent 找到真实路径后要立刻把这个事实写回 project navigation；普通任务不改 generated map cache，AHA/map 任务才修 extractor/resolver/ranking/refresh 逻辑。
 
 自修复边界：
 
@@ -666,6 +668,7 @@ Observe Proxy 是这个设计的度量层。
 
 - 自动对比 Context Pack 与实际读取/修改/验证路径。
 - 由 agent 基于当前任务证据直接维护 project nav/solutions Markdown；流程关系写 navigation flows。
+- nav/map 定位失败或不准确时，agent 找到真实代码后必须新增或修正 project navigation，而不是只在当前任务里临时绕过。
 - 自动记录 map miss / stale cache / extractor gap / query expansion gap / ranking gap，必要时触发 refresh 建议、修 map 逻辑或沉淀稳定入口到 navigation。
 - 自动生成 `context_hit_ok`、`nav_stale`、`map_miss`、`map_stale_cache`、`map_extractor_gap`、`map_query_expansion_gap`、`map_ranking_gap`、`map_coverage_gap`、`entry_wrong`、`missing_nav`、`missing_entry` 等结构化信号。
 - CRUD 语义只作用于当前任务 evidence 和项目 KB 原文：create/update/repair/deprecate，不触发完整知识库重建。

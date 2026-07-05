@@ -12,6 +12,7 @@ Current-task evidence protocol:
 - AHA may record which KB/nav/map/source paths you actually read, changed, or verified.
 - If KB/nav/map is missing, stale, wrong, or irrelevant, say so briefly when material.
 - Self-growth/self-repair is current-task incremental CRUD only.
+- If nav/map fails to locate the relevant code, or points to stale/wrong paths, first find and verify the real source path, then update or create the project navigation entry with the verified files, entrypoints, flow, and validation command.
 - For project-scoped navigation and project solutions, directly edit the approved KB Markdown files when the current task provides evidence. Keep edits narrow and cite the files/commands you verified.
 - Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path; ordinary task evidence should not wait for pending candidates.
 - Do not hand-edit generated Project Map cache files. If map output is stale, refresh it; if map generation or query is wrong, repair the extractor, schema, resolver, query expansion, ranking, or refresh logic when that is in scope.

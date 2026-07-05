@@ -443,6 +443,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Project map entrypoints:", enabled_prompt)
         self.assertIn("agent-pull", enabled_prompt)
         self.assertIn("directly edit the approved KB Markdown files", enabled_prompt)
+        self.assertIn("then update or create the project navigation entry with the verified files", enabled_prompt)
         self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", enabled_prompt)
         self.assertIn("Do not hand-edit generated Project Map cache files", enabled_prompt)
         self.assertIn("repair the extractor, schema, resolver, query expansion, ranking, or refresh logic", enabled_prompt)
@@ -490,6 +491,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Project map entrypoints:", prompt)
         self.assertIn("agent-pull", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
+        self.assertIn("then update or create the project navigation entry with the verified files", prompt)
         self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", prompt)
         self.assertIn("Do not hand-edit generated Project Map cache files", prompt)
         self.assertIn("repair the extractor, schema, resolver, query expansion, ranking, or refresh logic", prompt)
@@ -534,6 +536,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Knowledge base entrypoints:", prompt)
         self.assertIn("navigation_index:", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
+        self.assertIn("then update or create the project navigation entry with the verified files", prompt)
         self.assertNotIn("CH340 USB 电磁继电器串口控制协议", prompt)
         self.assertNotIn("串口模块也会输出状态", prompt)
 
