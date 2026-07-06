@@ -206,16 +206,18 @@
       const items = Array.isArray(values) ? values.filter(Boolean).slice(0, limit) : [];
       if (!items.length) return `<span class="task-evidence-muted">${escapeHtml(empty)}</span>`;
       if (code) {
-        return items.map(value => `<code title="${escapeHtml(value)}">${escapeHtml(value)}</code>`).join("");
+        return items.map(value => `<code title="${escapeHtml(value)}">${escapeHtml(localizeTimestampText(value))}</code>`).join("");
       }
-      return items.map(value => `<span class="task-evidence-chip">${escapeHtml(value)}</span>`).join("");
+      return items.map(value => `<span class="task-evidence-chip">${escapeHtml(localizeTimestampText(value))}</span>`).join("");
     }
 
-    function renderEvidenceSuggestions(suggestions = []) {
+    function renderEvidenceSuggestions(suggestions = [], { limit = 8 } = {}) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
-      const items = Array.isArray(suggestions) ? suggestions.filter(item => item && typeof item === "object").slice(0, 8) : [];
+      const items = Array.isArray(suggestions)
+        ? suggestions.filter(item => item && typeof item === "object").slice(0, limit)
+        : [];
       if (!items.length) {
-        return `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_suggestions", "No maintenance suggestions."))}</div>`;
+        return `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_suggestions", "No KB maintenance actions needed."))}</div>`;
       }
       return items.map(item => {
         const label = [item.action, item.target, item.reason].filter(Boolean).join(" / ");
@@ -284,6 +286,7 @@
       const state = status.state || "observing";
       const labels = {
         helped: t("task.context_evidence_status_helped", "KB helped"),
+        growth_pending: t("task.context_evidence_status_growth_pending", "KB growth pending"),
         needs_repair: t("task.context_evidence_status_needs_repair", "Needs KB repair"),
         no_evidence: t("task.context_evidence_status_no_evidence", "No evidence yet"),
         observing: t("task.context_evidence_status_observing", "Observing"),
@@ -297,11 +300,71 @@
       const labels = {
         after_agent_turn: t("task.context_evidence_source_after_turn", "after agent turn"),
         after_turn_runtime_distill: t("task.context_evidence_source_after_turn", "after agent turn"),
+        agent_kb_feedback: t("task.context_evidence_source_agent_feedback", "agent KB feedback"),
         before_agent_prompt: t("task.context_evidence_source_before_prompt", "before agent prompt"),
         context_pack_before_prompt: t("task.context_evidence_source_context_pack", "context pack"),
         map_query_on_demand: t("task.context_evidence_source_map_query", "map query")
       };
       return labels[source] || source;
+    }
+
+    function evidenceFeedbackModeText(mode) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      if (mode === "agent_feedback_plus_runtime") {
+        return t("task.context_evidence_feedback_mode_agent", "Agent KB feedback plus AHA runtime inference.");
+      }
+      return t("task.context_evidence_feedback_mode", "AHA runtime inference from prompts, map queries, commands, and changed files.");
+    }
+
+    function renderAgentKbFeedback(feedback = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const sections = [
+        ["helped", t("task.context_evidence_feedback_helped", "Helped")],
+        ["stale", t("task.context_evidence_feedback_stale", "Stale")],
+        ["missed", t("task.context_evidence_feedback_missed", "Missed")],
+        ["updated", t("task.context_evidence_feedback_updated", "Updated")],
+        ["pending", t("task.context_evidence_feedback_pending", "Pending")]
+      ].filter(([key]) => Array.isArray(feedback[key]) && feedback[key].length);
+      if (!sections.length) return "";
+      return `
+        <div class="task-evidence-block">
+          <strong>${escapeHtml(t("task.context_evidence_agent_feedback", "Agent KB feedback"))}</strong>
+          <div class="task-evidence-grid">
+            ${sections.map(([key, label]) => `
+              <div>
+                <span>${escapeHtml(label)}</span>
+                <div>${evidenceListHtml(feedback[key], { limit: 6, empty: "-", code: key !== "helped" })}</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderKbGrowthState(state = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      if (!state || typeof state !== "object" || !state.status || state.status === "not_required") return "";
+      const pending = Array.isArray(state.pending) ? state.pending.map(item => item?.target_path || item?.target || "").filter(Boolean) : [];
+      const applied = Array.isArray(state.applied) ? state.applied.map(item => item?.target_path || item?.matched_ref || "").filter(Boolean) : [];
+      return `
+        <div class="task-evidence-block">
+          <strong>${escapeHtml(t("task.context_evidence_growth", "KB growth"))}</strong>
+          <div class="task-evidence-grid">
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_growth_status", "Status"))}</span>
+              <div>${evidenceListHtml([state.status], { limit: 1, empty: "-" })}</div>
+            </div>
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_growth_pending", "Pending write-back"))}</span>
+              <div>${evidenceListHtml(pending, { limit: 6, empty: "-", code: true })}</div>
+            </div>
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_growth_applied", "Applied write-back"))}</span>
+              <div>${evidenceListHtml(applied, { limit: 6, empty: "-", code: true })}</div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     function renderEvidenceSummary(payload = {}) {
@@ -315,6 +378,7 @@
         ? sources.map(evidenceSourceText).join(" · ")
         : generatedWhen.map(evidenceSourceText).join(" · ");
       const statusState = String(status.state || "observing").replace(/[^a-z0-9_-]/gi, "");
+      const latestUpdate = localizeTimestampText(summary.latest_record_created_at || "-");
       const targetPath = nextAction.target_path
         ? `<div class="task-evidence-line">${evidenceListHtml([nextAction.target_path], { limit: 1, empty: "-", code: true })}</div>`
         : "";
@@ -323,7 +387,7 @@
           <div>
             <span>${escapeHtml(t("task.context_evidence_scope", "Scope"))}</span>
             <strong>${escapeHtml(t("task.context_evidence_scope_task", "This token-saving task"))}</strong>
-            <p>${escapeHtml(t("task.context_evidence_feedback_mode", "AHA runtime inference from prompts, map queries, commands, and changed files."))}</p>
+            <p>${escapeHtml(evidenceFeedbackModeText(summary.feedback_mode))}</p>
           </div>
           <div>
             <span>${escapeHtml(t("task.context_evidence_kb_effect", "KB effect"))}</span>
@@ -339,8 +403,98 @@
           <div>
             <span>${escapeHtml(t("task.context_evidence_sources", "Evidence sources"))}</span>
             <strong>${escapeHtml(sourceText || "-")}</strong>
-            <p>${escapeHtml(t("task.context_evidence_latest", "Latest update"))}: ${escapeHtml(summary.latest_record_created_at || "-")}</p>
+            <p>${escapeHtml(t("task.context_evidence_latest", "Latest update"))}: ${escapeHtml(latestUpdate)}</p>
           </div>
+        </div>
+      `;
+    }
+
+    function renderEvidenceFacts(latest = {}, diagnostics = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      return `
+        <div class="task-evidence-stack">
+          <div>
+            <span>${escapeHtml(t("task.context_evidence_signals", "Signals"))}</span>
+            <div>${evidenceListHtml(latest.signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
+          </div>
+          <div>
+            <span>${escapeHtml(t("task.context_evidence_actions", "Actions"))}</span>
+            <div>${evidenceListHtml(latest.crud_actions || [], { empty: t("task.context_evidence_none", "none") })}</div>
+          </div>
+          <div>
+            <span>${escapeHtml(t("task.context_evidence_actual", "Actual files"))}</span>
+            <div>${evidenceListHtml(latest.actual_files || diagnostics.actual_files || [], { limit: 8, empty: "-", code: true })}</div>
+          </div>
+          <div>
+            <span>${escapeHtml(t("task.context_evidence_referenced", "Referenced files"))}</span>
+            <div>${evidenceListHtml(latest.referenced_files || diagnostics.referenced_files || [], { limit: 8, empty: "-", code: true })}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderEvidenceDiagnostics(payload = {}, diagnostics = {}, routingHealth = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      return `
+        <div class="task-evidence-stack">
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_routing", "Routing health"))}</strong>
+            ${renderRoutingHealth(routingHealth)}
+          </div>
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_map", "Map diagnostics"))}</strong>
+            <div class="task-evidence-line">${evidenceListHtml(diagnostics.gap_signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
+            <div class="task-evidence-line">${evidenceListHtml(diagnostics.missing_files || [], { limit: 8, empty: "-", code: true })}</div>
+            <div class="task-evidence-line">${evidenceListHtml(diagnostics.stale_path_hints || [], { limit: 8, empty: "-", code: true })}</div>
+          </div>
+          <div class="task-evidence-block">
+            <strong>${escapeHtml(t("task.context_evidence_queries", "Map queries"))}</strong>
+            ${renderEvidenceQueries(payload)}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderContextEvidenceTabs({ payload = {}, latest = {}, diagnostics = {}, routingHealth = {}, maintenanceItems = [], kbGrowthState = {}, latestFeedback = {} } = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const growthHtml = renderKbGrowthState(kbGrowthState)
+        || `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_growth_not_required", "No KB growth state for this task yet."))}</div>`;
+      const feedbackHtml = renderAgentKbFeedback(latestFeedback)
+        || `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_agent_feedback", "No agent KB feedback yet."))}</div>`;
+      const tabs = [
+        ["growth", t("task.context_evidence_tab_growth", "Growth")],
+        ["feedback", t("task.context_evidence_tab_feedback", "Feedback")],
+        ["evidence", t("task.context_evidence_tab_evidence", "Evidence")],
+        ["diagnostics", t("task.context_evidence_tab_diagnostics", "Diagnostics")]
+      ];
+      const storedTab = window.__ahaContextEvidenceActiveTab;
+      const activeTab = tabs.some(([key]) => key === storedTab) ? storedTab : "growth";
+      return `
+        <div class="task-evidence-tabs" role="tablist" aria-label="${escapeHtml(t("task.context_evidence_tabs", "Context evidence sections"))}">
+          ${tabs.map(([key, label]) => {
+            const active = key === activeTab;
+            return `
+              <button class="button-ghost task-evidence-tab ${active ? "active" : ""}" type="button" role="tab" aria-selected="${active ? "true" : "false"}" data-context-evidence-tab="${escapeHtml(key)}">${escapeHtml(label)}</button>
+            `;
+          }).join("")}
+        </div>
+        <div class="task-evidence-tab-panels">
+          <section class="task-evidence-tab-panel ${activeTab === "growth" ? "active" : ""}" role="tabpanel" data-context-evidence-panel="growth">
+            <div class="task-evidence-block">
+              <strong>${escapeHtml(t("task.context_evidence_suggestions", "KB maintenance actions"))}</strong>
+              ${renderEvidenceSuggestions(maintenanceItems)}
+            </div>
+            ${growthHtml}
+          </section>
+          <section class="task-evidence-tab-panel ${activeTab === "feedback" ? "active" : ""}" role="tabpanel" data-context-evidence-panel="feedback">
+            ${feedbackHtml}
+          </section>
+          <section class="task-evidence-tab-panel ${activeTab === "evidence" ? "active" : ""}" role="tabpanel" data-context-evidence-panel="evidence">
+            ${renderEvidenceFacts(latest, diagnostics)}
+          </section>
+          <section class="task-evidence-tab-panel ${activeTab === "diagnostics" ? "active" : ""}" role="tabpanel" data-context-evidence-panel="diagnostics">
+            ${renderEvidenceDiagnostics(payload, diagnostics, routingHealth)}
+          </section>
         </div>
       `;
     }
@@ -354,6 +508,8 @@
       const latest = payload.latest_result || {};
       const diagnostics = latest.map_diagnostics || {};
       const routingHealth = payload.routing_health || latest.routing_health || {};
+      const latestFeedback = payload.summary?.latest_agent_feedback || {};
+      const kbGrowthState = payload.kb_growth_state || payload.summary?.kb_growth_state || {};
       const count = Number(payload.count || 0);
       const maintenanceItems = Array.isArray(payload.maintenance_plan) && payload.maintenance_plan.length
         ? payload.maintenance_plan
@@ -379,45 +535,7 @@
             <button type="button" data-context-evidence-refresh>${escapeHtml(t("common.refresh", "Refresh"))}</button>
           </div>
           ${renderEvidenceSummary(payload)}
-          <div class="task-evidence-grid">
-            <div>
-              <span>${escapeHtml(t("task.context_evidence_signals", "Signals"))}</span>
-              <div>${evidenceListHtml(latest.signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
-            </div>
-            <div>
-              <span>${escapeHtml(t("task.context_evidence_actions", "Actions"))}</span>
-              <div>${evidenceListHtml(latest.crud_actions || [], { empty: t("task.context_evidence_none", "none") })}</div>
-            </div>
-            <div>
-              <span>${escapeHtml(t("task.context_evidence_actual", "Actual files"))}</span>
-              <div>${evidenceListHtml(latest.actual_files || diagnostics.actual_files || [], { limit: 8, empty: "-", code: true })}</div>
-            </div>
-            <div>
-              <span>${escapeHtml(t("task.context_evidence_referenced", "Referenced files"))}</span>
-              <div>${evidenceListHtml(latest.referenced_files || diagnostics.referenced_files || [], { limit: 8, empty: "-", code: true })}</div>
-            </div>
-          </div>
-          <div class="task-evidence-block">
-            <strong>${escapeHtml(t("task.context_evidence_suggestions", "Maintenance suggestions"))}</strong>
-            ${renderEvidenceSuggestions(maintenanceItems)}
-          </div>
-          <div class="task-evidence-section-title">
-            <strong>${escapeHtml(t("task.context_evidence_diagnostics", "Diagnostic details"))}</strong>
-          </div>
-          <div class="task-evidence-block">
-            <strong>${escapeHtml(t("task.context_evidence_routing", "Routing health"))}</strong>
-            ${renderRoutingHealth(routingHealth)}
-          </div>
-          <div class="task-evidence-block">
-            <strong>${escapeHtml(t("task.context_evidence_map", "Map diagnostics"))}</strong>
-            <div class="task-evidence-line">${evidenceListHtml(diagnostics.gap_signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
-            <div class="task-evidence-line">${evidenceListHtml(diagnostics.missing_files || [], { limit: 8, empty: "-", code: true })}</div>
-            <div class="task-evidence-line">${evidenceListHtml(diagnostics.stale_path_hints || [], { limit: 8, empty: "-", code: true })}</div>
-          </div>
-          <div class="task-evidence-block">
-            <strong>${escapeHtml(t("task.context_evidence_queries", "Map queries"))}</strong>
-            ${renderEvidenceQueries(payload)}
-          </div>
+          ${renderContextEvidenceTabs({ payload, latest, diagnostics, routingHealth, maintenanceItems, kbGrowthState, latestFeedback })}
         </div>
       `;
     }

@@ -7,10 +7,13 @@ from unittest import mock
 
 from aha_cli.cli import main
 from aha_cli.services.context_evidence import (
+    append_task_context_evidence,
     distill_context_evidence_after_turn,
     list_task_context_evidence,
     record_context_pack_from_prompt_metrics,
+    record_agent_kb_feedback,
     record_project_map_query_result,
+    task_context_evidence_path,
 )
 from aha_cli.store.filesystem import append_event, load_config, update_task_token_saving_config
 from aha_cli.store.io import write_json
@@ -138,7 +141,60 @@ def test_context_evidence_map_miss_records_task_scoped_update_without_candidate(
     assert records[-1]["routing_health"]["status"] == "needs_repair"
     assert "src/aha_cli/new.py" in records[-1]["routing_health"]["prioritize_paths"]
     assert records[-1]["kb_scope_policy"]["general_personal_wiki"] == "manual_candidate_review_only"
+    assert records[-1]["kb_growth_state"]["status"] == "pending"
+    assert records[-1]["kb_growth_state"]["pending"][0]["target_path"] == "navigation/index.md"
     assert list_pending(home, load_config(home)) == []
+
+
+def test_context_evidence_marks_kb_growth_applied_from_agent_feedback(tmp_path: Path):
+    home, run_id, workspace = _make_run(tmp_path)
+    (workspace / "src" / "aha_cli").mkdir(parents=True)
+    (workspace / "src" / "aha_cli" / "new.py").write_text("def new_endpoint():\n    return True\n", encoding="utf-8")
+    evidence = {
+        "request": "where is new_endpoint",
+        "text_sha": "pack-growth",
+        "knowledge": {"entries": []},
+        "map": {"query": "new_endpoint", "total_matches": 1, "files": ["src/aha_cli/old.py"]},
+    }
+    prompt_event, metrics = _prompt_metrics(home, run_id, evidence)
+    record_agent_kb_feedback(
+        home,
+        run_id,
+        "task-001",
+        agent_id="main",
+        feedback={"updated": ["navigation/index.md"]},
+    )
+    append_event(
+        home,
+        run_id,
+        "agent_command_finished",
+        {
+            "task_id": "task-001",
+            "target": "main",
+            "command": "sed -n 1,40p src/aha_cli/new.py",
+            "exit_code": 0,
+        },
+    )
+
+    result = distill_context_evidence_after_turn(
+        home,
+        run_id,
+        task_id="task-001",
+        agent_id="main",
+        source="codex-chat",
+        prompt_event=prompt_event,
+        prompt_metrics=metrics,
+        reply="Updated navigation/index.md with the verified route.",
+        exit_code=0,
+        workspace=workspace,
+    )
+
+    assert result is not None
+    record = list_task_context_evidence(home, run_id, "task-001")[-1]
+    assert record["kb_growth_state"]["status"] == "applied"
+    assert record["kb_growth_state"]["applied"][0]["matched_ref"] == "navigation/index.md"
+    assert record["kb_growth_state"]["applied"][0]["source"] == "agent_kb_feedback"
+    assert record["kb_growth_state"]["pending"] == []
 
 
 def test_context_evidence_stale_reference_records_repair_deprecate_without_candidate(tmp_path: Path):
@@ -205,6 +261,7 @@ def test_context_evidence_stale_reference_records_repair_deprecate_without_candi
     assert cache_plan["validation"] == ["/aha map refresh", "/aha map status"]
     assert cache_plan["write_policy"] == "refresh_only_do_not_edit_cache"
     assert cache_plan["execution"]["mode"] == "refresh_command"
+    assert cache_plan["execution"]["owner"] == "agent"
     assert nav_plan["target_path"] == "navigation/index.md"
     assert record["routing_health"]["status"] == "stale"
     assert "docs/old-guide.md" in record["routing_health"]["downrank_paths"]
@@ -382,6 +439,119 @@ def test_context_evidence_entrypoint_only_pack_does_not_emit_false_missing_nav(t
     assert "missing_nav" not in record["signals"]
     assert "missing_entry" not in record["signals"]
     assert list_pending(home, load_config(home)) == []
+
+
+def test_context_evidence_filters_command_path_noise_and_keeps_kb_paths_separate(tmp_path: Path):
+    home, run_id, workspace = _make_run(tmp_path)
+    (workspace / "src" / "aha_cli").mkdir(parents=True)
+    (workspace / "src" / "aha_cli" / "panel.py").write_text("def render():\n    return True\n", encoding="utf-8")
+    kb_path = home / "knowledge" / "projects" / "demo" / "navigation" / "index.md"
+    kb_path.parent.mkdir(parents=True)
+    kb_path.write_text("# Demo nav\n", encoding="utf-8")
+    evidence = {
+        "request": "inspect evidence panel",
+        "text_sha": "pack-noise",
+        "knowledge": {"mode": "agent_pull", "navigation_index_exists": True, "entries": []},
+        "map": {"query": "evidence panel", "status": "fresh", "total_matches": 0, "files": []},
+    }
+    prompt_event, metrics = _prompt_metrics(home, run_id, evidence)
+    append_event(
+        home,
+        run_id,
+        "agent_command_finished",
+        {
+            "task_id": "task-001",
+            "target": "main",
+            "command": f"/bin/bash -lc 'sed -n 1,40p src/aha_cli/panel.py {workspace / 'src' / 'aha_cli' / 'panel.py'} {kb_path} KB/map'",
+            "exit_code": 0,
+        },
+    )
+
+    result = distill_context_evidence_after_turn(
+        home,
+        run_id,
+        task_id="task-001",
+        agent_id="main",
+        source="codex-chat",
+        prompt_event=prompt_event,
+        prompt_metrics=metrics,
+        reply="Only src/aha_cli/panel.py is task source; the KB path is reference material.",
+        exit_code=0,
+        workspace=workspace,
+    )
+
+    assert result is not None
+    record = list_task_context_evidence(home, run_id, "task-001")[-1]
+    assert record["actual_files"] == ["src/aha_cli/panel.py"]
+    assert "src/aha_cli/panel.py" in record["map_diagnostics"]["missing_files"]
+    assert "bin/bash" not in record["actual_files"]
+    assert "KB/map" not in record["actual_files"]
+    assert "KB/map" not in record["map_diagnostics"]["missing_files"]
+    assert any(path.endswith(".aha/knowledge/projects/demo/navigation/index.md") for path in record["knowledge_files"])
+    assert "bin/bash" in record["ignored_command_paths"]
+
+
+def test_context_evidence_read_side_cleans_historical_path_noise_without_rewriting_jsonl(tmp_path: Path):
+    home, run_id, workspace = _make_run(tmp_path)
+    source = workspace / "src" / "aha_cli" / "panel.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def render():\n    return True\n", encoding="utf-8")
+    kb_path = home / "knowledge" / "projects" / "demo" / "navigation" / "index.md"
+    kb_path.parent.mkdir(parents=True)
+    kb_path.write_text("# Demo nav\n", encoding="utf-8")
+    noisy_paths = ["/bin/bash", "KB/map", str(kb_path), str(source)]
+    append_task_context_evidence(
+        home,
+        run_id,
+        "task-001",
+        {
+            "type": "context_evidence_result",
+            "agent_id": "main",
+            "signals": ["map_miss"],
+            "actual_files": noisy_paths,
+            "map_diagnostics": {
+                "actual_files": noisy_paths,
+                "missing_files": noisy_paths,
+                "gap_reasons": [{"reason": "map_query_returned_no_matches", "paths": noisy_paths}],
+            },
+            "routing_health": {
+                "status": "needs_repair",
+                "prioritize_paths": noisy_paths,
+                "score_adjustments": [
+                    {"path": path, "direction": "prioritize", "reason": "verified_task_source"}
+                    for path in noisy_paths
+                ],
+            },
+            "maintenance_suggestions": [
+                {"action": "update", "target": "project_navigation", "reason": "map_miss", "files": noisy_paths}
+            ],
+            "maintenance_plan": [
+                {
+                    "action": "update",
+                    "target": "project_navigation",
+                    "reason": "map_miss",
+                    "files": noisy_paths,
+                    "source_files": noisy_paths,
+                }
+            ],
+        },
+    )
+
+    raw = task_context_evidence_path(home, run_id, "task-001").read_text(encoding="utf-8")
+    record = list_task_context_evidence(home, run_id, "task-001")[-1]
+
+    assert "KB/map" in raw
+    assert str(kb_path) in raw
+    assert record["actual_files"] == ["src/aha_cli/panel.py"]
+    assert record["map_diagnostics"]["missing_files"] == ["src/aha_cli/panel.py"]
+    assert record["map_diagnostics"]["gap_reasons"][0]["paths"] == ["src/aha_cli/panel.py"]
+    assert record["routing_health"]["prioritize_paths"] == ["src/aha_cli/panel.py"]
+    assert [item["path"] for item in record["routing_health"]["score_adjustments"]] == ["src/aha_cli/panel.py"]
+    assert record["maintenance_suggestions"][0]["files"] == ["src/aha_cli/panel.py"]
+    assert record["maintenance_plan"][0]["source_files"] == ["src/aha_cli/panel.py"]
+    assert any(path.endswith(".aha/knowledge/projects/demo/navigation/index.md") for path in record["knowledge_files"])
+    assert "bin/bash" in record["ignored_command_paths"]
+    assert "KB/map" in record["ignored_command_paths"]
 
 
 def test_context_evidence_merges_map_query_event_after_prompt(tmp_path: Path):

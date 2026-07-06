@@ -547,6 +547,8 @@ class ChatPromptTests(unittest.TestCase):
             root = Path(tmp) / ".aha"
             (workspace / "src").mkdir(parents=True)
             (workspace / "src" / "new_api.py").write_text("def new_api():\n    return True\n", encoding="utf-8")
+            kb_path = root / "knowledge" / "projects" / "demo" / "navigation" / "index.md"
+            noisy_paths = ["src/new_api.py", "/bin/bash", "KB/map", str(kb_path)]
             with mock.patch("pathlib.Path.cwd", return_value=workspace):
                 self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("--home", str(root), "plan", "Context evidence recap", "--agents", "1")
@@ -572,17 +574,17 @@ class ChatPromptTests(unittest.TestCase):
                         "type": "context_evidence_result",
                         "agent_id": "main",
                         "signals": ["map_miss", "map_coverage_gap"],
-                        "actual_files": ["src/new_api.py"],
+                        "actual_files": noisy_paths,
                         "referenced_files": ["src/old_api.py"],
                         "map_diagnostics": {
                             "gap_signals": ["map_coverage_gap"],
-                            "missing_files": ["src/new_api.py"],
+                            "missing_files": noisy_paths,
                             "stale_path_hints": ["src/old_api.py"],
                         },
                         "routing_health": {
                             "status": "needs_repair",
                             "downrank_paths": ["src/old_api.py"],
-                            "prioritize_paths": ["src/new_api.py"],
+                            "prioritize_paths": noisy_paths,
                         },
                         "kb_scope_policy": {
                             "project_navigation": "direct_edit_approved_markdown_with_task_evidence",
@@ -593,7 +595,7 @@ class ChatPromptTests(unittest.TestCase):
                                 "action": "update",
                                 "target": "project_navigation",
                                 "reason": "map_miss",
-                                "files": ["src/new_api.py"],
+                                "files": noisy_paths,
                             }
                         ],
                         "maintenance_plan": [
@@ -603,10 +605,24 @@ class ChatPromptTests(unittest.TestCase):
                                 "target_path": "projects/demo/navigation/flows/token-saving.md",
                                 "reason": "map_miss",
                                 "write_policy": "direct_project_navigation_update",
-                                "source_files": ["src/new_api.py"],
+                                "source_files": noisy_paths,
                                 "validation": ["python3 -m pytest tests/test_context_evidence.py -q"],
                             }
                         ],
+                        "kb_growth_state": {
+                            "status": "pending",
+                            "required_count": 1,
+                            "applied_count": 0,
+                            "pending_count": 1,
+                            "pending": [
+                                {
+                                    "target": "project_navigation",
+                                    "target_path": "projects/demo/navigation/flows/token-saving.md",
+                                    "reason": "map_miss",
+                                }
+                            ],
+                            "applied": [],
+                        },
                     },
                 )
                 item = append_message(
@@ -629,17 +645,21 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("- stale_path_hints: src/old_api.py", prompt)
         self.assertIn("routing_health: needs_repair downrank=src/old_api.py prioritize=src/new_api.py", prompt)
         self.assertIn("kb_scope_policy: project_navigation=direct_edit_approved_markdown_with_task_evidence", prompt)
+        self.assertIn("kb_growth_state: pending pending=projects/demo/navigation/flows/token-saving.md", prompt)
         self.assertIn("recent_map_queries: legacy api (0 matches)", prompt)
         self.assertIn(
             "maintenance_plan: update project_navigation -> projects/demo/navigation/flows/token-saving.md",
             prompt,
         )
         self.assertIn("policy=direct_project_navigation_update", prompt)
-        self.assertIn("maintenance_suggestions: update project_navigation (map_miss) files=src/new_api.py", prompt)
+        self.assertIn("maintenance_actions: update project_navigation (map_miss) files=src/new_api.py", prompt)
         self.assertIn("Re-check current source before edits.", prompt)
+        self.assertNotIn("KB/map", prompt)
+        self.assertNotIn("bin/bash", prompt)
         pack_evidence = metrics["context_pack_evidence"]
         self.assertEqual(pack_evidence["task_evidence"]["signals"], ["map_miss", "map_coverage_gap"])
         self.assertEqual(pack_evidence["task_evidence"]["actual_files"], ["src/new_api.py"])
+        self.assertEqual(pack_evidence["task_evidence"]["map_missing_files"], ["src/new_api.py"])
         self.assertEqual(pack_evidence["task_evidence"]["map_queries"][0]["query"], "legacy api")
         self.assertEqual(
             pack_evidence["task_evidence"]["maintenance_plan"][0]["target_path"],
@@ -649,6 +669,11 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(
             pack_evidence["task_evidence"]["kb_scope_policy"]["general_personal_wiki"],
             "manual_candidate_review_only",
+        )
+        self.assertEqual(pack_evidence["task_evidence"]["kb_growth_state"]["status"], "pending")
+        self.assertEqual(
+            pack_evidence["task_evidence"]["kb_growth_state"]["pending_paths"],
+            ["projects/demo/navigation/flows/token-saving.md"],
         )
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:

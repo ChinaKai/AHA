@@ -158,6 +158,19 @@ class WebTaskRouteTests(unittest.TestCase):
                         ],
                     },
                 )
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "type": "agent_kb_feedback",
+                        "agent_id": "main",
+                        "feedback": {
+                            "helped": ["navigation narrowed the route"],
+                            "updated": ["navigation/index.md"],
+                        },
+                    },
+                )
                 response = self.route(root, run_id, "GET", "/api/task/task-001/context-evidence", query={"limit": ["2"]})
                 result_only = self.route(
                     root,
@@ -178,9 +191,9 @@ class WebTaskRouteTests(unittest.TestCase):
         payload = response["payload"]
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["task_id"], "task-001")
-        self.assertEqual(payload["count"], 3)
+        self.assertEqual(payload["count"], 4)
         self.assertEqual(payload["limit"], 2)
-        self.assertEqual([record["type"] for record in payload["records"]], ["context_evidence_result", "context_evidence_result"])
+        self.assertEqual([record["type"] for record in payload["records"]], ["context_evidence_result", "agent_kb_feedback"])
         self.assertEqual(payload["latest_result"]["signals"], ["nav_stale"])
         self.assertEqual(
             [(item["action"], item["target"], item["reason"]) for item in payload["maintenance_suggestions"]],
@@ -201,17 +214,70 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertEqual(payload["kb_scope_policy"]["general_personal_wiki"], "manual_candidate_review_only")
         self.assertEqual(payload["summary"]["scope"], "task")
         self.assertEqual(payload["summary"]["generated_by"], "aha_runtime")
-        self.assertEqual(payload["summary"]["feedback_mode"], "runtime_inferred")
+        self.assertEqual(payload["summary"]["feedback_mode"], "agent_feedback_plus_runtime")
         self.assertEqual(payload["summary"]["status"]["state"], "stale")
         self.assertEqual(payload["summary"]["next_action"]["label"], "Repair project navigation")
         self.assertEqual(payload["summary"]["next_action"]["target_path"], "navigation/index.md")
         self.assertEqual(payload["summary"]["record_type_counts"]["context_pack"], 1)
         self.assertEqual(payload["summary"]["record_type_counts"]["context_evidence_result"], 2)
+        self.assertEqual(payload["summary"]["record_type_counts"]["agent_kb_feedback"], 1)
+        self.assertEqual(payload["summary"]["agent_feedback_count"], 1)
+        self.assertEqual(payload["summary"]["latest_agent_feedback"]["updated"], ["navigation/index.md"])
         self.assertIn("after_turn_runtime_distill", payload["summary"]["evidence_sources"])
+        self.assertIn("agent_kb_feedback", payload["summary"]["evidence_sources"])
         self.assertEqual(result_only["payload"]["count"], 2)
         self.assertTrue(all(record["type"] == "context_evidence_result" for record in result_only["payload"]["records"]))
         self.assertEqual(invalid_limit["status"], "400 Bad Request")
         self.assertIn("limit must be an integer", invalid_limit["payload"]["error"])
+
+    def test_task_context_evidence_route_surfaces_pending_kb_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Context evidence growth", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_task_context_evidence(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "type": "context_evidence_result",
+                        "agent_id": "main",
+                        "signals": ["map_miss"],
+                        "routing_health": {"status": "needs_repair"},
+                        "maintenance_plan": [
+                            {
+                                "action": "update",
+                                "target": "project_navigation",
+                                "target_path": "navigation/index.md",
+                                "reason": "map_miss",
+                                "write_policy": "direct_project_navigation_update",
+                            }
+                        ],
+                        "kb_growth_state": {
+                            "status": "pending",
+                            "required_count": 1,
+                            "applied_count": 0,
+                            "pending_count": 1,
+                            "pending": [
+                                {
+                                    "target": "project_navigation",
+                                    "target_path": "navigation/index.md",
+                                    "reason": "map_miss",
+                                }
+                            ],
+                            "applied": [],
+                        },
+                    },
+                )
+                response = self.route(root, run_id, "GET", "/api/task/task-001/context-evidence")
+
+        payload = response["payload"]
+        self.assertEqual(payload["summary"]["status"]["state"], "growth_pending")
+        self.assertEqual(payload["summary"]["kb_growth_state"]["status"], "pending")
+        self.assertEqual(payload["kb_growth_state"]["pending"][0]["target_path"], "navigation/index.md")
 
     def test_ui_server_runs_task_routes_off_event_loop(self) -> None:
         root = Path(__file__).resolve().parents[1]

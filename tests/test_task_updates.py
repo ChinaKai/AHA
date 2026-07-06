@@ -7,8 +7,9 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import main
+from aha_cli.services.context_evidence import list_task_context_evidence
 from aha_cli.services.task_updates import handle_record_task_update_action, task_update_round_payload
-from aha_cli.store.filesystem import event_path, iter_jsonl_from, list_task_rounds
+from aha_cli.store.filesystem import event_path, iter_jsonl_from, list_task_rounds, update_task_token_saving_config
 
 
 class TaskUpdateActionTests(unittest.TestCase):
@@ -65,6 +66,41 @@ class TaskUpdateActionTests(unittest.TestCase):
         self.assertEqual(rounds[0]["summary"], "Implemented slice")
         self.assertEqual(rounds[0]["changed_files"], ["src/aha_cli/services/task_updates.py"])
         self.assertEqual(rounds[0]["verification"], ["unit tests"])
+
+    def test_handle_record_task_update_action_records_optional_kb_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Record KB feedback", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+
+                result = handle_record_task_update_action(
+                    root,
+                    run_id,
+                    "task-001",
+                    {
+                        "summary": "Implemented slice",
+                        "agents": ["main"],
+                        "kb_feedback": {
+                            "helped": ["navigation pointed to src/aha_cli/services/context_evidence.py"],
+                            "stale": ["old docs path"],
+                            "updated": ["projects/demo/navigation/flows/token-saving.md"],
+                        },
+                    },
+                )
+                evidence = list_task_context_evidence(root, run_id, "task-001")
+
+        self.assertEqual(result, {"type": "record_task_update", "round_id": "round-001"})
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["type"], "agent_kb_feedback")
+        self.assertEqual(evidence[0]["agent_id"], "main")
+        self.assertEqual(
+            evidence[0]["feedback"]["updated"],
+            ["projects/demo/navigation/flows/token-saving.md"],
+        )
 
     def test_handle_record_task_update_action_skips_missing_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

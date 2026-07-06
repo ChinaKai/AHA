@@ -317,6 +317,7 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
     stale_hints = _compact_list([str(item) for item in (diagnostics.get("stale_path_hints") or [])], limit=6)
     routing_health = _compact_routing_health(latest)
     kb_scope_policy = _compact_kb_scope_policy(latest)
+    kb_growth_state = _compact_kb_growth_state(latest)
     suggestions = _compact_suggestions(recent_results)
     maintenance_plan = _compact_maintenance_plan(recent_results)
     map_queries = _compact_map_queries(query_records)
@@ -329,6 +330,7 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
         stale_hints,
         routing_health,
         kb_scope_policy,
+        kb_growth_state,
         suggestions,
         maintenance_plan,
         map_queries,
@@ -351,12 +353,14 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
         lines.append(f"- routing_health: {routing_health['summary']}")
     if kb_scope_policy:
         lines.append(f"- kb_scope_policy: {kb_scope_policy['summary']}")
+    if kb_growth_state:
+        lines.append(f"- kb_growth_state: {kb_growth_state['summary']}")
     if map_queries:
         lines.append(f"- recent_map_queries: {' | '.join(item['summary'] for item in map_queries)}")
     if maintenance_plan:
         lines.append(f"- maintenance_plan: {' | '.join(item['summary'] for item in maintenance_plan)}")
     if suggestions:
-        lines.append(f"- maintenance_suggestions: {' | '.join(item['summary'] for item in suggestions)}")
+        lines.append(f"- maintenance_actions: {' | '.join(item['summary'] for item in suggestions)}")
     lines.append("- Treat this as task-local observation, not source truth. Re-check current source before edits.")
     return {
         "text": "\n".join(lines).rstrip(),
@@ -368,6 +372,7 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
         "stale_path_hints": stale_hints,
         "routing_health": routing_health,
         "kb_scope_policy": kb_scope_policy,
+        "kb_growth_state": kb_growth_state,
         "map_queries": map_queries,
         "maintenance_plan": maintenance_plan,
         "maintenance_suggestions": suggestions,
@@ -483,6 +488,31 @@ def _compact_kb_scope_policy(latest_result: dict) -> dict:
         "project_navigation": str(policy.get("project_navigation") or ""),
         "general_personal_wiki": str(policy.get("general_personal_wiki") or ""),
         "summary": _clip_single_line(summary, 200),
+    }
+
+
+def _compact_kb_growth_state(latest_result: dict) -> dict:
+    state = latest_result.get("kb_growth_state") if isinstance(latest_result.get("kb_growth_state"), dict) else {}
+    if not state:
+        return {}
+    status = _clip_single_line(str(state.get("status") or ""), 48)
+    pending = state.get("pending") if isinstance(state.get("pending"), list) else []
+    applied = state.get("applied") if isinstance(state.get("applied"), list) else []
+    pending_paths = _compact_list([str(item.get("target_path") or "") for item in pending if isinstance(item, dict)], limit=4)
+    applied_paths = _compact_list([str(item.get("target_path") or "") for item in applied if isinstance(item, dict)], limit=4)
+    parts = [status or "unknown"]
+    if pending_paths:
+        parts.append(f"pending={_format_compact_list(pending_paths)}")
+    if applied_paths:
+        parts.append(f"applied={_format_compact_list(applied_paths)}")
+    return {
+        "status": status,
+        "required_count": int(state.get("required_count") or 0),
+        "applied_count": int(state.get("applied_count") or 0),
+        "pending_count": int(state.get("pending_count") or 0),
+        "pending_paths": pending_paths,
+        "applied_paths": applied_paths,
+        "summary": _clip_single_line(" ".join(parts), 220),
     }
 
 

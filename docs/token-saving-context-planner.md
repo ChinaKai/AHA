@@ -1,7 +1,7 @@
 # AHA Token Saving Context Planner 设计
 
-> 状态：Context Planner MVP 已接入；Phase 3/4 继续推进。
-> 最后更新：2026-07-05。
+> 状态：Context Planner / EVD 主链路已接入；EVD 历史证据读侧降噪、KB growth hard loop、EVD 首屏降噪和无横向滚动已接入，下一步做真实任务回归验证。
+> 最后更新：2026-07-06。
 > 维护规则：讨论过程中只要形成明确结论，就更新本文档对应章节，并在「进展日志」记录。没有结论的问题放到「开放问题」，不要只留在聊天记录里。
 
 ## 1. 核心判断
@@ -139,7 +139,7 @@ runtime/project_context/<project-key>/<workspace-id>/
 - nav/entry 是否被证明准确、缺失或过时。
 - 验证是否成功，以及最终关键路径是什么。
 
-这些观测应自动生成 `context_hit_ok`、`nav_stale`、`map_miss`、`entry_wrong`、`missing_nav`、`missing_entry` 等信号，并给出 advisory `maintenance_suggestions`。普通任务链路不再把这些信号转成 pending candidate；它们用于提示 agent 在有当前任务证据时直接维护项目级 approved KB Markdown，并用于后续度量和降权判断。
+这些观测应自动生成 `context_hit_ok`、`nav_stale`、`map_miss`、`entry_wrong`、`missing_nav`、`missing_entry` 等信号，并生成 agent-owned `maintenance_actions` / `maintenance_plan`。普通任务链路不再把这些信号转成 pending candidate 或用户建议；agent 在有当前任务证据时直接维护项目级 approved KB Markdown、刷新 stale generated map cache，或修复 map 生成/查询源码逻辑，并把结果记录到 EVD。
 
 当前仍存在的 `task final / memo report sidecar` 只能视为历史兼容或补充入口，不再作为新设计的主生产链路。后续设计和验收不能依赖 agent 在 final 里主动总结知识，因为这会把自增长能力退化成人工/模型自觉行为。
 
@@ -271,8 +271,8 @@ sidecar/capture/bootstrap
 
 1. 已落地：自然语言 turn 进入后端 agent 前生成 KB/Map Pull Contract。
 2. 已落地：AHA 把现有 nav/map/entry 的入口和使用方法交给 agent，而不是用关键词替 agent 选内容。
-3. 待推进：agent 执行过程中如何把“读了什么 / 跳过什么 / 缺什么 / 哪些过期”记录成更可用的 evidence，并驱动本任务窄范围 KB 原文维护。
-4. 待推进：需求完成后如何 reset/compact，让下一需求重新从 durable KB + Context Pack 启动。
+3. 已落地：agent 执行过程中的 Context Pack、map query、runtime-inferred result 和显式 `agent_kb_feedback` 会进入 task-scoped EVD。
+4. 暂缓：自动 reset/compact 不再绑定 finalization；当前保持手动，由用户决定何时 reset。
 
 ## 5. 最难的问题：准确知识库
 
@@ -690,12 +690,12 @@ Observe Proxy 是这个设计的度量层。
 - 新增 `src/aha_cli/services/context_evidence.py`，会把 Context Pack 交付和 turn 后推断结果写入 `tasks/<task-id>/context_evidence.jsonl`。
 - `chat.py` 在 prompt metrics 后记录 `context_pack_recorded`，并在普通 agent turn 结束后调用 evidence distill。
 - 已有信号包括 `context_hit_ok`、`nav_stale`、`map_miss`、`map_stale_cache`、`map_extractor_gap`、`map_query_expansion_gap`、`map_ranking_gap`、`map_coverage_gap`、`entry_wrong`、`missing_nav`、`missing_entry`。
-- 目前 evidence 记录 signals、crud_actions、commands、actual_files、map_diagnostics、routing_health、kb_scope_policy、advisory maintenance_suggestions 和结构化 maintenance_plan，不自动改 project navigation/project solutions。
+- 目前 evidence 记录 signals、crud_actions、commands、actual_files、map_diagnostics、routing_health、kb_scope_policy、maintenance actions 和结构化 maintenance_plan；这些是 agent-owned 维护动作，不是给用户处理的建议。
 - `map_diagnostics` 会暴露 `gap_reasons`、`stale_path_hints` 等更细原因；`routing_health` 汇总本轮需要 downrank/prioritize 的路径和 score 调整，帮助后续修 nav 或 map logic。
 - `kb_scope_policy` 明确 project navigation 可基于当前任务证据直写，general/personal/wiki 默认走 manual candidate review；普通任务不把非项目级 wiki 当作自动直写目标。
-- `maintenance_plan` 在旧 suggestions 之上补充 `target_path`、`target_kind`、`signals`、`source_files`、`validation`、`write_policy` 和 `execution`：project navigation 可基于当前任务证据直写 approved Markdown；project solutions 默认 advisory；generated map cache 只能 refresh/status，不能手改；map logic gap 指向 `project_context_index.py`/`project_context_resolver.py` 等源码和测试。
-- `GET /api/task/<task-id>/context-evidence` 可以读取最近 task-scoped evidence、latest result、routing health、KB scope policy、聚合后的 maintenance suggestions 和 maintenance plan；任务列表的 `Chat / Logs / Ctx / Evidence` 视图里已有只读 Context evidence 页面展示这些数据，移动端入口收在 `+` 操作面板里。
-- 后续 turn 的 Context Pack 会在已有 task evidence 时追加 compact “Current task evidence recap”，包含最近 signals、actual/referenced files、map gap、stale path hints、routing health、KB scope policy、map query、maintenance plan 和 maintenance suggestions。这个 recap 是 task-local hints，不替代源文件验证；只有存在 evidence 时才把预算提高到 4000 chars 硬上限，避免关键 source-check 提醒被裁掉。
+- `maintenance_plan` 在旧 suggestions 兼容字段之上补充 `target_path`、`target_kind`、`signals`、`source_files`、`validation`、`write_policy` 和 `execution`：project navigation / reusable project solutions 可基于当前任务证据直写 approved Markdown；generated map cache 只能 refresh/status，不能手改；map logic gap 指向 `project_context_index.py`/`project_context_resolver.py` 等源码和测试。
+- `GET /api/task/<task-id>/context-evidence` 可以读取最近 task-scoped evidence、latest result、routing health、KB scope policy、聚合后的 maintenance actions 和 maintenance plan；任务列表的 `Chat / Logs / Ctx / Evidence` 视图里已有只读 Context evidence 页面展示这些数据，移动端入口收在 `+` 操作面板里。
+- 后续 turn 的 Context Pack 会在已有 task evidence 时追加 compact “Current task evidence recap”，包含最近 signals、actual/referenced files、map gap、stale path hints、routing health、KB scope policy、map query、maintenance plan 和 maintenance actions。这个 recap 是 task-local hints，不替代源文件验证；只有存在 evidence 时才把预算提高到 4000 chars 硬上限，避免关键 source-check 提醒被裁掉。
 - agent-pull 入口契约本身不带具体 `map.files`；这种 entrypoint-only pack 即使本轮读取了源码，也不应被误判成 `missing_nav` 或 `missing_entry`。
 - 真实 `/aha map query` 和 Web Knowledge Map query 结果会记录为 `project_map_query` evidence，并在同一 agent turn 的 prompt 之后发生时并入 `context_evidence_result`。
 
@@ -711,25 +711,121 @@ EVD 面板不是普通 debug dump，而是 **单个 token-saving task 的 KB/map
 
 应该优先展示的人类可读层级：
 
-1. **任务级状态摘要**：KB/map 当前对这个 task 是 helped、stale、needs repair、observing 还是 no evidence。
-2. **下一步动作**：例如 refresh map cache、repair project navigation、write project solution、repair map ranking logic。
-3. **KB 效果证据**：哪些 nav/map query/context pack 起了作用，哪些 referenced files 被实际采用，哪些真实文件是 agent 后来找到的。
-4. **自增长/自修复状态**：哪些 project navigation/solution 已 ready 可直写，哪些已完成，哪些仍是 advisory/manual review。
-5. **原始诊断**：signals、routing health、gap reasons、stale path hints、raw records 默认折叠或放在下方，不作为第一眼主信息。
+1. **固定状态摘要**：KB/map 当前对这个 task 是 helped、stale、needs repair、observing 还是 no evidence，同时展示下一步动作和最近 evidence 来源。
+2. **Growth tab**：KB maintenance actions 和 KB growth state，回答“agent 已经/正在/必须执行哪些 KB 或 map 维护动作”。
+3. **Feedback tab**：显式 `agent_kb_feedback`，回答 agent 认为 KB 是否帮上忙、哪里 stale/missed/updated/pending。
+4. **Evidence tab**：signals、actions、actual files、referenced files，回答本轮证据事实。
+5. **Diagnostics tab**：routing health、map diagnostics、map queries，保留原始诊断但不挤在主状态区。
 
 当前数据来源分三类：
 
 - `context_pack`：发给 agent 前由 AHA runtime 记录，说明本轮提供了哪些 KB/map 入口。
 - `project_map_query`：agent 执行 `/aha map query` 或 Web Knowledge Map query 时记录，说明查询了什么、命中了什么、是否使用 navigation 扩展。
 - `context_evidence_result`：agent 一轮结束后由 AHA runtime 根据 prompt metrics、map query events、命令路径、git dirty paths、reply excerpt 和 exit code 推断，生成 signals、routing health、maintenance plan 等。
+- `agent_kb_feedback`：agent 在 `record_task_update` action 里附带 `kb_feedback` 时记录，用于表达 KB 是否帮上忙、哪里 stale/missed、已经 updated 什么、还有什么 pending。
 
-注意：当前 `context_evidence_result` 主要是 runtime-inferred evidence，不等同于 agent 的显式 KB 使用反馈。下一步应补充结构化 agent feedback，让 agent 在每次读取/采用/跳过/修复 KB 后记录：
+注意：`context_evidence_result` 主要是 runtime-inferred evidence，不等同于 agent 的显式 KB 使用反馈；`agent_kb_feedback` 是当前第一版显式反馈入口。后续可继续把它从 task-update 扩展为更细粒度的每次 KB 使用反馈。
 
 - `helped`: KB/nav/map 是否准确定位到代码。
 - `stale`: 哪些路径、入口或说明过期。
 - `missed`: KB/map 没有覆盖但 agent 已验证出的真实路径。
 - `updated`: agent 已经更新了哪个 project navigation/project solution。
 - `pending`: 仍建议后续 refresh/repair/manual review 的项目。
+
+### Phase 3.2：EVD 降噪与回归
+
+不用重做 Context Planner 主链路，目标是把 EVD 从“能看见原始 evidence”收敛成“能解释这个 token-saving task 的 KB/map 是否真的起作用”。
+
+当前切片状态：
+
+1. **历史 evidence 读侧降噪：已接入**
+
+   写入侧已经会把 workspace source、KB/navigation 文件和命令噪声分开；读侧现在也会兼容清洗旧 `context_evidence.jsonl` 里的 `bin/bash`、`KB/map`、外部 KB 路径等历史噪声，不改历史 jsonl 原文：
+
+   - `actual_files` 只展示 workspace 内真实源码、测试、文档。
+   - `knowledge_files` 单独展示 KB/navigation 路径。
+   - `ignored_command_paths` 或 raw diagnostic 可保留 shell/命令噪声，但默认不要进入主摘要。
+   - `map_missing_files`、`routing_health.prioritize_paths`、maintenance files 等派生字段也会避免被历史噪声污染。
+
+2. **任务级摘要优先：已接入，仍需真实任务观察**
+
+   EVD 首屏应该先回答四个问题，而不是先展示 raw signals：
+
+   - KB/map 对这个 task 是否帮上忙。
+   - 下一步应该 repair nav、refresh map、write solution，还是无需动作。
+   - 哪些 evidence 证明 KB/map 被采用或失配。
+   - agent 已经写回、准备写回或仍待人工确认的 KB 自增长/自修复动作是什么。
+   - raw signals、actual/referenced files、routing health、map diagnostics 和 map queries 默认进入 tabs 分区，避免多个短卡片挤在主状态区。
+
+3. **KB growth hard loop：已接入**
+
+   当 `maintenance_plan` 里出现 project navigation / project solution 写回需求时，turn-end `context_evidence_result` 会生成 `kb_growth_state`：
+
+   - `pending`：本轮有 KB 成长需求，但没有看到对应 project navigation/solution 写回。
+   - `applied`：通过 `agent_kb_feedback.updated` 或 dirty path 观察到对应写回。
+   - `not_required`：本轮没有项目 KB 原文成长需求。
+
+   EVD 首屏会把 pending growth 提升为 `KB growth pending`，后续 Context Pack recap 会继续携带 `kb_growth_state`，直到 agent 写回并通过 `agent_kb_feedback.updated` 或相关路径变更证明完成。
+
+4. **EVD 面板 UI 降噪：已接入**
+
+   `conversation_panel.js` 默认展示固定 task summary，下面用 `task-evidence-tabs` 切换 Growth / Feedback / Evidence / Diagnostics；tab panel 内部继续使用 `task-evidence-stack` 单列分组。`event_bindings.js` 处理 `data-context-evidence-tab` 的本地切换，不重新请求后端，并把当前 tab 存到 `window.__ahaContextEvidenceActiveTab`，自动刷新重渲染后继续停留在用户当前 tab。EVD 展示的 timestamp 要走 `localizeTimestampText` 转成本地时间。`styles.css` 对 EVD 容器、tabs、panels、chip、code/path 和 stack 使用 `min-width: 0`、`overflow-x: hidden`、`overflow-wrap: anywhere` 和 `white-space: normal`，避免长路径撑出左右滚轮。
+
+5. **显式 agent KB feedback 回归：接口已接入，仍需真实任务验证**
+
+   后端 agent 使用 KB/nav/map 后，若本轮返回 AHA `record_task_update` action，应附带可选 `kb_feedback`：
+
+   ```json
+   {
+     "helped": ["navigation/flows/token-saving.md 定位到 context_evidence.py 和 task_routes.py"],
+     "stale": ["旧 evidence 里仍有 bin/bash 噪声，需要读侧清洗"],
+     "missed": [],
+     "updated": ["docs/token-saving-context-planner.md"],
+     "pending": ["真实 token-saving task 回归验证 EVD 摘要"]
+   }
+   ```
+
+   EVD 应把这类 `agent_kb_feedback` 和 runtime-inferred `context_evidence_result` 分开展示，同时在 task-level summary 中合并解释。
+
+6. **真实任务回归：下一步**
+
+   新开一个开启 token saving/provider=map 的 task，验证完整链路：
+
+   - 首轮 prompt 有 KB/Map Pull Contract。
+   - agent 会先读 project navigation，再按需 `/aha map query` 或读源码。
+   - map query 会记录 `project_map_query`。
+   - turn 结束会记录 `context_evidence_result`。
+   - `record_task_update.kb_feedback` 会记录 `agent_kb_feedback`。
+   - EVD 面板随多轮任务更新，展示整个 task 的累计 KB 效果，而不是只展示首轮。
+   - 旧噪声不会进入主摘要；诊断细节仍可追溯。
+
+下一任务优先入口：
+
+- `src/aha_cli/services/context_evidence.py`
+- `src/aha_cli/services/context_evidence_growth.py`
+- `src/aha_cli/services/context_evidence_maintenance.py`
+- `src/aha_cli/services/context_evidence_paths.py`
+- `src/aha_cli/services/context_planner.py`
+- `src/aha_cli/services/task_updates.py`
+- `src/aha_cli/web/task_routes.py`
+- `src/aha_cli/web/static/conversation_panel.js`
+- `src/aha_cli/web/static/i18n.js`
+- `tests/test_context_evidence.py`
+- `tests/test_chat_prompt.py`
+- `tests/test_task_updates.py`
+- `tests/test_web_task_routes.py`
+- `tests/test_frontend_static.py`
+
+建议验证命令：
+
+```bash
+python3 -m pytest tests/test_context_evidence.py tests/test_task_updates.py tests/test_web_task_routes.py tests/test_frontend_static.py -q
+python3 -m pytest tests/test_chat_prompt.py -k 'context_pack or context_evidence' -q
+python3 -m pytest -q
+git diff --check
+node --check src/aha_cli/web/static/conversation_panel.js
+node --check src/aha_cli/web/static/i18n.js
+```
 
 ### Phase 4：生命周期 reset/compact
 
@@ -775,6 +871,7 @@ EVD 面板不是普通 debug dump，而是 **单个 token-saving task 的 KB/map
 - stale 知识的跨任务统计、展示和自动 repair/deprecate 工作流如何收敛。
 - 如果未来重新引入 AHA 内部自然语言检索，使用什么组合：关键词、结构化字段、向量、历史命中反馈。
 - 非项目级知识自修复何时允许直写，何时必须走 `/aha kb` 候选链路。
+- EVD 历史 jsonl 已先做读侧兼容清洗、不改历史原文；未来是否还需要一次性迁移/重写工具仍待观察。
 
 ## 15. 进展日志
 
@@ -794,11 +891,18 @@ EVD 面板不是普通 debug dump，而是 **单个 token-saving task 的 KB/map
 - 2026-07-05：收紧 Phase 3 signal 判断：Context Pack 只有 KB/map 入口、没有具体 referenced files 时，本轮实际读源码不再自动产生 `missing_nav`/`missing_entry` 假阳性；只有实际 map query observed 或 navigation index 明确缺失等场景才触发 missing-nav 类信号。
 - 2026-07-05：接入 `/aha map query` evidence：slash query 成功后记录紧凑 `project_map_query`，并在同一 agent turn 的 prompt 之后发生时合并进 `context_evidence_result`，用于 `context_hit_ok`、`map_miss` 和 map gap 判断。
 - 2026-07-05：接入 Web Knowledge Map query evidence：`/api/kb/project-context-index/query` 在能由 `run_id`/`task_id` 或唯一 workspace task 关联到 task 时记录 `project_map_query`；前端打开已有 map 查询时也随 payload 传递 `run_id`。
-- 2026-07-05：补充 `maintenance_suggestions`：context evidence 会把 miss/stale/wrong/missing 信号转成 advisory create/update/repair/refresh/deprecate 建议，用于指导 agent 窄范围维护 project navigation、project solutions 或 map 生成/查询逻辑；普通任务仍不自动生成 pending、不自动写 KB。
-- 2026-07-05：补充 task-scoped evidence 只读 API：`GET /api/task/<task-id>/context-evidence` 返回最近 evidence、latest context result 和聚合后的 maintenance suggestions，方便后续 UI 展示和调试，不改变 KB 写入策略。
-- 2026-07-05：接入 Web 只读展示：任务列表 view switcher 新增 Evidence 视图，移动端 `+` 操作面板新增 Evidence 入口，展示 signals、crud actions、actual/referenced files、maintenance suggestions、map diagnostics 和最近 map query；面板只调用只读 API，不触发 KB 写入。
-- 2026-07-05：Context Planner 后续 turn 接入 compact task evidence recap：当 task 已有 context evidence 时，在 KB/Map Pull Contract 中携带最近 signals/files/map query/suggestions，减少重复定位；该 recap 仅作 task-local hints，仍要求重新验证当前源文件。
-- 2026-07-05：补齐结构化 `maintenance_plan`：turn 后 evidence 会把泛化 suggestions 扩展为可执行计划，包含目标 KB/source/cache 路径、写入策略、来源文件、触发信号和验证命令；API、Evidence 面板和后续 Context Pack recap 都会优先暴露该计划，但仍不自动写 KB 或手改 generated map cache。
+- 2026-07-05：补充 maintenance actions：context evidence 会把 miss/stale/wrong/missing 信号转成 agent-owned create/update/repair/refresh/deprecate 动作，用于驱动 agent 窄范围维护 project navigation、project solutions 或 map 生成/查询逻辑；普通任务仍不生成 pending candidate。
+- 2026-07-05：补充 task-scoped evidence 只读 API：`GET /api/task/<task-id>/context-evidence` 返回最近 evidence、latest context result 和聚合后的 maintenance actions，方便后续 UI 展示和调试。
+- 2026-07-05：接入 Web 只读展示：任务列表 view switcher 新增 Evidence 视图，移动端 `+` 操作面板新增 Evidence 入口，展示 signals、crud actions、actual/referenced files、maintenance actions、map diagnostics 和最近 map query；面板只调用只读 API，不触发 KB 写入。
+- 2026-07-05：Context Planner 后续 turn 接入 compact task evidence recap：当 task 已有 context evidence 时，在 KB/Map Pull Contract 中携带最近 signals/files/map query/actions，减少重复定位；该 recap 仅作 task-local hints，仍要求重新验证当前源文件。
+- 2026-07-05：补齐结构化 `maintenance_plan`：turn 后 evidence 会把泛化 actions 扩展为可执行计划，包含目标 KB/source/cache 路径、写入策略、来源文件、触发信号和验证命令；API、Evidence 面板和后续 Context Pack recap 都会优先暴露该计划；generated map cache 仍只能 refresh/status，不能手改。
 - 2026-07-05：根据 Web 已丢弃 `/aha final` 的现状，撤回 finalization lifecycle advice；Phase 4 暂时保持手动 compact/reset，由用户决定何时清 backend session。
 - 2026-07-05：补齐剩余 Phase 3 闭环：resolver 输出 stale path hints 并从正向 hint 剔除，map ranking 对 stale hints 降权，context evidence 增加 `gap_reasons`、`routing_health`、`kb_scope_policy` 和 maintenance plan `execution`，API/UI/后续 Context Pack recap 同步展示；evidence recap 预算提升到 4000 硬上限以保留 source-check 边界。
 - 2026-07-06：明确 EVD 面板产品定义：它是单 token-saving task 的 KB/map 使用闭环观测中心，应默认展示任务级状态、下一步动作、KB 效果证据和自增长/自修复状态；当前实现以 runtime-inferred evidence 为主，后续补结构化 agent KB feedback。
+- 2026-07-06：EVD 第二刀开始落地：命令路径会区分 workspace source、KB/navigation 文件和 shell/命令噪声，避免 `bin/bash`、外部 KB 文件污染 `actual_files`/`map_missing_files`；`record_task_update` 支持可选 `kb_feedback`，记录为 `agent_kb_feedback` 并在 EVD summary/UI 中展示。
+- 2026-07-06：补充下一任务接手说明：后续重点是 EVD 历史 evidence 读侧降噪、任务级摘要优先、显式 `agent_kb_feedback` 回归，以及新开 token-saving task 做端到端验证；自动 reset/compact 继续保持手动。
+- 2026-07-06：EVD 历史 evidence 读侧降噪接入：`list_task_context_evidence()` 返回清洗后的展示视图，旧 jsonl 原文保持不可变；旧 `actual_files`/`map_missing_files`/`routing_health.prioritize_paths`/maintenance files 里的 KB 路径和 shell/ad-hoc 噪声会移到 `knowledge_files` 或 `ignored_command_paths`，Context Pack recap 同步受益。
+- 2026-07-06：接入 KB growth hard loop：`context_evidence_result` 增加 `kb_growth_state`，对 project navigation/project solution 写回需求标记 pending/applied/not_required；EVD summary/UI 会将 pending 显示为 `KB growth pending`，后续 Context Pack recap 会继续携带 pending growth，直到 `agent_kb_feedback.updated` 或路径变更证明写回完成。
+- 2026-07-06：EVD 面板首屏降噪和无横向滚动接入：主界面改为固定 task summary + Growth / Feedback / Evidence / Diagnostics tabs；每个 tab panel 内部用单列 stack 展示，长路径、chip 和 code 在面板内换行，不再撑出左右滚轮。
+- 2026-07-06：修复 EVD 自动刷新重置 tab：tab 点击会写入 `window.__ahaContextEvidenceActiveTab`，`renderContextEvidenceTabs()` 重渲染时优先恢复该 tab，避免自动刷新回到 Growth。
+- 2026-07-06：EVD Web 时间显示改成本地时间：summary 的 latest update 和 EVD list 中的 ISO timestamp 都通过 `localizeTimestampText` 渲染。

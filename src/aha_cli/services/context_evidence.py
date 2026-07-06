@@ -1,9 +1,21 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from aha_cli.domain.models import normalize_task_token_saving, utc_now
+from aha_cli.services.context_evidence_maintenance import (
+    crud_actions_for_signals,
+    kb_scope_policy as context_kb_scope_policy,
+    maintenance_plan_for_suggestions,
+    maintenance_suggestions_for_signals,
+    routing_health_for_evidence,
+)
+from aha_cli.services.context_evidence_growth import kb_growth_state_for_plan
+from aha_cli.services.context_evidence_paths import (
+    command_path_observations,
+    ignored_path,
+    sanitize_context_evidence_record,
+)
 from aha_cli.store.filesystem import append_event, event_path, run_dir, task_snapshot
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from
 
@@ -11,8 +23,6 @@ from aha_cli.store.io import append_jsonl, iter_jsonl_records_from
 CONTEXT_EVIDENCE_FILE = "context_evidence.jsonl"
 CONTEXT_PACK_EVIDENCE_METRIC_KEY = "context_pack_evidence"
 CONTEXT_MAP_QUERY_EVENT = "context_map_query_recorded"
-_PATH_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)+)(?![A-Za-z0-9_.-])")
-_IGNORED_PATH_PREFIXES = (".aha/", "task_memo_assets/")
 
 
 def task_context_evidence_enabled(task: dict | None) -> bool:
@@ -42,7 +52,24 @@ def list_task_context_evidence(root: Path, run_id: str, task_id: str) -> list[di
     if not path.exists():
         return []
     records, _ = iter_jsonl_records_from(path, 0)
-    return [dict(record) | {"evidence_id": offset} for record, offset in records]
+    workspace = _task_workspace(root, run_id, task_id)
+    return [
+        sanitize_context_evidence_record(
+            dict(record) | {"evidence_id": offset},
+            root=root,
+            workspace=workspace,
+        )
+        for record, offset in records
+    ]
+
+
+def _task_workspace(root: Path, run_id: str, task_id: str) -> Path | None:
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return None
+    workspace = str(task.get("workspace_path") or "").strip()
+    return Path(workspace).expanduser() if workspace else None
 
 
 def record_project_map_query_result(
@@ -150,6 +177,77 @@ def record_context_pack_from_prompt_metrics(
     return record
 
 
+def record_agent_kb_feedback(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    agent_id: str,
+    feedback: object,
+    source: str = "record_task_update",
+) -> dict | None:
+    if not isinstance(feedback, dict) or not feedback:
+        return None
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return None
+    if not task_context_evidence_enabled(task):
+        return None
+    compact = _compact_agent_kb_feedback(feedback)
+    if not compact:
+        return None
+    record = append_task_context_evidence(
+        root,
+        run_id,
+        task_id,
+        {
+            "type": "agent_kb_feedback",
+            "agent_id": agent_id,
+            "source": source,
+            "feedback": compact,
+        },
+    )
+    append_event(
+        root,
+        run_id,
+        "context_agent_kb_feedback_recorded",
+        {
+            "task_id": task_id,
+            "target": agent_id,
+            "evidence_id": record.get("evidence_id"),
+            "feedback": compact,
+        },
+    )
+    return record
+
+
+def _compact_agent_kb_feedback(feedback: dict) -> dict:
+    allowed = ("helped", "stale", "missed", "updated", "pending")
+    compact: dict[str, list[str]] = {}
+    for key in allowed:
+        values = feedback.get(key)
+        if values is None:
+            continue
+        if isinstance(values, str):
+            raw_items = [values]
+        elif isinstance(values, list):
+            raw_items = []
+            for item in values:
+                if isinstance(item, dict):
+                    text = item.get("path") or item.get("target") or item.get("summary") or item.get("reason")
+                    if text:
+                        raw_items.append(str(text))
+                else:
+                    raw_items.append(str(item))
+        else:
+            raw_items = [str(values)]
+        items = _ordered_unique([_clip(item, 160) for item in raw_items if str(item).strip()], limit=12)
+        if items:
+            compact[key] = items
+    return compact
+
+
 def distill_context_evidence_after_turn(
     root: Path,
     run_id: str,
@@ -184,12 +282,15 @@ def distill_context_evidence_after_turn(
         agent_id=agent_id,
     )
     command_records = _command_records_since(root, run_id, event_start, task_id=task_id, agent_id=agent_id)
-    command_paths = _paths_from_commands(command_records)
-    dirty_paths = _git_dirty_paths(Path(workspace))
+    workspace_path = Path(workspace)
+    command_paths = command_path_observations(command_records, workspace=workspace_path, root=root)
+    dirty_paths = _git_dirty_paths(workspace_path)
     map_files = _pack_map_files(evidence)
-    referenced = [path for path in map_files if not _ignored_path(path)]
-    actual = _ordered_unique([*command_paths, *dirty_paths], limit=40)
-    stale_refs = [path for path in referenced if not (Path(workspace) / path).exists()]
+    referenced = [path for path in map_files if not ignored_path(path)]
+    actual = _ordered_unique([*command_paths["workspace_files"], *dirty_paths], limit=40)
+    knowledge_files = _ordered_unique(command_paths["knowledge_files"], limit=20)
+    ignored_command_paths = _ordered_unique(command_paths["ignored_paths"], limit=20)
+    stale_refs = [path for path in referenced if not (workspace_path / path).exists()]
     adopted = [path for path in actual if path in set(referenced)]
     missing = [path for path in actual if path not in set(referenced)]
     signals = _signals_for(
@@ -209,8 +310,10 @@ def distill_context_evidence_after_turn(
         stale_refs=stale_refs,
         adopted=adopted,
         missing=missing,
+        knowledge_files=knowledge_files,
+        ignored_command_paths=ignored_command_paths,
     )
-    maintenance_suggestions = _maintenance_suggestions_for_signals(
+    maintenance_suggestions = maintenance_suggestions_for_signals(
         signals=signals,
         referenced=referenced,
         actual=actual,
@@ -219,12 +322,18 @@ def distill_context_evidence_after_turn(
         missing=missing,
         commands=[item.get("command") for item in command_records if item.get("command")],
     )
-    maintenance_plan = _maintenance_plan_for_suggestions(
+    maintenance_plan = maintenance_plan_for_suggestions(
         evidence=evidence,
         suggestions=maintenance_suggestions,
         signals=signals,
     )
-    routing_health = _routing_health_for_evidence(
+    prior_records = list_task_context_evidence(root, run_id, task_id)
+    kb_growth_state = kb_growth_state_for_plan(
+        maintenance_plan=maintenance_plan,
+        prior_records=prior_records,
+        dirty_paths=dirty_paths,
+    )
+    routing_health = routing_health_for_evidence(
         signals=signals,
         referenced=referenced,
         actual=actual,
@@ -233,7 +342,7 @@ def distill_context_evidence_after_turn(
         missing=missing,
         map_diagnostics=map_diagnostics,
     )
-    kb_scope_policy = _kb_scope_policy()
+    kb_scope_policy = context_kb_scope_policy()
     record = append_task_context_evidence(
         root,
         run_id,
@@ -245,15 +354,18 @@ def distill_context_evidence_after_turn(
             "prompt_event_id": event_start or None,
             "exit_code": exit_code,
             "signals": signals,
-            "crud_actions": _crud_actions_for_signals(signals),
+            "crud_actions": crud_actions_for_signals(signals),
             "referenced_files": referenced[:20],
             "actual_files": actual[:20],
+            "knowledge_files": knowledge_files[:20],
+            "ignored_command_paths": ignored_command_paths[:20],
             "stale_references": stale_refs[:20],
             "map_diagnostics": map_diagnostics,
             "routing_health": routing_health,
             "kb_scope_policy": kb_scope_policy,
             "maintenance_suggestions": maintenance_suggestions,
             "maintenance_plan": maintenance_plan,
+            "kb_growth_state": kb_growth_state,
             "commands": [item.get("command") for item in command_records[:12] if item.get("command")],
             "reply_excerpt": _clip(reply, 600),
         },
@@ -269,11 +381,13 @@ def distill_context_evidence_after_turn(
             "signals": signals,
             "referenced_files": referenced[:8],
             "actual_files": actual[:8],
+            "knowledge_files": knowledge_files[:8],
             "map_gap_signals": map_diagnostics.get("gap_signals") or [],
             "routing_health": routing_health,
             "kb_scope_policy": kb_scope_policy,
             "maintenance_suggestions": maintenance_suggestions[:6],
             "maintenance_plan": maintenance_plan[:6],
+            "kb_growth_state": kb_growth_state,
         },
     )
     return {"record": record, "candidate": None}
@@ -453,6 +567,8 @@ def _map_diagnostics(
     stale_refs: list[str],
     adopted: list[str],
     missing: list[str],
+    knowledge_files: list[str],
+    ignored_command_paths: list[str],
 ) -> dict:
     project_map = _pack_map(evidence)
     gap_signals = [signal for signal in signals if signal.startswith("map_") and signal != "map_miss"]
@@ -475,6 +591,8 @@ def _map_diagnostics(
         "stale_path_hints": _ordered_unique([str(item) for item in (resolution.get("stale_path_hints") or [])], limit=20),
         "referenced_files": referenced[:20],
         "actual_files": actual[:20],
+        "knowledge_files": knowledge_files[:20],
+        "ignored_command_paths": ignored_command_paths[:20],
         "adopted_files": adopted[:20],
         "missing_files": missing[:20],
         "stale_references": stale_refs[:20],
@@ -513,427 +631,6 @@ def _map_gap_reasons(
     return reasons[:8]
 
 
-def _crud_actions_for_signals(signals: list[str]) -> list[str]:
-    actions: list[str] = []
-    signal_set = set(signals)
-    if "context_hit_ok" in signal_set:
-        actions.append("read")
-    if signal_set.intersection({"missing_nav", "missing_entry"}):
-        actions.append("create")
-    if "map_miss" in signal_set:
-        actions.append("update")
-    if signal_set.intersection({"map_coverage_gap", "map_ranking_gap", "map_extractor_gap", "map_query_expansion_gap"}):
-        actions.append("update")
-        actions.append("repair")
-    if "map_stale_cache" in signal_set:
-        actions.append("refresh")
-        actions.append("repair")
-    if signal_set.intersection({"nav_stale", "entry_wrong"}):
-        actions.append("repair")
-    if "nav_stale" in signal_set:
-        actions.append("deprecate")
-    return _ordered_unique(actions, limit=8)
-
-
-def _suggestion(
-    *,
-    action: str,
-    target: str,
-    reason: str,
-    files: list[str] | None = None,
-    commands: list[str] | None = None,
-) -> dict:
-    item = {
-        "action": action,
-        "target": target,
-        "reason": reason,
-    }
-    if files:
-        item["files"] = files[:12]
-    if commands:
-        item["commands"] = commands[:4]
-    return item
-
-
-def _maintenance_suggestions_for_signals(
-    *,
-    signals: list[str],
-    referenced: list[str],
-    actual: list[str],
-    stale_refs: list[str],
-    adopted: list[str],
-    missing: list[str],
-    commands: list[str],
-) -> list[dict]:
-    del adopted
-    suggestions: list[dict] = []
-    signal_set = set(signals)
-    if "missing_nav" in signal_set:
-        suggestions.append(_suggestion(
-            action="create",
-            target="project_navigation",
-            reason="missing_nav",
-            files=actual or missing,
-            commands=commands,
-        ))
-    if "map_miss" in signal_set:
-        suggestions.append(_suggestion(
-            action="update",
-            target="project_navigation",
-            reason="map_miss",
-            files=missing or actual,
-            commands=commands,
-        ))
-    if "nav_stale" in signal_set:
-        suggestions.append(_suggestion(
-            action="repair",
-            target="project_navigation",
-            reason="nav_stale",
-            files=[*stale_refs, *actual],
-            commands=commands,
-        ))
-    if "entry_wrong" in signal_set:
-        suggestions.append(_suggestion(
-            action="repair",
-            target="project_solution",
-            reason="entry_wrong",
-            files=actual or referenced,
-            commands=commands,
-        ))
-    if "missing_entry" in signal_set:
-        suggestions.append(_suggestion(
-            action="create",
-            target="project_solution",
-            reason="missing_entry",
-            files=actual,
-            commands=commands,
-        ))
-    if "map_stale_cache" in signal_set:
-        suggestions.append(_suggestion(
-            action="refresh",
-            target="project_map_cache",
-            reason="map_stale_cache",
-            files=stale_refs or referenced,
-        ))
-    map_logic_signals = [
-        signal
-        for signal in ("map_coverage_gap", "map_ranking_gap", "map_extractor_gap", "map_query_expansion_gap")
-        if signal in signal_set
-    ]
-    if map_logic_signals:
-        suggestions.append(_suggestion(
-            action="repair",
-            target="project_map_logic",
-            reason="+".join(map_logic_signals),
-            files=missing or actual,
-            commands=commands,
-        ))
-    seen: set[tuple[str, str, str]] = set()
-    out: list[dict] = []
-    for item in suggestions:
-        key = (str(item.get("action") or ""), str(item.get("target") or ""), str(item.get("reason") or ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-        if len(out) >= 8:
-            break
-    return out
-
-
-def _maintenance_plan_for_suggestions(*, evidence: dict, suggestions: list[dict], signals: list[str]) -> list[dict]:
-    plans: list[dict] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for suggestion in suggestions:
-        if not isinstance(suggestion, dict):
-            continue
-        action = str(suggestion.get("action") or "").strip()
-        target = str(suggestion.get("target") or "").strip()
-        reason = str(suggestion.get("reason") or "").strip()
-        if not action or not target:
-            continue
-        files = _ordered_unique([str(item) for item in (suggestion.get("files") or [])], limit=12)
-        commands = _ordered_unique([str(item) for item in (suggestion.get("commands") or [])], limit=4)
-        target_info = _maintenance_target_info(
-            evidence=evidence,
-            target=target,
-            reason=reason,
-            files=files,
-        )
-        related_signals = _related_maintenance_signals(target=target, reason=reason, signals=signals)
-        item = {
-            "action": action,
-            "target": target,
-            "target_kind": target_info["target_kind"],
-            "target_path": target_info["target_path"],
-            "reason": reason,
-            "signals": related_signals,
-            "source_files": files,
-            "files": files,
-            "commands": commands,
-            "validation": target_info["validation"],
-            "write_policy": target_info["write_policy"],
-            "execution": _maintenance_execution_state(
-                action=action,
-                target=target,
-                target_path=target_info["target_path"],
-                write_policy=target_info["write_policy"],
-            ),
-        }
-        target_paths = target_info.get("target_paths") or []
-        if target_paths:
-            item["target_paths"] = target_paths
-        key = (action, target, reason, str(item.get("target_path") or ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        plans.append(item)
-        if len(plans) >= 8:
-            break
-    return plans
-
-
-def _maintenance_execution_state(*, action: str, target: str, target_path: str, write_policy: str) -> dict:
-    if target == "project_navigation":
-        return {
-            "state": "ready",
-            "mode": "direct_edit",
-            "owner": "agent",
-            "next_step": f"verify source files, then edit {target_path or 'project navigation'}",
-        }
-    if target == "project_solution":
-        return {
-            "state": "advisory",
-            "mode": "direct_edit_when_reusable",
-            "owner": "agent",
-            "next_step": "write a project solution only if the evidence is reusable beyond this task",
-        }
-    if target == "project_map_cache":
-        return {
-            "state": "ready",
-            "mode": "refresh_command",
-            "owner": "agent_or_user",
-            "next_step": "run /aha map refresh; do not edit generated cache files",
-        }
-    if target == "project_map_logic":
-        return {
-            "state": "ready",
-            "mode": "source_repair",
-            "owner": "agent",
-            "next_step": "repair map extractor/resolver/ranking source and rerun focused tests",
-        }
-    return {
-        "state": "blocked",
-        "mode": "manual_review",
-        "owner": "user",
-        "next_step": f"manual review required for {write_policy or action}",
-    }
-
-
-def _routing_health_for_evidence(
-    *,
-    signals: list[str],
-    referenced: list[str],
-    actual: list[str],
-    stale_refs: list[str],
-    adopted: list[str],
-    missing: list[str],
-    map_diagnostics: dict,
-) -> dict:
-    signal_set = set(signals)
-    stale_hints = [str(item) for item in (map_diagnostics.get("stale_path_hints") or []) if str(item).strip()]
-    downrank_paths = _ordered_unique([*stale_refs, *stale_hints], limit=16)
-    prioritize_paths = _ordered_unique([*missing, *actual], limit=16)
-    if not signals:
-        status = "unobserved"
-    elif signal_set == {"context_hit_ok"}:
-        status = "healthy"
-    elif signal_set.intersection({"nav_stale", "map_stale_cache", "map_stale_nav_hint"}):
-        status = "stale"
-    elif signal_set.intersection({"map_miss", "missing_nav", "missing_entry", "entry_wrong"}):
-        status = "needs_repair"
-    else:
-        status = "watch"
-    adjustments: list[dict] = []
-    for path in downrank_paths:
-        adjustments.append({"path": path, "direction": "downrank", "reason": "stale_or_missing_reference"})
-    for path in prioritize_paths:
-        if path in downrank_paths:
-            continue
-        adjustments.append({"path": path, "direction": "prioritize", "reason": "verified_task_source"})
-    return {
-        "status": status,
-        "signals": signals[:12],
-        "downrank_paths": downrank_paths,
-        "prioritize_paths": prioritize_paths,
-        "adopted_files": adopted[:12],
-        "score_adjustments": adjustments[:24],
-    }
-
-
-def _kb_scope_policy() -> dict:
-    return {
-        "project_navigation": "direct_edit_approved_markdown_with_task_evidence",
-        "project_solutions": "advisory_direct_edit_only_when_reusable",
-        "generated_project_map_cache": "refresh_only_do_not_edit",
-        "project_map_logic": "repair_source_when_evidence_is_about_map_logic",
-        "general_personal_wiki": "manual_candidate_review_only",
-    }
-
-
-def _maintenance_target_info(*, evidence: dict, target: str, reason: str, files: list[str]) -> dict:
-    if target == "project_navigation":
-        target_path = _navigation_target_path(evidence, files, reason=reason)
-        return {
-            "target_kind": "project_navigation",
-            "target_path": target_path,
-            "validation": _navigation_validation_commands(files),
-            "write_policy": "direct_project_navigation_update",
-        }
-    if target == "project_solution":
-        return {
-            "target_kind": "project_solution",
-            "target_path": _solution_target_path(evidence),
-            "validation": ["re-run the task-specific verification command before writing the solution note"],
-            "write_policy": "advisory_project_solution_update",
-        }
-    if target == "project_map_cache":
-        return {
-            "target_kind": "generated_project_map_cache",
-            "target_path": _map_cache_target_path(evidence),
-            "validation": ["/aha map refresh", "/aha map status"],
-            "write_policy": "refresh_only_do_not_edit_cache",
-        }
-    if target == "project_map_logic":
-        paths = _map_logic_target_paths(reason)
-        return {
-            "target_kind": "project_map_logic",
-            "target_path": paths[0] if paths else "src/aha_cli/services/project_context_index.py",
-            "target_paths": paths,
-            "validation": [
-                "python3 -m pytest tests/test_project_context_index.py tests/test_knowledge_routes.py tests/test_context_evidence.py -q"
-            ],
-            "write_policy": "repair_source_logic_not_generated_cache",
-        }
-    return {
-        "target_kind": target or "unknown",
-        "target_path": "",
-        "validation": [],
-        "write_policy": "advisory_only",
-    }
-
-
-def _navigation_target_path(evidence: dict, files: list[str], *, reason: str) -> str:
-    base = _navigation_base_path(evidence)
-    route = _navigation_route_for_files(files, reason=reason)
-    return f"{base}/{route}.md" if base else f"{route}.md"
-
-
-def _navigation_base_path(evidence: dict) -> str:
-    knowledge = evidence.get("knowledge") if isinstance(evidence.get("knowledge"), dict) else {}
-    nav_index = str(knowledge.get("navigation_index") or "").strip()
-    if "/navigation/" in nav_index:
-        return nav_index.split("/navigation/", 1)[0].rstrip("/") + "/navigation"
-    project_key = str(knowledge.get("project_key") or "").strip()
-    if project_key:
-        return f"projects/{project_key}/navigation"
-    return "navigation"
-
-
-def _navigation_route_for_files(files: list[str], *, reason: str) -> str:
-    joined = " ".join(files).lower()
-    reason_text = str(reason or "").lower()
-    if "token-saving" in joined or "context_evidence" in joined or "context_planner" in joined:
-        return "flows/token-saving"
-    if "backend_context_pack" in joined or "chat_prompt_context" in joined:
-        return "flows/token-saving"
-    if "src/aha_cli/web/static/" in joined:
-        return "modules/web-static"
-    if "src/aha_cli/web/" in joined:
-        return "modules/web-api"
-    if "src/aha_cli/services/project_context_" in joined:
-        return "flows/token-saving" if "map_" in reason_text else "modules/knowledge"
-    if "src/aha_cli/services/" in joined:
-        return "modules/services-orchestration"
-    if "src/aha_cli/store/" in joined or "src/aha_cli/domain/" in joined:
-        return "modules/domain-store"
-    if "src/aha_cli/cli" in joined:
-        return "modules/cli"
-    if "docs/" in joined:
-        return "index"
-    return "index"
-
-
-def _navigation_validation_commands(files: list[str]) -> list[str]:
-    joined = " ".join(files)
-    commands: list[str] = []
-    if any(token in joined for token in ("context_evidence", "context_planner", "backend_context_pack", "chat_prompt")):
-        commands.append(
-            "python3 -m pytest tests/test_context_evidence.py tests/test_chat_prompt.py tests/test_web_task_routes.py -q"
-        )
-    if "src/aha_cli/web/static/" in joined:
-        commands.append("python3 -m pytest tests/test_frontend_static.py tests/test_web_task_routes.py -q")
-    if "src/aha_cli/web/" in joined and "src/aha_cli/web/static/" not in joined:
-        commands.append("python3 -m pytest tests/test_web_task_routes.py tests/test_knowledge_routes.py -q")
-    if not commands:
-        commands.append("python3 -m pytest -q")
-    return _ordered_unique(commands, limit=3)
-
-
-def _solution_target_path(evidence: dict) -> str:
-    knowledge = evidence.get("knowledge") if isinstance(evidence.get("knowledge"), dict) else {}
-    for entry in knowledge.get("entries") or []:
-        if not isinstance(entry, dict):
-            continue
-        slug = str(entry.get("slug") or "").strip()
-        kind = str(entry.get("kind") or entry.get("type") or "").strip()
-        if slug and ("solution" in kind or slug.startswith("solutions/")):
-            if slug.endswith(".md"):
-                return slug
-            return f"{slug}.md" if slug.startswith("projects/") else f"solutions/{slug}.md"
-    project_key = str(knowledge.get("project_key") or "").strip()
-    if project_key:
-        return f"projects/{project_key}/solutions/"
-    return "solutions/"
-
-
-def _map_cache_target_path(evidence: dict) -> str:
-    project_map = _pack_map(evidence)
-    map_index = str(project_map.get("map_index") or "").strip()
-    if map_index:
-        return map_index
-    project_key = str(project_map.get("project_key") or "").strip()
-    workspace_id = str(project_map.get("workspace_id") or "").strip()
-    if project_key and workspace_id:
-        return f"runtime/project_context/{project_key}/{workspace_id}/index.json"
-    return "runtime/project_context/"
-
-
-def _map_logic_target_paths(reason: str) -> list[str]:
-    reason_text = str(reason or "")
-    paths: list[str] = []
-    if "map_extractor_gap" in reason_text:
-        paths.append("src/aha_cli/services/project_context_index.py")
-    if any(signal in reason_text for signal in ("map_query_expansion_gap", "map_ranking_gap", "map_coverage_gap")):
-        paths.append("src/aha_cli/services/project_context_resolver.py")
-    return _ordered_unique(paths, limit=4)
-
-
-def _related_maintenance_signals(*, target: str, reason: str, signals: list[str]) -> list[str]:
-    reason_parts = [part for part in str(reason or "").split("+") if part]
-    if target == "project_map_logic":
-        related = [signal for signal in signals if signal.startswith("map_")]
-    elif target == "project_map_cache":
-        related = [signal for signal in signals if signal in {"map_stale_cache", "nav_stale"}]
-    elif target == "project_navigation":
-        related = [signal for signal in signals if signal in {"missing_nav", "map_miss", "nav_stale"}]
-    elif target == "project_solution":
-        related = [signal for signal in signals if signal in {"missing_entry", "entry_wrong"}]
-    else:
-        related = []
-    return _ordered_unique([*reason_parts, *related], limit=8)
-
-
 def _command_records_since(root: Path, run_id: str, start_event_id: int, *, task_id: str, agent_id: str) -> list[dict]:
     records, _ = iter_jsonl_records_from(event_path(root, run_id), start_event_id)
     commands: list[dict] = []
@@ -950,18 +647,6 @@ def _command_records_since(root: Path, run_id: str, start_event_id: int, *, task
             continue
         commands.append({"event_type": event.get("type"), "command": command, "exit_code": data.get("exit_code")})
     return commands
-
-
-def _paths_from_commands(commands: list[dict]) -> list[str]:
-    paths: list[str] = []
-    for item in commands:
-        command = str(item.get("command") or "")
-        for match in _PATH_TOKEN_RE.findall(command):
-            clean = match.strip("'\"`.,;:)")
-            if _ignored_path(clean):
-                continue
-            paths.append(clean)
-    return _ordered_unique(paths, limit=40)
 
 
 def _git_dirty_paths(workspace: Path) -> list[str]:
@@ -984,14 +669,9 @@ def _git_dirty_paths(workspace: Path) -> list[str]:
         path_text = raw[3:].strip()
         if " -> " in path_text:
             path_text = path_text.rsplit(" -> ", 1)[-1]
-        if path_text and not _ignored_path(path_text):
+        if path_text and not ignored_path(path_text):
             paths.append(path_text)
     return _ordered_unique(paths, limit=40)
-
-
-def _ignored_path(path: str) -> bool:
-    clean = str(path or "").strip()
-    return not clean or clean.startswith(_IGNORED_PATH_PREFIXES)
 
 
 def _ordered_unique(values: list[str], *, limit: int) -> list[str]:
@@ -1019,6 +699,7 @@ __all__ = [
     "append_task_context_evidence",
     "distill_context_evidence_after_turn",
     "list_task_context_evidence",
+    "record_agent_kb_feedback",
     "record_project_map_query_result",
     "record_context_pack_from_prompt_metrics",
     "task_context_evidence_enabled",

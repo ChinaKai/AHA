@@ -195,6 +195,8 @@ def _context_evidence_source_labels(type_counts: dict) -> list[str]:
         sources.append("map_query_on_demand")
     if type_counts.get("context_evidence_result"):
         sources.append("after_turn_runtime_distill")
+    if type_counts.get("agent_kb_feedback"):
+        sources.append("agent_kb_feedback")
     return sources
 
 
@@ -204,6 +206,14 @@ def _context_evidence_status(*, total: int, latest_result: dict | None, routing_
             "state": "no_evidence",
             "label": "No evidence yet",
             "description": "No token-saving evidence has been recorded for this task yet.",
+        }
+    growth_state = latest_result.get("kb_growth_state") if isinstance(latest_result, dict) else {}
+    if isinstance(growth_state, dict) and growth_state.get("status") == "pending":
+        pending_count = int(growth_state.get("pending_count") or 0)
+        return {
+            "state": "growth_pending",
+            "label": "KB growth pending",
+            "description": f"{pending_count} KB growth action(s) still need project navigation or solution write-back.",
         }
     signals = set(str(item) for item in ((latest_result or {}).get("signals") or []) if item)
     health_status = str((routing_health or {}).get("status") or "").strip()
@@ -272,15 +282,18 @@ def _context_evidence_summary(
     maintenance_plan: list[dict],
 ) -> dict:
     type_counts = _context_evidence_type_counts(records)
+    feedback_records = [record for record in records if record.get("type") == "agent_kb_feedback"]
     routing_health = latest_result.get("routing_health") if isinstance(latest_result, dict) else {}
     status = _context_evidence_status(total=len(records), latest_result=latest_result, routing_health=routing_health)
     latest_created_at = str(records[-1].get("created_at") or "") if records else ""
     actual_files = (latest_result or {}).get("actual_files") if isinstance(latest_result, dict) else []
     referenced_files = (latest_result or {}).get("referenced_files") if isinstance(latest_result, dict) else []
+    latest_feedback = feedback_records[-1].get("feedback") if feedback_records else {}
+    kb_growth_state = latest_result.get("kb_growth_state") if isinstance(latest_result, dict) else {}
     return {
         "scope": "task",
         "generated_by": "aha_runtime",
-        "feedback_mode": "runtime_inferred",
+        "feedback_mode": "agent_feedback_plus_runtime" if feedback_records else "runtime_inferred",
         "generated_when": [
             "before_agent_prompt",
             "on_map_query",
@@ -290,6 +303,9 @@ def _context_evidence_summary(
         "next_action": _context_evidence_next_action(maintenance_plan, suggestions),
         "record_type_counts": type_counts,
         "evidence_sources": _context_evidence_source_labels(type_counts),
+        "agent_feedback_count": len(feedback_records),
+        "latest_agent_feedback": latest_feedback if isinstance(latest_feedback, dict) else {},
+        "kb_growth_state": kb_growth_state if isinstance(kb_growth_state, dict) else {},
         "latest_record_created_at": latest_created_at,
         "actual_file_count": len(actual_files or []),
         "referenced_file_count": len(referenced_files or []),
@@ -364,6 +380,7 @@ def task_context_evidence_payload(root: Path, run_id: str, task_id: str, query: 
         ),
         "routing_health": latest_result.get("routing_health") if isinstance(latest_result, dict) else {},
         "kb_scope_policy": latest_result.get("kb_scope_policy") if isinstance(latest_result, dict) else {},
+        "kb_growth_state": latest_result.get("kb_growth_state") if isinstance(latest_result, dict) else {},
         "maintenance_suggestions": suggestions,
         "maintenance_plan": maintenance_plan,
     }

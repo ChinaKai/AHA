@@ -30,4 +30,18 @@ def handle_record_task_update_action(root: Path, run_id: str, task_id: str, acti
         )
         return None
     record = append_task_round(root, run_id, task_id, payload)
+    feedback = action.get("kb_feedback") or action.get("knowledge_feedback")
+    if feedback:
+        from aha_cli.services.context_evidence import record_agent_kb_feedback
+
+        agents = payload.get("agents") if isinstance(payload.get("agents"), list) else []
+        agent_id = str(agents[0] if agents else action.get("agent_id") or "main")
+        record_agent_kb_feedback(
+            root,
+            run_id,
+            task_id,
+            agent_id=agent_id,
+            feedback=feedback,
+            source="record_task_update",
+        )
     return {"type": "record_task_update", "round_id": record["round_id"]}

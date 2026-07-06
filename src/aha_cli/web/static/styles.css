@@ -2760,12 +2760,21 @@ body.auth-required .login-view:not(.hidden) {
 .context-evidence-view {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 .task-evidence-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.task-evidence-head > div {
+  min-width: 0;
 }
 .task-evidence-head h3 {
   margin: 0;
@@ -2787,14 +2796,18 @@ body.auth-required .login-view:not(.hidden) {
   display: grid;
   grid-template-columns: 1fr;
   gap: 7px;
+  min-width: 0;
+  max-width: 100%;
 }
 .context-evidence-view .task-evidence-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 .task-evidence-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   padding: 8px;
   border: 1px solid var(--color-border-subtle);
   border-left: 3px solid var(--color-accent);
@@ -2814,6 +2827,12 @@ body.auth-required .login-view:not(.hidden) {
   display: grid;
   gap: 3px;
   min-width: 0;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.task-evidence-summary > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 .task-evidence-summary span {
   color: var(--color-text-muted);
@@ -2834,17 +2853,61 @@ body.auth-required .login-view:not(.hidden) {
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+.task-evidence-tabs {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  flex-wrap: wrap;
+}
+.task-evidence-tab {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+.task-evidence-tab.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-surface);
+  color: var(--color-primary-strong);
+  font-weight: 650;
+}
+.task-evidence-tab-panels {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.task-evidence-tab-panel {
+  display: none;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.task-evidence-tab-panel.active {
+  display: grid;
+}
 .task-evidence-grid > div,
 .task-evidence-block {
   display: grid;
   gap: 4px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.context-evidence-view .task-evidence-grid > div {
+  padding: 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
 }
 .task-evidence-section-title {
   padding-top: 2px;
   border-top: 1px solid var(--color-border-subtle);
 }
 .task-evidence-grid span,
+.task-evidence-stack span,
 .task-evidence-block strong,
 .task-evidence-section-title strong {
   color: var(--color-text-muted);
@@ -2852,7 +2915,8 @@ body.auth-required .login-view:not(.hidden) {
   font-weight: 700;
 }
 .task-evidence-chip {
-  display: inline-flex;
+  display: inline-block;
+  min-width: 0;
   max-width: 100%;
   margin: 0 4px 4px 0;
   padding: 2px 6px;
@@ -2863,17 +2927,21 @@ body.auth-required .login-view:not(.hidden) {
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
 }
 .task-evidence-body code,
 .context-evidence-view code {
   display: block;
   max-width: 100%;
   padding: 2px 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--color-text);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
 }
 .task-evidence-muted,
 .task-evidence-empty,
@@ -2886,6 +2954,8 @@ body.auth-required .login-view:not(.hidden) {
   display: grid;
   gap: 3px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   padding: 6px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
@@ -2900,6 +2970,27 @@ body.auth-required .login-view:not(.hidden) {
 }
 .task-evidence-line {
   min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.task-evidence-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.task-evidence-stack > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  overflow-x: hidden;
 }
 .task-settings-danger-zone {
   background: var(--color-surface);

@@ -125,6 +125,22 @@
         handlers.refreshContextEvidence?.();
         return;
       }
+      const contextEvidenceTab = target?.closest("[data-context-evidence-tab]");
+      if (contextEvidenceTab) {
+        event.preventDefault();
+        const view = contextEvidenceTab.closest(".context-evidence-view");
+        const selected = contextEvidenceTab.getAttribute("data-context-evidence-tab") || "";
+        windowRef.__ahaContextEvidenceActiveTab = selected;
+        view?.querySelectorAll("[data-context-evidence-tab]").forEach(tab => {
+          const active = tab.getAttribute("data-context-evidence-tab") === selected;
+          tab.classList.toggle("active", active);
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        view?.querySelectorAll("[data-context-evidence-panel]").forEach(panel => {
+          panel.classList.toggle("active", panel.getAttribute("data-context-evidence-panel") === selected);
+        });
+        return;
+      }
       const bridgeToggle = target?.closest("[data-hardware-bridge-action]");
       if (bridgeToggle) {
         event.preventDefault();
