@@ -699,6 +699,38 @@ Observe Proxy 是这个设计的度量层。
 - agent-pull 入口契约本身不带具体 `map.files`；这种 entrypoint-only pack 即使本轮读取了源码，也不应被误判成 `missing_nav` 或 `missing_entry`。
 - 真实 `/aha map query` 和 Web Knowledge Map query 结果会记录为 `project_map_query` evidence，并在同一 agent turn 的 prompt 之后发生时并入 `context_evidence_result`。
 
+### Phase 3.1：EVD 面板产品定义
+
+EVD 面板不是普通 debug dump，而是 **单个 token-saving task 的 KB/map 使用闭环观测中心**。它回答的是“这个 task 里，知识库和 project map 是否帮助 agent 更快完成任务，以及 agent 是否基于当前任务证据完成自增长/自修复”。
+
+作用域：
+
+- 只面向当前 task；未开启 token saving 的 task 不应展示复杂 KB 诊断。
+- 数据随 task 多轮更新，展示整个 task 的累计状态，同时保留 turn-by-turn 证据时间线。
+- 面板不是全局 KB 管理器，也不是 generated Project Map cache 编辑器。
+
+应该优先展示的人类可读层级：
+
+1. **任务级状态摘要**：KB/map 当前对这个 task 是 helped、stale、needs repair、observing 还是 no evidence。
+2. **下一步动作**：例如 refresh map cache、repair project navigation、write project solution、repair map ranking logic。
+3. **KB 效果证据**：哪些 nav/map query/context pack 起了作用，哪些 referenced files 被实际采用，哪些真实文件是 agent 后来找到的。
+4. **自增长/自修复状态**：哪些 project navigation/solution 已 ready 可直写，哪些已完成，哪些仍是 advisory/manual review。
+5. **原始诊断**：signals、routing health、gap reasons、stale path hints、raw records 默认折叠或放在下方，不作为第一眼主信息。
+
+当前数据来源分三类：
+
+- `context_pack`：发给 agent 前由 AHA runtime 记录，说明本轮提供了哪些 KB/map 入口。
+- `project_map_query`：agent 执行 `/aha map query` 或 Web Knowledge Map query 时记录，说明查询了什么、命中了什么、是否使用 navigation 扩展。
+- `context_evidence_result`：agent 一轮结束后由 AHA runtime 根据 prompt metrics、map query events、命令路径、git dirty paths、reply excerpt 和 exit code 推断，生成 signals、routing health、maintenance plan 等。
+
+注意：当前 `context_evidence_result` 主要是 runtime-inferred evidence，不等同于 agent 的显式 KB 使用反馈。下一步应补充结构化 agent feedback，让 agent 在每次读取/采用/跳过/修复 KB 后记录：
+
+- `helped`: KB/nav/map 是否准确定位到代码。
+- `stale`: 哪些路径、入口或说明过期。
+- `missed`: KB/map 没有覆盖但 agent 已验证出的真实路径。
+- `updated`: agent 已经更新了哪个 project navigation/project solution。
+- `pending`: 仍建议后续 refresh/repair/manual review 的项目。
+
 ### Phase 4：生命周期 reset/compact
 
 - 判断需求完成。
@@ -769,3 +801,4 @@ Observe Proxy 是这个设计的度量层。
 - 2026-07-05：补齐结构化 `maintenance_plan`：turn 后 evidence 会把泛化 suggestions 扩展为可执行计划，包含目标 KB/source/cache 路径、写入策略、来源文件、触发信号和验证命令；API、Evidence 面板和后续 Context Pack recap 都会优先暴露该计划，但仍不自动写 KB 或手改 generated map cache。
 - 2026-07-05：根据 Web 已丢弃 `/aha final` 的现状，撤回 finalization lifecycle advice；Phase 4 暂时保持手动 compact/reset，由用户决定何时清 backend session。
 - 2026-07-05：补齐剩余 Phase 3 闭环：resolver 输出 stale path hints 并从正向 hint 剔除，map ranking 对 stale hints 降权，context evidence 增加 `gap_reasons`、`routing_health`、`kb_scope_policy` 和 maintenance plan `execution`，API/UI/后续 Context Pack recap 同步展示；evidence recap 预算提升到 4000 硬上限以保留 source-check 边界。
+- 2026-07-06：明确 EVD 面板产品定义：它是单 token-saving task 的 KB/map 使用闭环观测中心，应默认展示任务级状态、下一步动作、KB 效果证据和自增长/自修复状态；当前实现以 runtime-inferred evidence 为主，后续补结构化 agent KB feedback。

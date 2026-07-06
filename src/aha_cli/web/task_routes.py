@@ -175,6 +175,129 @@ def _query_int(query: dict[str, list[str]], name: str, default: int, *, minimum:
     return max(minimum, min(maximum, value))
 
 
+_EVIDENCE_REPAIR_SIGNALS = {"map_miss", "missing_nav", "missing_entry", "entry_wrong"}
+_EVIDENCE_STALE_SIGNALS = {"nav_stale", "map_stale_cache", "map_stale_nav_hint"}
+
+
+def _context_evidence_type_counts(records: list[dict]) -> dict:
+    counts: dict[str, int] = {}
+    for record in records:
+        record_type = str(record.get("type") or "unknown")
+        counts[record_type] = counts.get(record_type, 0) + 1
+    return counts
+
+
+def _context_evidence_source_labels(type_counts: dict) -> list[str]:
+    sources: list[str] = []
+    if type_counts.get("context_pack"):
+        sources.append("context_pack_before_prompt")
+    if type_counts.get("project_map_query"):
+        sources.append("map_query_on_demand")
+    if type_counts.get("context_evidence_result"):
+        sources.append("after_turn_runtime_distill")
+    return sources
+
+
+def _context_evidence_status(*, total: int, latest_result: dict | None, routing_health: dict) -> dict:
+    if total <= 0:
+        return {
+            "state": "no_evidence",
+            "label": "No evidence yet",
+            "description": "No token-saving evidence has been recorded for this task yet.",
+        }
+    signals = set(str(item) for item in ((latest_result or {}).get("signals") or []) if item)
+    health_status = str((routing_health or {}).get("status") or "").strip()
+    if signals.intersection(_EVIDENCE_REPAIR_SIGNALS) or health_status == "needs_repair":
+        return {
+            "state": "needs_repair",
+            "label": "Needs KB repair",
+            "description": "KB/map routing did not fully match the verified task path.",
+        }
+    if signals.intersection(_EVIDENCE_STALE_SIGNALS) or health_status == "stale":
+        return {
+            "state": "stale",
+            "label": "KB/map stale",
+            "description": "The task observed stale navigation or project map data.",
+        }
+    if "context_hit_ok" in signals or health_status == "healthy":
+        return {
+            "state": "helped",
+            "label": "KB helped",
+            "description": "KB/map references were adopted by the task.",
+        }
+    return {
+        "state": "observing",
+        "label": "Observing",
+        "description": "Evidence exists, but AHA has not classified KB impact yet.",
+    }
+
+
+def _context_evidence_next_action(maintenance_plan: list[dict], suggestions: list[dict]) -> dict:
+    item = maintenance_plan[0] if maintenance_plan else (suggestions[0] if suggestions else None)
+    if not isinstance(item, dict):
+        return {
+            "state": "none",
+            "label": "No maintenance action",
+            "target": "",
+            "reason": "",
+        }
+    action = str(item.get("action") or "").strip()
+    target = str(item.get("target") or "").strip()
+    reason = str(item.get("reason") or "").strip()
+    execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
+    labels = {
+        ("refresh", "project_map_cache"): "Refresh project map cache",
+        ("repair", "project_navigation"): "Repair project navigation",
+        ("update", "project_navigation"): "Update project navigation",
+        ("create", "project_navigation"): "Create project navigation",
+        ("update", "project_solution"): "Update project solution",
+        ("repair", "project_map_logic"): "Repair map logic",
+    }
+    return {
+        "state": str(execution.get("state") or "suggested"),
+        "label": labels.get((action, target), " ".join(part for part in [action, target] if part) or "Review evidence"),
+        "action": action,
+        "target": target,
+        "reason": reason,
+        "target_path": str(item.get("target_path") or ""),
+        "write_policy": str(item.get("write_policy") or ""),
+    }
+
+
+def _context_evidence_summary(
+    *,
+    records: list[dict],
+    latest_result: dict | None,
+    suggestions: list[dict],
+    maintenance_plan: list[dict],
+) -> dict:
+    type_counts = _context_evidence_type_counts(records)
+    routing_health = latest_result.get("routing_health") if isinstance(latest_result, dict) else {}
+    status = _context_evidence_status(total=len(records), latest_result=latest_result, routing_health=routing_health)
+    latest_created_at = str(records[-1].get("created_at") or "") if records else ""
+    actual_files = (latest_result or {}).get("actual_files") if isinstance(latest_result, dict) else []
+    referenced_files = (latest_result or {}).get("referenced_files") if isinstance(latest_result, dict) else []
+    return {
+        "scope": "task",
+        "generated_by": "aha_runtime",
+        "feedback_mode": "runtime_inferred",
+        "generated_when": [
+            "before_agent_prompt",
+            "on_map_query",
+            "after_agent_turn",
+        ],
+        "status": status,
+        "next_action": _context_evidence_next_action(maintenance_plan, suggestions),
+        "record_type_counts": type_counts,
+        "evidence_sources": _context_evidence_source_labels(type_counts),
+        "latest_record_created_at": latest_created_at,
+        "actual_file_count": len(actual_files or []),
+        "referenced_file_count": len(referenced_files or []),
+        "maintenance_plan_count": len(maintenance_plan),
+        "maintenance_suggestion_count": len(suggestions),
+    }
+
+
 def task_context_evidence_payload(root: Path, run_id: str, task_id: str, query: dict[str, list[str]]) -> dict:
     task_snapshot(root, run_id, task_id)
     limit = _query_int(query, "limit", 50, minimum=1, maximum=200)
@@ -233,6 +356,12 @@ def task_context_evidence_payload(root: Path, run_id: str, task_id: str, query: 
         "limit": limit,
         "records": visible,
         "latest_result": latest_result,
+        "summary": _context_evidence_summary(
+            records=records,
+            latest_result=latest_result,
+            suggestions=suggestions,
+            maintenance_plan=maintenance_plan,
+        ),
         "routing_health": latest_result.get("routing_health") if isinstance(latest_result, dict) else {},
         "kb_scope_policy": latest_result.get("kb_scope_policy") if isinstance(latest_result, dict) else {},
         "maintenance_suggestions": suggestions,
