@@ -8,14 +8,6 @@ def crud_actions_for_signals(signals: list[str]) -> list[str]:
         actions.append("read")
     if signal_set.intersection({"missing_nav", "missing_entry"}):
         actions.append("create")
-    if "map_miss" in signal_set:
-        actions.append("update")
-    if signal_set.intersection({"map_coverage_gap", "map_ranking_gap", "map_extractor_gap", "map_query_expansion_gap"}):
-        actions.append("update")
-        actions.append("repair")
-    if "map_stale_cache" in signal_set:
-        actions.append("refresh")
-        actions.append("repair")
     if signal_set.intersection({"nav_stale", "entry_wrong"}):
         actions.append("repair")
     if "nav_stale" in signal_set:
@@ -44,11 +36,11 @@ def maintenance_suggestions_for_signals(
             files=actual or missing,
             commands=commands,
         ))
-    if "map_miss" in signal_set:
+    if "missing_nav" in signal_set and referenced:
         suggestions.append(_suggestion(
             action="update",
             target="project_navigation",
-            reason="map_miss",
+            reason="missing_nav",
             files=missing or actual,
             commands=commands,
         ))
@@ -74,26 +66,6 @@ def maintenance_suggestions_for_signals(
             target="project_solution",
             reason="missing_entry",
             files=actual,
-            commands=commands,
-        ))
-    if "map_stale_cache" in signal_set:
-        suggestions.append(_suggestion(
-            action="refresh",
-            target="project_map_cache",
-            reason="map_stale_cache",
-            files=stale_refs or referenced,
-        ))
-    map_logic_signals = [
-        signal
-        for signal in ("map_coverage_gap", "map_ranking_gap", "map_extractor_gap", "map_query_expansion_gap")
-        if signal in signal_set
-    ]
-    if map_logic_signals:
-        suggestions.append(_suggestion(
-            action="repair",
-            target="project_map_logic",
-            reason="+".join(map_logic_signals),
-            files=missing or actual,
             commands=commands,
         ))
     seen: set[tuple[str, str, str]] = set()
@@ -169,19 +141,19 @@ def routing_health_for_evidence(
     stale_refs: list[str],
     adopted: list[str],
     missing: list[str],
-    map_diagnostics: dict,
+    navigation_diagnostics: dict,
 ) -> dict:
     signal_set = set(signals)
-    stale_hints = [str(item) for item in (map_diagnostics.get("stale_path_hints") or []) if str(item).strip()]
-    downrank_paths = _ordered_unique([*stale_refs, *stale_hints], limit=16)
+    del navigation_diagnostics
+    downrank_paths = _ordered_unique(stale_refs, limit=16)
     prioritize_paths = _ordered_unique([*missing, *actual], limit=16)
     if not signals:
         status = "unobserved"
     elif signal_set == {"context_hit_ok"}:
         status = "healthy"
-    elif signal_set.intersection({"nav_stale", "map_stale_cache", "map_stale_nav_hint"}):
+    elif "nav_stale" in signal_set:
         status = "stale"
-    elif signal_set.intersection({"map_miss", "missing_nav", "missing_entry", "entry_wrong"}):
+    elif signal_set.intersection({"missing_nav", "missing_entry", "entry_wrong"}):
         status = "needs_repair"
     else:
         status = "watch"
@@ -206,8 +178,6 @@ def kb_scope_policy() -> dict:
     return {
         "project_navigation": "direct_edit_approved_markdown_with_task_evidence",
         "project_solutions": "direct_edit_when_reusable_with_task_evidence",
-        "generated_project_map_cache": "refresh_only_do_not_edit",
-        "project_map_logic": "repair_source_when_evidence_is_about_map_logic",
         "general_personal_wiki": "manual_candidate_review_only",
     }
 
@@ -247,20 +217,6 @@ def _maintenance_execution_state(*, action: str, target: str, target_path: str, 
             "owner": "agent",
             "next_step": "write a project solution only if the evidence is reusable beyond this task",
         }
-    if target == "project_map_cache":
-        return {
-            "state": "ready",
-            "mode": "refresh_command",
-            "owner": "agent",
-            "next_step": "run /aha map refresh when stale; do not edit generated cache files",
-        }
-    if target == "project_map_logic":
-        return {
-            "state": "ready",
-            "mode": "source_repair",
-            "owner": "agent",
-            "next_step": "repair map extractor/resolver/ranking source and rerun focused tests",
-        }
     return {
         "state": "blocked",
         "mode": "manual_review",
@@ -284,24 +240,6 @@ def _maintenance_target_info(*, evidence: dict, target: str, reason: str, files:
             "target_path": _solution_target_path(evidence),
             "validation": ["re-run the task-specific verification command before writing the solution note"],
             "write_policy": "direct_project_solution_update_when_reusable",
-        }
-    if target == "project_map_cache":
-        return {
-            "target_kind": "generated_project_map_cache",
-            "target_path": _map_cache_target_path(evidence),
-            "validation": ["/aha map refresh", "/aha map status"],
-            "write_policy": "refresh_only_do_not_edit_cache",
-        }
-    if target == "project_map_logic":
-        paths = _map_logic_target_paths(reason)
-        return {
-            "target_kind": "project_map_logic",
-            "target_path": paths[0] if paths else "src/aha_cli/services/project_context_index.py",
-            "target_paths": paths,
-            "validation": [
-                "python3 -m pytest tests/test_project_context_index.py tests/test_knowledge_routes.py tests/test_context_evidence.py -q"
-            ],
-            "write_policy": "repair_source_logic_not_generated_cache",
         }
     return {
         "target_kind": target or "unknown",
@@ -330,7 +268,7 @@ def _navigation_base_path(evidence: dict) -> str:
 
 def _navigation_route_for_files(files: list[str], *, reason: str) -> str:
     joined = " ".join(files).lower()
-    reason_text = str(reason or "").lower()
+    del reason
     if "token-saving" in joined or "context_evidence" in joined or "context_planner" in joined:
         return "flows/token-saving"
     if "backend_context_pack" in joined or "chat_prompt_context" in joined:
@@ -339,8 +277,6 @@ def _navigation_route_for_files(files: list[str], *, reason: str) -> str:
         return "modules/web-static"
     if "src/aha_cli/web/" in joined:
         return "modules/web-api"
-    if "src/aha_cli/services/project_context_" in joined:
-        return "flows/token-saving" if "map_" in reason_text else "modules/knowledge"
     if "src/aha_cli/services/" in joined:
         return "modules/services-orchestration"
     if "src/aha_cli/store/" in joined or "src/aha_cli/domain/" in joined:
@@ -385,36 +321,10 @@ def _solution_target_path(evidence: dict) -> str:
     return "solutions/"
 
 
-def _map_cache_target_path(evidence: dict) -> str:
-    project_map = evidence.get("map") if isinstance(evidence.get("map"), dict) else {}
-    map_index = str(project_map.get("map_index") or "").strip()
-    if map_index:
-        return map_index
-    project_key = str(project_map.get("project_key") or "").strip()
-    workspace_id = str(project_map.get("workspace_id") or "").strip()
-    if project_key and workspace_id:
-        return f"runtime/project_context/{project_key}/{workspace_id}/index.json"
-    return "runtime/project_context/"
-
-
-def _map_logic_target_paths(reason: str) -> list[str]:
-    reason_text = str(reason or "")
-    paths: list[str] = []
-    if "map_extractor_gap" in reason_text:
-        paths.append("src/aha_cli/services/project_context_index.py")
-    if any(signal in reason_text for signal in ("map_query_expansion_gap", "map_ranking_gap", "map_coverage_gap")):
-        paths.append("src/aha_cli/services/project_context_resolver.py")
-    return _ordered_unique(paths, limit=4)
-
-
 def _related_maintenance_signals(*, target: str, reason: str, signals: list[str]) -> list[str]:
     reason_parts = [part for part in str(reason or "").split("+") if part]
-    if target == "project_map_logic":
-        related = [signal for signal in signals if signal.startswith("map_")]
-    elif target == "project_map_cache":
-        related = [signal for signal in signals if signal in {"map_stale_cache", "nav_stale"}]
-    elif target == "project_navigation":
-        related = [signal for signal in signals if signal in {"missing_nav", "map_miss", "nav_stale"}]
+    if target == "project_navigation":
+        related = [signal for signal in signals if signal in {"missing_nav", "nav_stale"}]
     elif target == "project_solution":
         related = [signal for signal in signals if signal in {"missing_entry", "entry_wrong"}]
     else:

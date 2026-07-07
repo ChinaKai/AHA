@@ -1,8 +1,8 @@
 """Project navigation ("memory palace") generation.
 
 Project navigation is a small entry point plus on-demand module docs. The entry
-point is a generated project briefing, similar to an agent `/init` document,
-followed by a first-level project map. The module document tells an agent which
+point is a generated project briefing, similar to an agent `/init` document.
+The module document tells an agent which
 source files, entry points, tests, and caveats matter for that module. This
 keeps prompts small while preserving a durable map for agents that need to
 modify a focused part of the codebase.

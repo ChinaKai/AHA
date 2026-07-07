@@ -1,7 +1,9 @@
 # AHA Token Saving Context Planner 设计
 
-> 状态：Context Planner / EVD 主链路已接入；EVD 历史证据读侧降噪、KB growth hard loop、EVD 首屏降噪和无横向滚动已接入，下一步做真实任务回归验证。
-> 最后更新：2026-07-06。
+> 2026-07-07 当前状态：Project Map / Project Context Index 已从活跃产品面切除。token saving 现在走 `provider=nav`，旧 `provider=map` 只做兼容迁移到 `nav`。下文保留了部分历史设计讨论；实现和调试以项目导航 `navigation/flows/token-saving.md` 和当前源码为准。
+
+> 状态：Context Planner / EVD 主链路已接入；EVD 历史证据读侧降噪、KB growth hard loop、EVD 首屏降噪和无横向滚动已接入；Project Map 已删除，下一步做 nav-only 真实任务回归验证。
+> 最后更新：2026-07-07。
 > 维护规则：讨论过程中只要形成明确结论，就更新本文档对应章节，并在「进展日志」记录。没有结论的问题放到「开放问题」，不要只留在聊天记录里。
 
 ## 1. 核心判断

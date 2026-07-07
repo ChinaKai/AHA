@@ -114,7 +114,7 @@ def handle_slash_command(
         else:
             reply = handlers.format_aha_command(root, run_id, task_id, stripped, target)
     else:
-        reply = f"Unknown command: {stripped.split()[0]}. Supported slash commands: /aha kb <message>, /aha nav <message>, /aha map status|refresh|query <terms>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
+        reply = f"Unknown command: {stripped.split()[0]}. Supported slash commands: /aha kb <message>, /aha nav <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
     handlers.append_event(root, run_id, "aha_command_handled", {"task_id": task_id, "command": stripped})
     response = handlers.append_message(

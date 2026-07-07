@@ -1,5 +1,7 @@
 # AHA Project Context Index Plan
 
+> Deprecated 2026-07-07: Project Context Index / Project Map was removed from the active AHA product surface. This file remains as historical design discussion only. Current token-saving routing is nav-only through project navigation and `backend_context_pack.md`; do not use this document as implementation guidance for active features.
+
 This document tracks the proposed AHA best-practice path for coding-oriented
 token savings across embedded Linux, C/C++, Python, and future cloud stacks.
 It is a live discussion document: when the design discussion makes a concrete

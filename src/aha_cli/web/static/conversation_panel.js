@@ -259,28 +259,6 @@
       `;
     }
 
-    function renderEvidenceQueries(payload = {}) {
-      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
-      const records = Array.isArray(payload.records) ? payload.records : [];
-      const queries = records
-        .filter(item => item?.type === "project_map_query")
-        .slice(-6)
-        .reverse();
-      if (!queries.length) {
-        return `<div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_no_queries", "No map queries recorded."))}</div>`;
-      }
-      return queries.map(item => {
-        const map = item.map || {};
-        return `
-          <div class="task-evidence-query">
-            <strong>${escapeHtml(map.query || "-")}</strong>
-            <span>${escapeHtml(String(map.total_matches ?? 0))} matches</span>
-            <div>${evidenceListHtml(map.files || [], { limit: 6, empty: "-", code: true })}</div>
-          </div>
-        `;
-      }).join("");
-    }
-
     function evidenceStatusText(status = {}) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
       const state = status.state || "observing";
@@ -290,7 +268,7 @@
         needs_repair: t("task.context_evidence_status_needs_repair", "Needs KB repair"),
         no_evidence: t("task.context_evidence_status_no_evidence", "No evidence yet"),
         observing: t("task.context_evidence_status_observing", "Observing"),
-        stale: t("task.context_evidence_status_stale", "KB/map stale")
+        stale: t("task.context_evidence_status_stale", "KB/nav stale")
       };
       return labels[state] || status.label || state;
     }
@@ -302,8 +280,7 @@
         after_turn_runtime_distill: t("task.context_evidence_source_after_turn", "after agent turn"),
         agent_kb_feedback: t("task.context_evidence_source_agent_feedback", "agent KB feedback"),
         before_agent_prompt: t("task.context_evidence_source_before_prompt", "before agent prompt"),
-        context_pack_before_prompt: t("task.context_evidence_source_context_pack", "context pack"),
-        map_query_on_demand: t("task.context_evidence_source_map_query", "map query")
+        context_pack_before_prompt: t("task.context_evidence_source_context_pack", "context pack")
       };
       return labels[source] || source;
     }
@@ -313,7 +290,7 @@
       if (mode === "agent_feedback_plus_runtime") {
         return t("task.context_evidence_feedback_mode_agent", "Agent KB feedback plus AHA runtime inference.");
       }
-      return t("task.context_evidence_feedback_mode", "AHA runtime inference from prompts, map queries, commands, and changed files.");
+      return t("task.context_evidence_feedback_mode", "AHA runtime inference from prompts, commands, and changed files.");
     }
 
     function renderAgentKbFeedback(feedback = {}) {
@@ -435,6 +412,14 @@
 
     function renderEvidenceDiagnostics(payload = {}, diagnostics = {}, routingHealth = {}) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const gapReasons = Array.isArray(diagnostics.gap_reasons)
+        ? diagnostics.gap_reasons.map(item => {
+            if (!item || typeof item !== "object") return String(item || "");
+            const paths = Array.isArray(item.paths) ? item.paths.filter(Boolean).join(", ") : "";
+            return [item.reason, paths].filter(Boolean).join(": ");
+          }).filter(Boolean)
+        : [];
+      void payload;
       return `
         <div class="task-evidence-stack">
           <div class="task-evidence-block">
@@ -442,14 +427,9 @@
             ${renderRoutingHealth(routingHealth)}
           </div>
           <div class="task-evidence-block">
-            <strong>${escapeHtml(t("task.context_evidence_map", "Map diagnostics"))}</strong>
-            <div class="task-evidence-line">${evidenceListHtml(diagnostics.gap_signals || [], { empty: t("task.context_evidence_none", "none") })}</div>
+            <strong>${escapeHtml(t("task.context_evidence_map", "Navigation diagnostics"))}</strong>
+            <div class="task-evidence-line">${evidenceListHtml(gapReasons, { empty: t("task.context_evidence_none", "none") })}</div>
             <div class="task-evidence-line">${evidenceListHtml(diagnostics.missing_files || [], { limit: 8, empty: "-", code: true })}</div>
-            <div class="task-evidence-line">${evidenceListHtml(diagnostics.stale_path_hints || [], { limit: 8, empty: "-", code: true })}</div>
-          </div>
-          <div class="task-evidence-block">
-            <strong>${escapeHtml(t("task.context_evidence_queries", "Map queries"))}</strong>
-            ${renderEvidenceQueries(payload)}
           </div>
         </div>
       `;
@@ -506,7 +486,7 @@
       if (detail.loading) return `<div class="empty">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
       const payload = detail.payload || { records: [], latest_result: null, maintenance_suggestions: [], maintenance_plan: [] };
       const latest = payload.latest_result || {};
-      const diagnostics = latest.map_diagnostics || {};
+      const diagnostics = latest.navigation_diagnostics || {};
       const routingHealth = payload.routing_health || latest.routing_health || {};
       const latestFeedback = payload.summary?.latest_agent_feedback || {};
       const kbGrowthState = payload.kb_growth_state || payload.summary?.kb_growth_state || {};

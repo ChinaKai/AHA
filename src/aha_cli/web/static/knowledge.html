@@ -259,24 +259,9 @@
     .kb-project-nav-controls { flex-wrap: nowrap; align-items: center; overflow-x: auto; }
     .kb-project-nav-controls .kb-muted { flex: 0 0 auto; white-space: nowrap; }
     .kb-project-nav-controls select { min-width: 150px; }
-    .kb-project-nav-controls #nav-workspace-select,
-    .kb-project-nav-controls #map-workspace-select { min-width: 240px; }
+    .kb-project-nav-controls #nav-workspace-select { min-width: 240px; }
     .kb-project-nav-controls #nav-model { min-width: 180px; }
     .kb-project-nav-controls button { flex: 0 0 auto; }
-    .kb-map-path { overflow-wrap: anywhere; }
-    .kb-map-file-path { overflow-wrap: anywhere; }
-    .kb-map-file-tree { display: grid; gap: 6px; }
-    .kb-map-file-link,
-    .kb-map-dir-link,
-    .kb-map-up-link { display: flex; width: fit-content; max-width: 100%; align-items: baseline; gap: 8px; color: var(--color-primary-strong); text-decoration: underline; overflow-wrap: anywhere; }
-    .kb-map-file-link:hover,
-    .kb-map-dir-link:hover,
-    .kb-map-up-link:hover { color: var(--color-primary); }
-    .kb-map-file-icon { width: 28px; color: var(--color-text-subtle); font-size: 12px; text-transform: uppercase; flex: 0 0 auto; }
-    .kb-map-file-name { overflow-wrap: anywhere; }
-    .kb-map-search-results { display: grid; gap: 12px; }
-    .kb-map-search-section { display: grid; gap: 6px; }
-    .kb-map-search-section h4 { margin: 4px 0 0; font-size: 14px; }
     .kb-toast {
       position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
       width: max-content; max-width: calc(100vw - 24px);
@@ -354,7 +339,6 @@
 
   <nav class="kb-tabs">
     <button data-tab="entries" class="button-ghost kb-tab active" type="button"><span data-i18n="knowledge.tab_entries">Entries</span></button>
-    <button data-tab="map" class="button-ghost kb-tab" type="button"><span>Map</span></button>
     <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Project navigation</span></button>
     <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
     <button data-tab="capture" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_capture">Capture</span></button>
@@ -393,19 +377,6 @@
     </div>
     <div id="nav-draft-list"></div>
     <div id="navigation-list"></div>
-  </section>
-
-  <section id="tab-map" hidden>
-    <div id="project-context-panel" class="kb-card kb-project-nav-panel">
-      <h3>Project context map</h3>
-      <div class="kb-muted">Build and inspect the generated local project map for a workspace.</div>
-      <div class="kb-row kb-project-nav-controls">
-        <select id="map-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
-        <input id="map-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
-        <button class="button-ghost" id="ctx-refresh" type="button">Generate map</button>
-      </div>
-    </div>
-    <div id="ctx-map-list"></div>
   </section>
 
   <section id="tab-pending" hidden>
@@ -469,31 +440,6 @@
         <button class="button-ghost" type="button" id="entry-ref-close" data-i18n="common.close">Close</button>
       </div>
       <div id="entry-ref-body" class="kb-body kb-entry-body" data-entry-body="reference"></div>
-    </div>
-  </div>
-
-  <div id="map-view-modal" class="kb-modal" hidden>
-    <div class="kb-modal-card kb-entry-ref-modal">
-      <h3 id="map-view-title">Project map</h3>
-      <div id="map-view-meta" class="kb-muted"></div>
-      <div class="kb-row kb-project-nav-controls">
-        <input id="map-view-search" type="search" placeholder="Search map records" />
-      </div>
-      <div id="map-view-files"></div>
-      <div class="kb-card-actions">
-        <button class="button-ghost" type="button" id="map-view-close" data-i18n="common.close">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="map-file-modal" class="kb-modal" hidden>
-    <div class="kb-modal-card kb-entry-ref-modal">
-      <h3 id="map-file-title">Map file</h3>
-      <div id="map-file-meta" class="kb-muted"></div>
-      <pre id="map-file-body" class="kb-body kb-log-body"></pre>
-      <div class="kb-card-actions">
-        <button class="button-ghost" type="button" id="map-file-close" data-i18n="common.close">Close</button>
-      </div>
     </div>
   </div>
 
@@ -634,7 +580,7 @@
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
-    const KB_TABS = ["entries", "map", "navigation", "pending", "capture", "settings"];
+    const KB_TABS = ["entries", "navigation", "pending", "capture", "settings"];
     const ENTRIES_PAGE_LIMIT = 120;
 
     function normalizedTabName(name) {
@@ -658,7 +604,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, projectContextJob: null, projectContextJobPoll: null, projectContextMaps: [], activeProjectContextMap: null, activeProjectContextPath: "", projectContextFiles: [], projectContextRoot: "", projectContextStatus: null, projectContextSearchTimer: null, projectContextSearchTerm: "", projectContextSearchResult: null, projectContextSearchError: "", projectContextSearchLoading: false, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -675,9 +621,6 @@
         if (!state.captureBackends) loadCaptureAgents();
         loadProjectNavDrafts();
         loadNavigation();
-      }
-      if (tab === "map") {
-        loadProjectContextMaps();
       }
       if (tab === "pending") loadPending();
       if (tab === "capture") loadCapture();
@@ -703,13 +646,6 @@
     function syncProjectNavCustomWorkspace() {
       const select = $("#nav-workspace-select");
       const custom = $("#nav-workspace-custom");
-      if (!select || !custom) return;
-      custom.classList.toggle("hidden", select.value !== "__custom__");
-    }
-
-    function syncProjectMapCustomWorkspace() {
-      const select = $("#map-workspace-select");
-      const custom = $("#map-workspace-custom");
       if (!select || !custom) return;
       custom.classList.toggle("hidden", select.value !== "__custom__");
     }
@@ -745,43 +681,12 @@
       syncProjectNavCustomWorkspace();
     }
 
-    function renderProjectMapWorkspaceSelect() {
-      const select = $("#map-workspace-select");
-      const customInput = $("#map-workspace-custom");
-      if (!select || !customInput) return;
-      const current = selectedProjectMapWorkspacePath();
-      const options = state.workspaces.map((workspace) => {
-        const opt = document.createElement("option");
-        opt.value = workspace.path;
-        opt.dataset.workspaceId = workspace.id || "";
-        opt.textContent = workspace.label || workspace.name || workspace.path;
-        return opt;
-      });
-      select.innerHTML = "";
-      for (const opt of options) select.appendChild(opt);
-      const customOpt = document.createElement("option");
-      customOpt.value = "__custom__";
-      customOpt.textContent = t("task.workspace_custom", "Custom...");
-      select.appendChild(customOpt);
-      const preferred = state.workspaces.find((workspace) => workspace.path === current) ||
-        state.workspaces.find((workspace) => workspace.path === state.defaultWorkspacePath) ||
-        state.workspaces[0];
-      if (preferred?.path) {
-        select.value = preferred.path;
-      } else {
-        select.value = "__custom__";
-        if (!customInput.value && state.defaultWorkspacePath) customInput.value = state.defaultWorkspacePath;
-      }
-      syncProjectMapCustomWorkspace();
-    }
-
     async function loadProjectNavWorkspaces() {
       try {
         const payload = await api("/api/workspaces");
         state.defaultWorkspacePath = payload.default_workspace_path || "";
         state.workspaces = Array.isArray(payload.workspaces) ? payload.workspaces : [];
         renderProjectNavWorkspaceSelect();
-        renderProjectMapWorkspaceSelect();
       } catch (e) {
         $("#nav-result").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message);
       }
@@ -791,13 +696,6 @@
       const select = $("#nav-workspace-select");
       if (!select) return "";
       if (select.value === "__custom__") return $("#nav-workspace-custom").value.trim();
-      return select.value.trim();
-    }
-
-    function selectedProjectMapWorkspacePath() {
-      const select = $("#map-workspace-select");
-      if (!select) return "";
-      if (select.value === "__custom__") return $("#map-workspace-custom").value.trim();
       return select.value.trim();
     }
 
@@ -812,505 +710,6 @@
       const proxyMode = $("#nav-proxy-mode")?.value || "off";
       payload.proxy_enabled = proxyMode === "on";
       return payload;
-    }
-
-    function projectContextPayload() {
-      const workspacePath = selectedProjectMapWorkspacePath();
-      const payload = { workspace_path: workspacePath || null };
-      if (pageRunId) payload.run_id = pageRunId;
-      return payload;
-    }
-
-    function projectContextFilteredMaps() {
-      return state.projectContextMaps;
-    }
-
-    function projectContextFilteredFiles() {
-      const current = String(state.activeProjectContextPath || "").replace(/^\/+|\/+$/g, "");
-      const prefix = current ? current + "/" : "";
-      return state.projectContextFiles.filter((item) => {
-        const path = String(item.path || "");
-        if (current && !path.startsWith(prefix)) return false;
-        const rest = current ? path.slice(prefix.length) : path;
-        return Boolean(rest) && !rest.includes("/");
-      });
-    }
-
-    function renderProjectContextMapListMessage(message) {
-      $("#ctx-map-list").innerHTML = `
-        <div class="kb-card">
-          <h3>Project maps</h3>
-          <p class="kb-muted">${esc(message || "No generated project maps")}</p>
-        </div>`;
-    }
-
-    function projectContextActiveJob() {
-      const job = state.projectContextJob;
-      if (!job?.id) return null;
-      return ["queued", "running", "stopping"].includes(String(job.status || "")) ? job : null;
-    }
-
-    function projectContextJobWorkspaceId(job) {
-      return String(job?.workspace_id || job?.result?.workspace_id || "").trim();
-    }
-
-    function projectContextJobCanStop(job) {
-      return ["queued", "running"].includes(String(job?.status || ""));
-    }
-
-    function projectContextMapHasActiveJob(item) {
-      const job = projectContextActiveJob();
-      if (!job) return false;
-      const workspaceId = projectContextJobWorkspaceId(job);
-      return Boolean(workspaceId && workspaceId === String(item?.workspace_id || ""));
-    }
-
-    function projectContextMapJobMatches(item) {
-      const job = projectContextActiveJob();
-      return Boolean(projectContextMapHasActiveJob(item) && projectContextJobCanStop(job));
-    }
-
-    function projectContextJobCard(job) {
-      const counts = job?.counts || job?.result?.counts || {};
-      const stopDisabled = projectContextJobCanStop(job) ? "" : " disabled";
-      return `<div class="kb-card">
-        <h3>Map refresh</h3>
-        <div class="kb-muted">${esc(job?.status || "-")} · ${esc(job?.phase || "-")} · ${esc(job?.summary || "")}</div>
-        <div class="kb-muted">job: ${esc(job?.id || "-")} · workspace: ${esc(projectContextJobWorkspaceId(job) || "-")}</div>
-        <div class="kb-muted">files ${esc(counts.files || 0)} · packages ${esc(counts.packages || 0)} · symbols ${esc(counts.symbols || 0)}</div>
-        <div class="kb-card-actions kb-entry-actions kb-inline-actions">
-          <button class="button-ghost kb-map-stop-link" type="button"${stopDisabled}>${esc(t("knowledge.stop", "Stop"))}</button>
-        </div>
-      </div>`;
-    }
-
-    function renderProjectContextMapList(data) {
-      if (data) {
-        state.projectContextMaps = Array.isArray(data.maps) ? data.maps : [];
-      }
-      const maps = projectContextFilteredMaps();
-      const activeJob = projectContextActiveJob();
-      const jobBanner = activeJob ? projectContextJobCard(activeJob) : "";
-      if (!state.projectContextMaps.length) {
-        if (jobBanner) {
-          $("#ctx-map-list").innerHTML = jobBanner;
-        } else {
-          renderProjectContextMapListMessage("No generated project maps. Select a workspace and refresh map first.");
-        }
-        return;
-      }
-      const cards = maps.map((item) => {
-        const profiles = Array.isArray(item.profiles) && item.profiles.length ? item.profiles.join(", ") : "-";
-        const counts = item.counts || {};
-        const hasActiveJob = projectContextMapHasActiveJob(item);
-        const canStop = projectContextMapJobMatches(item);
-        const disabledStop = canStop ? "" : " disabled";
-        const disabledDelete = hasActiveJob ? " disabled" : "";
-        return `<div class="kb-card">
-          <h3>${esc(item.project_key || "-")}</h3>
-          <div class="kb-muted kb-map-file-path">${esc(item.workspace || "-")}</div>
-          <div class="kb-muted">${esc(item.workspace_id || "-")} · ${esc(item.status || "generated")} · ${esc(item.generated_at || "-")}</div>
-          <div class="kb-muted">profiles: ${esc(profiles)} · files ${esc(counts.files || 0)} · packages ${esc(counts.packages || 0)} · symbols ${esc(counts.symbols || 0)}</div>
-          <div class="kb-card-actions kb-entry-actions kb-inline-actions">
-            <button class="button-ghost kb-map-open-link" type="button" data-project-key="${esc(item.project_key || "")}" data-workspace-id="${esc(item.workspace_id || "")}">${esc(t("knowledge.view", "View"))}</button>
-            <button class="button-ghost kb-map-stop-link" type="button" data-project-key="${esc(item.project_key || "")}" data-workspace-id="${esc(item.workspace_id || "")}"${disabledStop}>${esc(t("knowledge.stop", "Stop"))}</button>
-            <button class="button-ghost kb-reject kb-map-delete-link" type="button" data-project-key="${esc(item.project_key || "")}" data-workspace-id="${esc(item.workspace_id || "")}"${disabledDelete}>${esc(t("knowledge.delete", "Delete"))}</button>
-          </div>
-        </div>`;
-      }).join("");
-      $("#ctx-map-list").innerHTML = jobBanner + (cards || `<p class="kb-muted">No generated maps match the search.</p>`);
-    }
-
-    async function loadProjectContextMaps() {
-      renderProjectContextMapListMessage("Loading generated maps...");
-      try {
-        const data = await api("/api/kb/project-context-index/maps");
-        renderProjectContextMapList(data);
-      } catch (e) {
-        state.projectContextMaps = [];
-        renderProjectContextMapListMessage("Project maps unavailable.");
-      }
-    }
-
-    function projectContextFileParams(path = "") {
-      const map = state.activeProjectContextMap;
-      const params = new URLSearchParams();
-      if (map?.project_key && map?.workspace_id) {
-        params.set("project_key", map.project_key);
-        params.set("workspace_id", map.workspace_id);
-      } else {
-        const payload = projectContextPayload();
-        if (payload.workspace_path) params.set("workspace_path", payload.workspace_path);
-        if (payload.run_id) params.set("run_id", payload.run_id);
-      }
-      if (path) params.set("path", path);
-      return params;
-    }
-
-    function projectContextQueryPayload(queryText) {
-      const map = state.activeProjectContextMap;
-      const payload = { query: queryText };
-      if (map?.project_key && map?.workspace_id) {
-        payload.project_key = map.project_key;
-        payload.workspace_id = map.workspace_id;
-        if (pageRunId) payload.run_id = pageRunId;
-      } else {
-        Object.assign(payload, projectContextPayload());
-      }
-      return payload;
-    }
-
-    function clearProjectContextSearch() {
-      if (state.projectContextSearchTimer) {
-        clearTimeout(state.projectContextSearchTimer);
-        state.projectContextSearchTimer = null;
-      }
-      state.projectContextSearchTerm = "";
-      state.projectContextSearchResult = null;
-      state.projectContextSearchError = "";
-      state.projectContextSearchLoading = false;
-    }
-
-    function renderProjectContextFileTreeMessage(message) {
-      $("#map-view-files").innerHTML = `<p class="kb-muted">${esc(message || "No project map files")}</p>`;
-    }
-
-    function projectContextRecordPath(item) {
-      return String(item?.path || item?.mk_path || item?.config_path || "").trim();
-    }
-
-    function projectContextRecordLabel(item, section) {
-      return String(item?.name || item?.symbol || item?.value || item?.node || item?.path || item?.mk_path || item?.config_path || section || "-");
-    }
-
-    function projectContextRecordDetail(item, section) {
-      const parts = [];
-      if (item?.kind) parts.push(item.kind);
-      else parts.push(section);
-      if (item?.line) parts.push("line " + item.line);
-      if (item?.size) parts.push(item.size + " bytes");
-      const dependencies = Array.isArray(item?.dependencies) ? item.dependencies : [];
-      if (dependencies.length) parts.push("deps " + dependencies.slice(0, 4).join(","));
-      const enabled = Array.isArray(item?.enabled_in) ? item.enabled_in : [];
-      if (enabled.length) parts.push("enabled " + enabled.length);
-      return parts.filter(Boolean).join(" · ");
-    }
-
-    function renderProjectContextSearchSection(result, key, title) {
-      const records = Array.isArray(result?.[key]) ? result[key] : [];
-      if (!records.length) return "";
-      const rows = records.map((item) => {
-        const path = projectContextRecordPath(item);
-        const line = item?.line ? ":" + item.line : "";
-        const label = projectContextRecordLabel(item, key);
-        const detail = projectContextRecordDetail(item, key);
-        if (path) {
-          return `
-            <a class="kb-map-file-link" href="#" data-path="${esc(path)}">
-              <span class="kb-map-file-icon">${esc(key === "files" ? "file" : "hit")}</span>
-              <span class="kb-map-file-name">${esc(label)}${esc(line)} <span class="kb-muted">${esc(detail)}</span></span>
-            </a>`;
-        }
-        return `<div class="kb-muted">${esc(label)} · ${esc(detail)}</div>`;
-      }).join("");
-      return `
-        <div class="kb-map-search-section">
-          <h4>${esc(title)}</h4>
-          <div class="kb-map-file-tree">${rows}</div>
-        </div>`;
-    }
-
-    function projectContextSearchSectionOrder(queryText) {
-      const pathLike = /[/.]/.test(queryText || "");
-      if (pathLike) {
-        return [
-          ["files", "Files"],
-          ["symbols", "Symbols"],
-          ["packages", "Packages"],
-          ["configs", "Configs"],
-          ["build", "Build"],
-          ["device_tree", "Device tree"],
-          ["tests", "Tests"],
-          ["entry_points", "Entry points"],
-        ];
-      }
-      return [
-        ["packages", "Packages"],
-        ["configs", "Configs"],
-        ["build", "Build"],
-        ["device_tree", "Device tree"],
-        ["symbols", "Symbols"],
-        ["files", "Files"],
-        ["tests", "Tests"],
-        ["entry_points", "Entry points"],
-      ];
-    }
-
-    function renderProjectContextSearchResults(queryText) {
-      if (state.projectContextSearchLoading && state.projectContextSearchTerm === queryText) {
-        renderProjectContextFileTreeMessage("Searching project map...");
-        return;
-      }
-      if (state.projectContextSearchError && state.projectContextSearchTerm === queryText) {
-        renderProjectContextFileTreeMessage(state.projectContextSearchError);
-        return;
-      }
-      const result = state.projectContextSearchTerm === queryText ? state.projectContextSearchResult : null;
-      if (!result) {
-        renderProjectContextFileTreeMessage("Searching project map...");
-        return;
-      }
-      const matches = Number(result.total_matches || 0);
-      const totals = result.section_totals && typeof result.section_totals === "object"
-        ? Object.entries(result.section_totals).filter(([, value]) => Number(value || 0)).map(([key, value]) => `${key}=${value}`).join(", ")
-        : "";
-      const resolution = result.resolution && typeof result.resolution === "object" ? result.resolution : {};
-      const navRoutes = Array.isArray(resolution.nav_routes) ? resolution.nav_routes : [];
-      const navRouteText = navRoutes.map((item) => item?.slug || item?.title || "").filter(Boolean).slice(0, 3).join(" -> ");
-      const expandedTerms = Array.isArray(resolution.expanded_terms) ? resolution.expanded_terms.slice(0, 12).join(", ") : "";
-      const resolutionLine = resolution.used_navigation
-        ? `<div class="kb-muted kb-map-file-path">nav route: ${esc(navRouteText || "-")}${expandedTerms ? " · expanded: " + esc(expandedTerms) : ""}</div>`
-        : "";
-      if (!matches) {
-        $("#map-view-files").innerHTML = `
-          <div class="kb-map-search-results">
-            <div class="kb-muted kb-map-file-path">query: ${esc(queryText)}</div>
-            ${resolutionLine}
-            <p class="kb-muted">No project map matches. Refresh the map or use broader terms.</p>
-          </div>`;
-        return;
-      }
-      const sections = projectContextSearchSectionOrder(queryText)
-        .map(([key, title]) => renderProjectContextSearchSection(result, key, title))
-        .join("");
-      $("#map-view-files").innerHTML = `
-        <div class="kb-map-search-results">
-          <div class="kb-muted kb-map-file-path">query: ${esc(queryText)} · matches ${esc(matches)}${totals ? " · " + esc(totals) : ""}</div>
-          ${resolutionLine}
-          ${sections || `<p class="kb-muted">No displayable project map matches.</p>`}
-        </div>`;
-    }
-
-    function renderProjectContextFileTree(data) {
-      if (data) {
-        state.projectContextFiles = Array.isArray(data.entries) ? data.entries : [];
-        state.projectContextRoot = data.root || "";
-        state.projectContextStatus = data.map || data.status || state.projectContextStatus;
-      }
-      const query = ($("#map-view-search")?.value || "").trim();
-      if (query) {
-        renderProjectContextSearchResults(query);
-        return;
-      }
-      const entries = projectContextFilteredFiles();
-      if (!entries.length) {
-        renderProjectContextFileTreeMessage("No files in this map.");
-        return;
-      }
-      const rows = entries.map((item) => {
-        const icon = item.type === "dir" ? "dir" : "file";
-        const name = item.name || item.path || "-";
-        if (item.type === "file") {
-          const size = Number(item.bytes || 0);
-          return `
-            <a class="kb-map-file-link" href="#" data-path="${esc(item.path || "")}">
-              <span class="kb-map-file-icon">file</span>
-              <span class="kb-map-file-name">${esc(name)}</span>
-              <span class="kb-muted">${esc(size)} bytes</span>
-            </a>`;
-        }
-        return `
-          <a class="kb-map-dir-link" href="#" data-path="${esc(item.path || "")}">
-            <span class="kb-map-file-icon">${esc(icon)}</span>
-            <span class="kb-map-file-name">${esc(name)}</span>
-          </a>`;
-      }).join("");
-      const current = state.activeProjectContextPath || "/";
-      const up = state.activeProjectContextPath
-        ? `<a class="kb-map-up-link" href="#" data-path="${esc(state.activeProjectContextPath.split("/").slice(0, -1).join("/"))}">../</a>`
-        : "";
-      $("#map-view-files").innerHTML = `
-        <div class="kb-muted kb-map-file-path">${esc(current)}</div>
-        <div class="kb-map-file-tree">${up}${rows}</div>`;
-    }
-
-    async function runProjectContextSearch(queryText) {
-      const current = ($("#map-view-search")?.value || "").trim();
-      if (!queryText || current !== queryText) return;
-      state.projectContextSearchLoading = true;
-      state.projectContextSearchTerm = queryText;
-      state.projectContextSearchError = "";
-      renderProjectContextFileTree();
-      try {
-        const data = await api("/api/kb/project-context-index/query", {
-          method: "POST",
-          body: JSON.stringify(projectContextQueryPayload(queryText)),
-        });
-        if (($("#map-view-search")?.value || "").trim() !== queryText) return;
-        state.projectContextSearchLoading = false;
-        state.projectContextSearchResult = data.query || null;
-        state.projectContextSearchError = "";
-        renderProjectContextFileTree();
-      } catch (e) {
-        if (($("#map-view-search")?.value || "").trim() !== queryText) return;
-        state.projectContextSearchLoading = false;
-        state.projectContextSearchResult = null;
-        state.projectContextSearchError = formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message);
-        renderProjectContextFileTree();
-      }
-    }
-
-    function scheduleProjectContextSearch() {
-      const queryText = ($("#map-view-search")?.value || "").trim();
-      if (state.projectContextSearchTimer) {
-        clearTimeout(state.projectContextSearchTimer);
-        state.projectContextSearchTimer = null;
-      }
-      if (!queryText) {
-        clearProjectContextSearch();
-        renderProjectContextFileTree();
-        return;
-      }
-      state.projectContextSearchTerm = queryText;
-      state.projectContextSearchResult = null;
-      state.projectContextSearchError = "";
-      state.projectContextSearchLoading = true;
-      renderProjectContextFileTree();
-      state.projectContextSearchTimer = setTimeout(() => runProjectContextSearch(queryText), 250);
-    }
-
-    async function openProjectContextMap(projectKey, workspaceId) {
-      const map = state.projectContextMaps.find((item) => item.project_key === projectKey && item.workspace_id === workspaceId) || { project_key: projectKey, workspace_id: workspaceId };
-      state.activeProjectContextMap = map;
-      state.projectContextFiles = [];
-      state.projectContextRoot = "";
-      state.activeProjectContextPath = "";
-      clearProjectContextSearch();
-      $("#map-view-title").textContent = map.project_key || "Project map";
-      $("#map-view-meta").textContent = `${map.workspace || "-"} · ${map.workspace_id || "-"} · ${map.generated_at || "-"}`;
-      $("#map-view-search").value = "";
-      $("#map-view-modal").hidden = false;
-      renderProjectContextFileTreeMessage("Loading map files...");
-      try {
-        const params = projectContextFileParams();
-        const data = await api("/api/kb/project-context-index/tree?" + params.toString());
-        $("#map-view-meta").textContent = `${data.map?.workspace || map.workspace || "-"} · ${data.workspace_id || map.workspace_id || "-"} · ${data.map?.generated_at || map.generated_at || "-"}`;
-        renderProjectContextFileTree(data);
-      } catch (e) {
-        renderProjectContextFileTreeMessage("Map files unavailable.");
-      }
-    }
-
-    function closeProjectContextMapModal() {
-      $("#map-view-modal").hidden = true;
-    }
-
-    async function loadProjectContextMapFile(path) {
-      if (!path) return;
-      $("#map-file-title").textContent = path;
-      $("#map-file-meta").textContent = "Loading...";
-      $("#map-file-body").textContent = "";
-      $("#map-file-modal").hidden = false;
-      try {
-        const params = projectContextFileParams(path);
-        const data = await api("/api/kb/project-context-index/file?" + params.toString());
-        const truncated = data.truncated ? "\n\n[File is truncated in the browser view at 2 MiB.]" : "";
-        $("#map-file-title").textContent = data.path || path;
-        $("#map-file-meta").textContent = `${data.bytes || 0} bytes`;
-        $("#map-file-body").textContent = `${data.content || ""}${truncated}`;
-      } catch (e) {
-        $("#map-file-meta").textContent = "";
-        $("#map-file-body").textContent = formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message);
-      }
-    }
-
-    function closeProjectContextMapFileModal() {
-      $("#map-file-modal").hidden = true;
-    }
-
-    function renderProjectContextJob(job) {
-      if (!job) return;
-      state.projectContextJob = job;
-      renderProjectContextMapList();
-    }
-
-    function scheduleProjectContextJobPoll() {
-      if (state.projectContextJobPoll) {
-        clearTimeout(state.projectContextJobPoll);
-        state.projectContextJobPoll = null;
-      }
-      const job = state.projectContextJob;
-      if (state.activeTab !== "map" || !job?.id) return;
-      if (!["queued", "running", "stopping"].includes(String(job.status || ""))) return;
-      state.projectContextJobPoll = setTimeout(() => pollProjectContextJob(job.id), 1200);
-    }
-
-    async function loadProjectContextIndexStatus() {
-      await loadProjectContextMaps();
-    }
-
-    async function refreshProjectContextIndex() {
-      const payload = projectContextPayload();
-      if (!payload.workspace_path) {
-        toast(t("knowledge.project_nav_workspace_required", "Select a workspace first"));
-        return;
-      }
-      try {
-        const data = await api("/api/kb/project-context-index/refresh", { method: "POST", body: JSON.stringify(payload) });
-        renderProjectContextJob(data.job);
-        scheduleProjectContextJobPoll();
-        toast(`Project context map refresh started: ${data.job_id || "-"}`);
-      } catch (e) {
-        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
-      }
-    }
-
-    async function pollProjectContextJob(id) {
-      try {
-        const data = await api("/api/kb/project-context-index/job?id=" + encodeURIComponent(id));
-        renderProjectContextJob(data.job);
-        if (["completed", "failed", "stopped"].includes(String(data.job?.status || ""))) {
-          await loadProjectContextIndexStatus();
-        }
-        scheduleProjectContextJobPoll();
-      } catch (e) {
-        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
-      }
-    }
-
-    async function stopProjectContextJob() {
-      const id = state.projectContextJob?.id;
-      if (!id) {
-        toast("No project context map job");
-        return;
-      }
-      try {
-        const data = await api("/api/kb/project-context-index/job/stop", { method: "POST", body: JSON.stringify({ id }) });
-        renderProjectContextJob(data.job);
-        scheduleProjectContextJobPoll();
-      } catch (e) {
-        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
-      }
-    }
-
-    async function deleteProjectContextMap(projectKey, workspaceId) {
-      const label = `${projectKey || "-"} / ${workspaceId || "-"}`;
-      if (!confirm(formatText("knowledge.confirm_delete_project_context_map", { map: label }, "Delete project map " + label + "?"))) return;
-      try {
-        await api("/api/kb/project-context-index/map", {
-          method: "DELETE",
-          body: JSON.stringify({ project_key: projectKey, workspace_id: workspaceId }),
-        });
-        if (state.activeProjectContextMap?.project_key === projectKey && state.activeProjectContextMap?.workspace_id === workspaceId) {
-          closeProjectContextMapModal();
-          closeProjectContextMapFileModal();
-          state.activeProjectContextMap = null;
-        }
-        await loadProjectContextMaps();
-        toast(t("knowledge.deleted", "Deleted"));
-      } catch (e) {
-        toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
-      }
     }
 
     function projectNavGenerateErrorMessage(error) {
@@ -3248,10 +2647,6 @@
     $("#nav-workspace-custom").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { loadProjectNavDrafts(); loadNavigation(); }
     });
-    $("#map-workspace-select").addEventListener("change", () => { syncProjectMapCustomWorkspace(); loadProjectContextIndexStatus(); });
-    $("#map-workspace-custom").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") loadProjectContextIndexStatus();
-    });
     $("#nav-backend").addEventListener("change", () => { state.navLastBackend = $("#nav-backend").value; renderNavigationModels(); syncNavigationProxyMode(false); });
     $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; });
     $("#nav-proxy-mode").addEventListener("change", () => {
@@ -3266,44 +2661,6 @@
     $("#nav-agent-close").addEventListener("click", closeProjectNavAgentModal);
     $("#nav-agent-modal").addEventListener("click", (ev) => { if (ev.target.id === "nav-agent-modal") closeProjectNavAgentModal(); });
     $("#nav-agent-stop").addEventListener("click", () => { if (state.activeNavAgentDraft?.id) stopProjectNavDraft(state.activeNavAgentDraft.id); });
-    $("#ctx-refresh").addEventListener("click", refreshProjectContextIndex);
-    $("#ctx-map-list").addEventListener("click", (event) => {
-      const button = event.target.closest(".kb-map-open-link");
-      if (button) {
-        openProjectContextMap(button.dataset?.projectKey || "", button.dataset?.workspaceId || "");
-        return;
-      }
-      const stop = event.target.closest(".kb-map-stop-link");
-      if (stop && !stop.disabled) {
-        stopProjectContextJob();
-        return;
-      }
-      const deleteButton = event.target.closest(".kb-map-delete-link");
-      if (deleteButton && !deleteButton.disabled) {
-        deleteProjectContextMap(deleteButton.dataset?.projectKey || "", deleteButton.dataset?.workspaceId || "");
-      }
-    });
-    $("#map-view-files").addEventListener("click", (event) => {
-      const dir = event.target.closest(".kb-map-dir-link,.kb-map-up-link");
-      if (dir) {
-        event.preventDefault();
-        state.activeProjectContextPath = dir.dataset?.path || "";
-        $("#map-view-search").value = "";
-        clearProjectContextSearch();
-        renderProjectContextFileTree();
-        return;
-      }
-      const button = event.target.closest(".kb-map-file-link");
-      if (button) {
-        event.preventDefault();
-        loadProjectContextMapFile(button.dataset?.path || "");
-      }
-    });
-    $("#map-view-search").addEventListener("input", scheduleProjectContextSearch);
-    $("#map-view-close").addEventListener("click", closeProjectContextMapModal);
-    $("#map-view-modal").addEventListener("click", (ev) => { if (ev.target.id === "map-view-modal") closeProjectContextMapModal(); });
-    $("#map-file-close").addEventListener("click", closeProjectContextMapFileModal);
-    $("#map-file-modal").addEventListener("click", (ev) => { if (ev.target.id === "map-file-modal") closeProjectContextMapFileModal(); });
     $("#nav-generate").addEventListener("click", async () => {
       const payload = projectNavActionPayload();
       if (!payload.workspace_path) {
@@ -3360,7 +2717,6 @@
       renderProjectNavDraftModal();
       renderProjectNavAgentModal();
       renderProjectNavWorkspaceSelect();
-      renderProjectMapWorkspaceSelect();
       renderNavigationAgents();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();

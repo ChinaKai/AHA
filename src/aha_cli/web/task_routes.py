@@ -175,8 +175,8 @@ def _query_int(query: dict[str, list[str]], name: str, default: int, *, minimum:
     return max(minimum, min(maximum, value))
 
 
-_EVIDENCE_REPAIR_SIGNALS = {"map_miss", "missing_nav", "missing_entry", "entry_wrong"}
-_EVIDENCE_STALE_SIGNALS = {"nav_stale", "map_stale_cache", "map_stale_nav_hint"}
+_EVIDENCE_REPAIR_SIGNALS = {"missing_nav", "missing_entry", "entry_wrong"}
+_EVIDENCE_STALE_SIGNALS = {"nav_stale"}
 
 
 def _context_evidence_type_counts(records: list[dict]) -> dict:
@@ -191,8 +191,6 @@ def _context_evidence_source_labels(type_counts: dict) -> list[str]:
     sources: list[str] = []
     if type_counts.get("context_pack"):
         sources.append("context_pack_before_prompt")
-    if type_counts.get("project_map_query"):
-        sources.append("map_query_on_demand")
     if type_counts.get("context_evidence_result"):
         sources.append("after_turn_runtime_distill")
     if type_counts.get("agent_kb_feedback"):
@@ -221,19 +219,19 @@ def _context_evidence_status(*, total: int, latest_result: dict | None, routing_
         return {
             "state": "needs_repair",
             "label": "Needs KB repair",
-            "description": "KB/map routing did not fully match the verified task path.",
+            "description": "KB/nav routing did not fully match the verified task path.",
         }
     if signals.intersection(_EVIDENCE_STALE_SIGNALS) or health_status == "stale":
         return {
             "state": "stale",
-            "label": "KB/map stale",
-            "description": "The task observed stale navigation or project map data.",
+            "label": "KB/nav stale",
+            "description": "The task observed stale navigation data.",
         }
     if "context_hit_ok" in signals or health_status == "healthy":
         return {
             "state": "helped",
             "label": "KB helped",
-            "description": "KB/map references were adopted by the task.",
+            "description": "KB/nav references were adopted by the task.",
         }
     return {
         "state": "observing",
@@ -256,12 +254,10 @@ def _context_evidence_next_action(maintenance_plan: list[dict], suggestions: lis
     reason = str(item.get("reason") or "").strip()
     execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
     labels = {
-        ("refresh", "project_map_cache"): "Refresh project map cache",
         ("repair", "project_navigation"): "Repair project navigation",
         ("update", "project_navigation"): "Update project navigation",
         ("create", "project_navigation"): "Create project navigation",
         ("update", "project_solution"): "Update project solution",
-        ("repair", "project_map_logic"): "Repair map logic",
     }
     return {
         "state": str(execution.get("state") or "suggested"),
@@ -296,7 +292,6 @@ def _context_evidence_summary(
         "feedback_mode": "agent_feedback_plus_runtime" if feedback_records else "runtime_inferred",
         "generated_when": [
             "before_agent_prompt",
-            "on_map_query",
             "after_agent_turn",
         ],
         "status": status,

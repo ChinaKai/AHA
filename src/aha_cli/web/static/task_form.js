@@ -12,7 +12,7 @@
     const policy = payload.token_saving && typeof payload.token_saving === "object"
       ? payload.token_saving
       : {};
-    const provider = String(policy.provider || "map");
+    const provider = String(policy.provider || "nav");
     return policy.enabled === true ? `${provider} on` : "off";
   }
 
@@ -62,7 +62,7 @@
       supervision: input.supervision || {},
       token_saving: {
         enabled: tokenSavingEnabled,
-        provider: "map"
+        provider: "nav"
       },
       observe_proxy: {
         enabled: Boolean(input.observeProxyEnabled)

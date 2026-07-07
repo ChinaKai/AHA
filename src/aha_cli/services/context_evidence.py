@@ -22,14 +22,13 @@ from aha_cli.store.io import append_jsonl, iter_jsonl_records_from
 
 CONTEXT_EVIDENCE_FILE = "context_evidence.jsonl"
 CONTEXT_PACK_EVIDENCE_METRIC_KEY = "context_pack_evidence"
-CONTEXT_MAP_QUERY_EVENT = "context_map_query_recorded"
 
 
 def task_context_evidence_enabled(task: dict | None) -> bool:
     if not isinstance(task, dict):
         return False
     policy = normalize_task_token_saving(task.get("token_saving"), task.get("context_management"))
-    return bool(policy.get("enabled") and policy.get("provider") == "map")
+    return bool(policy.get("enabled") and policy.get("provider") == "nav")
 
 
 def task_context_evidence_path(root: Path, run_id: str, task_id: str) -> Path:
@@ -70,56 +69,6 @@ def _task_workspace(root: Path, run_id: str, task_id: str) -> Path | None:
         return None
     workspace = str(task.get("workspace_path") or "").strip()
     return Path(workspace).expanduser() if workspace else None
-
-
-def record_project_map_query_result(
-    root: Path,
-    run_id: str,
-    *,
-    task_id: str | None,
-    agent_id: str,
-    command: str,
-    query_result: dict,
-    status: dict,
-    source: str = "aha-map-command",
-) -> dict | None:
-    if not task_id:
-        return None
-    try:
-        task = task_snapshot(root, run_id, task_id)["task"]
-    except KeyError:
-        return None
-    if not task_context_evidence_enabled(task):
-        return None
-    project_map = _compact_project_map_query_result(query_result, status)
-    record = append_task_context_evidence(
-        root,
-        run_id,
-        task_id,
-        {
-            "type": "project_map_query",
-            "agent_id": agent_id,
-            "source": source,
-            "command": _clip(command, 600),
-            "map": project_map,
-        },
-    )
-    append_event(
-        root,
-        run_id,
-        CONTEXT_MAP_QUERY_EVENT,
-        {
-            "task_id": task_id,
-            "target": agent_id,
-            "evidence_id": record.get("evidence_id"),
-            "command": _clip(command, 600),
-            "map": project_map,
-            "query": project_map.get("query"),
-            "total_matches": project_map.get("total_matches"),
-            "files": project_map.get("files") or [],
-        },
-    )
-    return record
 
 
 def record_context_pack_from_prompt_metrics(
@@ -170,7 +119,6 @@ def record_context_pack_from_prompt_metrics(
             "target": agent_id,
             "evidence_id": record.get("evidence_id"),
             "prompt_event_id": prompt_event.get("event_id"),
-            "map_files": _pack_map_files(evidence)[:8],
             "knowledge_entries": len(((evidence.get("knowledge") or {}).get("entries") or [])),
         },
     )
@@ -273,20 +221,11 @@ def distill_context_evidence_after_turn(
     if not task_context_evidence_enabled(task):
         return None
     event_start = int((prompt_event or {}).get("event_id") or 0)
-    evidence = _merge_project_map_query_events(
-        root,
-        run_id,
-        evidence,
-        event_start,
-        task_id=task_id,
-        agent_id=agent_id,
-    )
     command_records = _command_records_since(root, run_id, event_start, task_id=task_id, agent_id=agent_id)
     workspace_path = Path(workspace)
     command_paths = command_path_observations(command_records, workspace=workspace_path, root=root)
     dirty_paths = _git_dirty_paths(workspace_path)
-    map_files = _pack_map_files(evidence)
-    referenced = [path for path in map_files if not ignored_path(path)]
+    referenced = _pack_referenced_files(evidence)
     actual = _ordered_unique([*command_paths["workspace_files"], *dirty_paths], limit=40)
     knowledge_files = _ordered_unique(command_paths["knowledge_files"], limit=20)
     ignored_command_paths = _ordered_unique(command_paths["ignored_paths"], limit=20)
@@ -302,7 +241,7 @@ def distill_context_evidence_after_turn(
         adopted=adopted,
         missing=missing,
     )
-    map_diagnostics = _map_diagnostics(
+    navigation_diagnostics = _navigation_diagnostics(
         evidence=evidence,
         signals=signals,
         referenced=referenced,
@@ -340,7 +279,7 @@ def distill_context_evidence_after_turn(
         stale_refs=stale_refs,
         adopted=adopted,
         missing=missing,
-        map_diagnostics=map_diagnostics,
+        navigation_diagnostics=navigation_diagnostics,
     )
     kb_scope_policy = context_kb_scope_policy()
     record = append_task_context_evidence(
@@ -360,7 +299,7 @@ def distill_context_evidence_after_turn(
             "knowledge_files": knowledge_files[:20],
             "ignored_command_paths": ignored_command_paths[:20],
             "stale_references": stale_refs[:20],
-            "map_diagnostics": map_diagnostics,
+            "navigation_diagnostics": navigation_diagnostics,
             "routing_health": routing_health,
             "kb_scope_policy": kb_scope_policy,
             "maintenance_suggestions": maintenance_suggestions,
@@ -382,7 +321,6 @@ def distill_context_evidence_after_turn(
             "referenced_files": referenced[:8],
             "actual_files": actual[:8],
             "knowledge_files": knowledge_files[:8],
-            "map_gap_signals": map_diagnostics.get("gap_signals") or [],
             "routing_health": routing_health,
             "kb_scope_policy": kb_scope_policy,
             "maintenance_suggestions": maintenance_suggestions[:6],
@@ -393,90 +331,19 @@ def distill_context_evidence_after_turn(
     return {"record": record, "candidate": None}
 
 
-def _pack_map_files(evidence: dict) -> list[str]:
-    project_map = evidence.get("map") if isinstance(evidence.get("map"), dict) else {}
-    return _ordered_unique([str(item) for item in (project_map.get("files") or [])], limit=24)
-
-
-def _pack_map(evidence: dict) -> dict:
-    return evidence.get("map") if isinstance(evidence.get("map"), dict) else {}
-
-
-def _compact_project_map_query_result(query_result: dict, status: dict) -> dict:
-    files = query_result.get("files") if isinstance(query_result.get("files"), list) else []
-    resolution = query_result.get("resolution") if isinstance(query_result.get("resolution"), dict) else {}
-    compact_resolution = {
-        "used_navigation": bool(resolution.get("used_navigation")),
-        "expanded_terms": _ordered_unique([str(item) for item in (resolution.get("expanded_terms") or [])], limit=16),
-        "path_hints": _ordered_unique([str(item) for item in (resolution.get("path_hints") or [])], limit=16),
-        "stale_path_hints": _ordered_unique([str(item) for item in (resolution.get("stale_path_hints") or [])], limit=16),
-    }
-    routes = resolution.get("nav_routes") if isinstance(resolution.get("nav_routes"), list) else []
-    compact_routes: list[dict] = []
-    for item in routes[:6]:
-        if not isinstance(item, dict):
+def _pack_referenced_files(evidence: dict) -> list[str]:
+    knowledge = evidence.get("knowledge") if isinstance(evidence.get("knowledge"), dict) else {}
+    files: list[str] = []
+    for entry in knowledge.get("entries") or []:
+        if not isinstance(entry, dict):
             continue
-        compact_routes.append({
-            "slug": str(item.get("slug") or ""),
-            "title": str(item.get("title") or ""),
-        })
-    if compact_routes:
-        compact_resolution["nav_routes"] = compact_routes
-    return {
-        "status": str(status.get("status") or query_result.get("status") or ""),
-        "query": str(query_result.get("query") or ""),
-        "resolved_query": str(query_result.get("resolved_query") or ""),
-        "total_matches": query_result.get("total_matches"),
-        "files": _ordered_unique([str(item.get("path") or "") for item in files if isinstance(item, dict)], limit=24),
-        "resolution": compact_resolution,
-    }
-
-
-def _merge_project_map_query_events(
-    root: Path,
-    run_id: str,
-    evidence: dict,
-    start_event_id: int,
-    *,
-    task_id: str,
-    agent_id: str,
-) -> dict:
-    records, _ = iter_jsonl_records_from(event_path(root, run_id), start_event_id)
-    query_maps: list[dict] = []
-    for event, _offset in records:
-        if event.get("type") != CONTEXT_MAP_QUERY_EVENT:
-            continue
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        if str(data.get("task_id") or "") != task_id:
-            continue
-        if data.get("target") and str(data.get("target")) != agent_id:
-            continue
-        project_map = data.get("map") if isinstance(data.get("map"), dict) else {}
-        if project_map:
-            query_maps.append(project_map)
-    if not query_maps:
-        return evidence
-    merged = dict(evidence)
-    base_map = dict(_pack_map(evidence))
-    files = _ordered_unique(
-        [
-            *[str(item) for item in (base_map.get("files") or [])],
-            *[str(item) for query_map in query_maps for item in (query_map.get("files") or [])],
-        ],
-        limit=24,
-    )
-    latest = dict(query_maps[-1])
-    latest["files"] = files
-    latest["queries"] = [
-        {
-            "query": str(item.get("query") or ""),
-            "total_matches": item.get("total_matches"),
-            "files": [str(path) for path in (item.get("files") or [])][:8],
-        }
-        for item in query_maps[-6:]
-    ]
-    merged["map"] = {**base_map, **latest}
-    return merged
+        files.extend(str(path) for path in (entry.get("related_files") or []) if str(path).strip())
+    task_evidence = evidence.get("task_evidence") if isinstance(evidence.get("task_evidence"), dict) else {}
+    files.extend(str(path) for path in (task_evidence.get("referenced_files") or []) if str(path).strip())
+    # Legacy context packs may still carry the removed Project Map's files.
+    legacy_reference = evidence.get("map") if isinstance(evidence.get("map"), dict) else {}
+    files.extend(str(path) for path in (legacy_reference.get("files") or []) if str(path).strip())
+    return [path for path in _ordered_unique(files, limit=24) if not ignored_path(path)]
 
 
 def _signals_for(
@@ -490,29 +357,16 @@ def _signals_for(
     missing: list[str],
 ) -> list[str]:
     signals: list[str] = []
-    project_map = _pack_map(evidence)
-    resolution = project_map.get("resolution") if isinstance(project_map.get("resolution"), dict) else {}
-    stale_nav_hints = [str(item) for item in (resolution.get("stale_path_hints") or []) if str(item).strip()]
     if adopted:
         signals.append("context_hit_ok")
-    if stale_refs or stale_nav_hints:
+    if stale_refs:
         signals.append("nav_stale")
-    if missing and referenced:
-        signals.append("map_miss")
     knowledge = evidence.get("knowledge") if isinstance(evidence.get("knowledge"), dict) else {}
     nav_index_missing = knowledge.get("navigation_index_exists") is False
-    if missing and not referenced and (_map_query_observed(project_map) or nav_index_missing):
+    if missing and not referenced and nav_index_missing:
         signals.append("missing_nav")
-    signals.extend(
-        _map_gap_signals(
-            evidence=evidence,
-            referenced=referenced,
-            actual=actual,
-            stale_refs=stale_refs,
-            adopted=adopted,
-            missing=missing,
-        )
-    )
+    if missing and referenced:
+        signals.append("missing_nav")
     knowledge_entries = (knowledge.get("entries") or []) if isinstance(knowledge, dict) else []
     if exit_code != 0 and knowledge_entries:
         signals.append("entry_wrong")
@@ -521,44 +375,7 @@ def _signals_for(
     return _ordered_unique(signals, limit=12)
 
 
-def _map_gap_signals(
-    *,
-    evidence: dict,
-    referenced: list[str],
-    actual: list[str],
-    stale_refs: list[str],
-    adopted: list[str],
-    missing: list[str],
-) -> list[str]:
-    project_map = _pack_map(evidence)
-    if not project_map:
-        return []
-    signals: list[str] = []
-    status = str(project_map.get("status") or "").strip().lower()
-    resolution = project_map.get("resolution") if isinstance(project_map.get("resolution"), dict) else {}
-    if status == "stale" or stale_refs:
-        signals.append("map_stale_cache")
-    if resolution.get("stale_path_hints"):
-        signals.append("map_stale_nav_hint")
-    if missing and referenced:
-        signals.append("map_coverage_gap" if adopted else "map_ranking_gap")
-    if actual and not referenced and _map_query_observed(project_map):
-        signals.append("map_extractor_gap")
-        if not resolution.get("used_navigation"):
-            signals.append("map_query_expansion_gap")
-    return _ordered_unique(signals, limit=8)
-
-
-def _map_query_observed(project_map: dict) -> bool:
-    return bool(
-        str(project_map.get("query") or "").strip()
-        or str(project_map.get("resolved_query") or "").strip()
-        or "total_matches" in project_map
-        or isinstance(project_map.get("resolution"), dict)
-    )
-
-
-def _map_diagnostics(
+def _navigation_diagnostics(
     *,
     evidence: dict,
     signals: list[str],
@@ -570,25 +387,14 @@ def _map_diagnostics(
     knowledge_files: list[str],
     ignored_command_paths: list[str],
 ) -> dict:
-    project_map = _pack_map(evidence)
-    gap_signals = [signal for signal in signals if signal.startswith("map_") and signal != "map_miss"]
-    resolution = project_map.get("resolution") if isinstance(project_map.get("resolution"), dict) else {}
     return {
-        "status": str(project_map.get("status") or ""),
-        "query": str(project_map.get("query") or ""),
-        "resolved_query": str(project_map.get("resolved_query") or ""),
-        "total_matches": project_map.get("total_matches"),
-        "query_observed": _map_query_observed(project_map),
-        "gap_signals": gap_signals,
-        "gap_reasons": _map_gap_reasons(
-            project_map=project_map,
+        "gap_reasons": _navigation_gap_reasons(
             referenced=referenced,
             actual=actual,
             stale_refs=stale_refs,
             adopted=adopted,
             missing=missing,
         ),
-        "stale_path_hints": _ordered_unique([str(item) for item in (resolution.get("stale_path_hints") or [])], limit=20),
         "referenced_files": referenced[:20],
         "actual_files": actual[:20],
         "knowledge_files": knowledge_files[:20],
@@ -599,35 +405,22 @@ def _map_diagnostics(
     }
 
 
-def _map_gap_reasons(
+def _navigation_gap_reasons(
     *,
-    project_map: dict,
     referenced: list[str],
     actual: list[str],
     stale_refs: list[str],
     adopted: list[str],
     missing: list[str],
 ) -> list[dict]:
-    resolution = project_map.get("resolution") if isinstance(project_map.get("resolution"), dict) else {}
     reasons: list[dict] = []
-    stale_hints = _ordered_unique([str(item) for item in (resolution.get("stale_path_hints") or [])], limit=8)
     if stale_refs:
         reasons.append({"reason": "referenced_file_missing", "paths": stale_refs[:8]})
-    if stale_hints:
-        reasons.append({"reason": "navigation_path_hint_missing", "paths": stale_hints})
     if missing and referenced:
         reasons.append({
-            "reason": "map_returned_related_but_missed_actual" if adopted else "map_ranked_wrong_files",
+            "reason": "navigation_referenced_related_but_missed_actual" if adopted else "navigation_referenced_wrong_files",
             "paths": missing[:8],
         })
-    if actual and not referenced and _map_query_observed(project_map):
-        total = project_map.get("total_matches")
-        if total == 0:
-            reasons.append({"reason": "map_query_returned_no_matches", "paths": actual[:8]})
-        elif not resolution.get("used_navigation"):
-            reasons.append({"reason": "navigation_not_used_for_query", "paths": actual[:8]})
-        else:
-            reasons.append({"reason": "map_query_did_not_surface_actual_files", "paths": actual[:8]})
     return reasons[:8]
 
 
@@ -700,7 +493,6 @@ __all__ = [
     "distill_context_evidence_after_turn",
     "list_task_context_evidence",
     "record_agent_kb_feedback",
-    "record_project_map_query_result",
     "record_context_pack_from_prompt_metrics",
     "task_context_evidence_enabled",
     "task_context_evidence_path",

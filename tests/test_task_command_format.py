@@ -7,8 +7,6 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import main
-from aha_cli.services.context_evidence import list_task_context_evidence
-from aha_cli.store.filesystem import update_task_token_saving_config
 from aha_cli.web.task_command_format import (
     finalization_prompt,
     format_agent_command,
@@ -43,20 +41,14 @@ class TaskCommandFormatTests(unittest.TestCase):
                 session_text = format_aha_command(root, run_id, "task-001", "/aha session compact-reset")
                 finalize_text = format_aha_command(root, run_id, "task-001", "/aha finalize")
                 complete_text = format_aha_command(root, run_id, "task-001", "/aha complete")
-                map_missing_text = format_aha_command(root, run_id, "task-001", "/aha map status")
-                (root / "drivers" / "net").mkdir(parents=True)
-                (root / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
-                map_refresh_text = format_aha_command(root, run_id, "task-001", "/aha map refresh")
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
-                map_query_text = format_aha_command(root, run_id, "task-001", "/aha map query foo")
-                map_query_evidence = list_task_context_evidence(root, run_id, "task-001")
+                map_text = format_aha_command(root, run_id, "task-001", "/aha map status")
                 done_text = format_aha_command(root, run_id, "task-001", "/aha done")
                 unknown_text = format_aha_command(root, run_id, "task-001", "/aha missing")
 
         self.assertNotIn("/aha final", help_text)
         self.assertIn("/aha kb <message>", help_text)
         self.assertIn("/aha nav <message>", help_text)
-        self.assertIn("/aha map status|refresh|query", help_text)
+        self.assertNotIn("/aha map", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
         self.assertIn("/aha interrupt", help_text)
@@ -67,16 +59,7 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertNotIn("/aha done", help_text)
         self.assertNotIn("/aha finalize", help_text)
         self.assertIn("mark the task completed", complete_text)
-        self.assertIn("Project map status: missing", map_missing_text)
-        self.assertIn("Project map refreshed.", map_refresh_text)
-        self.assertIn("drivers/net/foo.c", map_query_text)
-        self.assertIn("Symbols:", map_query_text)
-        self.assertIn("foo_probe", map_query_text)
-        self.assertIn("Reference preview:", map_query_text)
-        self.assertIn("Project map reference", map_query_text)
-        self.assertEqual(map_query_evidence[-1]["type"], "project_map_query")
-        self.assertEqual(map_query_evidence[-1]["map"]["query"], "foo")
-        self.assertIn("drivers/net/foo.c", map_query_evidence[-1]["map"]["files"])
+        self.assertIn("Unsupported AHA command", map_text)
         for text in (status_text, agents_text, checkpoint_text, phase_text, session_text, finalize_text, done_text, unknown_text):
             self.assertIn("Unsupported AHA command", text)
 

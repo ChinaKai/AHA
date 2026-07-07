@@ -55,7 +55,8 @@ def sanitize_context_evidence_record(record: dict, *, root: Path, workspace: Pat
     knowledge_files.extend(existing_ignored["knowledge"])
     ignored_paths.extend([*existing_knowledge["ignored"], *existing_ignored["ignored"]])
 
-    diagnostics = payload.get("map_diagnostics")
+    diagnostics_key = "navigation_diagnostics" if isinstance(payload.get("navigation_diagnostics"), dict) else "map_diagnostics"
+    diagnostics = payload.get(diagnostics_key)
     if isinstance(diagnostics, dict):
         diagnostics = dict(diagnostics)
         for field in ("actual_files", "adopted_files", "missing_files"):
@@ -75,7 +76,7 @@ def sanitize_context_evidence_record(record: dict, *, root: Path, workspace: Pat
             knowledge_files=knowledge_files,
             ignored_paths=ignored_paths,
         )
-        payload["map_diagnostics"] = diagnostics
+        payload[diagnostics_key] = diagnostics
 
     routing_health = payload.get("routing_health")
     if isinstance(routing_health, dict):
@@ -104,9 +105,9 @@ def sanitize_context_evidence_record(record: dict, *, root: Path, workspace: Pat
 
     payload["knowledge_files"] = _ordered_unique(knowledge_files, limit=20)
     payload["ignored_command_paths"] = _ordered_unique(ignored_paths, limit=20)
-    if isinstance(payload.get("map_diagnostics"), dict):
-        payload["map_diagnostics"]["knowledge_files"] = payload["knowledge_files"]
-        payload["map_diagnostics"]["ignored_command_paths"] = payload["ignored_command_paths"]
+    if isinstance(payload.get(diagnostics_key), dict):
+        payload[diagnostics_key]["knowledge_files"] = payload["knowledge_files"]
+        payload[diagnostics_key]["ignored_command_paths"] = payload["ignored_command_paths"]
     return payload
 
 
@@ -366,4 +367,3 @@ def _ordered_unique(values: list[str], *, limit: int) -> list[str]:
         if len(out) >= limit:
             break
     return out
-

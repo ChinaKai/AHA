@@ -75,7 +75,7 @@ class TaskUpdateActionTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Record KB feedback", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
 
                 result = handle_record_task_update_action(
                     root,

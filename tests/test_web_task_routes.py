@@ -102,16 +102,16 @@ class WebTaskRouteTests(unittest.TestCase):
                     {
                         "type": "context_evidence_result",
                         "agent_id": "main",
-                        "signals": ["map_miss"],
+                        "signals": ["missing_nav"],
                         "maintenance_suggestions": [
-                            {"action": "update", "target": "project_navigation", "reason": "map_miss"}
+                            {"action": "update", "target": "project_navigation", "reason": "missing_nav"}
                         ],
                         "maintenance_plan": [
                             {
                                 "action": "update",
                                 "target": "project_navigation",
                                 "target_path": "navigation/index.md",
-                                "reason": "map_miss",
+                                "reason": "missing_nav",
                                 "write_policy": "direct_project_navigation_update",
                             }
                         ],
@@ -136,7 +136,7 @@ class WebTaskRouteTests(unittest.TestCase):
                         },
                         "maintenance_suggestions": [
                             {"action": "repair", "target": "project_navigation", "reason": "nav_stale"},
-                            {"action": "update", "target": "project_navigation", "reason": "map_miss"},
+                            {"action": "update", "target": "project_navigation", "reason": "missing_nav"},
                         ],
                         "maintenance_plan": [
                             {
@@ -151,7 +151,7 @@ class WebTaskRouteTests(unittest.TestCase):
                                 "action": "update",
                                 "target": "project_navigation",
                                 "target_path": "navigation/index.md",
-                                "reason": "map_miss",
+                                "reason": "missing_nav",
                                 "write_policy": "direct_project_navigation_update",
                                 "execution": {"state": "ready", "mode": "direct_edit"},
                             },
@@ -199,14 +199,14 @@ class WebTaskRouteTests(unittest.TestCase):
             [(item["action"], item["target"], item["reason"]) for item in payload["maintenance_suggestions"]],
             [
                 ("repair", "project_navigation", "nav_stale"),
-                ("update", "project_navigation", "map_miss"),
+                ("update", "project_navigation", "missing_nav"),
             ],
         )
         self.assertEqual(
             [(item["action"], item["target"], item["target_path"], item["reason"]) for item in payload["maintenance_plan"]],
             [
                 ("repair", "project_navigation", "navigation/index.md", "nav_stale"),
-                ("update", "project_navigation", "navigation/index.md", "map_miss"),
+                ("update", "project_navigation", "navigation/index.md", "missing_nav"),
             ],
         )
         self.assertEqual(payload["routing_health"]["status"], "stale")
@@ -245,14 +245,14 @@ class WebTaskRouteTests(unittest.TestCase):
                     {
                         "type": "context_evidence_result",
                         "agent_id": "main",
-                        "signals": ["map_miss"],
+                        "signals": ["missing_nav"],
                         "routing_health": {"status": "needs_repair"},
                         "maintenance_plan": [
                             {
                                 "action": "update",
                                 "target": "project_navigation",
                                 "target_path": "navigation/index.md",
-                                "reason": "map_miss",
+                                "reason": "missing_nav",
                                 "write_policy": "direct_project_navigation_update",
                             }
                         ],
@@ -265,7 +265,7 @@ class WebTaskRouteTests(unittest.TestCase):
                                 {
                                     "target": "project_navigation",
                                     "target_path": "navigation/index.md",
-                                    "reason": "map_miss",
+                                    "reason": "missing_nav",
                                 }
                             ],
                             "applied": [],

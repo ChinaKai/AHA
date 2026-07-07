@@ -18,7 +18,7 @@ def task_context_planner_enabled(task: dict | None) -> bool:
     if not isinstance(task, dict):
         return False
     policy = normalize_task_token_saving(task.get("token_saving"), task.get("context_management"))
-    return bool(policy.get("enabled") and policy.get("provider") == "map")
+    return bool(policy.get("enabled") and policy.get("provider") == "nav")
 
 
 def context_pack_for_turn(
@@ -49,11 +49,11 @@ def context_pack_payload_for_turn(
     target_chars: int = DEFAULT_CONTEXT_PACK_TARGET_CHARS,
     hard_limit: int = DEFAULT_CONTEXT_PACK_HARD_LIMIT,
 ) -> dict:
-    """Build a bounded per-turn KB/Map pull contract for token-saving tasks.
+    """Build a bounded per-turn KB/navigation pull contract for token-saving tasks.
 
     The pack is deliberately best-effort and read-only. It does not retrieve
-    keyword-matched KB entries, does not run map queries, and never builds or
-    refreshes the project map during prompt assembly.
+    keyword-matched KB entries and never scans the workspace during prompt
+    assembly.
     """
     try:
         if not task_context_planner_enabled(task):
@@ -66,15 +66,13 @@ def context_pack_payload_for_turn(
             return {}
         config = load_config(root)
         knowledge = _knowledge_pull_reference(root, run_id, task or {}, config, workspace)
-        project_map = _map_pull_reference(root, workspace, config)
         task_evidence = _task_evidence_reference(root, run_id, task or {})
-        if not knowledge.get("text") and not project_map.get("text") and not task_evidence.get("text"):
+        if not knowledge.get("text") and not task_evidence.get("text"):
             return {}
         text = render_prompt_template(
             "backend_context_pack.md",
             request=_clip_single_line(message, 360),
             knowledge_reference=knowledge.get("text") or "",
-            map_reference=project_map.get("text") or "",
             evidence_reference=task_evidence.get("text") or "",
         ).rstrip()
         budget = max(
@@ -95,7 +93,6 @@ def context_pack_payload_for_turn(
             "request": _clip_single_line(message, 360),
             "text_sha": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
             "knowledge": {key: value for key, value in knowledge.items() if key != "text"},
-            "map": {key: value for key, value in project_map.items() if key != "text"},
             "task_evidence": {key: value for key, value in task_evidence.items() if key != "text"},
         }
     except (Exception, SystemExit):
@@ -228,45 +225,6 @@ def _navigation_index_reference(kb_root: Path, project_keys: list[str]) -> tuple
     return fallback, False
 
 
-def _map_pull_reference(root: Path, workspace: Path, config: dict) -> dict:
-    try:
-        from aha_cli.services.project_context_index import project_context_index_status
-
-        status = project_context_index_status(root, workspace, config=config, verify_worktree=False)
-        if not status.get("exists"):
-            return {}
-        paths = status.get("paths") if isinstance(status.get("paths"), dict) else {}
-        map_index = str(paths.get("index") or "").strip()
-        if not map_index:
-            return {}
-        text = "\n".join(
-            [
-                "Project map entrypoints:",
-                f"- map_index: {map_index}",
-                f"- project_key: {status.get('project_key') or '-'}",
-                f"- workspace_id: {status.get('workspace_id') or '-'}",
-                f"- status: {status.get('status') or '-'}",
-                f"- generated_at: {status.get('generated_at') or '-'}",
-                "- Use `/aha map query <focused natural-language terms>` when navigation/source search needs help.",
-                "- Map results are hints only. Read exact source files before analysis or edits.",
-                "- Do not edit generated map cache files. Refresh stale cache, and repair extractor/resolver/ranking logic when map evidence proves the logic is wrong.",
-                "- Do not refresh/build map during prompt assembly; request refresh only when evidence shows stale/missing cache.",
-            ]
-        ).rstrip()
-        return {
-            "text": text,
-            "mode": "agent_pull",
-            "map_index": map_index,
-            "project_key": str(status.get("project_key") or ""),
-            "workspace_id": str(status.get("workspace_id") or ""),
-            "status": str(status.get("status") or ""),
-            "generated_at": str(status.get("generated_at") or ""),
-            "files": [],
-        }
-    except (Exception, SystemExit):
-        return {}
-
-
 def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
     task_id = str(task.get("id") or "").strip()
     if not task_id:
@@ -280,7 +238,6 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
     if not records:
         return {}
     result_records = [record for record in records if record.get("type") == "context_evidence_result"]
-    query_records = [record for record in records if record.get("type") == "project_map_query"]
     latest = result_records[-1] if result_records else {}
     recent_results = result_records[-4:]
     signals = _compact_list(
@@ -311,29 +268,23 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
         ],
         limit=8,
     )
-    diagnostics = latest.get("map_diagnostics") if isinstance(latest.get("map_diagnostics"), dict) else {}
-    gap_signals = _compact_list([str(item) for item in (diagnostics.get("gap_signals") or [])], limit=8, item_chars=48)
+    diagnostics = latest.get("navigation_diagnostics") if isinstance(latest.get("navigation_diagnostics"), dict) else {}
     missing_files = _compact_list([str(item) for item in (diagnostics.get("missing_files") or [])], limit=8)
-    stale_hints = _compact_list([str(item) for item in (diagnostics.get("stale_path_hints") or [])], limit=6)
     routing_health = _compact_routing_health(latest)
     kb_scope_policy = _compact_kb_scope_policy(latest)
     kb_growth_state = _compact_kb_growth_state(latest)
     suggestions = _compact_suggestions(recent_results)
     maintenance_plan = _compact_maintenance_plan(recent_results)
-    map_queries = _compact_map_queries(query_records)
     if not any([
         signals,
         actual_files,
         referenced_files,
-        gap_signals,
         missing_files,
-        stale_hints,
         routing_health,
         kb_scope_policy,
         kb_growth_state,
         suggestions,
         maintenance_plan,
-        map_queries,
     ]):
         return {}
     lines = ["Current task evidence recap:"]
@@ -343,20 +294,14 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
         lines.append(f"- actual_files: {_format_compact_list(actual_files)}")
     if referenced_files:
         lines.append(f"- referenced_files: {_format_compact_list(referenced_files)}")
-    if gap_signals:
-        lines.append(f"- map_gap_signals: {_format_compact_list(gap_signals)}")
     if missing_files:
-        lines.append(f"- map_missing_files: {_format_compact_list(missing_files)}")
-    if stale_hints:
-        lines.append(f"- stale_path_hints: {_format_compact_list(stale_hints)}")
+        lines.append(f"- navigation_missing_files: {_format_compact_list(missing_files)}")
     if routing_health:
         lines.append(f"- routing_health: {routing_health['summary']}")
     if kb_scope_policy:
         lines.append(f"- kb_scope_policy: {kb_scope_policy['summary']}")
     if kb_growth_state:
         lines.append(f"- kb_growth_state: {kb_growth_state['summary']}")
-    if map_queries:
-        lines.append(f"- recent_map_queries: {' | '.join(item['summary'] for item in map_queries)}")
     if maintenance_plan:
         lines.append(f"- maintenance_plan: {' | '.join(item['summary'] for item in maintenance_plan)}")
     if suggestions:
@@ -367,13 +312,10 @@ def _task_evidence_reference(root: Path, run_id: str, task: dict) -> dict:
         "signals": signals,
         "actual_files": actual_files,
         "referenced_files": referenced_files,
-        "map_gap_signals": gap_signals,
-        "map_missing_files": missing_files,
-        "stale_path_hints": stale_hints,
+        "navigation_missing_files": missing_files,
         "routing_health": routing_health,
         "kb_scope_policy": kb_scope_policy,
         "kb_growth_state": kb_growth_state,
-        "map_queries": map_queries,
         "maintenance_plan": maintenance_plan,
         "maintenance_suggestions": suggestions,
     }
@@ -514,27 +456,6 @@ def _compact_kb_growth_state(latest_result: dict) -> dict:
         "applied_paths": applied_paths,
         "summary": _clip_single_line(" ".join(parts), 220),
     }
-
-
-def _compact_map_queries(query_records: list[dict]) -> list[dict]:
-    queries: list[dict] = []
-    for record in query_records[-4:]:
-        project_map = record.get("map") if isinstance(record.get("map"), dict) else {}
-        query = _clip_single_line(str(project_map.get("query") or project_map.get("resolved_query") or ""), 80)
-        if not query:
-            continue
-        files = _compact_list([str(path) for path in (project_map.get("files") or [])], limit=4)
-        matches = project_map.get("total_matches")
-        match_text = "unknown" if matches is None else str(matches)
-        file_text = f" files={_format_compact_list(files)}" if files else ""
-        summary = _clip_single_line(f"{query} ({match_text} matches){file_text}", 180)
-        queries.append({
-            "query": query,
-            "total_matches": matches,
-            "files": files,
-            "summary": summary,
-        })
-    return queries
 
 
 __all__ = ["context_pack_for_turn", "context_pack_payload_for_turn", "task_context_planner_enabled"]

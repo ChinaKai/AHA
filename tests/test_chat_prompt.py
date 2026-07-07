@@ -12,7 +12,6 @@ from aha_cli.cli import append_message, main
 from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.services import headroom_integration
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
-from aha_cli.services.project_context_index import build_project_context_index
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -289,7 +288,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Headroom chat", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
                 append_message(root, run_id, "main", "use token saving", sender="browser", task_id="task-001", role="main")
 
                 with (
@@ -407,7 +406,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("write=True", sticky_prompt)
         self.assertNotIn("operation skill path", sticky_prompt)
 
-    def test_chat_prompt_uses_context_pack_without_duplicate_project_map_context_when_token_saving_enabled(self) -> None:
+    def test_chat_prompt_uses_context_pack_when_token_saving_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "repo"
             aha_root = Path(tmp) / ".aha"
@@ -415,10 +414,12 @@ class ChatPromptTests(unittest.TestCase):
             (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
             with mock.patch("pathlib.Path.cwd", return_value=workspace):
                 self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Map prompt", "--agents", "1")
+                code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Nav prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
-                build_project_context_index(aha_root, workspace)
+                cfg = read_json(config_path(aha_root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(aha_root), cfg)
 
                 disabled_prompt = chat_prompt(
                     aha_root,
@@ -427,7 +428,7 @@ class ChatPromptTests(unittest.TestCase):
                     {"sender": "browser", "message": "where is foo_probe", "task_id": "task-001", "role": "main"},
                     "",
                 )
-                update_task_token_saving_config(aha_root, run_id, "task-001", enabled=True, provider="map")
+                update_task_token_saving_config(aha_root, run_id, "task-001", enabled=True, provider="nav")
                 enabled_prompt = chat_prompt(
                     aha_root,
                     run_id,
@@ -436,22 +437,17 @@ class ChatPromptTests(unittest.TestCase):
                     "",
                 )
 
-        self.assertNotIn("Project context map:", disabled_prompt)
-        self.assertNotIn("Project context map:", enabled_prompt)
-        self.assertIn("- map_index:", enabled_prompt)
-        self.assertIn("/aha map query <focused natural-language terms>", enabled_prompt)
-        self.assertIn("AHA Knowledge/Map Pull Contract:", enabled_prompt)
-        self.assertIn("Project map entrypoints:", enabled_prompt)
+        self.assertNotIn("AHA Knowledge/Nav Pull Contract:", disabled_prompt)
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", enabled_prompt)
+        self.assertIn("Knowledge base entrypoints:", enabled_prompt)
         self.assertIn("agent-pull", enabled_prompt)
         self.assertIn("directly edit the approved KB Markdown files", enabled_prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", enabled_prompt)
         self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", enabled_prompt)
-        self.assertIn("Do not hand-edit generated Project Map cache files", enabled_prompt)
-        self.assertIn("repair the extractor, schema, resolver, query expansion, ranking, or refresh logic", enabled_prompt)
-        self.assertNotIn("Project map reference:", enabled_prompt)
+        self.assertNotIn("Project map", enabled_prompt)
         self.assertNotIn("drivers/net/foo.c", enabled_prompt)
 
-    def test_sticky_delta_includes_context_pack_for_plain_turn_when_map_hits(self) -> None:
+    def test_sticky_delta_includes_context_pack_for_plain_turn_when_nav_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "repo"
             root = Path(tmp) / ".aha"
@@ -459,11 +455,13 @@ class ChatPromptTests(unittest.TestCase):
             (workspace / "drivers" / "net" / "foo.c").write_text("int foo_probe(void) { return 0; }\n", encoding="utf-8")
             with mock.patch("pathlib.Path.cwd", return_value=workspace):
                 self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
-                code, plan_output = self.run_cli("--home", str(root), "plan", "Sticky map context pack", "--agents", "1")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Sticky nav context pack", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
-                build_project_context_index(root, workspace)
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                cfg = read_json(config_path(root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(root), cfg)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"
@@ -488,15 +486,13 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
         self.assertIn("AHA sticky-session delta turn", prompt)
-        self.assertIn("AHA Knowledge/Map Pull Contract:", prompt)
-        self.assertIn("Project map entrypoints:", prompt)
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
+        self.assertIn("Knowledge base entrypoints:", prompt)
         self.assertIn("agent-pull", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", prompt)
         self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", prompt)
-        self.assertIn("Do not hand-edit generated Project Map cache files", prompt)
-        self.assertIn("repair the extractor, schema, resolver, query expansion, ranking, or refresh logic", prompt)
-        self.assertNotIn("Project map reference:", prompt)
+        self.assertNotIn("Project map", prompt)
         self.assertNotIn("drivers/net/foo.c", prompt)
         self.assertIn("context_pack", metrics["components"])
 
@@ -511,8 +507,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("--home", str(root), "plan", "AHA dialog output refresh", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
-                build_project_context_index(root, workspace)
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
                 cfg = read_json(config_path(root))
                 cfg["knowledge"]["enabled"] = True
                 write_json(config_path(root), cfg)
@@ -533,7 +528,7 @@ class ChatPromptTests(unittest.TestCase):
                     "",
                 )
 
-        self.assertIn("AHA Knowledge/Map Pull Contract:", prompt)
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
         self.assertIn("Knowledge base entrypoints:", prompt)
         self.assertIn("navigation_index:", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
@@ -548,24 +543,13 @@ class ChatPromptTests(unittest.TestCase):
             (workspace / "src").mkdir(parents=True)
             (workspace / "src" / "new_api.py").write_text("def new_api():\n    return True\n", encoding="utf-8")
             kb_path = root / "knowledge" / "projects" / "demo" / "navigation" / "index.md"
-            noisy_paths = ["src/new_api.py", "/bin/bash", "KB/map", str(kb_path)]
+            noisy_paths = ["src/new_api.py", "/bin/bash", "tmp/noise", str(kb_path)]
             with mock.patch("pathlib.Path.cwd", return_value=workspace):
                 self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
                 code, plan_output = self.run_cli("--home", str(root), "plan", "Context evidence recap", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
-                build_project_context_index(root, workspace)
-                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="map")
-                append_task_context_evidence(
-                    root,
-                    run_id,
-                    "task-001",
-                    {
-                        "type": "project_map_query",
-                        "agent_id": "main",
-                        "map": {"query": "legacy api", "total_matches": 0, "files": []},
-                    },
-                )
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
                 append_task_context_evidence(
                     root,
                     run_id,
@@ -573,13 +557,11 @@ class ChatPromptTests(unittest.TestCase):
                     {
                         "type": "context_evidence_result",
                         "agent_id": "main",
-                        "signals": ["map_miss", "map_coverage_gap"],
+                        "signals": ["missing_nav"],
                         "actual_files": noisy_paths,
                         "referenced_files": ["src/old_api.py"],
-                        "map_diagnostics": {
-                            "gap_signals": ["map_coverage_gap"],
+                        "navigation_diagnostics": {
                             "missing_files": noisy_paths,
-                            "stale_path_hints": ["src/old_api.py"],
                         },
                         "routing_health": {
                             "status": "needs_repair",
@@ -594,7 +576,7 @@ class ChatPromptTests(unittest.TestCase):
                             {
                                 "action": "update",
                                 "target": "project_navigation",
-                                "reason": "map_miss",
+                                "reason": "missing_nav",
                                 "files": noisy_paths,
                             }
                         ],
@@ -603,7 +585,7 @@ class ChatPromptTests(unittest.TestCase):
                                 "action": "update",
                                 "target": "project_navigation",
                                 "target_path": "projects/demo/navigation/flows/token-saving.md",
-                                "reason": "map_miss",
+                                "reason": "missing_nav",
                                 "write_policy": "direct_project_navigation_update",
                                 "source_files": noisy_paths,
                                 "validation": ["python3 -m pytest tests/test_context_evidence.py -q"],
@@ -618,7 +600,7 @@ class ChatPromptTests(unittest.TestCase):
                                 {
                                     "target": "project_navigation",
                                     "target_path": "projects/demo/navigation/flows/token-saving.md",
-                                    "reason": "map_miss",
+                                    "reason": "missing_nav",
                                 }
                             ],
                             "applied": [],
@@ -637,30 +619,26 @@ class ChatPromptTests(unittest.TestCase):
                 prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
 
         self.assertIn("Current task evidence recap:", prompt)
-        self.assertIn("- signals: map_miss, map_coverage_gap", prompt)
+        self.assertIn("- signals: missing_nav", prompt)
         self.assertIn("- actual_files: src/new_api.py", prompt)
         self.assertIn("- referenced_files: src/old_api.py", prompt)
-        self.assertIn("- map_gap_signals: map_coverage_gap", prompt)
-        self.assertIn("- map_missing_files: src/new_api.py", prompt)
-        self.assertIn("- stale_path_hints: src/old_api.py", prompt)
+        self.assertIn("- navigation_missing_files: src/new_api.py", prompt)
         self.assertIn("routing_health: needs_repair downrank=src/old_api.py prioritize=src/new_api.py", prompt)
         self.assertIn("kb_scope_policy: project_navigation=direct_edit_approved_markdown_with_task_evidence", prompt)
         self.assertIn("kb_growth_state: pending pending=projects/demo/navigation/flows/token-saving.md", prompt)
-        self.assertIn("recent_map_queries: legacy api (0 matches)", prompt)
         self.assertIn(
             "maintenance_plan: update project_navigation -> projects/demo/navigation/flows/token-saving.md",
             prompt,
         )
         self.assertIn("policy=direct_project_navigation_update", prompt)
-        self.assertIn("maintenance_actions: update project_navigation (map_miss) files=src/new_api.py", prompt)
+        self.assertIn("maintenance_actions: update project_navigation (missing_nav) files=src/new_api.py", prompt)
         self.assertIn("Re-check current source before edits.", prompt)
-        self.assertNotIn("KB/map", prompt)
+        self.assertNotIn("tmp/noise", prompt)
         self.assertNotIn("bin/bash", prompt)
         pack_evidence = metrics["context_pack_evidence"]
-        self.assertEqual(pack_evidence["task_evidence"]["signals"], ["map_miss", "map_coverage_gap"])
+        self.assertEqual(pack_evidence["task_evidence"]["signals"], ["missing_nav"])
         self.assertEqual(pack_evidence["task_evidence"]["actual_files"], ["src/new_api.py"])
-        self.assertEqual(pack_evidence["task_evidence"]["map_missing_files"], ["src/new_api.py"])
-        self.assertEqual(pack_evidence["task_evidence"]["map_queries"][0]["query"], "legacy api")
+        self.assertEqual(pack_evidence["task_evidence"]["navigation_missing_files"], ["src/new_api.py"])
         self.assertEqual(
             pack_evidence["task_evidence"]["maintenance_plan"][0]["target_path"],
             "projects/demo/navigation/flows/token-saving.md",

@@ -91,7 +91,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertFalse(body["task"]["context_management"]["auto_compact_enabled"])
         self.assertEqual(body["task"]["context_management"]["auto_compact_threshold_percent"], 75)
         self.assertFalse(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
         self.assertEqual(status["tasks"][-1]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(status["tasks"][-1]["collaboration_mode"], "team")
         self.assertEqual(status["tasks"][-1]["workflow_template"], "fault-debug")
@@ -124,7 +124,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "dispatch": False,
                             "token_saving": {
                                 "enabled": True,
-                                "provider": "map",
+                                "provider": "nav",
                             },
                         },
                     )
@@ -134,7 +134,7 @@ class WebTaskApiTests(unittest.TestCase):
 
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
         self.assertEqual(status["tasks"][-1]["token_saving"], body["task"]["token_saving"])
 
     def test_api_task_create_persists_codex_default_model_for_empty_ui_model(self) -> None:
@@ -204,7 +204,7 @@ class WebTaskApiTests(unittest.TestCase):
                         payload={
                             "title": "Token saving without headroom",
                             "dispatch": False,
-                            "token_saving": {"enabled": True, "provider": "map"},
+                            "token_saving": {"enabled": True, "provider": "nav"},
                         },
                     )
                 )
@@ -213,7 +213,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
 
     def test_api_task_create_and_update_accepts_observe_proxy_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1861,7 +1861,7 @@ class WebTaskApiTests(unittest.TestCase):
                         method="POST",
                         payload={
                             "enabled": True,
-                            "provider": "map",
+                            "provider": "nav",
                         },
                     )
                 )
@@ -1871,7 +1871,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
-        self.assertEqual(body["task"]["token_saving"]["provider"], "map")
+        self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
         self.assertEqual(snapshot["tasks"][0]["token_saving"], body["task"]["token_saving"])
 
     def test_task_token_saving_api_accepts_enable_without_headroom(self) -> None:
@@ -1891,7 +1891,7 @@ class WebTaskApiTests(unittest.TestCase):
                         method="POST",
                         payload={
                             "enabled": True,
-                            "provider": "map",
+                            "provider": "nav",
                         },
                     )
                 )
@@ -1901,7 +1901,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertTrue(snapshot["tasks"][0]["token_saving"]["enabled"])
-        self.assertEqual(snapshot["tasks"][0]["token_saving"]["provider"], "map")
+        self.assertEqual(snapshot["tasks"][0]["token_saving"]["provider"], "nav")
 
 
 if __name__ == "__main__":

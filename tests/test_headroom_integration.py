@@ -103,7 +103,7 @@ class HeadroomIntegrationTests(unittest.TestCase):
     def test_prepare_runtime_never_wraps_from_task_token_saving(self) -> None:
         cfg = default_config()
         cfg["integrations"]["headroom"]["enabled"] = True
-        task = {"token_saving": {"enabled": True, "provider": "map"}}
+        task = {"token_saving": {"enabled": True, "provider": "nav"}}
 
         self.assertFalse(headroom_should_wrap_codex(cfg, task, "codex"))
         codex_config, proxy_env, status = prepare_headroom_codex_runtime(
@@ -122,7 +122,7 @@ class HeadroomIntegrationTests(unittest.TestCase):
     def test_prepare_runtime_does_not_consider_litellm_bridge_when_not_selected(self) -> None:
         cfg = default_config()
         cfg["integrations"]["headroom"].update({"enabled": True, "port": 8989})
-        task = {"token_saving": {"enabled": True, "provider": "map"}}
+        task = {"token_saving": {"enabled": True, "provider": "nav"}}
         codex_config = {
             "env_active": "kimi-k2.6",
             "env": [

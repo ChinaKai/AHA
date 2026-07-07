@@ -625,7 +625,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(api.runScopedPayload({
           enabled,
-          provider: "map"
+          provider: "nav"
         }))
       }, "Failed to update task token saving");
       contextEditingUntil = 0;
