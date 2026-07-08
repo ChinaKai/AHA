@@ -9,7 +9,16 @@ from aha_cli.store.config import load_config
 from aha_cli.store import knowledge_nav_drafts as nav_drafts
 from aha_cli.store.filesystem import create_plan
 from aha_cli.store.io import read_json, write_json
-from aha_cli.store.knowledge import enqueue_candidate, init_knowledge_base, list_entries, list_pending, project_key, write_entry
+from aha_cli.store.knowledge import (
+    enqueue_candidate,
+    init_knowledge_base,
+    list_entries,
+    list_pending,
+    parse_entry,
+    project_key,
+    serialize_entry,
+    write_entry,
+)
 from aha_cli.store.paths import config_path
 from aha_cli.web.knowledge_routes import knowledge_route_response
 from tests.helpers import fetch_ui_response, json_response_body
@@ -38,6 +47,12 @@ def _patch(home: Path, path: str, payload: dict):
 
 def _delete(home: Path, path: str, payload: dict):
     return knowledge_route_response(home, "DELETE", path, {}, json.dumps(payload).encode(), {})
+
+
+def _set_entry_updated_at(path: Path, value: str) -> None:
+    meta, body = parse_entry(path.read_text(encoding="utf-8"))
+    meta["updated_at"] = value
+    path.write_text(serialize_entry(meta, body), encoding="utf-8")
 
 
 def _sync_project_nav_jobs(monkeypatch) -> None:
@@ -81,9 +96,13 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     cfg = load_config(home)
     write_entry(home, config=cfg, scope="project", kind="solutions",
                 project_key_value="git-abc", title="Fix build", body="do x")
-    write_entry(home, config=cfg, scope="project", kind="navigation",
-                project_key_value="git-abc", title="demo 项目导航", body="## 模块索引\n- [store](modules/store.md)", slug="index")
+    index_path = write_entry(home, config=cfg, scope="project", kind="navigation",
+                             project_key_value="git-abc", title="demo 项目导航", body="## 模块索引\n- [store](modules/store.md)", slug="index")
+    module_path = write_entry(home, config=cfg, scope="project", kind="navigation",
+                              project_key_value="git-abc", title="store 模块", body="store details", slug="modules/store")
     write_entry(home, config=cfg, scope="general", kind="wiki", title="Docker 教程", body="containers")
+    _set_entry_updated_at(index_path, "2026-01-01T00:00:00+00:00")
+    _set_entry_updated_at(module_path, "2026-01-03T00:00:00+00:00")
 
     # Project navigation is no longer mixed into ordinary entries.
     nav = _get(home, "/api/kb/entries", {"kind": ["navigation"]})
@@ -92,6 +111,9 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     project_nav = _get(home, "/api/kb/project-nav", {"project_key": ["git-abc"]})
     assert project_nav["count"] == 1 and project_nav["entries"][0]["type"] == "navigation"
     assert project_nav["entries"][0]["size_bytes"] > 0
+    assert project_nav["entries"][0]["index_updated_at"] == "2026-01-01T00:00:00+00:00"
+    assert project_nav["entries"][0]["nav_updated_at"] == "2026-01-03T00:00:00+00:00"
+    assert project_nav["entries"][0]["updated_at"] == "2026-01-03T00:00:00+00:00"
 
     # The general tutorial is reachable via the general scope filter.
     general = _get(home, "/api/kb/entries", {"scope": ["general"]})

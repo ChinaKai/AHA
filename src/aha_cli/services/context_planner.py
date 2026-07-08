@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from aha_cli.domain.models import normalize_task_token_saving
@@ -95,6 +96,7 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
         kb_root = knowledge_root(root, config)
         nav_rel, nav_exists = _navigation_index_reference(kb_root, project_keys)
         worklog_rel, worklog_exists = _task_worklog_reference(kb_root, project_keys, task)
+        worklog_frontmatter = _task_worklog_frontmatter(project_keys[0], run_id, task)
         text = "\n".join(
             [
                 "Knowledge base entrypoints:",
@@ -103,6 +105,9 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
                 *([f"- project_key_aliases: {', '.join(project_keys[1:])}"] if len(project_keys) > 1 else []),
                 f"- navigation_index: {nav_rel or '-'} ({'exists' if nav_exists else 'not found yet'})",
                 *([f"- task_worklog: {worklog_rel} ({'exists' if worklog_exists else 'not found yet'})"] if worklog_rel else []),
+                *([f"- task_worklog_frontmatter_json: {worklog_frontmatter}"] if worklog_frontmatter else []),
+                "- New approved KB Markdown must use one JSON object frontmatter between `---` fences; do not use YAML frontmatter.",
+                "- Navigation hierarchy: keep index as the top-level router, group detailed docs under parent module/flow docs, and ensure every non-index nav doc is reachable through direct parent links.",
                 "- Start with navigation/index for broad orientation, then choose modules/* or flows/* yourself.",
                 "- If navigation_index is not found yet, create a minimal evidence-based navigation/index.md during the task after verifying source entrypoints.",
                 "- Read solutions/wiki only when the current task is semantically similar; skip irrelevant entries.",
@@ -151,6 +156,31 @@ def _task_worklog_reference(kb_root: Path, project_keys: list[str], task: dict) 
         if (kb_root / rel).exists():
             return rel_text, True
     return fallback, False
+
+
+def _task_worklog_frontmatter(project_key_value: str, run_id: str, task: dict) -> str:
+    task_id = str((task or {}).get("id") or "").strip()
+    if not task_id:
+        return ""
+    title = str((task or {}).get("title") or task_id).strip()
+    meta = {
+        "confidence": 0.8,
+        "created_at": "<ISO8601>",
+        "distilled_by": "task-main",
+        "id": f"kb_task_worklog_{task_id.replace('-', '_')}",
+        "navigation_role": "task_worklog",
+        "outcome": "success",
+        "project_key": project_key_value,
+        "scope": "project",
+        "slug": f"tasks/{task_id}",
+        "source_tasks": [f"{run_id}/{task_id}"],
+        "tags": ["worklog", "task"],
+        "title": f"{task_id} {title} 工作记录",
+        "type": "task_worklog",
+        "update_mode": "incremental",
+        "updated_at": "<ISO8601>",
+    }
+    return json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
 
 
 __all__ = ["context_pack_for_turn", "context_pack_payload_for_turn", "task_context_planner_enabled"]

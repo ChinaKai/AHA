@@ -153,6 +153,8 @@ def test_navigation_bootstrap_prompt_requires_project_readme_and_map(tmp_path: P
 
     assert "Project navigation is a first-read router" in prompt
     assert "Inspect the workspace in read-only mode" in prompt
+    assert "Do not overload `index`" in prompt
+    assert "reachable from `index` through direct parent links" in prompt
     assert "`## 项目介绍`" in prompt
     assert "`## 项目结构 / 核心 Nav`" in prompt
     assert "COMPRESSED WORKSPACE SCAN JSON" not in prompt

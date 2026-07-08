@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import datetime as dt
 import os
 from pathlib import Path
 import signal
@@ -426,17 +427,63 @@ def _entry_summary(entry: dict) -> dict:
     }
 
 
+def _parse_entry_time(value: object) -> dt.datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _entry_updated_value(entry: dict) -> tuple[dt.datetime, str] | None:
+    meta = entry.get("meta", {})
+    for key in ("updated_at", "created_at"):
+        value = str(meta.get(key) or "").strip()
+        parsed = _parse_entry_time(value)
+        if parsed is not None:
+            return parsed, value
+    path = entry.get("path")
+    if path:
+        try:
+            updated = dt.datetime.fromtimestamp(Path(str(path)).stat().st_mtime, tz=dt.timezone.utc).replace(microsecond=0)
+        except OSError:
+            return None
+        return updated, updated.isoformat()
+    return None
+
+
 def _navigation_summaries(root: Path, cfg: dict, project_key_value: str | None = None) -> list[dict]:
-    entries: list[dict] = []
+    index_entries: list[dict] = []
+    latest_by_project: dict[str, tuple[dt.datetime, str]] = {}
     for entry in iter_all_entries(root, cfg):
         meta = entry.get("meta", {})
         if meta.get("type") != "navigation":
             continue
-        if meta.get("slug") != NAVIGATION_SLUG:
-            continue
         if project_key_value and meta.get("project_key") != project_key_value:
             continue
-        entries.append(_entry_summary(entry))
+        project_key = str(meta.get("project_key") or "")
+        updated = _entry_updated_value(entry)
+        if updated and (project_key not in latest_by_project or updated[0] > latest_by_project[project_key][0]):
+            latest_by_project[project_key] = updated
+        if meta.get("slug") == NAVIGATION_SLUG:
+            index_entries.append(entry)
+    entries: list[dict] = []
+    for entry in index_entries:
+        summary = _entry_summary(entry)
+        project_key = str(summary.get("project_key") or "")
+        latest = latest_by_project.get(project_key)
+        if latest and latest[1]:
+            summary["index_updated_at"] = summary.get("updated_at")
+            summary["nav_updated_at"] = latest[1]
+            summary["updated_at"] = latest[1]
+        entries.append(summary)
     return sorted(
         entries,
         key=lambda item: (

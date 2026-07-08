@@ -19,6 +19,7 @@ Rules:
   - `## 项目结构 / 核心 Nav`
 - `index` is a compact router, not a full manual. Keep it concise.
 - Under `## 项目结构 / 核心 Nav`, list first-level modules/flows with direct links only to `modules/*.md` or `flows/*.md` candidates that are also in this JSON batch.
+- Do not overload `index` with every detailed child doc. Use parent module/flow docs as grouping nodes; every non-index doc must be reachable from `index` through direct parent links, and parent docs should link only direct children.
 - Each module/flow doc stays lightweight: responsibility, key files, entry points, common task routing hints, caveats, and relevant tests only.
 - Slugs must already be normalized: `index`, `modules/<name>`, or `flows/<name>`.
 - If there is not enough evidence for a module/flow doc, omit it instead of creating empty template noise.
