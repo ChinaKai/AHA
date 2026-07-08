@@ -427,7 +427,7 @@
       }
     }).catch(err => {
       if (deps.isAuthRequiredError?.(err)) {
-        deps.renderLoginState?.();
+        deps.renderLoginState?.(window.AHAI18n?.t?.("auth.token_invalid", "Token is incorrect. Try again."), true);
         return;
       }
       deps.setBootstrapError?.(err?.message || String(err));

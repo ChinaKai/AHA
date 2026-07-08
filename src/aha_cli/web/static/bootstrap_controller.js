@@ -28,6 +28,7 @@
     }
 
     function renderBootstrapConfigState(force = false) {
+      deps.clearBootstrapHomeViews?.();
       enterEmptyWorkspace({
         summaryText: "Initialize AHA",
         selectedTitle: "AHA config"

@@ -586,6 +586,17 @@ bootstrapController = window.AHABootstrapController.createBootstrapController({
   bootstrapConfigHelpers,
   bootstrapData: () => bootstrapData,
   bootstrapError: () => bootstrapError,
+  clearBootstrapHomeViews: () => {
+    document.body.classList.remove("task-memo-home", "knowledge-home", "settings-home");
+    domRefs.taskMemoDialogEl?.removeAttribute("open");
+    if (domRefs.knowledgeHomeEl) domRefs.knowledgeHomeEl.hidden = true;
+    domRefs.sessionMenuEl?.classList.add("hidden");
+    domRefs.openTaskViewEl?.setAttribute("aria-pressed", "true");
+    domRefs.openTaskMemosEl?.setAttribute("aria-pressed", "false");
+    domRefs.openKnowledgeBaseEl?.setAttribute("aria-pressed", "false");
+    domRefs.sessionToggleEl?.setAttribute("aria-expanded", "false");
+    domRefs.sessionToggleEl?.setAttribute("aria-pressed", "false");
+  },
   closeEventWebSocket,
   confirmDialogAction,
   createRun: runActions.createRun,

@@ -66,6 +66,49 @@ class WebAuthTests(unittest.TestCase):
         self.assertIn("HttpOnly", cookie)
         self.assertTrue(second.startswith(b"HTTP/1.1 200 OK"))
 
+    def test_invalid_shell_token_still_loads_login_ui(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+
+            wrong_query = asyncio.run(fetch_ui_response(root, "", "/?token=wrong", auth_token="secret"))
+            stale_cookie = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/",
+                    headers={"Cookie": "aha_web_token=wrong"},
+                    auth_token="secret",
+                )
+            )
+            static_asset = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/static/app.js",
+                    headers={"Cookie": "aha_web_token=wrong"},
+                    auth_token="secret",
+                )
+            )
+            api_denied = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    headers={"Cookie": "aha_web_token=wrong"},
+                    auth_token="secret",
+                )
+            )
+
+        self.assertTrue(wrong_query.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b'id="login-view"', wrong_query)
+        self.assertNotIn("set-cookie", response_headers(wrong_query))
+        self.assertTrue(stale_cookie.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b'id="login-view"', stale_cookie)
+        self.assertTrue(static_asset.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b"window.AHAAppRuntime.start", static_asset)
+        self.assertTrue(api_denied.startswith(b"HTTP/1.1 401 Unauthorized"))
+
     def test_login_endpoint_sets_and_logout_clears_auth_cookie(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"

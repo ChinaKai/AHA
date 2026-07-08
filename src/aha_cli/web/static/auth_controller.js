@@ -78,7 +78,7 @@
         clearLoginState();
         await options.afterLogin?.();
       } catch (err) {
-        const text = options.isAuthRequiredError?.(err) ? t("auth.token_invalid", "Token is incorrect.") : (err?.message || String(err || t("auth.login_failed", "Login failed")));
+        const text = options.isAuthRequiredError?.(err) ? t("auth.token_invalid", "Token is incorrect. Try again.") : (err?.message || String(err || t("auth.login_failed", "Login failed")));
         renderLoginState(text, true);
       } finally {
         loginInFlight = false;

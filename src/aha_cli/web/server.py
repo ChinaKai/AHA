@@ -99,9 +99,7 @@ async def handle_ui_client(
         if auth_token and public_ui_shell:
             authorized, set_auth_cookie = optional_authorized_request(auth_token, target, headers)
             if not authorized:
-                writer.write(unauthorized_response(method))
-                await writer.drain()
-                return
+                set_auth_cookie = False
         elif auth_token and not (public_health or public_auth_route):
             authorized, set_auth_cookie = is_authorized_request(auth_token, target, headers)
             if not authorized:
