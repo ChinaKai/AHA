@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -33,6 +34,10 @@ from aha_cli.store.filesystem import (
 
 BACKEND_ACTIVITY_SCAN_LIMIT = 5000
 CODEX_CONTEXT_WINDOW_SCAN_LIMIT = 1000
+CODEX_CONTEXT_DROP_MIN_PREVIOUS_PERCENT = 70.0
+CODEX_CONTEXT_DROP_MAX_CURRENT_PERCENT = 60.0
+CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT = 20.0
+CODEX_CONTEXT_DROP_MIN_DELTA_TOKENS = 30_000
 PROCESS_AGENT_BACKENDS = {"codex", "claude"}
 
 
@@ -218,6 +223,123 @@ def _codex_token_count_info(record: dict) -> dict:
     if payload.get("model_context_window") or payload.get("last_token_usage"):
         return payload
     return {}
+
+
+def _codex_token_count_sample(record: dict) -> dict:
+    info = _codex_token_count_info(record)
+    if not info:
+        return {}
+    usage = info.get("last_token_usage") if isinstance(info.get("last_token_usage"), dict) else {}
+    input_tokens = _positive_int(usage.get("input_tokens"))
+    context_window = _positive_int(info.get("model_context_window"))
+    if input_tokens is None or context_window is None:
+        return {}
+    percent = round(input_tokens / context_window * 100, 2) if context_window else None
+    return {
+        "timestamp": str(record.get("timestamp") or record.get("ts") or ""),
+        "input_tokens": input_tokens,
+        "cached_input_tokens": _positive_int(usage.get("cached_input_tokens")),
+        "output_tokens": _positive_int(usage.get("output_tokens")),
+        "reasoning_output_tokens": _positive_int(usage.get("reasoning_output_tokens")),
+        "total_tokens": _positive_int(usage.get("total_tokens")),
+        "context_window": context_window,
+        "percent": percent,
+    }
+
+
+def _codex_token_count_samples(session_id: str, *, limit: int = CODEX_CONTEXT_WINDOW_SCAN_LIMIT) -> list[dict]:
+    path = _codex_session_jsonl_path(session_id)
+    if not path:
+        return []
+    samples: list[dict] = []
+    scanned = 0
+    for _offset, record in iter_jsonl_reverse(path) or ():
+        scanned += 1
+        sample = _codex_token_count_sample(record)
+        if sample:
+            samples.append(sample)
+        if scanned >= limit:
+            break
+    return list(reversed(samples))
+
+
+def detect_runtime_context_compaction(root: Path, run_id: str, target: str, task_id: str | None, session: dict | None = None) -> dict:
+    """Infer silent backend context compaction from runtime token_count drops.
+
+    Some Codex sessions reduce the retained conversation without emitting a
+    machine-readable compact event. The token_count stream still shows a sharp
+    drop in last-turn input tokens for the same backend session; use that as a
+    conservative signal so the next AHA prompt can be full again.
+    """
+    del root, run_id, target, task_id
+    backend_session_id = str((session or {}).get("backend_session_id") or "").strip()
+    if not backend_session_id:
+        return {}
+    samples = _codex_token_count_samples(backend_session_id)
+    peak: dict | None = None
+    detected: dict | None = None
+    for sample in samples:
+        current = int(sample.get("input_tokens") or 0)
+        window = int(sample.get("context_window") or 0)
+        if not current or not window:
+            if peak:
+                previous = int(peak.get("input_tokens") or 0)
+                prev_percent = float(peak.get("percent") or 0.0)
+                drop_tokens = previous - current
+                drop_percent = prev_percent
+                if (
+                    prev_percent >= CODEX_CONTEXT_DROP_MIN_PREVIOUS_PERCENT
+                    and drop_percent >= CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT
+                    and drop_tokens >= CODEX_CONTEXT_DROP_MIN_DELTA_TOKENS
+                ):
+                    detected = {
+                        "backend_session_id": backend_session_id,
+                        "previous": peak,
+                        "current": sample,
+                        "drop_tokens": drop_tokens,
+                        "drop_percent": round(drop_percent, 2),
+                    }
+            continue
+        if peak is None or current >= int(peak.get("input_tokens") or 0):
+            peak = sample
+            continue
+        previous = int(peak.get("input_tokens") or 0)
+        prev_percent = float(peak.get("percent") or 0.0)
+        current_percent = float(sample.get("percent") or 0.0)
+        drop_tokens = previous - current
+        drop_percent = prev_percent - current_percent
+        if (
+            prev_percent >= CODEX_CONTEXT_DROP_MIN_PREVIOUS_PERCENT
+            and current_percent <= CODEX_CONTEXT_DROP_MAX_CURRENT_PERCENT
+            and drop_percent >= CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT
+            and drop_tokens >= CODEX_CONTEXT_DROP_MIN_DELTA_TOKENS
+        ):
+            detected = {
+                "backend_session_id": backend_session_id,
+                "previous": peak,
+                "current": sample,
+                "drop_tokens": drop_tokens,
+                "drop_percent": round(drop_percent, 2),
+            }
+        # After a drop, keep tracking from the lower baseline so a later growth
+        # does not erase the latest detected compaction signal.
+        if current_percent < CODEX_CONTEXT_DROP_MAX_CURRENT_PERCENT:
+            peak = sample
+    if not detected:
+        return {}
+    previous = detected["previous"]
+    current = detected["current"]
+    signature_basis = "|".join(
+        [
+            backend_session_id,
+            str(previous.get("timestamp") or ""),
+            str(previous.get("input_tokens") or ""),
+            str(current.get("timestamp") or ""),
+            str(current.get("input_tokens") or ""),
+        ]
+    )
+    detected["signature"] = "runtime_drop:" + hashlib.sha1(signature_basis.encode("utf-8")).hexdigest()[:16]
+    return detected
 
 
 def _codex_runtime_context(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:

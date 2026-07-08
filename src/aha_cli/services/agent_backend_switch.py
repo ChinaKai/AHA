@@ -11,7 +11,7 @@ from aha_cli.store.filesystem import append_event, append_message, task_snapshot
 from aha_cli.store.io import write_json
 from aha_cli.store.paths import run_dir
 from aha_cli.store.runs import locked_plan, require_plan, save_plan
-from aha_cli.store.sessions import backend_session_usage_archive_fields, ensure_session, save_session
+from aha_cli.store.sessions import backend_session_usage_archive_fields, ensure_session, save_session, set_force_full_prompt_next_turn
 
 UNSET = object()
 
@@ -192,6 +192,13 @@ def switch_agent_backend(
         "chars": len(summary),
         "archived_backend_session_id": old_backend_session_id,
     }
+    set_force_full_prompt_next_turn(
+        session,
+        "agent_backend_switch",
+        detected_at=switched_at,
+        trigger=switch_reason,
+        summary_path=summary_ref,
+    )
     save_session(root, session)
 
     append_event(

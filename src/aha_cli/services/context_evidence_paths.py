@@ -347,7 +347,7 @@ def _looks_like_knowledge_path(path: str, root: Path) -> bool:
     clean = str(path or "").replace("\\", "/").strip("/")
     if ".aha/knowledge/" in clean or clean.startswith("knowledge/"):
         return True
-    if re.match(r"^(projects/[^/]+/(navigation|solutions)|general/(wiki|solutions)|personal/(wiki|solutions))(/|$)", clean):
+    if re.match(r"^(projects/[^/]+/(navigation|solutions|worklog)|general/(wiki|solutions)|personal/(wiki|solutions))(/|$)", clean):
         return True
     for prefix in _path_prefixes(root / "knowledge"):
         if clean == prefix or clean.startswith(prefix + "/"):

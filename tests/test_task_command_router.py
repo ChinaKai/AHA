@@ -64,6 +64,8 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertIsNotNone(forwarded)
         self.assertIn("AHA knowledge-base feedback request.", forwarded or "")
         self.assertIn("蓝牙配网流程", forwarded or "")
+        self.assertIn("kb add --pending", forwarded or "")
+        self.assertNotIn("<aha_knowledge_candidates>[", forwarded or "")
         self.assertEqual(
             payload,
             {
@@ -74,7 +76,7 @@ class TaskCommandRouterTests(unittest.TestCase):
         )
         self.assertEqual(calls, [])
 
-    def test_aha_nav_command_is_forwarded_with_plain_sticky_metadata(self) -> None:
+    def test_aha_nav_command_is_no_longer_forwarded(self) -> None:
         handlers, calls = self.make_handlers()
 
         handled, forwarded, payload = handle_slash_command(
@@ -86,19 +88,12 @@ class TaskCommandRouterTests(unittest.TestCase):
             handlers=handlers,
         )
 
-        self.assertFalse(handled)
-        self.assertIsNotNone(forwarded)
-        self.assertIn("AHA project navigation feedback request.", forwarded or "")
-        self.assertIn("项目导航", forwarded or "")
-        self.assertEqual(
-            payload,
-            {
-                "command_namespace": "aha_nav",
-                "original_command": "/aha nav 根据刚才修改的知识库命令流程更新项目导航",
-                "plain_sticky": True,
-            },
-        )
-        self.assertEqual(calls, [])
+        self.assertTrue(handled)
+        self.assertIsNone(forwarded)
+        self.assertEqual(payload["message"]["message"], "formatted /aha nav 根据刚才修改的知识库命令流程更新项目导航 for main")
+        self.assertEqual(calls[0][0], "append_message")
+        self.assertEqual(calls[0][1][2], "aha")
+        self.assertEqual(calls[1][0], "append_event")
 
     def test_default_handlers_use_format_and_action_candidates(self) -> None:
         from aha_cli.web import task_command_actions
@@ -109,8 +104,7 @@ class TaskCommandRouterTests(unittest.TestCase):
         self.assertEqual(handlers.format_agent_command.__module__, "aha_cli.web.task_command_format")
         self.assertIsNotNone(handlers.format_aha_kb_command)
         self.assertEqual((handlers.format_aha_kb_command).__module__, "aha_cli.web.task_command_format")
-        self.assertIsNotNone(handlers.format_aha_nav_command)
-        self.assertEqual((handlers.format_aha_nav_command).__module__, "aha_cli.web.task_command_format")
+        self.assertFalse(hasattr(handlers, "format_aha_nav_command"))
         self.assertIs(handlers.request_task_finalization, task_command_actions.request_task_finalization)
 
     def test_aha_final_is_no_longer_supported(self) -> None:

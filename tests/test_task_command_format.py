@@ -11,7 +11,6 @@ from aha_cli.web.task_command_format import (
     finalization_prompt,
     format_agent_command,
     format_aha_kb_command,
-    format_aha_nav_command,
     format_aha_command,
     format_task_journal_for_prompt,
 )
@@ -47,7 +46,7 @@ class TaskCommandFormatTests(unittest.TestCase):
 
         self.assertNotIn("/aha final", help_text)
         self.assertIn("/aha kb <message>", help_text)
-        self.assertIn("/aha nav <message>", help_text)
+        self.assertNotIn("/aha nav <message>", help_text)
         self.assertNotIn("/aha map", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
@@ -73,6 +72,9 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertIn("AHA knowledge-base feedback request.", forwarded or "")
         self.assertIn("Use only your existing backend session context", forwarded or "")
         self.assertIn("Do not generate project navigation entries here", forwarded or "")
+        self.assertIn("Write pending knowledge-base candidates directly", forwarded or "")
+        self.assertIn("kb add --pending", forwarded or "")
+        self.assertIn("Do not append `<aha_knowledge_candidates>`", forwarded or "")
         self.assertIn("assets/<entry-slug>/<filename>", forwarded or "")
         self.assertIn("Do not invent image paths", forwarded or "")
         self.assertIn("do not merely say AHA should add the image later", forwarded or "")
@@ -80,26 +82,12 @@ class TaskCommandFormatTests(unittest.TestCase):
         self.assertIn("SVG is supported as a normal image asset", forwarded or "")
         self.assertIn("do not paste raw SVG markup into the article body", forwarded or "")
         self.assertIn("diagram.svg", forwarded or "")
+        self.assertNotIn("<aha_knowledge_candidates>[", forwarded or "")
         self.assertNotIn("![alt]", forwarded or "")
         self.assertIn("将刚才整理的蓝牙配网流程输出到知识库", forwarded or "")
         self.assertTrue(empty_handled)
         self.assertIsNone(empty_forwarded)
         self.assertIn("Usage: /aha kb <message>", empty_reply or "")
-
-    def test_format_aha_nav_command_forwards_minimal_navigation_prompt(self) -> None:
-        handled, forwarded, reply = format_aha_nav_command("/aha nav 根据刚才修改的知识库命令流程更新项目导航")
-        empty_handled, empty_forwarded, empty_reply = format_aha_nav_command("/aha nav")
-
-        self.assertFalse(handled)
-        self.assertIsNotNone(forwarded)
-        self.assertIsNone(reply)
-        self.assertIn("AHA project navigation feedback request.", forwarded or "")
-        self.assertIn("Do not run commands, inspect files, scan the workspace", forwarded or "")
-        self.assertIn("Do not generate `solutions` or `wiki` candidates here", forwarded or "")
-        self.assertIn("根据刚才修改的知识库命令流程更新项目导航", forwarded or "")
-        self.assertTrue(empty_handled)
-        self.assertIsNone(empty_forwarded)
-        self.assertIn("Usage: /aha nav <message>", empty_reply or "")
 
     def test_format_aha_without_task_and_missing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

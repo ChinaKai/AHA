@@ -41,7 +41,7 @@ PERSONAL_DIR = "personal"
 PROJECTS_DIR = "projects"
 PENDING_DIR = ".pending"
 NAV_DRAFTS_DIR = ".nav_drafts"
-ENTRY_KINDS = ("wiki", "solutions", "navigation")
+ENTRY_KINDS = ("wiki", "solutions", "navigation", "worklog")
 # `personal` is a user scratch scope: stored and searchable like general, but
 # deliberately NOT auto-injected into task prompts (see knowledge_retrieval).
 SCOPES = ("general", "project", "personal")
@@ -52,8 +52,19 @@ ENTRY_KINDS_BY_SCOPE = {
 }
 
 # Stable mapping between on-disk kind (directory) and frontmatter ``type``.
-_KIND_TO_TYPE = {"wiki": "wiki", "solutions": "solution", "navigation": "navigation"}
-_TYPE_TO_KIND = {"wiki": "wiki", "solution": "solutions", "navigation": "navigation"}
+_KIND_TO_TYPE = {
+    "wiki": "wiki",
+    "solutions": "solution",
+    "navigation": "navigation",
+    "worklog": "task_worklog",
+}
+_TYPE_TO_KIND = {
+    "wiki": "wiki",
+    "solution": "solutions",
+    "navigation": "navigation",
+    "task_worklog": "worklog",
+    "worklog": "worklog",
+}
 
 # A project's navigation entry point is intentionally small. Detailed project
 # orientation lives under nested navigation docs such as modules/<name>.md.
@@ -284,6 +295,7 @@ def _render_readme() -> str:
         "- `personal/wiki` — personal notes that should be searchable but not auto-injected\n"
         "- `personal/solutions` — personal reusable playbooks\n"
         "- `projects/<project-key>/solutions` — rare reusable project playbooks\n"
+        "- `projects/<project-key>/worklog/tasks/*.md` — live task plans, progress, requirement changes, decisions, and verification notes\n"
         "- `projects/<project-key>/navigation/index.md` — the project navigation entry point\n"
         "- `projects/<project-key>/navigation/modules/*.md` — on-demand module docs\n"
         "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n"
@@ -633,8 +645,9 @@ def list_stale_entries(root: Path, config: dict | None = None, now: str | None =
 
 
 def read_entry(path: Path) -> dict:
-    meta, body = parse_entry(Path(path).read_text(encoding="utf-8"))
-    return {"meta": meta, "body": body, "path": str(path)}
+    path = Path(path)
+    meta, body = parse_entry(path.read_text(encoding="utf-8"))
+    return {"meta": meta, "body": body, "path": str(path), "size_bytes": _entry_size_bytes(path)}
 
 
 def read_entry_meta(path: Path) -> dict:
@@ -652,7 +665,15 @@ def read_entry_meta(path: Path) -> dict:
 
 
 def read_entry_summary(path: Path) -> dict:
-    return {"meta": read_entry_meta(path), "path": str(path)}
+    path = Path(path)
+    return {"meta": read_entry_meta(path), "path": str(path), "size_bytes": _entry_size_bytes(path)}
+
+
+def _entry_size_bytes(path: Path) -> int | None:
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        return None
 
 
 def list_entries(

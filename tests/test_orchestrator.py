@@ -10,7 +10,9 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
+from aha_cli.domain.models import default_knowledge_config
 from aha_cli.services.chat import chat_offset_path, load_chat_offset
+from aha_cli.services import knowledge_git
 from aha_cli.services.orchestrator import (
     action_response_text,
     execute_actions,
@@ -43,6 +45,7 @@ from aha_cli.store.filesystem import (
     update_agent_runtime,
     write_task_result,
 )
+from aha_cli.store.knowledge import knowledge_root, project_key_aliases
 from aha_cli.web.server import finalization_prompt
 
 
@@ -1132,6 +1135,65 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertIn("1. `round-001` 修复 action schema 误解析", snapshot["result"])
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 self.assertTrue(any(event["type"] == "task_round_recorded" for event in events))
+
+    def test_record_task_update_kb_feedback_auto_commits_project_knowledge(self) -> None:
+        if not knowledge_git.git_available():
+            self.skipTest("git not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                kb = default_knowledge_config()
+                kb["enabled"] = True
+                kb["git"]["enabled"] = True
+                cfg = {"knowledge": kb}
+                write_json(root / ".aha" / "config.json", cfg)
+                code, plan_output = self.run_cli("plan", "KB auto commit", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                self.assertTrue(knowledge_git.commit_all(root, "init", cfg)["committed"])
+                repo = knowledge_root(root, cfg)
+                project = project_key_aliases(root, goal="KB auto commit")[0]
+                approved = repo / "projects" / project / "navigation" / "index.md"
+                approved.parent.mkdir(parents=True, exist_ok=True)
+                approved.write_text("# 项目导航\n", encoding="utf-8")
+                unrelated = repo / "general" / "wiki" / "unrelated.md"
+                unrelated.parent.mkdir(parents=True, exist_ok=True)
+                unrelated.write_text("# Unrelated\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(repo), "add", "general/wiki/unrelated.md"], check=True, capture_output=True)
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "record_task_update",
+                                "summary": "更新项目 KB",
+                                "kb_feedback": {"updated": ["navigation/index.md"]},
+                            }
+                        ],
+                        "response": "已记录",
+                    },
+                    ensure_ascii=False,
+                )
+
+                executed = execute_actions(root, run_id, "task-001", reply)
+
+                self.assertTrue(executed[0]["knowledge_git"]["committed"])
+                committed = subprocess.run(
+                    ["git", "-C", str(repo), "show", "--name-only", "--pretty=format:", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip().splitlines()
+                self.assertEqual(committed, [f"projects/{project}/navigation/index.md"])
+                status = subprocess.run(
+                    ["git", "-C", str(repo), "status", "--porcelain"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                self.assertIn("A  general/wiki/unrelated.md", status)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                self.assertTrue(any(event["type"] == "knowledge_task_feedback_auto_commit" for event in events))
 
     def test_codex_chat_record_task_update_does_not_wait_for_subagents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

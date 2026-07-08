@@ -65,12 +65,15 @@ def test_status_and_entries(tmp_path: Path):
 
     all_entries = _get(home, "/api/kb/entries")
     assert all_entries["count"] == 2
+    assert all(isinstance(entry.get("size_bytes"), int) and entry["size_bytes"] > 0 for entry in all_entries["entries"])
 
     filtered = _get(home, "/api/kb/entries", {"scope": ["general"]})
     assert filtered["count"] == 1 and filtered["entries"][0]["title"] == "Overview"
+    assert filtered["entries"][0]["size_bytes"] > 0
 
     by_kind = _get(home, "/api/kb/entries", {"kind": ["solutions"]})
     assert by_kind["count"] == 1 and by_kind["entries"][0]["id"].startswith("kb_")
+    assert by_kind["entries"][0]["size_bytes"] > 0
 
 
 def test_entries_kind_filter_includes_navigation(tmp_path: Path):
@@ -88,6 +91,7 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
 
     project_nav = _get(home, "/api/kb/project-nav", {"project_key": ["git-abc"]})
     assert project_nav["count"] == 1 and project_nav["entries"][0]["type"] == "navigation"
+    assert project_nav["entries"][0]["size_bytes"] > 0
 
     # The general tutorial is reachable via the general scope filter.
     general = _get(home, "/api/kb/entries", {"scope": ["general"]})
@@ -96,6 +100,30 @@ def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     # Existing kind filters are unaffected (navigation is not a solution).
     sol = _get(home, "/api/kb/entries", {"kind": ["solutions"]})
     assert sol["count"] == 1 and sol["entries"][0]["title"] == "Fix build"
+
+
+def test_entries_kind_filter_includes_project_worklog(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="worklog",
+        project_key_value="git-abc",
+        title="task-001 worklog",
+        body="## Progress\n- Implemented one step.",
+        slug="tasks/task-001",
+    )
+
+    status = _get(home, "/api/kb/status")
+    project = next(item for item in status["projects"] if item["project_key"] == "git-abc")
+    assert project["counts"]["worklog"] == 1
+
+    worklog = _get(home, "/api/kb/entries", {"kind": ["worklog"]})
+    assert worklog["count"] == 1
+    assert worklog["entries"][0]["type"] == "task_worklog"
+    assert worklog["entries"][0]["slug"] == "tasks/task-001"
 
 
 def _capture_sidecar(candidates_json: str) -> str:

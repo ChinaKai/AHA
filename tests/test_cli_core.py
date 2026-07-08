@@ -1489,7 +1489,7 @@ class CliCoreTests(unittest.TestCase):
                 self.assertTrue(handled)
                 self.assertIsNone(agent_message)
                 self.assertIn("/aha kb <message>", payload["message"]["message"])
-                self.assertIn("/aha nav <message>", payload["message"]["message"])
+                self.assertNotIn("/aha nav <message>", payload["message"]["message"])
                 self.assertNotIn("/aha map", payload["message"]["message"])
                 self.assertIn("/aha complete", payload["message"]["message"])
                 self.assertIn("/aha reopen", payload["message"]["message"])

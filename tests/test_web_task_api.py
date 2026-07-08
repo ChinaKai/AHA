@@ -30,7 +30,7 @@ from aha_cli.store.filesystem import (
     update_task_supervision_config,
     write_task_result,
 )
-from aha_cli.store.sessions import ensure_session, save_session
+from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY, ensure_session, save_session
 from aha_cli.store.task_memos import create_task_memo
 from aha_cli.store.io import write_json
 from aha_cli.store.paths import config_path
@@ -1306,6 +1306,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(updated_session["history_backend_sessions"][-1]["token_summary"]["total_tokens"], 275)
         self.assertEqual(updated_session["history_backend_sessions"][-1]["token_summary"]["cached_tokens"], 40)
         self.assertEqual(updated_session["compact_summary"]["reason"], "backend_switch")
+        self.assertEqual(updated_session[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["reason"], "agent_backend_switch")
+        self.assertEqual(updated_session[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["trigger"], "backend_switch")
         handoff_message = next(message.get("message", "") for message in messages if message.get("coordination") == "backend_switch")
         self.assertIn("previous backend: codex", handoff_message)
         self.assertIn(str(root), handoff_message)

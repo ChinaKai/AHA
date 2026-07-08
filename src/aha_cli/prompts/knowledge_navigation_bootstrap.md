@@ -9,6 +9,7 @@ Return ONLY valid JSON. The top-level value must be an array of candidates. Each
 
 Rules:
 - Use the provided project_key exactly.
+- Write candidate titles, body text, diagnostics, and navigation reasons in Chinese by default; keep code identifiers, paths, commands, and schema fields literal.
 - Include exactly one `index` candidate.
 - The `index` body is mandatory and MUST contain these sections in this order:
   - `## 项目介绍`

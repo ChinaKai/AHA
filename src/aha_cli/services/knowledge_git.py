@@ -26,9 +26,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from aha_cli.store.knowledge import init_knowledge_base, knowledge_config, knowledge_root
+from aha_cli.store.knowledge import PROJECTS_DIR, init_knowledge_base, knowledge_config, knowledge_root
 
 _GIT_TIMEOUT = 120
+_PROJECT_APPROVED_KINDS = ("navigation", "solutions", "worklog")
 
 
 def git_available() -> bool:
@@ -130,6 +131,66 @@ def _has_changes(repo: Path) -> bool:
     return bool(res["ok"] and res["stdout"])
 
 
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _safe_project_keys(project_keys: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    safe: list[str] = []
+    for value in project_keys:
+        key = str(value or "").strip()
+        if not key or key in {".", ".."} or "/" in key or "\\" in key:
+            continue
+        safe.append(key)
+    return _dedupe(safe)
+
+
+def _project_approved_pathspecs(project_keys: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    pathspecs: list[str] = []
+    for key in _safe_project_keys(project_keys):
+        for kind in _PROJECT_APPROVED_KINDS:
+            pathspecs.append(f"{PROJECTS_DIR}/{key}/{kind}")
+    return pathspecs
+
+
+def _usable_pathspecs(repo: Path, pathspecs: list[str]) -> list[str]:
+    usable: list[str] = []
+    for pathspec in pathspecs:
+        if (repo / pathspec).exists():
+            usable.append(pathspec)
+            continue
+        tracked = _run_git(repo, ["ls-files", "--", pathspec])
+        if tracked["ok"] and tracked["stdout"]:
+            usable.append(pathspec)
+    return usable
+
+
+def _status_for_pathspecs(repo: Path, pathspecs: list[str]) -> dict:
+    if not pathspecs:
+        return {"ok": True, "stdout": ""}
+    return _run_git(repo, ["status", "--porcelain", "--", *pathspecs])
+
+
+def _changed_paths_from_status(stdout: str) -> list[str]:
+    paths: list[str] = []
+    for raw in (stdout or "").splitlines():
+        if len(raw) < 4:
+            continue
+        path = raw[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        if path:
+            paths.append(path)
+    return paths
+
+
 def commit_all(root: Path, message: str, config: dict | None = None) -> dict:
     """Stage all knowledge changes and commit. No-op when the tree is clean."""
     ensured = ensure_repo(root, config)
@@ -149,6 +210,46 @@ def commit_all(root: Path, message: str, config: dict | None = None) -> dict:
         return {"ok": False, "committed": False, "error": f"git commit failed: {commit['stderr']}"}
     head = _run_git(repo, ["rev-parse", "--short", "HEAD"])
     return {"ok": True, "committed": True, "commit": head["stdout"] if head["ok"] else None}
+
+
+def commit_project_approved_entries(root: Path, message: str, project_keys: list[str], config: dict | None = None) -> dict:
+    """Commit only approved project KB entry changes for the given project keys.
+
+    This deliberately excludes pending candidates, general/personal entries,
+    and other projects. It also uses ``git commit --only`` so pre-existing
+    staged changes outside these pathspecs cannot be swept into the commit.
+    """
+    ensured = ensure_repo(root, config)
+    if not ensured["ok"]:
+        return {"ok": False, "committed": False, "error": ensured.get("error")}
+    repo = knowledge_root(root, config)
+    git_cfg = _git_cfg(config)
+    project_keys = _safe_project_keys(project_keys)
+    pathspecs = _usable_pathspecs(repo, _project_approved_pathspecs(project_keys))
+    if not pathspecs:
+        return {"ok": True, "committed": False, "reason": "no project pathspecs"}
+
+    status = _status_for_pathspecs(repo, pathspecs)
+    if not status["ok"]:
+        return {"ok": False, "committed": False, "error": f"git status failed: {status['stderr']}"}
+    changed_paths = _changed_paths_from_status(status["stdout"])
+    if not changed_paths:
+        return {"ok": True, "committed": False, "reason": "nothing to commit", "project_keys": project_keys}
+
+    add = _run_git(repo, ["add", "-A", "--", *pathspecs])
+    if not add["ok"]:
+        return {"ok": False, "committed": False, "error": f"git add failed: {add['stderr']}"}
+    commit = _run_git(repo, ["commit", "-m", message, "--only", "--", *pathspecs], author=git_cfg)
+    if not commit["ok"]:
+        return {"ok": False, "committed": False, "error": f"git commit failed: {commit['stderr']}"}
+    head = _run_git(repo, ["rev-parse", "--short", "HEAD"])
+    return {
+        "ok": True,
+        "committed": True,
+        "commit": head["stdout"] if head["ok"] else None,
+        "project_keys": project_keys,
+        "paths": changed_paths,
+    }
 
 
 def pull(root: Path, config: dict | None = None) -> dict:
@@ -231,6 +332,24 @@ def auto_commit_after_change(root: Path, message: str, config: dict | None = Non
     if not git_cfg.get("auto_commit", True):
         return {"ok": True, "skipped": "auto_commit disabled"}
     result = commit_all(root, message, config)
+    if result.get("committed") and git_cfg.get("auto_push", False):
+        result["push"] = push(root, config)
+    return result
+
+
+def auto_commit_project_approved_entries_after_feedback(
+    root: Path,
+    message: str,
+    project_keys: list[str],
+    config: dict | None = None,
+) -> dict:
+    """Commit approved project KB edits reported by task KB feedback."""
+    if not _enabled(config):
+        return {"ok": True, "skipped": "git sync disabled"}
+    git_cfg = _git_cfg(config)
+    if not git_cfg.get("auto_commit", True):
+        return {"ok": True, "skipped": "auto_commit disabled"}
+    result = commit_project_approved_entries(root, message, project_keys, config)
     if result.get("committed") and git_cfg.get("auto_push", False):
         result["push"] = push(root, config)
     return result

@@ -14,7 +14,13 @@ from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.backends.claude import run_claude_exec
 from aha_cli.cli import main
 from aha_cli.services import backend_runtime as backend_runtime_module
-from aha_cli.services.backend_runtime import _process_matches_home, backend_status, start_backend, stop_task_backends
+from aha_cli.services.backend_runtime import (
+    _process_matches_home,
+    backend_status,
+    detect_runtime_context_compaction,
+    start_backend,
+    stop_task_backends,
+)
 from aha_cli.store.filesystem import add_agent, append_event, read_json, session_path, update_agent_config, write_json
 
 
@@ -349,6 +355,49 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["context_pressure"]["prompt_tokens"], 219640)
         self.assertEqual(status["context_pressure"]["runtime_input_tokens"], 226853)
         self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.input_tokens")
+
+    def test_detect_runtime_context_compaction_from_codex_token_count_drop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            session = {"backend_session_id": "codex-drop-session"}
+            codex_session = home / ".codex" / "sessions" / "2026" / "07" / "08" / "rollout-codex-drop-session.jsonl"
+            codex_session.parent.mkdir(parents=True)
+            rows = [
+                {
+                    "timestamp": "2026-07-08T13:29:56.685Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "model_context_window": 258400,
+                            "last_token_usage": {"input_tokens": 219987, "total_tokens": 220000},
+                        },
+                    },
+                },
+                {
+                    "timestamp": "2026-07-08T13:30:40.978Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "model_context_window": 258400,
+                            "last_token_usage": {"input_tokens": 34445, "total_tokens": 34500},
+                        },
+                    },
+                },
+            ]
+            codex_session.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+            with mock.patch("pathlib.Path.home", return_value=home):
+                signal = detect_runtime_context_compaction(root / ".aha", "run-1", "main", "task-001", session)
+
+        self.assertEqual(signal["backend_session_id"], "codex-drop-session")
+        self.assertEqual(signal["previous"]["input_tokens"], 219987)
+        self.assertEqual(signal["current"]["input_tokens"], 34445)
+        self.assertEqual(signal["drop_tokens"], 185542)
+        self.assertGreater(signal["drop_percent"], 70)
+        self.assertTrue(signal["signature"].startswith("runtime_drop:"))
 
     def test_backend_status_keeps_context_pressure_unknown_without_prompt_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

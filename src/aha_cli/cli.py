@@ -91,6 +91,7 @@ from aha_cli.store.filesystem import (
 from aha_cli.services.knowledge_git import sync as knowledge_sync
 from aha_cli.store.knowledge import (
     approve_candidate as knowledge_approve_candidate,
+    enqueue_candidate as knowledge_enqueue_candidate,
     entry_exists as knowledge_entry_exists,
     entry_path_for as knowledge_entry_path_for,
     find_entry as knowledge_find_entry,
@@ -726,6 +727,9 @@ def cmd_kb(args: argparse.Namespace) -> int:
         if args.scope == "project" and args.kind == "wiki":
             print("project wiki entries are not supported; use project navigation docs or project solutions", file=sys.stderr)
             return 2
+        if args.scope != "project" and args.kind == "worklog":
+            print("worklog entries are only supported for --scope project", file=sys.stderr)
+            return 2
         if args.scope == "project" and not args.project:
             print("--project is required for --scope project", file=sys.stderr)
             return 2
@@ -737,6 +741,43 @@ def cmd_kb(args: argparse.Namespace) -> int:
             meta["tags"] = args.tag
         if args.review_days is not None:
             meta["review_after"] = knowledge_future_iso(args.review_days)
+        if getattr(args, "confidence", None) is not None:
+            meta["confidence"] = args.confidence
+        if getattr(args, "pending", False):
+            if args.append:
+                print("--append is only supported when writing approved entries, not pending candidates", file=sys.stderr)
+                return 2
+            if not body.strip():
+                print("pending candidate requires a non-empty body (--body/--body-file)", file=sys.stderr)
+                return 2
+            init_knowledge_base(root, cfg)
+            source = {"source_type": args.source_type or "manual_cli"}
+            if args.source_run:
+                source["run_id"] = args.source_run
+            if args.source_task:
+                source["task_id"] = args.source_task
+            if args.source_agent:
+                source["agent_id"] = args.source_agent
+            path = knowledge_enqueue_candidate(
+                root,
+                cfg,
+                {
+                    "kind": args.kind,
+                    "scope": args.scope,
+                    "project_key": args.project if args.scope == "project" else None,
+                    "title": args.title,
+                    "body": body,
+                    "meta": meta,
+                    "source": source,
+                },
+            )
+            record = read_json(path)
+            result = {"ok": True, "action": "pending", "path": str(path), "candidate_id": record.get("id")}
+            if getattr(args, "json", False):
+                print(json.dumps(result | {"candidate": record}, indent=2, ensure_ascii=False))
+            else:
+                print(f"pending candidate: {record.get('id')} {path}")
+            return 0
         slug = knowledge_slugify(args.title)
         existing_path = knowledge_entry_path_for(root, cfg, args.scope, args.kind, args.project, slug)
         action = "created"
@@ -892,6 +933,7 @@ def _kb_entry_summary(entry: dict) -> dict:
         "review_after": meta.get("review_after"),
         "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
+        "size_bytes": entry.get("size_bytes"),
         "path": entry.get("path"),
     }
 
@@ -924,7 +966,8 @@ def format_knowledge_status(status: dict) -> str:
             counts = proj["counts"]
             lines.append(
                 f"    - {proj['project_key']}: wiki={counts.get('wiki', 0)} "
-                f"solutions={counts.get('solutions', 0)} navigation={counts.get('navigation', 0)}"
+                f"solutions={counts.get('solutions', 0)} navigation={counts.get('navigation', 0)} "
+                f"worklog={counts.get('worklog', 0)}"
             )
     else:
         lines.append("  projects: none")

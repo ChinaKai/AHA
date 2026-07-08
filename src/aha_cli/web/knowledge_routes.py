@@ -402,6 +402,12 @@ def _capture_note_matches_query(note: dict, query: str) -> bool:
 
 def _entry_summary(entry: dict) -> dict:
     meta = entry.get("meta", {})
+    size_bytes = entry.get("size_bytes")
+    if size_bytes is None and entry.get("path"):
+        try:
+            size_bytes = Path(str(entry.get("path"))).stat().st_size
+        except OSError:
+            size_bytes = None
     return {
         "id": meta.get("id"),
         "slug": meta.get("slug"),
@@ -416,6 +422,7 @@ def _entry_summary(entry: dict) -> dict:
         "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
         "path": entry.get("path"),
+        "size_bytes": size_bytes,
     }
 
 
@@ -688,7 +695,7 @@ def knowledge_route_response(
         project = str(query.get("project", [""])[0] or "").strip() or None
         search = str(query.get("q", [""])[0] or "").strip()
         kind = str(query.get("kind", [""])[0] or "").strip() or None
-        want_type = type_for_kind(kind) if kind in ("solutions", "wiki", "navigation") else None
+        want_type = type_for_kind(kind) if kind in ("solutions", "wiki", "navigation", "worklog") else None
         try:
             limit = _query_int_param(query, "limit", 0)
             offset = max(0, _query_int_param(query, "offset", 0))

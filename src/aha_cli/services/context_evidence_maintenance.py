@@ -178,6 +178,7 @@ def kb_scope_policy() -> dict:
     return {
         "project_navigation": "direct_edit_approved_markdown_with_task_evidence",
         "project_solutions": "direct_edit_when_reusable_with_task_evidence",
+        "project_worklog": "direct_edit_throughout_task_lifecycle_when_durable",
         "general_personal_wiki": "manual_candidate_review_only",
     }
 

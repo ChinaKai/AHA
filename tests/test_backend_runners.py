@@ -34,6 +34,7 @@ from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path, chat_prompt, save_chat_offset
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.store.filesystem import append_event, append_jsonl, inbox_path, iter_jsonl_from, read_json, run_dir
+from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.web.server import backend_session_jsonl_info
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -650,6 +651,25 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual([row["type"] for row in rows], ["agent_error", "agent_context_overflow"])
         self.assertEqual(rows[1]["data"]["reason"], "context_window")
 
+    def test_codex_auto_context_compact_marks_next_prompt_full(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            session: dict = {"backend_session_id": "codex-session-1"}
+            handle_codex_event(
+                json.dumps({"type": "thread.compacted", "reason": "context_window_auto_compact"}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="codex-chat",
+                target="main",
+                session=session,
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([row["type"] for row in rows], ["backend_auto_context_compact"])
+        self.assertEqual(session[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["reason"], "backend_auto_context_compact")
+        self.assertEqual(session[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["raw_type"], "thread.compacted")
+
     def test_codex_exec_reports_missing_cli_as_agent_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "reply.md"
@@ -864,6 +884,25 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual([row["type"] for row in rows], ["agent_error", "agent_context_overflow"])
         self.assertEqual(rows[1]["data"]["reason"], "context_window")
 
+    def test_claude_auto_context_compact_marks_next_prompt_full(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            session: dict = {"backend_session_id": "claude-session-1"}
+            handle_claude_event(
+                json.dumps({"type": "system", "subtype": "context_compacted", "message": "context was compacted automatically"}),
+                events_file=events,
+                run_id="run",
+                task_id="task-001",
+                source="claude-chat",
+                target="main",
+                session=session,
+            )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([row["type"] for row in rows], ["backend_auto_context_compact"])
+        self.assertEqual(session[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["reason"], "backend_auto_context_compact")
+        self.assertEqual(session[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["subtype"], "context_compacted")
+
     def test_codex_backend_dry_run_uses_codex_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1049,6 +1088,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(updated["history_backend_sessions"][0]["token_summary"]["total_tokens"], 150)
         self.assertEqual(updated["history_backend_sessions"][0]["token_summary"]["cached_tokens"], 20)
         self.assertEqual(updated["compact_summary"]["archived_backend_session_id"], session_id)
+        self.assertEqual(updated[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["reason"], "backend_session_compact_reset")
+        self.assertEqual(updated[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["trigger"], "manual")
+        self.assertEqual(updated[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["summary_path"], payload["summary_path"])
         self.assertTrue(summary_exists)
         self.assertEqual(offset["offset"], inbox_size)
         self.assertIn("Backend compact summary from previous session", prompt)

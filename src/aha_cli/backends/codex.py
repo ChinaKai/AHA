@@ -17,6 +17,7 @@ from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
+from aha_cli.store.sessions import force_full_prompt_marker, set_force_full_prompt_next_turn
 
 OUTPUT_TAIL_LIMIT = 1200
 CONTEXT_OVERFLOW_MARKERS = (
@@ -26,6 +27,21 @@ CONTEXT_OVERFLOW_MARKERS = (
     "maximum context",
     "too many tokens",
     "prompt is too long",
+)
+BACKEND_AUTO_CONTEXT_COMPACT_TYPE_MARKERS = ("compact", "compaction")
+BACKEND_AUTO_CONTEXT_COMPACT_SCOPE_MARKERS = ("context", "conversation", "session", "thread", "window", "auto")
+BACKEND_AUTO_CONTEXT_COMPACT_MESSAGE_MARKERS = (
+    "auto compact",
+    "auto-compact",
+    "automatic compact",
+    "context compact",
+    "context compaction",
+    "context was compact",
+    "context window compact",
+    "conversation compact",
+    "conversation was compact",
+    "conversation was summarized",
+    "summarized the conversation",
 )
 CODEX_ENV_MODEL_PREFIX = "env:"
 CODEX_PROVIDER_OVERRIDE_KEY = "_provider_override"
@@ -63,6 +79,59 @@ def tail_text(value: str, limit: int = OUTPUT_TAIL_LIMIT) -> str:
 def is_context_overflow_message(message: object) -> bool:
     text = str(message or "").casefold()
     return any(marker in text for marker in CONTEXT_OVERFLOW_MARKERS)
+
+
+def _compact_detection_values(event: dict, keys: tuple[str, ...]) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        value = event.get(key)
+        if value is not None:
+            values.append(str(value).casefold())
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if value is not None:
+                values.append(str(value).casefold())
+    return values
+
+
+def is_backend_auto_context_compact_event(event: object) -> bool:
+    if not isinstance(event, dict):
+        return False
+    typed_values = _compact_detection_values(event, ("type", "subtype", "event", "name", "reason", "status"))
+    for value in typed_values:
+        has_compact = any(marker in value for marker in BACKEND_AUTO_CONTEXT_COMPACT_TYPE_MARKERS)
+        if has_compact and (
+            any(marker in value for marker in BACKEND_AUTO_CONTEXT_COMPACT_SCOPE_MARKERS)
+            or value in {"compact", "compacted", "compaction"}
+        ):
+            return True
+    raw_type = str(event.get("type") or "").casefold()
+    if raw_type in {"system", "status", "progress", "event"} or any("compact" in value for value in typed_values):
+        for value in _compact_detection_values(event, ("message", "detail", "details", "description")):
+            if any(marker in value for marker in BACKEND_AUTO_CONTEXT_COMPACT_MESSAGE_MARKERS):
+                return True
+            if "context" in value and ("summarized" in value or "summary" in value) and "conversation" in value:
+                return True
+    return False
+
+
+def mark_backend_auto_context_compact(session: dict | None, event: dict) -> dict:
+    raw_type = str(event.get("type") or "").strip()
+    subtype = str(event.get("subtype") or event.get("event") or event.get("name") or "").strip()
+    if session is not None:
+        return set_force_full_prompt_next_turn(
+            session,
+            "backend_auto_context_compact",
+            raw_type=raw_type,
+            subtype=subtype,
+        )
+    return force_full_prompt_marker(
+        "backend_auto_context_compact",
+        raw_type=raw_type,
+        subtype=subtype,
+    )
 
 
 def codex_sandbox(mode: str, requested: str) -> str:
@@ -403,6 +472,14 @@ def handle_codex_event(
         data["task_id"] = task_id
     if target:
         data["target"] = target
+    if is_backend_auto_context_compact_event(event):
+        compact_marker = mark_backend_auto_context_compact(session, event)
+        append_event_to_file(
+            events_file,
+            run_id,
+            "backend_auto_context_compact",
+            data | compact_marker,
+        )
     if raw_type == "thread.started":
         thread_id = event.get("thread_id")
         data["thread_id"] = thread_id

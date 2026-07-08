@@ -8,6 +8,7 @@ from aha_cli.store.io import iter_jsonl_reverse, read_json, write_json
 from aha_cli.store.paths import event_path, run_dir, session_path
 
 SESSION_RESET_EVENT_TYPES = {"backend_session_reset", "backend_session_compact_reset"}
+FORCE_FULL_PROMPT_NEXT_TURN_KEY = "force_full_prompt_next_turn"
 USAGE_SUM_KEYS = {
     "input_tokens",
     "cached_input_tokens",
@@ -21,6 +22,28 @@ USAGE_SUM_KEYS = {
     "num_turns",
 }
 USAGE_FLOAT_SUM_KEYS = {"total_cost_usd"}
+
+
+def force_full_prompt_marker(reason: str, *, detected_at: str | None = None, **metadata: object) -> dict:
+    marker = {
+        "reason": str(reason or "force_full_prompt"),
+        "detected_at": detected_at or utc_now(),
+    }
+    marker.update({str(key): value for key, value in metadata.items() if value is not None and value != ""})
+    return marker
+
+
+def set_force_full_prompt_next_turn(
+    session: dict,
+    reason: str,
+    *,
+    detected_at: str | None = None,
+    **metadata: object,
+) -> dict:
+    marker = force_full_prompt_marker(reason, detected_at=detected_at, **metadata)
+    session[FORCE_FULL_PROMPT_NEXT_TURN_KEY] = marker
+    session["updated_at"] = marker["detected_at"]
+    return marker
 
 
 def _normalized_backend(value: object) -> str:

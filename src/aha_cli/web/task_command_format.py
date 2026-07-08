@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
 
 from aha_cli.services.prompt_templates import render_prompt_template
-from aha_cli.store.filesystem import task_snapshot
+from aha_cli.store.filesystem import load_config, require_plan, task_snapshot
+from aha_cli.store.knowledge import knowledge_config, knowledge_root, project_key_aliases
 
 
-SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha nav <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
+SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
 
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
@@ -21,9 +23,7 @@ def format_aha_command(root: Path, run_id: str, task_id: str | None, command: st
     except KeyError:
         return f"Task not found: {task_id}"
     if name == "kb":
-        return "Use `/aha kb <message>` from the selected task conversation to ask the current agent to emit knowledge-base candidates from its sticky session context."
-    if name == "nav":
-        return "Use `/aha nav <message>` from the selected task conversation to ask the current agent to emit project navigation candidates from its sticky session context."
+        return "Use `/aha kb <message>` from the selected task conversation to ask the current agent to write pending knowledge-base candidates from its sticky session context."
     if name == "complete":
         return "Use `/aha complete` from the selected task conversation to mark the task completed."
     if name == "reopen":
@@ -41,21 +41,77 @@ def format_agent_command(root: Path, run_id: str, task_id: str | None, agent_id:
     return False, suffix if suffix.startswith("/") else f"/{suffix}", None
 
 
-def format_aha_kb_command(command: str) -> tuple[bool, str | None, str | None]:
+def _quote(value: object) -> str:
+    return shlex.quote(str(value))
+
+
+def _knowledge_command_context(root: Path | None, run_id: str | None, task_id: str | None) -> str:
+    if root is None or not run_id or not task_id:
+        return "- AHA home/run/task context was not provided; write a pending candidate only if you can infer the correct `--home`, `--source-run`, and `--source-task` from the session."
+    try:
+        snapshot = task_snapshot(root, run_id, task_id)
+        task = snapshot["task"]
+    except (KeyError, SystemExit):
+        return f"- Task context unavailable: task not found `{task_id}`."
+    try:
+        plan = require_plan(root, run_id)
+    except (FileNotFoundError, KeyError, ValueError):
+        plan = {}
+    try:
+        cfg = load_config(root)
+    except (FileNotFoundError, ValueError):
+        cfg = {}
+    kb_cfg = knowledge_config(cfg)
+    workspace = Path(task.get("workspace_path") or root)
+    aliases = project_key_aliases(workspace, goal=str(plan.get("goal") or ""))
+    project_key = aliases[0] if aliases else ""
+    alias_text = ", ".join(aliases) if aliases else "-"
+    project_command = (
+        "python3 -m aha_cli "
+        f"--home {_quote(root)} kb add --pending --scope project --kind solutions "
+        f"--project {_quote(project_key)} --title '<title>' --body-file <body-file> "
+        f"--source-type kb_command --source-run {_quote(run_id)} --source-task {_quote(task_id)} "
+        "--source-agent <agent-id> --json"
+    )
+    general_command = (
+        "python3 -m aha_cli "
+        f"--home {_quote(root)} kb add --pending --scope general --kind wiki "
+        "--title '<title>' --body-file <body-file> "
+        f"--source-type kb_command --source-run {_quote(run_id)} --source-task {_quote(task_id)} "
+        "--source-agent <agent-id> --json"
+    )
+    return "\n".join(
+        [
+            f"- aha_home: {root}",
+            f"- run_id: {run_id}",
+            f"- task_id: {task_id}",
+            f"- knowledge_enabled: {str(bool(kb_cfg.get('enabled'))).lower()}",
+            f"- kb_root: {knowledge_root(root, cfg)}",
+            f"- workspace_path: {workspace}",
+            f"- project_key: {project_key or '-'}",
+            f"- project_key_aliases: {alias_text}",
+            f"- project pending command template: `{project_command}`",
+            f"- general pending command template: `{general_command}`",
+        ]
+    )
+
+
+def format_aha_kb_command(
+    command: str,
+    *,
+    root: Path | None = None,
+    run_id: str | None = None,
+    task_id: str | None = None,
+) -> tuple[bool, str | None, str | None]:
     parts = command.split(maxsplit=2)
     suffix = parts[2].strip() if len(parts) > 2 and parts[0] == "/aha" and parts[1] == "kb" else ""
     if not suffix:
-        return True, None, "Usage: /aha kb <message> asks the current agent to generate knowledge-base candidates from its sticky session context."
-    prompt = render_prompt_template("knowledge_command.md", instruction=suffix).rstrip()
-    return False, prompt, None
-
-
-def format_aha_nav_command(command: str) -> tuple[bool, str | None, str | None]:
-    parts = command.split(maxsplit=2)
-    suffix = parts[2].strip() if len(parts) > 2 and parts[0] == "/aha" and parts[1] == "nav" else ""
-    if not suffix:
-        return True, None, "Usage: /aha nav <message> asks the current agent to generate project navigation candidates from its sticky session context."
-    prompt = render_prompt_template("navigation_command.md", instruction=suffix).rstrip()
+        return True, None, "Usage: /aha kb <message> asks the current agent to write pending knowledge-base candidates from its sticky session context."
+    prompt = render_prompt_template(
+        "knowledge_command.md",
+        instruction=suffix,
+        knowledge_command_context=_knowledge_command_context(root, run_id, task_id),
+    ).rstrip()
     return False, prompt, None
 
 
@@ -152,7 +208,6 @@ __all__ = [
     "format_finalization_context_for_prompt",
     "format_agent_command",
     "format_aha_kb_command",
-    "format_aha_nav_command",
     "format_aha_command",
     "format_knowledge_feedback_context_for_prompt",
     "format_task_journal_for_prompt",

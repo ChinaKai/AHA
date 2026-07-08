@@ -54,7 +54,9 @@ def test_kb_list_show_search(tmp_path: Path):
 
     rc, out = _run(home, "list", "--json")
     assert rc == 0
-    assert len(json.loads(out)) == 2
+    listed_all = json.loads(out)
+    assert len(listed_all) == 2
+    assert all(isinstance(item.get("size_bytes"), int) and item["size_bytes"] > 0 for item in listed_all)
 
     rc, out = _run(home, "list", "--scope", "general", "--json")
     assert len(json.loads(out)) == 1
@@ -119,6 +121,60 @@ def test_kb_reject_json_outputs_json(tmp_path: Path):
     assert rc == 0
     payload = json.loads(out)
     assert payload["ok"] is True and payload["rejected"] == cid
+
+
+def test_kb_add_pending_enqueues_candidate(tmp_path: Path):
+    home = _home(tmp_path)
+    body_file = tmp_path / "candidate.md"
+    body_file.write_text("## 做法\n\n把可复用步骤写成候选。\n", encoding="utf-8")
+
+    rc, out = _run(
+        home,
+        "add",
+        "--pending",
+        "--scope",
+        "project",
+        "--kind",
+        "solutions",
+        "--project",
+        "git-abc",
+        "--title",
+        "蓝牙配网流程",
+        "--body-file",
+        str(body_file),
+        "--tag",
+        "bluetooth",
+        "--source-type",
+        "kb_command",
+        "--source-run",
+        "run-1",
+        "--source-task",
+        "task-1",
+        "--source-agent",
+        "main",
+        "--confidence",
+        "0.8",
+        "--json",
+    )
+
+    payload = json.loads(out)
+    pending = list_pending(home, _cfg())
+    assert rc == 0
+    assert payload["action"] == "pending"
+    assert payload["candidate_id"] == pending[0]["id"]
+    assert pending[0]["scope"] == "project"
+    assert pending[0]["kind"] == "solutions"
+    assert pending[0]["project_key"] == "git-abc"
+    assert pending[0]["title"] == "蓝牙配网流程"
+    assert pending[0]["body"] == body_file.read_text(encoding="utf-8")
+    assert pending[0]["meta"]["tags"] == ["bluetooth"]
+    assert pending[0]["meta"]["confidence"] == 0.8
+    assert pending[0]["source"] == {
+        "source_type": "kb_command",
+        "run_id": "run-1",
+        "task_id": "task-1",
+        "agent_id": "main",
+    }
 
 
 def test_kb_approve_and_reject(tmp_path: Path):

@@ -28,6 +28,7 @@ from aha_cli.store.filesystem import (
     write_json,
 )
 from aha_cli.store.knowledge import write_entry
+from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.store.paths import config_path
 
 
@@ -441,13 +442,18 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("AHA Knowledge/Nav Pull Contract:", enabled_prompt)
         self.assertIn("Knowledge base entrypoints:", enabled_prompt)
         self.assertIn("agent-pull", enabled_prompt)
+        self.assertIn("task_worklog:", enabled_prompt)
+        self.assertIn("Write project-scoped KB Markdown", enabled_prompt)
+        self.assertIn("in Chinese by default", enabled_prompt)
+        self.assertIn("Maintain task_worklog throughout the task lifecycle", enabled_prompt)
+        self.assertIn("If navigation_index is not found yet, create a minimal project navigation/index.md", enabled_prompt)
         self.assertIn("directly edit the approved KB Markdown files", enabled_prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", enabled_prompt)
-        self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", enabled_prompt)
+        self.assertIn("Manual `/aha kb` feedback is only for candidate-review flows", enabled_prompt)
         self.assertNotIn("Project map", enabled_prompt)
         self.assertNotIn("drivers/net/foo.c", enabled_prompt)
 
-    def test_sticky_delta_includes_context_pack_for_plain_turn_when_nav_enabled(self) -> None:
+    def test_sticky_delta_injects_context_pack_once_when_nav_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "repo"
             root = Path(tmp) / ".aha"
@@ -483,18 +489,241 @@ class ChatPromptTests(unittest.TestCase):
                     plain_sticky=True,
                 )
                 prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+                session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                next_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "next",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                next_prompt, next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
 
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")
         self.assertIn("AHA sticky-session delta turn", prompt)
         self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
         self.assertIn("Knowledge base entrypoints:", prompt)
         self.assertIn("agent-pull", prompt)
+        self.assertIn("task_worklog:", prompt)
+        self.assertIn("Write project-scoped KB Markdown", prompt)
+        self.assertIn("in Chinese by default", prompt)
+        self.assertIn("Maintain task_worklog throughout the task lifecycle", prompt)
+        self.assertIn("If navigation_index is not found yet, create a minimal project navigation/index.md", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", prompt)
-        self.assertIn("Manual `/aha kb` and `/aha nav` feedback commands are the candidate-review path", prompt)
+        self.assertIn("Manual `/aha kb` feedback is only for candidate-review flows", prompt)
         self.assertNotIn("Project map", prompt)
         self.assertNotIn("drivers/net/foo.c", prompt)
         self.assertIn("context_pack", metrics["components"])
+        self.assertTrue(metrics["context_fingerprint_updates"]["context_pack"])
+        self.assertEqual(next_prompt, "next")
+        self.assertEqual(set(next_metrics["components"]), {"user_message"})
+        self.assertNotIn("context_pack_evidence", next_metrics)
+
+    def test_auto_context_compact_marker_forces_full_prompt_with_context_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            (workspace / "src").mkdir(parents=True)
+            (workspace / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Auto compact full prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                cfg = read_json(config_path(root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(root), cfg)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "enabled",
+                    "context_pack": "already-delivered",
+                }
+                session[FORCE_FULL_PROMPT_NEXT_TURN_KEY] = {"reason": "backend_auto_context_compact"}
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "continue after compact",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertEqual(metrics["prompt_mode"], "full")
+        self.assertIn("You are the AHA backend agent", prompt)
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
+        self.assertIn("Knowledge base entrypoints:", prompt)
+        self.assertIn("context_pack", metrics["components"])
+        self.assertIn(FORCE_FULL_PROMPT_NEXT_TURN_KEY, metrics["components"])
+        self.assertNotIn("AHA sticky-session delta turn", prompt)
+
+    def test_codex_chat_clears_auto_compact_force_full_marker_after_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            workspace.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Clear force full", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                plan_file = run_dir(root, run_id) / "plan.json"
+                plan = read_json(plan_file)
+                plan["tasks"][0]["preferred_backend"] = "codex"
+                plan["tasks"][0]["agents"][0]["backend"] = "codex"
+                write_json(plan_file, plan)
+                cfg = read_json(config_path(root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(root), cfg)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
+                append_message(root, run_id, "main", "next turn", sender="browser", task_id="task-001", role="main", plain_sticky=True)
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend"] = "codex"
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "enabled",
+                    "context_pack": "already-delivered",
+                }
+                session[FORCE_FULL_PROMPT_NEXT_TURN_KEY] = {"reason": "backend_auto_context_compact"}
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                captured: dict[str, str] = {}
+
+                def fake_codex_exec(prompt: str, **kwargs: object) -> tuple[int, str, dict | None]:
+                    captured["prompt"] = prompt
+                    returned_session = kwargs.get("session")
+                    return 0, "reply", returned_session if isinstance(returned_session, dict) else None
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=fake_codex_exec):
+                    code, _ = self.run_cli(
+                        "--home",
+                        str(root),
+                        "codex-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+                updated = read_json(session_file)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn(FORCE_FULL_PROMPT_NEXT_TURN_KEY, updated)
+        self.assertIn("You are the AHA backend agent", captured["prompt"])
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", captured["prompt"])
+        self.assertNotIn("AHA sticky-session delta turn", captured["prompt"])
+
+    def test_codex_chat_forces_full_after_silent_runtime_context_drop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            home = Path(tmp) / "home"
+            workspace.mkdir()
+            with (
+                mock.patch("pathlib.Path.cwd", return_value=workspace),
+                mock.patch("pathlib.Path.home", return_value=home),
+            ):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Silent compact full prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                plan_file = run_dir(root, run_id) / "plan.json"
+                plan = read_json(plan_file)
+                plan["tasks"][0]["preferred_backend"] = "codex"
+                plan["tasks"][0]["agents"][0]["backend"] = "codex"
+                write_json(plan_file, plan)
+                cfg = read_json(config_path(root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(root), cfg)
+                update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
+                append_message(root, run_id, "main", "after silent compact", sender="browser", task_id="task-001", role="main", plain_sticky=True)
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend"] = "codex"
+                session["backend_session_id"] = "codex-drop-session"
+                session["delivered_context_fingerprints"] = {
+                    "hardware_debug": "",
+                    "task_skills": "",
+                    "knowledge_enabled": "enabled",
+                    "context_pack": "already-delivered",
+                }
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                codex_session = home / ".codex" / "sessions" / "2026" / "07" / "08" / "rollout-codex-drop-session.jsonl"
+                codex_session.parent.mkdir(parents=True)
+                rows = [
+                    {
+                        "timestamp": "2026-07-08T13:29:56.685Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "model_context_window": 258400,
+                                "last_token_usage": {"input_tokens": 219987, "total_tokens": 220000},
+                            },
+                        },
+                    },
+                    {
+                        "timestamp": "2026-07-08T13:30:40.978Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "model_context_window": 258400,
+                                "last_token_usage": {"input_tokens": 34445, "total_tokens": 34500},
+                            },
+                        },
+                    },
+                ]
+                codex_session.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                captured: dict[str, str] = {}
+
+                def fake_codex_exec(prompt: str, **kwargs: object) -> tuple[int, str, dict | None]:
+                    captured["prompt"] = prompt
+                    returned_session = kwargs.get("session")
+                    return 0, "reply", returned_session if isinstance(returned_session, dict) else None
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=fake_codex_exec):
+                    code, _ = self.run_cli(
+                        "--home",
+                        str(root),
+                        "codex-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+                updated = read_json(session_file)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                prompt_events = [row for row in events if row["type"] == "agent_prompt_metrics"]
+                compact_events = [row for row in events if row["type"] == "backend_auto_context_compact"]
+
+        self.assertEqual(code, 0)
+        self.assertNotIn(FORCE_FULL_PROMPT_NEXT_TURN_KEY, updated)
+        self.assertIn("runtime_context_compact_signature", updated)
+        self.assertIn("You are the AHA backend agent", captured["prompt"])
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", captured["prompt"])
+        self.assertNotIn("AHA sticky-session delta turn", captured["prompt"])
+        self.assertEqual(prompt_events[-1]["data"]["prompt_mode"], "full")
+        self.assertEqual(compact_events[-1]["data"]["reason"], "backend_runtime_context_drop")
+        self.assertEqual(compact_events[-1]["data"]["phase"], "before_prompt")
 
     def test_context_pack_does_not_inject_keyword_matched_knowledge_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -531,12 +760,15 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
         self.assertIn("Knowledge base entrypoints:", prompt)
         self.assertIn("navigation_index:", prompt)
+        self.assertIn("task_worklog:", prompt)
+        self.assertIn("Write project-scoped KB Markdown", prompt)
+        self.assertIn("in Chinese by default", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", prompt)
         self.assertNotIn("CH340 USB 电磁继电器串口控制协议", prompt)
         self.assertNotIn("串口模块也会输出状态", prompt)
 
-    def test_context_pack_includes_compact_prior_task_evidence(self) -> None:
+    def test_context_pack_does_not_reinject_prior_task_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "repo"
             root = Path(tmp) / ".aha"
@@ -550,6 +782,9 @@ class ChatPromptTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
                 update_task_token_saving_config(root, run_id, "task-001", enabled=True, provider="nav")
+                cfg = read_json(config_path(root))
+                cfg["knowledge"]["enabled"] = True
+                write_json(config_path(root), cfg)
                 append_task_context_evidence(
                     root,
                     run_id,
@@ -618,41 +853,24 @@ class ChatPromptTests(unittest.TestCase):
                 )
                 prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
 
-        self.assertIn("Current task evidence recap:", prompt)
-        self.assertIn("- signals: missing_nav", prompt)
-        self.assertIn("- actual_files: src/new_api.py", prompt)
-        self.assertIn("- referenced_files: src/old_api.py", prompt)
-        self.assertIn("- navigation_missing_files: src/new_api.py", prompt)
-        self.assertIn("routing_health: needs_repair downrank=src/old_api.py prioritize=src/new_api.py", prompt)
-        self.assertIn("kb_scope_policy: project_navigation=direct_edit_approved_markdown_with_task_evidence", prompt)
-        self.assertIn("kb_growth_state: pending pending=projects/demo/navigation/flows/token-saving.md", prompt)
-        self.assertIn(
-            "maintenance_plan: update project_navigation -> projects/demo/navigation/flows/token-saving.md",
-            prompt,
-        )
-        self.assertIn("policy=direct_project_navigation_update", prompt)
-        self.assertIn("maintenance_actions: update project_navigation (missing_nav) files=src/new_api.py", prompt)
-        self.assertIn("Re-check current source before edits.", prompt)
+        self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
+        self.assertIn("Knowledge base entrypoints:", prompt)
+        self.assertIn("Write project-scoped KB Markdown", prompt)
+        self.assertIn("in Chinese by default", prompt)
+        self.assertIn("directly edit the approved KB Markdown files", prompt)
+        self.assertNotIn("Current task evidence recap:", prompt)
+        self.assertNotIn("- signals: missing_nav", prompt)
+        self.assertNotIn("- actual_files: src/new_api.py", prompt)
+        self.assertNotIn("src/new_api.py", prompt)
+        self.assertNotIn("src/old_api.py", prompt)
+        self.assertNotIn("routing_health: needs_repair", prompt)
+        self.assertNotIn("kb_growth_state: pending", prompt)
+        self.assertNotIn("maintenance_plan: update project_navigation", prompt)
         self.assertNotIn("tmp/noise", prompt)
         self.assertNotIn("bin/bash", prompt)
         pack_evidence = metrics["context_pack_evidence"]
-        self.assertEqual(pack_evidence["task_evidence"]["signals"], ["missing_nav"])
-        self.assertEqual(pack_evidence["task_evidence"]["actual_files"], ["src/new_api.py"])
-        self.assertEqual(pack_evidence["task_evidence"]["navigation_missing_files"], ["src/new_api.py"])
-        self.assertEqual(
-            pack_evidence["task_evidence"]["maintenance_plan"][0]["target_path"],
-            "projects/demo/navigation/flows/token-saving.md",
-        )
-        self.assertEqual(pack_evidence["task_evidence"]["routing_health"]["status"], "needs_repair")
-        self.assertEqual(
-            pack_evidence["task_evidence"]["kb_scope_policy"]["general_personal_wiki"],
-            "manual_candidate_review_only",
-        )
-        self.assertEqual(pack_evidence["task_evidence"]["kb_growth_state"]["status"], "pending")
-        self.assertEqual(
-            pack_evidence["task_evidence"]["kb_growth_state"]["pending_paths"],
-            ["projects/demo/navigation/flows/token-saving.md"],
-        )
+        self.assertNotIn("task_evidence", pack_evidence)
+        self.assertIn("task_worklog", pack_evidence["knowledge"])
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

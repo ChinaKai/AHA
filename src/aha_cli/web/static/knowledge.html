@@ -9,6 +9,7 @@
     /* Layered on top of the app stylesheet so the console matches the
        Weixin console look: same tokens, surfaces, borders, status pills. */
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body {
       min-height: 100vh; overflow-x: hidden; overflow-y: auto;
       background: var(--color-bg); color: var(--color-text);
@@ -339,7 +340,7 @@
 
   <nav class="kb-tabs">
     <button data-tab="entries" class="button-ghost kb-tab active" type="button"><span data-i18n="knowledge.tab_entries">Entries</span></button>
-    <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Project navigation</span></button>
+    <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Nav</span></button>
     <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
     <button data-tab="capture" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_capture">Capture</span></button>
     <button data-tab="settings" class="button-ghost kb-tab" type="button"><span data-i18n="common.settings">Settings</span></button>
@@ -358,9 +359,9 @@
   </section>
 
   <section id="tab-navigation" hidden>
-    <div id="project-nav-panel" class="kb-card kb-project-nav-panel">
+    <div id="project-nav-panel" class="kb-card kb-project-nav-panel" hidden>
       <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
-      <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Generate project navigation for a workspace.</div>
+      <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Project navigation is maintained by agents during token-saving tasks.</div>
       <div class="kb-row kb-project-nav-controls">
         <select id="nav-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
         <input id="nav-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
@@ -371,11 +372,11 @@
           <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
           <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
         </select>
-        <button class="button-ghost" id="nav-generate" type="button" data-i18n="knowledge.generate_project_nav">Generate project nav</button>
+        <button class="button-ghost" id="nav-generate" type="button" data-i18n="knowledge.generate_project_nav" hidden>Generate project nav</button>
       </div>
       <div id="nav-result" class="kb-muted"></div>
     </div>
-    <div id="nav-draft-list"></div>
+    <div id="nav-draft-list" hidden></div>
     <div id="navigation-list"></div>
   </section>
 
@@ -489,8 +490,8 @@
           <input type="text" id="s-path" />
           <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
           <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-project-nav-enabled" data-i18n="knowledge.project_nav">Project navigation</label>
-          <select id="s-project-nav-enabled"><option value="on">on</option><option value="off">off</option></select>
+          <label class="kb-field" for="s-project-nav-enabled" data-i18n="knowledge.project_nav" hidden>Project navigation</label>
+          <select id="s-project-nav-enabled" hidden><option value="on">on</option><option value="off">off</option></select>
         </div>
         <div>
           <label class="kb-field" for="s-git-enabled" data-i18n="knowledge.enable_git">Enable git sync</label>
@@ -547,6 +548,25 @@
         .filter((key) => item && item[key])
         .map((key) => `${t("knowledge." + key, key)} ${localTime(item[key])}`)
         .join(" · ");
+    }
+    function formatFileSize(bytes) {
+      const size = Number(bytes);
+      if (!Number.isFinite(size) || size < 0) return "";
+      if (size < 1024) return `${size} B`;
+      const units = ["KB", "MB", "GB"];
+      let value = size;
+      for (const unit of units) {
+        value = value / 1024;
+        if (value < 1024 || unit === units[units.length - 1]) {
+          const digits = value >= 10 ? 1 : 2;
+          return `${value.toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1")} ${unit}`;
+        }
+      }
+      return `${size} B`;
+    }
+    function sizeLine(item) {
+      const formatted = formatFileSize(item?.size_bytes);
+      return formatted ? `${t("knowledge.file_size", "Size")} ${formatted}` : "";
     }
     function navRefSlug(path) {
       const clean = String(path || "").trim().split("#", 1)[0].split("?", 1)[0].replace(/^\.\//, "").replace(/\.md$/i, "");
@@ -618,8 +638,6 @@
       for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === tab);
       for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
       if (tab === "navigation") {
-        if (!state.captureBackends) loadCaptureAgents();
-        loadProjectNavDrafts();
         loadNavigation();
       }
       if (tab === "pending") loadPending();
@@ -1129,7 +1147,13 @@
       }
       const meta = ref.meta || {};
       $("#entry-ref-title").textContent = meta.title || meta.slug || "Reference";
-      $("#entry-ref-meta").textContent = `${meta.scope || "-"}/${meta.type || "-"} · ${meta.project_key || "-"} · ${meta.slug || meta.id || "-"} · ${timeLine(meta)}`;
+      $("#entry-ref-meta").textContent = [
+        `${meta.scope || "-"}/${meta.type || "-"}`,
+        meta.project_key || "-",
+        meta.slug || meta.id || "-",
+        timeLine(meta),
+        sizeLine(ref),
+      ].filter(Boolean).join(" · ");
       const body = $("#entry-ref-body");
       body.innerHTML = "";
       $("#entry-ref-actions").innerHTML = state.editingReference ? "" : renderEntryModalActions(ref);
@@ -1229,6 +1253,7 @@
     function entryTypeLabel(type) {
       if (type === "solution" || type === "solutions") return t("knowledge.type_solutions", "Solutions");
       if (type === "wiki") return t("knowledge.type_wiki", "Wiki");
+      if (type === "task_worklog" || type === "worklog") return t("knowledge.type_worklog", "Task worklog");
       return type || "-";
     }
 

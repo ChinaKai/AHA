@@ -21,7 +21,7 @@ from aha_cli.store.filesystem import (
     session_path,
     task_snapshot,
 )
-from aha_cli.store.sessions import backend_session_usage_archive_fields, usage_token_summary
+from aha_cli.store.sessions import backend_session_usage_archive_fields, set_force_full_prompt_next_turn, usage_token_summary
 
 
 def compact_summary_dir(root: Path, run_id: str, task_id: str) -> Path:
@@ -258,6 +258,13 @@ def compact_reset_backend_session(
         "chars": len(summary),
         "archived_backend_session_id": old_backend_session_id,
     }
+    set_force_full_prompt_next_turn(
+        session,
+        "backend_session_compact_reset",
+        detected_at=created_at,
+        trigger=reason,
+        summary_path=compact_summary_relpath(root, run_id, summary_path),
+    )
     save_session(root, session)
 
     offset_file = chat_offset_path(run_dir(root, run_id), agent_id, task_id)

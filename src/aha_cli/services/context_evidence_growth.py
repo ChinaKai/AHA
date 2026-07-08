@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-_GROWTH_TARGETS = {"project_navigation", "project_solution"}
+_GROWTH_TARGETS = {"project_navigation", "project_solution", "project_worklog"}
 
 
 def kb_growth_state_for_plan(*, maintenance_plan: list[dict], prior_records: list[dict], dirty_paths: list[str]) -> dict:

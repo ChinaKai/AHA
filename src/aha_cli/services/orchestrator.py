@@ -16,6 +16,7 @@ from aha_cli.services.auto_context_compact import start_backend_after_auto_compa
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
+from aha_cli.services.knowledge_git import auto_commit_project_approved_entries_after_feedback
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.routing import (
     route_to_agent_request,
@@ -49,14 +50,78 @@ from aha_cli.store.filesystem import (
     status_snapshot,
     task_snapshot,
     update_agent_runtime,
+    require_plan,
     run_dir,
     write_json,
 )
+from aha_cli.store.knowledge import project_key_aliases
 from aha_cli.store.sessions import backend_session_usage_archive_fields
 
 REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 SUPERVISION_STUB_DECISION = "ask_user"
+
+
+def _feedback_updated_items(feedback: object) -> list[str]:
+    if not isinstance(feedback, dict):
+        return []
+    value = feedback.get("updated")
+    if isinstance(value, str):
+        item = value.strip()
+        return [item] if item else []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                items.append(text)
+        return items
+    return []
+
+
+def _project_keys_for_task_feedback(root: Path, run_id: str, task: dict) -> list[str]:
+    workspace = Path(str(task.get("workspace_path") or root)).expanduser()
+    goal = ""
+    try:
+        goal = str(require_plan(root, run_id).get("goal") or "")
+    except KeyError:
+        goal = str(task.get("title") or "")
+    return project_key_aliases(workspace, goal=goal)
+
+
+def _auto_commit_kb_feedback_update(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    task: dict,
+    action: dict,
+    config: dict,
+) -> dict | None:
+    feedback = action.get("kb_feedback") or action.get("knowledge_feedback")
+    updated = _feedback_updated_items(feedback)
+    if not updated:
+        return None
+    project_keys = _project_keys_for_task_feedback(root, run_id, task)
+    result = auto_commit_project_approved_entries_after_feedback(
+        root,
+        f"chore(knowledge): update {task_id} project knowledge",
+        project_keys,
+        config,
+    )
+    append_event(
+        root,
+        run_id,
+        "knowledge_task_feedback_auto_commit",
+        {
+            "task_id": task_id,
+            "project_keys": project_keys,
+            "updated": updated,
+            "result": result,
+        },
+    )
+    return result
+
+
 def task_has_active_followup(task: dict) -> bool:
     if task.get("status") in TERMINAL_AGENT_STATUSES:
         return False
@@ -625,6 +690,9 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         if action_type == "record_task_update":
             result = handle_record_task_update_action(root, run_id, task_id, action)
             if result:
+                kb_git = _auto_commit_kb_feedback_update(root, run_id, task_id, task, action, config)
+                if kb_git is not None:
+                    result["knowledge_git"] = kb_git
                 executed.append(result)
             continue
         if action_type == "route_to_agent":

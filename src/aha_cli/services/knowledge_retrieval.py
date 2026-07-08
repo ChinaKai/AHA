@@ -59,6 +59,10 @@ def _is_navigation_entry(entry: dict) -> bool:
     return entry.get("meta", {}).get("type") == "navigation"
 
 
+def _is_task_worklog_entry(entry: dict) -> bool:
+    return entry.get("meta", {}).get("type") == "task_worklog"
+
+
 def _is_navigation_index(entry: dict) -> bool:
     meta = entry.get("meta", {})
     return meta.get("type") == "navigation" and meta.get("slug") == NAVIGATION_SLUG
@@ -100,6 +104,8 @@ def retrieve_for_task(
     for entry in iter_all_entries(root, config):
         meta = entry.get("meta", {})
         if meta.get("status") == "deprecated":
+            continue
+        if _is_task_worklog_entry(entry):
             continue
         if meta.get("type") == "navigation" and not include_project_nav:
             continue

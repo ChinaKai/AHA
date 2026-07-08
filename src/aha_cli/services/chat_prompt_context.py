@@ -30,6 +30,7 @@ from aha_cli.store.filesystem import (
     status_snapshot,
     task_snapshot,
 )
+from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.store.task_memo_assets import TASK_MEMO_ASSET_DIR, task_memo_assets_dir
 
 
@@ -439,6 +440,11 @@ def _delivered_context_fingerprints(session: dict | None) -> dict[str, str]:
     if not isinstance(delivered, dict):
         return {}
     return {str(key): str(value or "") for key, value in delivered.items()}
+
+
+def _force_full_prompt_next_turn(session: dict | None) -> bool:
+    marker = session.get(FORCE_FULL_PROMPT_NEXT_TURN_KEY) if isinstance(session, dict) else None
+    return bool(marker)
 
 
 def _sticky_context_delta_for_prompt(
@@ -978,10 +984,14 @@ def chat_prompt(
                 merged_agent["backend_session_id"] = session.get("backend_session_id")
                 merged_agent["session_status"] = session.get("status")
                 agent = merged_agent
+            force_full_prompt = _force_full_prompt_next_turn(session)
+            if force_full_prompt:
+                components[FORCE_FULL_PROMPT_NEXT_TURN_KEY] = "backend_auto_context_compact"
             sticky_delta = bool(
                 not is_result_request
                 and (agent or {}).get("session_policy") == "sticky"
                 and (agent or {}).get("backend_session_id")
+                and not force_full_prompt
             )
             if not is_result_request:
                 context_fingerprint_updates = _prompt_context_fingerprints(
@@ -994,8 +1004,15 @@ def chat_prompt(
                     context_pack_payload = _context_pack_payload_for_prompt(root, run_id, detail["task"], item)
                     context_pack = str(context_pack_payload.get("text") or "").rstrip()
                     if context_pack:
-                        context_pack_evidence = {key: value for key, value in context_pack_payload.items() if key != "text"}
-                        components["context_pack"] = context_pack
+                        context_pack_fingerprint = _context_fingerprint(context_pack)
+                        if context_pack_fingerprint:
+                            context_fingerprint_updates["context_pack"] = context_pack_fingerprint
+                        delivered_fingerprints = _delivered_context_fingerprints(session)
+                        if sticky_delta and delivered_fingerprints.get("context_pack") == context_pack_fingerprint:
+                            context_pack = ""
+                        else:
+                            context_pack_evidence = {key: value for key, value in context_pack_payload.items() if key != "text"}
+                            components["context_pack"] = context_pack
             if (
                 sticky_delta
                 and item.get("plain_sticky")

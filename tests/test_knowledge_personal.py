@@ -14,6 +14,7 @@ from aha_cli.store.knowledge import (
     init_knowledge_base,
     iter_all_entries,
     knowledge_status,
+    read_entry,
     search_entries,
     write_entry,
 )
@@ -94,3 +95,67 @@ def test_cli_add_and_list_personal_scope(tmp_path: Path):
     assert len(listed) == 1
     assert listed[0]["scope"] == "personal"
     assert listed[0]["title"] == "Personal tip"
+
+
+def test_project_worklog_storage_status_and_retrieval_boundary(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    path = write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="worklog",
+        project_key_value="git-abc",
+        title="task-001 cache fix worklog",
+        body="## Progress\n- Found cache issue.\n",
+        slug="tasks/task-001",
+    )
+
+    assert "projects/git-abc/worklog/tasks/task-001.md" in str(path)
+    entry = read_entry(path)
+    assert entry["meta"]["type"] == "task_worklog"
+    assert entry["meta"]["slug"] == "tasks/task-001"
+
+    status = knowledge_status(home, cfg)
+    project = next(item for item in status["projects"] if item["project_key"] == "git-abc")
+    assert project["counts"]["worklog"] == 1
+    assert status["total_entries"] == 1
+
+    found = [e["meta"]["title"] for e in search_entries(home, cfg, "cache")]
+    assert "task-001 cache fix worklog" in found
+
+    injected = retrieve_for_task(home, cfg, project_key="git-abc", terms=["cache"], max_entries=10)
+    assert all(e["meta"]["type"] != "task_worklog" for e in injected)
+
+
+def test_cli_add_project_worklog_and_list_kind(tmp_path: Path):
+    home = _home(tmp_path)
+    rc, out = _run(
+        home,
+        "add",
+        "--scope",
+        "project",
+        "--kind",
+        "worklog",
+        "--project",
+        "git-abc",
+        "--title",
+        "task-002 worklog",
+        "--body",
+        "## Plan\n- Implement.\n",
+        "--json",
+    )
+    assert rc == 0
+    payload = json.loads(out)
+    entry = read_entry(Path(payload["path"]))
+    assert entry["meta"]["type"] == "task_worklog"
+
+    rc, out = _run(home, "list", "--kind", "worklog", "--json")
+    listed = json.loads(out)
+    assert rc == 0
+    assert len(listed) == 1
+    assert listed[0]["type"] == "task_worklog"
+    assert listed[0]["title"] == "task-002 worklog"
+
+    rc, _ = _run(home, "add", "--kind", "worklog", "--title", "bad", "--body", "x")
+    assert rc == 2

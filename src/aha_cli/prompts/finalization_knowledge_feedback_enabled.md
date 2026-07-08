@@ -12,6 +12,7 @@ This is a byproduct of finalizing the current task, not a new task:
 - Use only facts already learned while solving this task: touched/read files, final changes, validation commands, discovered module ownership, stale nav facts, or changed workflows.
 - Emit nav feedback only when there is a concrete, evidence-backed delta. If there is no clear nav delta, omit the sidecar.
 - Keep each nav candidate a minimal patch candidate for review; do not rewrite the whole project nav.
+- Write candidate titles, summaries, diagnostics, and navigation reasons in Chinese by default; keep code identifiers, paths, commands, and schema fields literal.
 - Prefer `kind:"navigation"` candidates with `slug` such as `index`, `modules/<module>`, or `flows/<flow>`, plus `title`, `responsibility` or `summary`, `related_files`, optional `entry_points`, optional `diagnostic_paths`, and a short `navigation_reason`.
 
 Hidden sidecar format, only when useful:

@@ -12,7 +12,12 @@ from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, code
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
-from aha_cli.services.backend_runtime import mark_backend_stopped, start_backend, stop_task_backends
+from aha_cli.services.backend_runtime import (
+    detect_runtime_context_compaction,
+    mark_backend_stopped,
+    start_backend,
+    stop_task_backends,
+)
 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
 from aha_cli.services.chat_prompt_context import (
     CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY,
@@ -67,6 +72,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     write_task_result,
 )
+from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY, set_force_full_prompt_next_turn
 from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 from aha_cli.store.task_memos import update_task_memo
 from aha_cli.services.native_subagents import text_claims_subagent_created
@@ -84,6 +90,7 @@ BLOCKED_REPLY_MARKERS = (
 )
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+RUNTIME_CONTEXT_COMPACT_SIGNATURE_KEY = "runtime_context_compact_signature"
 SUPERVISION_SKIP_COORDINATIONS = {
     "agent_recovery_notice",
     "backend_restart_status",
@@ -113,6 +120,68 @@ def _apply_context_fingerprint_updates(session: dict, prompt_metrics: dict) -> N
     if changed:
         session["delivered_context_fingerprints"] = delivered
         session["updated_at"] = utc_now()
+
+
+def _clear_force_full_prompt_after_delivery(session: dict, prompt_metrics: dict) -> None:
+    if prompt_metrics.get("prompt_mode") != "full":
+        return
+    if FORCE_FULL_PROMPT_NEXT_TURN_KEY not in session:
+        return
+    session.pop(FORCE_FULL_PROMPT_NEXT_TURN_KEY, None)
+    session["updated_at"] = utc_now()
+
+
+def _mark_force_full_for_runtime_context_compaction(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    agent_id: str,
+    source_name: str,
+    session: dict | None,
+    *,
+    phase: str,
+) -> dict | None:
+    if not session or session.get(FORCE_FULL_PROMPT_NEXT_TURN_KEY):
+        return None
+    signal = detect_runtime_context_compaction(root, run_id, agent_id, task_id, session)
+    if not signal:
+        return None
+    signature = str(signal.get("signature") or "")
+    if signature and session.get(RUNTIME_CONTEXT_COMPACT_SIGNATURE_KEY) == signature:
+        return None
+    previous = signal.get("previous") if isinstance(signal.get("previous"), dict) else {}
+    current = signal.get("current") if isinstance(signal.get("current"), dict) else {}
+    marker = set_force_full_prompt_next_turn(
+        session,
+        "backend_runtime_context_drop",
+        backend_session_id=signal.get("backend_session_id"),
+        previous_input_tokens=previous.get("input_tokens"),
+        current_input_tokens=current.get("input_tokens"),
+        previous_percent=previous.get("percent"),
+        current_percent=current.get("percent"),
+        drop_tokens=signal.get("drop_tokens"),
+        drop_percent=signal.get("drop_percent"),
+        detected_phase=phase,
+        runtime_context_drop_signature=signature,
+    )
+    if signature:
+        session[RUNTIME_CONTEXT_COMPACT_SIGNATURE_KEY] = signature
+    append_event(
+        root,
+        run_id,
+        "backend_auto_context_compact",
+        {
+            "source": source_name,
+            "target": agent_id,
+            "task_id": task_id,
+            "reason": "backend_runtime_context_drop",
+            "force_full_prompt_next_turn": marker,
+            "runtime_context_drop": signal,
+            "phase": phase,
+        },
+    )
+    return marker
+
 
 def action_retry_schema() -> str:
     return render_prompt_template("chat_action_retry_schema.md").strip()
@@ -763,6 +832,17 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 if not workspace.exists():
                     append_event(root, run_id, "workspace_missing", {"task_id": item_task_id, "workspace_path": str(workspace)})
                     workspace = root
+                if item_task_id and backend_name == "codex":
+                    if _mark_force_full_for_runtime_context_compaction(
+                        root,
+                        run_id,
+                        item_task_id,
+                        agent_id,
+                        source_name,
+                        session,
+                        phase="before_prompt",
+                    ):
+                        save_session(root, session)
                 if manages_task_status:
                     set_task_status(root, run_id, item_task_id, "running")
                     set_agent_status(root, run_id, item_task_id, agent_id, "running")
@@ -964,6 +1044,17 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 if session:
                     if exit_code == 0:
                         _apply_context_fingerprint_updates(session, prompt_metrics)
+                        _clear_force_full_prompt_after_delivery(session, prompt_metrics)
+                        if item_task_id and backend_name == "codex":
+                            _mark_force_full_for_runtime_context_compaction(
+                                root,
+                                run_id,
+                                item_task_id,
+                                agent_id,
+                                source_name,
+                                session,
+                                phase="after_turn",
+                            )
                     save_session(root, session)
                 if is_memo_report:
                     try:

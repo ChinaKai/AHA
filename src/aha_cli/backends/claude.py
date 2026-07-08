@@ -8,7 +8,13 @@ import shlex
 import subprocess
 import sys
 
-from aha_cli.backends.codex import OUTPUT_TAIL_LIMIT, is_context_overflow_message, tail_text
+from aha_cli.backends.codex import (
+    OUTPUT_TAIL_LIMIT,
+    is_backend_auto_context_compact_event,
+    is_context_overflow_message,
+    mark_backend_auto_context_compact,
+    tail_text,
+)
 from aha_cli.backends.registry import normalize_model_selector
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
@@ -189,6 +195,14 @@ def handle_claude_event(
         data["task_id"] = task_id
     if target:
         data["target"] = target
+    if is_backend_auto_context_compact_event(event):
+        compact_marker = mark_backend_auto_context_compact(session, event)
+        append_event_to_file(
+            events_file,
+            run_id,
+            "backend_auto_context_compact",
+            data | compact_marker,
+        )
 
     if raw_type == "system" and event.get("subtype") == "init":
         session_id = event.get("session_id")

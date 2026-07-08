@@ -250,6 +250,38 @@ def test_auto_commit_pushes_when_auto_push_on(tmp_path: Path):
     assert res.get("push", {}).get("pushed") is True
 
 
+def test_auto_commit_project_feedback_only_commits_approved_project_paths(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _config()
+    assert kg.commit_all(root, "init", cfg)["committed"] is True
+    repo = knowledge_root(root, cfg)
+
+    approved = repo / "projects" / "demo" / "navigation" / "index.md"
+    approved.parent.mkdir(parents=True, exist_ok=True)
+    approved.write_text("# Nav\n", encoding="utf-8")
+    unrelated = repo / "general" / "wiki" / "unrelated.md"
+    unrelated.parent.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text("# Unrelated\n", encoding="utf-8")
+    other_project = repo / "projects" / "other" / "navigation" / "index.md"
+    other_project.parent.mkdir(parents=True, exist_ok=True)
+    other_project.write_text("# Other\n", encoding="utf-8")
+    pending = repo / ".pending" / "candidate.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text("{}", encoding="utf-8")
+
+    # Simulate a pre-existing staged change; the scoped commit must not sweep it in.
+    _git(repo, "add", "general/wiki/unrelated.md")
+    res = kg.auto_commit_project_approved_entries_after_feedback(root, "feedback", ["demo"], cfg)
+
+    assert res.get("committed") is True
+    committed = _git(repo, "show", "--name-only", "--pretty=format:", "HEAD").splitlines()
+    assert committed == ["projects/demo/navigation/index.md"]
+    status = _git(repo, "status", "--porcelain")
+    assert "A  general/wiki/unrelated.md" in status
+    assert "?? projects/other/" in status
+    assert ".pending" not in status
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #

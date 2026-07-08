@@ -49,7 +49,7 @@ class TaskCommandTests(unittest.TestCase):
 
         self.assertNotIn("/aha final", help_text)
         self.assertIn("/aha kb <message>", help_text)
-        self.assertIn("/aha nav <message>", help_text)
+        self.assertNotIn("/aha nav <message>", help_text)
         self.assertNotIn("/aha map", help_text)
         self.assertIn("/aha complete", help_text)
         self.assertIn("/aha reopen", help_text)
