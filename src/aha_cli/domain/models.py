@@ -113,6 +113,7 @@ def default_config() -> dict:
         "codex": {
             "bin": "codex",
             "model": None,
+            "reasoning_effort": None,
             "sandbox": "auto",
             "approval": "never",
             "json": True,
@@ -129,6 +130,7 @@ def default_config() -> dict:
         "claude": {
             "bin": "claude",
             "model": None,
+            "reasoning_effort": None,
             "sandbox": "auto",
             "permission_mode": None,
             "session_policy": "sticky",
@@ -590,6 +592,7 @@ def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict
         "workspace_path": task.get("workspace_path"),
         "preferred_backend": preferred_backend,
         "preferred_model": preferred_model,
+        "preferred_reasoning_effort": task.get("preferred_reasoning_effort"),
         "preferred_sandbox": task.get("preferred_sandbox"),
         "preferred_approval": task.get("preferred_approval"),
         "preferred_proxy_enabled": bool(task.get("preferred_proxy_enabled")),
@@ -637,6 +640,7 @@ def make_agent(
     backend: str = "codex",
     status: str = "pending",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     workspace_path: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
@@ -649,6 +653,7 @@ def make_agent(
         "role": role,
         "backend": backend,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "sandbox": sandbox,
         "approval": approval,
         "proxy_enabled": bool(proxy_enabled),
@@ -675,6 +680,7 @@ def make_task(
     created: str,
     backend: str = "codex",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     workspace_path: str | None = None,
     workspace_id: str | None = None,
     sandbox: str | None = None,
@@ -710,6 +716,7 @@ def make_task(
         "workspace_path": workspace_path,
         "preferred_backend": backend,
         "preferred_model": model,
+        "preferred_reasoning_effort": reasoning_effort,
         "preferred_sandbox": sandbox,
         "preferred_approval": approval,
         "preferred_proxy_enabled": bool(proxy_enabled),
@@ -751,6 +758,7 @@ def make_task(
                 backend,
                 status="active",
                 model=model,
+                reasoning_effort=reasoning_effort,
                 workspace_path=workspace_path,
                 sandbox=sandbox,
                 approval=approval,
@@ -801,6 +809,7 @@ def ensure_task_agents(task: dict, backend: str = "codex") -> list[dict]:
         )
     for agent in agents:
         agent.setdefault("model", task.get("preferred_model"))
+        agent.setdefault("reasoning_effort", task.get("preferred_reasoning_effort"))
         agent.setdefault("sandbox", task.get("preferred_sandbox"))
         agent.setdefault("approval", task.get("preferred_approval"))
         agent.setdefault("proxy_enabled", bool(task.get("preferred_proxy_enabled")))

@@ -3,6 +3,7 @@
     const escapeHtml = options.escapeHtml || (value => String(value ?? ""));
     const selectOptions = options.selectOptions || (() => "");
     const backendModelSelectOptions = options.backendModelSelectOptions || (() => "");
+    const reasoningEffortSelectOptions = options.reasoningEffortSelectOptions || (() => "");
     const agentBackendOptions = options.agentBackendOptions || (() => []);
     const sandboxOptions = options.sandboxOptions || [];
     const approvalOptions = options.approvalOptions || [];
@@ -14,6 +15,7 @@
     const agentBackendModelChanged = options.agentBackendModelChanged || (() => false);
     const agentRuntimeConfigChanged = options.agentRuntimeConfigChanged || (() => false);
     const fillModelSelect = options.fillModelSelect || (() => {});
+    const fillReasoningEffortSelect = options.fillReasoningEffortSelect || (() => {});
     const confirmDialogAction = options.confirmDialogAction || (() => Promise.resolve(true));
     const agentBackendProcessStatus = options.agentBackendProcessStatus || (() => "");
     const agentRuntimeConfirmDialogEl = options.agentRuntimeConfirmDialogEl || null;
@@ -49,6 +51,7 @@
           <div class="agent-config-fields">
             <select data-agent-config-part="backend" title="Backend">${selectOptions(agentBackendOptions(), currentConfig.backend)}</select>
             <select data-agent-config-part="model" title="Model">${backendModelSelectOptions(currentConfig.backend, currentConfig.model)}</select>
+            <select data-agent-config-part="reasoning_effort" title="Reasoning effort">${reasoningEffortSelectOptions(currentConfig.backend, currentConfig.model, currentConfig.reasoningEffort)}</select>
             <select data-agent-config-part="sandbox" title="Sandbox">${selectOptions(sandboxOptions, currentConfig.sandbox)}</select>
             <select data-agent-config-part="approval" title="Approval">${selectOptions(approvalOptions, currentConfig.approval)}</select>
             <select data-agent-config-part="proxy_enabled" title="Proxy">${proxySelectOptions(currentConfig.proxyEnabled)}</select>
@@ -77,13 +80,16 @@
     function syncAgentConfigEditorModel(card) {
       const backendSelect = card.querySelector('[data-agent-config-part="backend"]');
       const modelSelect = card.querySelector('[data-agent-config-part="model"]');
+      const effortSelect = card.querySelector('[data-agent-config-part="reasoning_effort"]');
       fillModelSelect(modelSelect, backendSelect?.value || "codex", modelSelect?.value || "");
+      fillReasoningEffortSelect(effortSelect, backendSelect?.value || "codex", modelSelect?.value || "", effortSelect?.value || "");
     }
 
     function agentRuntimeFieldLabel(field) {
       if (field === "agent_config") return t("agent.field_runtime_settings", "runtime settings");
       if (field === "sandbox") return t("agent.field_sandbox", "sandbox");
       if (field === "approval") return t("agent.field_approval", "approval");
+      if (field === "reasoning_effort") return t("agent.field_reasoning_effort", "reasoning effort");
       if (field === "proxy_enabled") return t("agent.field_proxy", "proxy");
       return field || t("agent.field_runtime_setting", "runtime setting");
     }
@@ -155,6 +161,7 @@
       const payload = { task_id: task.id, agent_id: agentId };
       payload.sandbox = normalized.sandbox;
       payload.approval = normalized.approval;
+      payload.reasoning_effort = normalized.reasoningEffort || "";
       payload.proxy_enabled = normalized.proxyEnabled;
       if (options.includeBackendModel) {
         payload.backend = normalized.backend;
@@ -189,6 +196,11 @@
       editor.addEventListener("change", event => {
         const target = event.target instanceof HTMLElement ? event.target : null;
         if (target?.dataset.agentConfigPart === "backend") syncAgentConfigEditorModel(editor);
+        if (target?.dataset.agentConfigPart === "model") {
+          const backendSelect = editor.querySelector('[data-agent-config-part="backend"]');
+          const effortSelect = editor.querySelector('[data-agent-config-part="reasoning_effort"]');
+          fillReasoningEffortSelect(effortSelect, backendSelect?.value || "codex", target.value || "", effortSelect?.value || "");
+        }
       });
       editor.addEventListener("click", event => {
         const target = event.target instanceof HTMLElement ? event.target : null;

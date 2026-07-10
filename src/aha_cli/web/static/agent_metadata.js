@@ -62,6 +62,7 @@
     return {
       sandbox: agent?.sandbox || task?.preferred_sandbox || "workspace-write",
       approval: agent?.approval || task?.preferred_approval || "never",
+      reasoningEffort: agent?.reasoning_effort || task?.preferred_reasoning_effort || "",
       proxyEnabled: Boolean(agent?.proxy_enabled)
     };
   }
@@ -105,6 +106,7 @@
       roleLabel,
       sandbox: runtime.sandbox,
       approval: runtime.approval,
+      reasoningEffort: runtime.reasoningEffort,
       proxyEnabled: runtime.proxyEnabled,
       processStatus,
       rawProcessStatus,
@@ -119,6 +121,7 @@
         `${agent?.id || ""} ${roleLabel}`,
         `backend=${agent?.backend || "-"}`,
         `model=${resolvedModel}`,
+        `effort=${runtime.reasoningEffort || "default"}`,
         `sandbox=${runtime.sandbox}`,
         `approval=${runtime.approval}`,
         `proxy=${runtime.proxyEnabled ? "on" : "off"} (${taskProxySummary})`,
@@ -131,7 +134,7 @@
       ].filter(Boolean).join("\n"),
       metaLines: [
         `status=${statusText} | ${roleLabel} | ${agent?.backend || "-"} | ${resolvedModel}`,
-        `sandbox=${runtime.sandbox} | approval=${runtime.approval}`,
+        `sandbox=${runtime.sandbox} | approval=${runtime.approval} | effort=${runtime.reasoningEffort || "default"}`,
         `proxy=${runtime.proxyEnabled ? "on" : "off"} | task proxy=${taskProxySummary}`,
         `process=${rawProcessStatus} | ${contextPressure} | session=${sessionLabel}`
       ]

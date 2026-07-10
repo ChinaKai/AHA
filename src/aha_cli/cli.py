@@ -1266,6 +1266,7 @@ def cmd_task(args: argparse.Namespace) -> int:
             args.title,
             backend=args.backend,
             model=args.model,
+            reasoning_effort=args.reasoning_effort,
             workspace_path=workspace_path,
             workspace_id=workspace_id,
             sandbox=args.sandbox,
@@ -1366,6 +1367,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
             backend=args.backend,
             role=args.role,
             model=args.model,
+            reasoning_effort=args.reasoning_effort,
             sandbox=args.sandbox,
             approval=args.approval,
             proxy_enabled=args.proxy_enabled,
@@ -1374,7 +1376,10 @@ def cmd_agent(args: argparse.Namespace) -> int:
         )
         print(json.dumps(agent, indent=2, ensure_ascii=False))
     elif args.agent_cmd == "set":
-        agent = update_agent_config(root, run_id, args.task_id, args.agent_id, sandbox=args.sandbox, approval=args.approval, proxy_enabled=args.proxy_enabled)
+        update_kwargs = {"sandbox": args.sandbox, "approval": args.approval, "proxy_enabled": args.proxy_enabled}
+        if args.reasoning_effort is not None:
+            update_kwargs["reasoning_effort"] = args.reasoning_effort
+        agent = update_agent_config(root, run_id, args.task_id, args.agent_id, **update_kwargs)
         print(json.dumps(agent, indent=2, ensure_ascii=False))
     elif args.agent_cmd == "list":
         task = task_snapshot(root, run_id, args.task_id)["task"]

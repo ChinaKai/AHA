@@ -161,6 +161,7 @@
     agentsEl: "agents",
     taskBackendEl: "task-backend",
     taskModelEl: "task-model",
+    taskReasoningEffortEl: "task-reasoning-effort",
     taskSandboxEl: "task-sandbox",
     taskApprovalEl: "task-approval",
     taskProxyEnabledEl: "task-proxy-enabled",
@@ -333,6 +334,9 @@
     elements.taskBackendEl?.addEventListener("change", () => {
       deps.renderModelOptions?.();
       deps.syncCreateProxyDefaultForBackend?.();
+    });
+    elements.taskModelEl?.addEventListener("change", () => {
+      deps.fillReasoningEffortSelect?.(elements.taskReasoningEffortEl, elements.taskBackendEl?.value, elements.taskModelEl?.value, elements.taskReasoningEffortEl?.value || "");
     });
     elements.collaborationModeEl?.addEventListener("change", deps.syncCollaborationFields);
     elements.workflowTemplateEl?.addEventListener("change", deps.syncWorkflowTemplateHelp);

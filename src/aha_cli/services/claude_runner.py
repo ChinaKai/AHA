@@ -68,6 +68,7 @@ def run_claude_task(args) -> int:
         claude_bin=args.claude_bin,
         model=claude_cli_model(configured_model, claude_cfg),
         permission_mode=permission_mode,
+        reasoning_effort=args.reasoning_effort,
         extra_args=args.extra_arg or [],
         events_file=events_file,
         run_id=run_id,

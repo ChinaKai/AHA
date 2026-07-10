@@ -41,6 +41,7 @@ def add_agent_to_task_dict(
     backend: str = "codex",
     role: str = "sub",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     workspace_path: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
@@ -66,12 +67,14 @@ def add_agent_to_task_dict(
         agent_role = "sub"
     default_sandbox = "read-only" if agent_role == "host" else task.get("preferred_sandbox")
     default_approval = "never" if agent_role == "host" else task.get("preferred_approval")
+    default_reasoning_effort = task.get("preferred_reasoning_effort")
     default_proxy_enabled = False if agent_role == "host" else bool(task.get("preferred_proxy_enabled"))
     agent = make_agent(
         agent_id,
         agent_role,
         backend,
         model=model,
+        reasoning_effort=reasoning_effort if reasoning_effort is not None else default_reasoning_effort,
         workspace_path=workspace_path or task.get("workspace_path"),
         sandbox=sandbox if sandbox is not None else default_sandbox,
         approval=approval if approval is not None else default_approval,
@@ -210,6 +213,7 @@ def add_agent(
     backend: str = "codex",
     role: str = "sub",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
     proxy_enabled: bool | None = None,
@@ -228,6 +232,7 @@ def add_agent(
             backend,
             role,
             model=model,
+            reasoning_effort=reasoning_effort,
             workspace_path=task.get("workspace_path"),
             sandbox=sandbox,
             approval=approval,
@@ -248,6 +253,7 @@ def add_agent(
             "agent_id": agent["id"],
             "backend": backend,
             "model": model,
+            "reasoning_effort": agent.get("reasoning_effort"),
             "sandbox": agent.get("sandbox"),
             "approval": agent.get("approval"),
             "proxy_enabled": agent.get("proxy_enabled"),
@@ -265,6 +271,7 @@ def update_agent_config(
     agent_id: str,
     sandbox: str | None = None,
     approval: str | None = None,
+    reasoning_effort: object = UNSET,
     proxy_enabled: bool | None = None,
     *,
     now_func: Callable[[], str] = utc_now,
@@ -282,6 +289,11 @@ def update_agent_config(
             agent["approval"] = approval
             if agent_id == "main":
                 task["preferred_approval"] = approval
+        if reasoning_effort is not UNSET:
+            cleaned_reasoning_effort = str(reasoning_effort or "").strip() or None
+            agent["reasoning_effort"] = cleaned_reasoning_effort
+            if agent_id == "main":
+                task["preferred_reasoning_effort"] = cleaned_reasoning_effort
         if proxy_enabled is not None:
             agent["proxy_enabled"] = bool(proxy_enabled)
             supervision = normalize_task_supervision(task.get("supervision"))
@@ -301,6 +313,7 @@ def update_agent_config(
             "agent_id": agent_id,
             "sandbox": agent.get("sandbox"),
             "approval": agent.get("approval"),
+            "reasoning_effort": agent.get("reasoning_effort"),
             "proxy_enabled": agent.get("proxy_enabled"),
         },
     )

@@ -10,7 +10,8 @@
       return {
         config: configData(),
         backendModels: deps.backendModels?.() || new Map(),
-        modelOptionsForBackend: deps.modelOptionsForBackend || (() => [])
+        modelOptionsForBackend: deps.modelOptionsForBackend || (() => []),
+        reasoningEffortSelectOptions: deps.reasoningEffortSelectOptions || (() => "")
       };
     }
 

@@ -22,6 +22,7 @@ from aha_cli.domain.models import (
 )
 from aha_cli.services.proxy import backend_has_proxy_config, backend_proxy_config, normalize_proxy_config, normalize_proxy_value, run_has_proxy_config, run_proxy_config
 from aha_cli.store.agents import (
+    UNSET as AGENT_CONFIG_UNSET,
     add_agent as _add_agent,
     add_agent_to_task_dict,
     ensure_task_supervision_host_agent as _ensure_task_supervision_host_agent,
@@ -162,6 +163,7 @@ def ensure_session(
     agent_id: str,
     backend: str,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     workspace_path: str | None = None,
 ) -> dict:
     return _ensure_session(root, run_id, task_id, agent_id, backend, model=model, workspace_path=workspace_path, now_func=utc_now)
@@ -295,6 +297,7 @@ def create_plan(
     write_scopes: list[str],
     backend: str = "codex",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     workspace_path: str | None = None,
     workspace_id: str | None = None,
     sandbox: str | None = None,
@@ -329,6 +332,7 @@ def create_plan(
             created,
             backend,
             model=model,
+            reasoning_effort=reasoning_effort,
             workspace_path=workspace_path or str(root),
             workspace_id=workspace_id,
             sandbox=sandbox,
@@ -355,6 +359,7 @@ def create_plan(
             workspace_path=workspace_path,
             sandbox=sandbox,
             approval=approval,
+            reasoning_effort=reasoning_effort,
             proxy_enabled=proxy_enabled,
         ),
         "tasks": tasks,
@@ -409,6 +414,7 @@ def add_task(
     backend: str = "codex",
     sub_agents: int = 0,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     workspace_path: str | None = None,
     workspace_id: str | None = None,
     sandbox: str | None = None,
@@ -451,6 +457,7 @@ def add_task(
             utc_now(),
             backend,
             model=model,
+            reasoning_effort=reasoning_effort,
             workspace_path=workspace_path or str(root),
             workspace_id=workspace_id,
             sandbox=sandbox,
@@ -475,6 +482,7 @@ def add_task(
                 task,
                 preferred_sub_backend or backend,
                 model=preferred_sub_model if preferred_sub_model is not None else model,
+                reasoning_effort=reasoning_effort,
                 workspace_path=workspace_path or str(root),
                 sandbox=sandbox,
                 approval=approval,
@@ -502,6 +510,7 @@ def add_task(
         "title": title,
         "backend": backend,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "sandbox": sandbox,
         "approval": approval,
         "proxy_enabled": task_proxy_enabled,
@@ -541,6 +550,7 @@ def add_agent(
     backend: str = "codex",
     role: str = "sub",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     sandbox: str | None = None,
     approval: str | None = None,
     proxy_enabled: bool | None = None,
@@ -554,6 +564,7 @@ def add_agent(
         backend=backend,
         role=role,
         model=model,
+        reasoning_effort=reasoning_effort,
         sandbox=sandbox,
         approval=approval,
         proxy_enabled=proxy_enabled,
@@ -572,6 +583,7 @@ def update_agent_config(
     agent_id: str,
     sandbox: str | None = None,
     approval: str | None = None,
+    reasoning_effort: object = AGENT_CONFIG_UNSET,
     proxy_enabled: bool | None = None,
 ) -> dict:
     return _update_agent_config(
@@ -581,6 +593,7 @@ def update_agent_config(
         agent_id,
         sandbox=sandbox,
         approval=approval,
+        reasoning_effort=reasoning_effort,
         proxy_enabled=proxy_enabled,
         now_func=utc_now,
         append_event_func=append_event,

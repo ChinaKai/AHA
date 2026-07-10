@@ -45,7 +45,14 @@ class BackendRegistryTests(unittest.TestCase):
         catalog = {
             "models": [
                 {"slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide", "priority": 1},
-                {"slug": "gpt-new", "display_name": "GPT New", "visibility": "list", "priority": 3},
+                {
+                    "slug": "gpt-new",
+                    "display_name": "GPT New",
+                    "visibility": "list",
+                    "priority": 3,
+                    "default_reasoning_level": "high",
+                    "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}, {"effort": "ultra"}],
+                },
                 {"slug": "gpt-fast", "display_name": "GPT Fast", "visibility": "list", "priority": 2},
             ]
         }
@@ -59,12 +66,24 @@ class BackendRegistryTests(unittest.TestCase):
         with mock.patch("aha_cli.backends.registry.subprocess.run", return_value=completed) as run:
             options = model_options("codex", {"codex": {"bin": "test-codex"}})
 
-        self.assertEqual(options[0], {"name": "", "label": f"default ({CODEX_DEFAULT_MODEL})"})
+        self.assertEqual(options[0]["name"], "")
+        self.assertEqual(options[0]["label"], f"default ({CODEX_DEFAULT_MODEL})")
+        self.assertIn({"name": "xhigh", "label": "xhigh"}, options[0]["reasoning_efforts"])
         self.assertEqual(
             options[1:],
             [
                 {"name": "gpt-fast", "label": "GPT Fast"},
-                {"name": "gpt-new", "label": "GPT New"},
+                {
+                    "name": "gpt-new",
+                    "label": "GPT New",
+                    "reasoning_efforts": [
+                        {"name": "", "label": "default"},
+                        {"name": "low", "label": "low"},
+                        {"name": "high", "label": "high"},
+                        {"name": "ultra", "label": "ultra"},
+                    ],
+                    "default_reasoning_effort": "high",
+                },
             ],
         )
         run.assert_called_once()

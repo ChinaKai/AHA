@@ -211,6 +211,11 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertIn("resume", cmd)
         self.assertIn("session-123", cmd)
 
+    def test_codex_config_overrides_include_reasoning_effort(self) -> None:
+        overrides = codex_config_overrides({"reasoning_effort": "xhigh"})
+
+        self.assertEqual(overrides, ["-c", 'model_reasoning_effort="xhigh"'])
+
     def test_codex_exec_records_resolved_default_model_in_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "reply.md"
@@ -709,11 +714,14 @@ class BackendRunnerSessionTests(unittest.TestCase):
             claude_bin="claude",
             model="sonnet",
             permission_mode="acceptEdits",
+            reasoning_effort="xhigh",
             session_id="session-123",
         )
         self.assertEqual(cmd[:5], ["claude", "-p", "--output-format", "stream-json", "--verbose"])
         self.assertIn("--model", cmd)
         self.assertIn("sonnet", cmd)
+        self.assertIn("--effort", cmd)
+        self.assertEqual(cmd[cmd.index("--effort") + 1], "xhigh")
         self.assertNotIn("--sandbox", cmd)
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)

@@ -9,7 +9,7 @@ import uuid
 
 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
 from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
-from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, resolve_model
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import (
@@ -809,6 +809,13 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 output_file = run / "chat" / f"{args.target}-{uuid.uuid4().hex[:8]}.md"
                 requested_sandbox = (agent or {}).get("sandbox") or task.get("preferred_sandbox") or args.sandbox
                 requested_approval = (agent or {}).get("approval") or task.get("preferred_approval") or args.approval
+                requested_reasoning_effort = normalize_reasoning_effort(
+                    getattr(args, "reasoning_effort", None)
+                    or (agent or {}).get("reasoning_effort")
+                    or task.get("preferred_reasoning_effort")
+                    or ((cfg.get(backend_name) or {}) if isinstance(cfg.get(backend_name), dict) else {}).get("reasoning_effort"),
+                    backend_name,
+                )
                 configured_model = args.model or (agent or {}).get("model") or task.get("preferred_model")
                 if backend_name == "codex" and not configured_model:
                     configured_model = CODEX_DEFAULT_MODEL if item_task_id else (cfg.get("codex", {}) or {}).get("model")
@@ -857,6 +864,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         "task_id": item_task_id,
                         "sandbox": sandbox,
                         "approval": requested_approval,
+                        "reasoning_effort": requested_reasoning_effort,
                         "requested_model": requested_model,
                         "resolved_model": resolved_model,
                         "proxy_enabled": bool((agent or {}).get("proxy_enabled")),
@@ -943,6 +951,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             claude_bin=getattr(args, "claude_bin", "claude"),
                             model=command_model,
                             permission_mode=claude_permission_mode("research", sandbox),
+                            reasoning_effort=requested_reasoning_effort,
                             extra_args=args.extra_arg or [],
                             events_file=events_file,
                             run_id=run_id,
@@ -1026,6 +1035,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             sandbox=sandbox,
                             approval=requested_approval,
                             json_events=not getattr(args, "no_json", False),
+                            reasoning_effort=requested_reasoning_effort,
                             extra_args=args.extra_arg or [],
                             events_file=events_file,
                             run_id=run_id,

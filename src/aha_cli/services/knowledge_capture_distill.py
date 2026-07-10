@@ -24,7 +24,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort
 from aha_cli.domain.models import utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_distill import (
@@ -135,6 +135,16 @@ def _effective_proxy_enabled(config: dict | None, backend: str, proxy_enabled: b
     return bool(backend_proxy_config(config, backend).get("enabled"))
 
 
+def _effective_reasoning_effort(config: dict | None, backend: str, reasoning_effort: str | None) -> str | None:
+    if reasoning_effort:
+        return normalize_reasoning_effort(reasoning_effort, backend)
+    if isinstance(config, dict):
+        backend_cfg = config.get(backend)
+        if isinstance(backend_cfg, dict):
+            return normalize_reasoning_effort(backend_cfg.get("reasoning_effort"), backend)
+    return None
+
+
 def _backend_proxy_env(config: dict | None, backend: str, proxy_enabled: bool | None = None) -> dict[str, str]:
     proxy = backend_proxy_config(config, backend)
     if not _effective_proxy_enabled(config, backend, proxy_enabled):
@@ -168,11 +178,18 @@ def default_capture_agent(context: dict) -> str:
     prompt = str(context.get("prompt") or "")
     cwd = Path(context.get("cwd") or Path.cwd())
     proxy_env = _backend_proxy_env(config, backend, context.get("proxy_enabled"))
+    reasoning_effort = _effective_reasoning_effort(config, backend, context.get("reasoning_effort"))
     progress_callback = context.get("progress_callback")
     if callable(progress_callback):
         progress_callback(
             "backend_started",
-            {"backend": backend, "model": model, "cwd": str(cwd), "proxy_enabled": context.get("proxy_enabled")},
+            {
+                "backend": backend,
+                "model": model,
+                "cwd": str(cwd),
+                "proxy_enabled": context.get("proxy_enabled"),
+                "reasoning_effort": reasoning_effort,
+            },
         )
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -187,6 +204,7 @@ def default_capture_agent(context: dict) -> str:
                     prompt, cwd=cwd, output_file=output_file,
                     codex_bin=codex_bin, model=model, sandbox="read-only",
                     approval="never", codex_config=codex_config, proxy_env=proxy_env,
+                    reasoning_effort=reasoning_effort,
                     event_callback=progress_callback if callable(progress_callback) else None,
                     start_new_session=True,
                 )
@@ -201,6 +219,7 @@ def default_capture_agent(context: dict) -> str:
                     prompt, cwd=cwd, output_file=output_file,
                     claude_bin=claude_bin, model=command_model, permission_mode="plan",
                     claude_config=claude_config, proxy_env=proxy_env,
+                    reasoning_effort=reasoning_effort,
                     event_callback=progress_callback if callable(progress_callback) else None,
                     start_new_session=True,
                 )
@@ -353,6 +372,7 @@ def distill_note(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    reasoning_effort: str | None = None,
     mode: str = "organize",
     agent: CaptureAgent | None = None,
 ) -> dict:
@@ -371,10 +391,12 @@ def distill_note(
     effective_backend = _effective_backend(config, backend)
     effective_model = _effective_model(config, effective_backend, model)
     effective_proxy_enabled = _effective_proxy_enabled(config, effective_backend, proxy_enabled)
+    effective_reasoning_effort = _effective_reasoning_effort(config, effective_backend, reasoning_effort)
     log = create_distill_log(root, config, note_id, {
         "backend": effective_backend,
         "model": effective_model,
         "proxy_enabled": effective_proxy_enabled,
+        "reasoning_effort": effective_reasoning_effort,
         "distill_mode": distill_mode,
         "status": "running",
         "prompt": prompt,
@@ -386,6 +408,7 @@ def distill_note(
                 backend=effective_backend,
                 model=effective_model,
                 proxy_enabled=effective_proxy_enabled,
+                reasoning_effort=effective_reasoning_effort,
                 distill_mode=distill_mode,
             )
         ],
@@ -400,6 +423,7 @@ def distill_note(
             "backend": effective_backend,
             "model": effective_model,
             "proxy_enabled": effective_proxy_enabled,
+            "reasoning_effort": effective_reasoning_effort,
             "distill_mode": distill_mode,
             "config": config,
             "cwd": root,
@@ -478,6 +502,7 @@ def distill_note(
         "candidate_ids": enqueued_ids,
         "log_id": log_id,
         "distill_mode": distill_mode,
+        "reasoning_effort": effective_reasoning_effort,
         "navigation": navigation,
     }
 
@@ -490,6 +515,7 @@ def run_distill_job(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    reasoning_effort: str | None = None,
     mode: str = "organize",
     agent: CaptureAgent | None = None,
 ) -> dict:
@@ -503,7 +529,17 @@ def run_distill_job(
         update_note(root, config, note_id, status="distilling", last_error="")
     except FileNotFoundError:
         return {"ok": False, "error": f"capture note not found: {note_id}"}
-    result = distill_note(root, config, note_id, backend=backend, model=model, proxy_enabled=proxy_enabled, mode=mode, agent=agent)
+    result = distill_note(
+        root,
+        config,
+        note_id,
+        backend=backend,
+        model=model,
+        proxy_enabled=proxy_enabled,
+        reasoning_effort=reasoning_effort,
+        mode=mode,
+        agent=agent,
+    )
     if not result.get("ok"):
         try:
             update_note(root, config, note_id, status="error", last_error=result.get("error", "distill failed"))

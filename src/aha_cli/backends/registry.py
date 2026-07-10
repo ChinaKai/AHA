@@ -10,6 +10,7 @@ from aha_cli.services.backend_paths import add_user_backend_paths
 
 CODEX_DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_MODEL_OPTION = {"name": "", "label": "default"}
+DEFAULT_REASONING_EFFORT_OPTION = {"name": "", "label": "default"}
 CODEX_MODEL_CATALOG_TIMEOUT_SECONDS = 3.0
 CODEX_MODEL_CATALOG_CACHE_TTL_SECONDS = 300.0
 
@@ -21,6 +22,9 @@ CODEX_FALLBACK_MODEL_NAMES = (
     "gpt-5.3-codex-spark",
     "gpt-5.2",
 )
+CODEX_FALLBACK_REASONING_EFFORT_NAMES = ("low", "medium", "high", "xhigh")
+CLAUDE_REASONING_EFFORT_NAMES = ("low", "medium", "high", "xhigh", "max")
+REASONING_EFFORT_NAMES = ("low", "medium", "high", "xhigh", "max", "ultra")
 _CODEX_MODEL_OPTIONS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 DEFAULT_MODEL_OPTIONS = [DEFAULT_MODEL_OPTION]
@@ -52,11 +56,41 @@ def _copy_model_options(options: list[dict]) -> list[dict]:
 
 
 def _codex_default_model_option() -> dict:
-    return {"name": "", "label": f"default ({CODEX_DEFAULT_MODEL})"}
+    return {
+        "name": "",
+        "label": f"default ({CODEX_DEFAULT_MODEL})",
+        "reasoning_efforts": _reasoning_effort_options(CODEX_FALLBACK_REASONING_EFFORT_NAMES),
+    }
 
 
 def _codex_fallback_model_options() -> list[dict]:
     return [{"name": name, "label": name} for name in CODEX_FALLBACK_MODEL_NAMES]
+
+
+def _reasoning_effort_options(names: tuple[str, ...] | list[str]) -> list[dict]:
+    seen: set[str] = set()
+    options = [dict(DEFAULT_REASONING_EFFORT_OPTION)]
+    for raw_name in names:
+        name = str(raw_name or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        options.append({"name": name, "label": name})
+    return options
+
+
+def _codex_reasoning_efforts_from_catalog_item(item: dict) -> list[str]:
+    raw_levels = item.get("supported_reasoning_levels") or item.get("supported_reasoning_efforts") or []
+    names: list[str] = []
+    if isinstance(raw_levels, list):
+        for level in raw_levels:
+            if isinstance(level, dict):
+                name = str(level.get("effort") or level.get("name") or level.get("level") or "").strip()
+            else:
+                name = str(level or "").strip()
+            if name and name in REASONING_EFFORT_NAMES and name not in names:
+                names.append(name)
+    return names
 
 
 def _float_env(name: str, default: float) -> float:
@@ -97,7 +131,14 @@ def _codex_catalog_model_options_from_payload(payload: object) -> list[dict]:
         except (TypeError, ValueError):
             priority = 1000 + index
         seen.add(name)
-        sortable.append((priority, index, {"name": name, "label": label}))
+        option = {"name": name, "label": label}
+        reasoning_efforts = _codex_reasoning_efforts_from_catalog_item(item)
+        if reasoning_efforts:
+            option["reasoning_efforts"] = _reasoning_effort_options(reasoning_efforts)
+        default_reasoning = str(item.get("default_reasoning_level") or item.get("default_reasoning_effort") or "").strip()
+        if default_reasoning in reasoning_efforts:
+            option["default_reasoning_effort"] = default_reasoning
+        sortable.append((priority, index, option))
 
     sortable.sort(key=lambda entry: (entry[0], entry[1]))
     return [option for _priority, _index, option in sortable]
@@ -145,6 +186,28 @@ def _backend_model_options(backend: str, config: dict | None = None) -> list[dic
     if backend == "codex":
         return _codex_model_options(config)
     return _copy_model_options(BACKENDS.get(backend, {}).get("models", DEFAULT_MODEL_OPTIONS))
+
+
+def _backend_reasoning_effort_options(backend: str) -> list[dict]:
+    if backend == "codex":
+        return _reasoning_effort_options(CODEX_FALLBACK_REASONING_EFFORT_NAMES)
+    if backend == "claude":
+        return _reasoning_effort_options(CLAUDE_REASONING_EFFORT_NAMES)
+    return [dict(DEFAULT_REASONING_EFFORT_OPTION)]
+
+
+def reasoning_effort_options(backend: str = "codex") -> list[dict]:
+    return _backend_reasoning_effort_options(backend)
+
+
+def normalize_reasoning_effort(value: object, backend: str | None = None) -> str | None:
+    effort = str(value or "").strip().lower()
+    if not effort or effort in {"default", "none", "null"}:
+        return None
+    allowed = CLAUDE_REASONING_EFFORT_NAMES if backend == "claude" else REASONING_EFFORT_NAMES
+    if effort not in allowed:
+        raise ValueError(f"unknown reasoning effort: {value}")
+    return effort
 
 
 def resolve_model(backend: str, model: str | None) -> str | None:
@@ -235,6 +298,7 @@ def agent_backends(config: dict | None = None) -> list[dict]:
         {
             "name": name,
             "models": _backend_model_options(name, config),
+            "reasoning_efforts": _backend_reasoning_effort_options(name),
             "commands": BACKENDS[name].get("commands", []),
             "native_commands": BACKENDS[name].get("native_commands", []),
         }

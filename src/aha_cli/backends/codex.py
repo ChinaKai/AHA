@@ -10,7 +10,7 @@ import shlex
 import subprocess
 import sys
 
-from aha_cli.backends.registry import normalize_model_selector, resolve_model
+from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort, resolve_model
 from aha_cli.backends.codex_litellm_bridge import start_litellm_responses_bridge
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
@@ -425,14 +425,19 @@ def codex_config_with_observe_provider_override(
 
 
 def codex_config_overrides(codex_config: dict | None) -> list[str]:
+    overrides: list[str] = []
+    if isinstance(codex_config, dict):
+        reasoning_effort = normalize_reasoning_effort(codex_config.get("reasoning_effort"), "codex")
+        if reasoning_effort:
+            overrides.extend(["-c", f"model_reasoning_effort={_toml_string(reasoning_effort)}"])
     provider = _provider_override(codex_config)
     base_url = str(provider.get("base_url") or "").strip()
     if not base_url:
-        return []
+        return overrides
     provider_id = str(provider.get("provider_id") or "aha_provider").strip() or "aha_provider"
     name = str(provider.get("name") or provider_id).strip() or provider_id
     wire_api = str(provider.get("wire_api") or CODEX_PROVIDER_DEFAULT_WIRE_API).strip() or CODEX_PROVIDER_DEFAULT_WIRE_API
-    overrides = [
+    overrides.extend([
         "-c",
         f"model_provider={_toml_string(provider_id)}",
         "-c",
@@ -443,7 +448,7 @@ def codex_config_overrides(codex_config: dict | None) -> list[str]:
         f"model_providers.{provider_id}.wire_api={_toml_string(wire_api)}",
         "-c",
         f"model_providers.{provider_id}.requires_openai_auth={_toml_bool(provider.get('requires_openai_auth'))}",
-    ]
+    ])
     env_key = str(provider.get("env_key") or "").strip()
     if env_key:
         overrides.extend(["-c", f"model_providers.{provider_id}.env_key={_toml_string(env_key)}"])
@@ -619,12 +624,16 @@ def run_codex_exec(
     session: dict | None = None,
     proxy_env: dict[str, str] | None = None,
     codex_config: dict | None = None,
+    reasoning_effort: str | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
     start_new_session: bool = False,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     requested_model = session.get("requested_model") if session is not None and "requested_model" in session else model
     codex_config = codex_config_for_model(codex_config, model)
+    if reasoning_effort is not None:
+        codex_config = dict(codex_config)
+        codex_config["reasoning_effort"] = reasoning_effort
     bridge_runtime = None
     try:
         bridge_config = _provider_litellm_bridge(codex_config)
@@ -762,6 +771,9 @@ def codex_runner_command(args, cfg: dict) -> str:
     model = resolve_model("codex", args.codex_model if args.codex_model is not None else codex_cfg.get("model"))
     if model:
         parts.extend(["--model", shlex.quote(model)])
+    reasoning_effort = normalize_reasoning_effort(args.codex_reasoning_effort if args.codex_reasoning_effort is not None else codex_cfg.get("reasoning_effort"), "codex")
+    if reasoning_effort:
+        parts.extend(["--reasoning-effort", shlex.quote(reasoning_effort)])
     sandbox = args.codex_sandbox or codex_cfg.get("sandbox") or "auto"
     parts.extend(["--sandbox", shlex.quote(sandbox)])
     approval = args.codex_approval or codex_cfg.get("approval") or "never"

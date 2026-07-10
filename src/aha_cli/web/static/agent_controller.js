@@ -189,6 +189,7 @@
         const currentConfig = deps.normalizeAgentConfig?.({
           backend: agent.backend || "codex",
           model: modelValue,
+          reasoningEffort: agent.reasoning_effort || task.preferred_reasoning_effort || "",
           sandbox,
           approval,
           proxyEnabled
@@ -264,6 +265,7 @@
           const currentConfig = deps.normalizeAgentConfig?.({
             backend: agent.backend || "codex",
             model: modelValue,
+            reasoningEffort: agent.reasoning_effort || task.preferred_reasoning_effort || "",
             sandbox: runtimeDefaults.sandbox,
             approval: runtimeDefaults.approval,
             proxyEnabled: runtimeDefaults.proxyEnabled

@@ -297,6 +297,7 @@
           description: elements.newTaskDescriptionEl?.value || "",
           backend: elements.taskBackendEl?.value || "",
           model: elements.taskModelEl?.value || "",
+          reasoning_effort: elements.taskReasoningEffortEl?.value || "",
           sandbox: elements.taskSandboxEl?.value || "",
           approval: elements.taskApprovalEl?.value || "",
           proxy_enabled: taskProxyEnabledValue(),
@@ -512,6 +513,7 @@
       }
       setSelectValue(elements.taskSandboxEl, values.sandbox);
       setSelectValue(elements.taskApprovalEl, values.approval);
+      deps.fillReasoningEffortSelect?.(elements.taskReasoningEffortEl, elements.taskBackendEl?.value || "codex", elements.taskModelEl?.value || "", values.reasoning_effort || "");
       restoreWorkspaceDraft(values);
       setSelectValue(elements.collaborationModeEl, values.collaboration_mode);
       setSelectValue(elements.workflowTemplateEl, values.workflow_template);
@@ -540,6 +542,7 @@
         description: memo.description || "",
         backend: memo.backend || "",
         model: memo.model || "",
+        reasoning_effort: memo.reasoning_effort || "",
         sandbox: memo.sandbox || "",
         approval: memo.approval || "",
         workspace_path: memo.workspace_path || "",
@@ -685,6 +688,7 @@
         description,
         backend: elements.taskBackendEl.value,
         model: elements.taskModelEl.value || null,
+        reasoningEffort: elements.taskReasoningEffortEl?.value || "",
         sandbox: elements.taskSandboxEl.value,
         approval: elements.taskApprovalEl.value,
         proxyEnabled: createProxyEnabled,

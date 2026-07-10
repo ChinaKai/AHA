@@ -70,6 +70,7 @@ def run_codex_task(args) -> int:
         sandbox=sandbox,
         approval=args.approval,
         json_events=not args.no_json,
+        reasoning_effort=args.reasoning_effort,
         extra_args=args.extra_arg or [],
         events_file=events_file,
         run_id=run_id,

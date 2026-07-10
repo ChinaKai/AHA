@@ -207,6 +207,42 @@
     .kb-modal[hidden] { display: none; }
     .kb-modal-card { background: var(--color-surface); padding: 16px; border-radius: var(--radius-md); min-width: min(260px, 92vw); max-width: 92vw; min-height: 0; box-sizing: border-box; display: grid; gap: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
     .kb-modal-card h3 { margin: 0; font-size: 15px; }
+    .kb-detail-fullscreen-modal {
+      background: var(--color-bg); align-items: stretch; justify-content: stretch;
+    }
+    .kb-detail-fullscreen-modal .kb-detail-fullscreen {
+      width: 100vw; height: 100vh; height: 100dvh; max-width: none; max-height: none;
+      overflow: hidden; border-radius: 0; box-shadow: none; padding: 0;
+      display: flex; flex-direction: column; gap: 0;
+    }
+    .kb-detail-fullscreen > h3 {
+      flex: 0 0 auto;
+      padding: 16px 20px 8px; font-size: 18px; line-height: 1.35;
+    }
+    .kb-detail-fullscreen > .kb-muted {
+      flex: 0 0 auto;
+      padding: 0 20px 12px; border-bottom: 1px solid var(--color-border-subtle);
+    }
+    .kb-detail-fullscreen .kb-modal-action-row {
+      flex: 0 0 auto;
+      margin: 0; padding: 10px 20px; justify-content: space-between; gap: 12px;
+      border-bottom: 1px solid var(--color-border-subtle);
+      background: var(--color-surface-muted);
+    }
+    .kb-detail-fullscreen .kb-modal-action-group { flex: 1 1 auto; }
+    .kb-detail-fullscreen .kb-modal-action-row > button { margin-left: auto; }
+    .kb-detail-fullscreen #cap-view-refs,
+    .kb-detail-fullscreen #cap-view-distill {
+      flex: 0 0 auto; padding: 0 20px; background: var(--color-surface);
+    }
+    .kb-detail-fullscreen .kb-detail-scroll-body {
+      flex: 1 1 auto;
+      min-height: 0; overflow: auto; border: 0; border-radius: 0;
+      background: var(--color-surface); padding: 18px 22px 56px;
+    }
+    .kb-detail-fullscreen #cap-view-log.kb-detail-scroll-body {
+      max-height: none; margin: 0; border: 0; border-radius: 0;
+    }
     .kb-log-modal { width: min(92vw, 860px); max-height: 90vh; overflow: auto; }
     .kb-log-label { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
     .kb-log-body { max-height: min(360px, 35vh); overflow: auto; }
@@ -245,6 +281,7 @@
     .kb-cap-distill-controls #cap-distill-mode { width: 88px; }
     .kb-cap-distill-controls #cap-backend { width: 92px; }
     .kb-cap-distill-controls #cap-model { flex: 1 1 150px; max-width: 220px; }
+    .kb-cap-distill-controls #cap-effort { width: 96px; }
     .kb-cap-distill-controls #cap-proxy-mode { width: 100px; }
     .kb-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-text-muted); }
     .kb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
@@ -262,6 +299,7 @@
     .kb-project-nav-controls select { min-width: 150px; }
     .kb-project-nav-controls #nav-workspace-select { min-width: 240px; }
     .kb-project-nav-controls #nav-model { min-width: 180px; }
+    .kb-project-nav-controls #nav-effort { min-width: 120px; }
     .kb-project-nav-controls button { flex: 0 0 auto; }
     .kb-toast {
       position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
@@ -325,6 +363,14 @@
       .kb-entry-edit-toolbar { display: grid; grid-template-columns: 1fr; }
       .kb-entry-edit-modes, .kb-entry-image-upload { width: 100%; }
       .kb-entry-edit-modes button { flex: 1 1 0; }
+      .kb-detail-fullscreen > h3 { padding: 12px 12px 6px; font-size: 16px; }
+      .kb-detail-fullscreen > .kb-muted { padding: 0 12px 10px; }
+      .kb-detail-fullscreen .kb-modal-action-row {
+        display: flex; padding: 8px 12px; overflow-x: auto;
+      }
+      .kb-detail-fullscreen #cap-view-refs,
+      .kb-detail-fullscreen #cap-view-distill { padding: 0 12px; }
+      .kb-detail-fullscreen .kb-detail-scroll-body { padding: 14px 12px 44px; }
     }
   </style>
 </head>
@@ -368,6 +414,7 @@
         <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
         <select id="nav-backend" aria-label="Project navigation backend"></select>
         <select id="nav-model" aria-label="Project navigation model"></select>
+        <select id="nav-effort" aria-label="Project navigation reasoning effort"></select>
         <select id="nav-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
           <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
           <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
@@ -410,8 +457,8 @@
     </form>
   </div>
 
-  <div id="cap-view-modal" class="kb-modal" hidden>
-    <div class="kb-modal-card kb-entry-ref-modal">
+  <div id="cap-view-modal" class="kb-modal kb-detail-fullscreen-modal" hidden>
+    <div class="kb-modal-card kb-entry-ref-modal kb-detail-fullscreen kb-capture-fullscreen" role="dialog" aria-modal="true" aria-labelledby="cap-view-title">
       <h3 id="cap-view-title">Capture note</h3>
       <div id="cap-view-meta" class="kb-muted"></div>
       <div class="kb-card-actions kb-inline-actions kb-modal-action-row">
@@ -420,8 +467,8 @@
       </div>
       <div id="cap-view-refs"></div>
       <div id="cap-view-distill"></div>
-      <div id="cap-view-body" class="kb-body kb-cap-md"></div>
-      <div id="cap-view-log" class="kb-cap-log-panel" hidden>
+      <div id="cap-view-body" class="kb-body kb-cap-md kb-detail-scroll-body"></div>
+      <div id="cap-view-log" class="kb-cap-log-panel kb-detail-scroll-body" hidden>
         <div class="kb-row kb-cap-log-head">
           <strong data-i18n="knowledge.capture_agent_log">Agent log</strong>
           <button class="button-ghost" type="button" id="cap-log-close" data-i18n="common.close">Close</button>
@@ -432,15 +479,15 @@
     </div>
   </div>
 
-  <div id="entry-ref-modal" class="kb-modal" hidden>
-    <div class="kb-modal-card kb-entry-ref-modal">
+  <div id="entry-ref-modal" class="kb-modal kb-detail-fullscreen-modal" hidden>
+    <div class="kb-modal-card kb-entry-ref-modal kb-entry-fullscreen kb-detail-fullscreen" role="dialog" aria-modal="true" aria-labelledby="entry-ref-title">
       <h3 id="entry-ref-title">Reference</h3>
       <div id="entry-ref-meta" class="kb-muted"></div>
       <div class="kb-card-actions kb-entry-actions kb-inline-actions kb-modal-action-row">
         <div id="entry-ref-actions" class="kb-modal-action-group"></div>
         <button class="button-ghost" type="button" id="entry-ref-close" data-i18n="common.close">Close</button>
       </div>
-      <div id="entry-ref-body" class="kb-body kb-entry-body" data-entry-body="reference"></div>
+      <div id="entry-ref-body" class="kb-body kb-entry-body kb-detail-scroll-body" data-entry-body="reference"></div>
     </div>
   </div>
 
@@ -624,7 +671,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -725,6 +772,8 @@
       const model = $("#nav-model")?.value || "";
       if (backend) payload.backend = backend;
       if (model) payload.model = model;
+      const reasoningEffort = $("#nav-effort")?.value || "";
+      if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
       const proxyMode = $("#nav-proxy-mode")?.value || "off";
       payload.proxy_enabled = proxyMode === "on";
       return payload;
@@ -2043,6 +2092,7 @@
           <select id="cap-distill-mode" aria-label="${esc(t("knowledge.capture_distill_mode", "Distill mode"))}">${renderCaptureDistillModeOptions(state.lastDistillMode)}</select>
           <select id="cap-backend" aria-label="Distill backend"></select>
           <select id="cap-model" aria-label="Distill model"></select>
+          <select id="cap-effort" aria-label="Distill reasoning effort"></select>
           <select id="cap-proxy-mode" aria-label="${esc(t("knowledge.proxy_mode", "Proxy mode"))}">
             <option value="on">${esc(t("knowledge.proxy_on", "Proxy on"))}</option>
             <option value="off">${esc(t("knowledge.proxy_off", "Proxy off"))}</option>
@@ -2154,6 +2204,7 @@
       const official = ((backend && backend.models) || []).map((m) => ({
         name: configString(m.name),
         label: configString(m.label, m.name || "default"),
+        reasoning_efforts: Array.isArray(m.reasoning_efforts) ? m.reasoning_efforts : null,
       }));
       const env = ["codex", "claude"].includes(backendName) ? captureEnvGroups(backendName).map((group, index) => {
         const name = captureEnvGroupName(group, index);
@@ -2161,11 +2212,39 @@
       }).filter((m) => m.name) : [];
       return official.concat(env);
     }
+    function captureSelectableModelOptions(backendName) {
+      const options = captureModelOptions(backendName);
+      const named = options.filter((model) => configString(model.name));
+      return named.length ? named : options;
+    }
+    function captureFirstModel(backendName) {
+      return configString(captureSelectableModelOptions(backendName)[0]?.name);
+    }
+    function captureReasoningEffortOptions(backendName, modelValue = "") {
+      const backend = (state.captureBackends || []).find((b) => b.name === backendName);
+      const selectedModel = configString(modelValue);
+      const model = captureModelOptions(backendName).find((m) => configString(m.name) === selectedModel);
+      const options = model?.reasoning_efforts || backend?.reasoning_efforts || [{ name: "", label: "default" }];
+      return Array.isArray(options) && options.length ? options : [{ name: "", label: "default" }];
+    }
+    function captureSelectableReasoningEffortOptions(backendName, modelValue = "") {
+      const options = captureReasoningEffortOptions(backendName, modelValue);
+      const named = options.filter((option) => configString(option.name));
+      return named.length ? named : options;
+    }
+    function capturePreferredReasoningEffort(backendName, modelValue = "") {
+      const options = captureSelectableReasoningEffortOptions(backendName, modelValue);
+      const preferred = options.find((option) => configString(option.name) === "xhigh");
+      return configString(preferred?.name || options[0]?.name);
+    }
     function captureDefaultModel(backendName) {
       const cfg = state.captureConfig?.[backendName] || {};
-      if (backendName === "claude") return configString(cfg.model) || captureEnvModelValue(cfg.env_active);
-      if (backendName === "codex") return configString(cfg.model) || captureEnvModelValue(cfg.env_active);
-      return configString(cfg.model);
+      if (backendName === "claude") return captureFirstModel(backendName) || configString(cfg.model) || captureEnvModelValue(cfg.env_active);
+      if (backendName === "codex") return captureFirstModel(backendName) || configString(cfg.model) || captureEnvModelValue(cfg.env_active);
+      return captureFirstModel(backendName) || configString(cfg.model);
+    }
+    function captureDefaultReasoningEffort(backendName) {
+      return configString(state.captureConfig?.[backendName]?.reasoning_effort);
     }
     function captureDefaultProxyEnabled(backendName) {
       const backendProxy = state.captureConfig?.[backendName]?.proxy || {};
@@ -2184,12 +2263,36 @@
       const modelEl = $("#cap-model");
       if (!backendEl || !modelEl) return;
       const backendName = backendEl.value;
-      const models = captureModelOptions(backendName);
+      const models = captureSelectableModelOptions(backendName);
       modelEl.innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
       const values = [...modelEl.options].map((opt) => opt.value);
       const requested = configString(selectedModel ?? state.lastModel ?? "");
       const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
       if (values.includes(fallback)) modelEl.value = fallback;
+      else if (values.length) modelEl.value = values[0];
+      renderCaptureReasoningEfforts();
+    }
+    function renderReasoningEffortSelect(select, backendName, modelValue, selectedValue, configuredDefault) {
+      if (!select) return;
+      const options = captureSelectableReasoningEffortOptions(backendName, modelValue);
+      select.innerHTML = options.map((opt) => `<option value="${esc(configString(opt.name))}">${esc(configString(opt.label, opt.name || "default"))}</option>`).join("");
+      const values = [...select.options].map((opt) => opt.value);
+      const requested = configString(selectedValue);
+      const configured = configString(configuredDefault);
+      const preferred = capturePreferredReasoningEffort(backendName, modelValue);
+      const fallback = values.includes(requested) ? requested : values.includes(preferred) ? preferred : configured;
+      select.value = values.includes(fallback) ? fallback : "";
+    }
+    function renderCaptureReasoningEfforts(selectedEffort) {
+      const backendEl = $("#cap-backend");
+      const modelEl = $("#cap-model");
+      renderReasoningEffortSelect(
+        $("#cap-effort"),
+        backendEl?.value || "",
+        modelEl?.value || "",
+        selectedEffort ?? state.lastReasoningEffort ?? "",
+        captureDefaultReasoningEffort(backendEl?.value || "")
+      );
     }
     function syncCaptureDistillPanelControls(useLast = true) {
       const backendEl = $("#cap-backend");
@@ -2215,12 +2318,23 @@
     }
     function renderNavigationModels(selectedModel) {
       const backendName = $("#nav-backend").value;
-      const models = captureModelOptions(backendName);
+      const models = captureSelectableModelOptions(backendName);
       $("#nav-model").innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
       const values = [...$("#nav-model").options].map((opt) => opt.value);
       const requested = configString(selectedModel ?? state.navLastModel ?? "");
       const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
       if (values.includes(fallback)) $("#nav-model").value = fallback;
+      else if (values.length) $("#nav-model").value = values[0];
+      renderNavigationReasoningEfforts();
+    }
+    function renderNavigationReasoningEfforts(selectedEffort) {
+      renderReasoningEffortSelect(
+        $("#nav-effort"),
+        $("#nav-backend")?.value || "",
+        $("#nav-model")?.value || "",
+        selectedEffort ?? state.navLastReasoningEffort ?? "",
+        captureDefaultReasoningEffort($("#nav-backend")?.value || "")
+      );
     }
     function syncNavigationProxyMode(useLast = true) {
       const select = $("#nav-proxy-mode");
@@ -2467,15 +2581,16 @@
       state.lastDistillMode = $("#cap-distill-mode")?.value === "generate" ? "generate" : "organize";
       state.lastBackend = $("#cap-backend")?.value || "";
       state.lastModel = $("#cap-model")?.value || "";
+      state.lastReasoningEffort = $("#cap-effort")?.value || "";
       state.lastProxyEnabled = $("#cap-proxy-mode")?.value === "on";
       state.distillTarget = null;
       renderCaptureNoteModal();
-      if (id) runDistill(id, state.lastBackend || null, state.lastModel || null, state.lastProxyEnabled, state.lastDistillMode);
+      if (id) runDistill(id, state.lastBackend || null, state.lastModel || null, state.lastProxyEnabled, state.lastDistillMode, state.lastReasoningEffort || null);
     };
 
-    async function runDistill(id, backend, model, proxyEnabled, distillMode = "organize") {
+    async function runDistill(id, backend, model, proxyEnabled, distillMode = "organize", reasoningEffort = null) {
       try {
-        await api("/api/kb/capture/distill", { method: "POST", body: JSON.stringify({ id, backend, model, proxy_enabled: Boolean(proxyEnabled), distill_mode: distillMode }) });
+        await api("/api/kb/capture/distill", { method: "POST", body: JSON.stringify({ id, backend, model, reasoning_effort: reasoningEffort || "", proxy_enabled: Boolean(proxyEnabled), distill_mode: distillMode }) });
         toast(t("knowledge.capture_distilling", "Distilling…"));
         await loadCapture();
         for (let i = 0; i < 60; i++) {
@@ -2629,9 +2744,15 @@
       }
     });
     document.addEventListener("change", (event) => {
-      if (event.target?.id !== "cap-backend") return;
-      renderCaptureModels();
-      syncCaptureProxyMode(false);
+      if (event.target?.id === "cap-backend") {
+        renderCaptureModels();
+        syncCaptureProxyMode(false);
+      } else if (event.target?.id === "cap-model") {
+        state.lastModel = $("#cap-model")?.value || "";
+        renderCaptureReasoningEfforts();
+      } else if (event.target?.id === "cap-effort") {
+        state.lastReasoningEffort = $("#cap-effort")?.value || "";
+      }
     });
 
     async function loadSettings() {
@@ -2673,7 +2794,8 @@
       if (event.key === "Enter") { loadProjectNavDrafts(); loadNavigation(); }
     });
     $("#nav-backend").addEventListener("change", () => { state.navLastBackend = $("#nav-backend").value; renderNavigationModels(); syncNavigationProxyMode(false); });
-    $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; });
+    $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; renderNavigationReasoningEfforts(); });
+    $("#nav-effort").addEventListener("change", () => { state.navLastReasoningEffort = $("#nav-effort").value; });
     $("#nav-proxy-mode").addEventListener("change", () => {
       const mode = $("#nav-proxy-mode").value;
       state.navLastProxyEnabled = mode === "on";
@@ -2695,6 +2817,7 @@
       if (!confirm(formatText("knowledge.confirm_generate_project_nav", { workspace: payload.workspace_path }, "Generate project navigation for " + payload.workspace_path + "?"))) return;
       state.navLastBackend = payload.backend || "";
       state.navLastModel = payload.model || "";
+      state.navLastReasoningEffort = payload.reasoning_effort || "";
       state.navLastProxyEnabled = Boolean(payload.proxy_enabled);
       try {
         const result = await api("/api/kb/project-nav", { method: "POST", body: JSON.stringify(payload) });

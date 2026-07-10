@@ -33,6 +33,7 @@ def _agent_status_item(
         workspace_path=agent.get("workspace_path") or task.get("workspace_path"),
     )
     merged = dict(agent)
+    merged["reasoning_effort"] = agent.get("reasoning_effort") or task.get("preferred_reasoning_effort")
     merged["sandbox"] = agent.get("sandbox") or task.get("preferred_sandbox")
     merged["approval"] = agent.get("approval") or task.get("preferred_approval")
     merged["proxy_enabled"] = bool(agent.get("proxy_enabled"))

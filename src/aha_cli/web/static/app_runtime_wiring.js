@@ -606,6 +606,7 @@ bootstrapController = window.AHABootstrapController.createBootstrapController({
   loadStatus,
   locationOrigin: () => location.origin,
   modelOptionsForBackend: backend => runtimeOptions.modelOptionsForBackend(backend),
+  reasoningEffortSelectOptions: (backend, model, current) => runtimeOptions.reasoningEffortSelectOptions(backend, model, current),
   openTaskMemoHome: () => taskMemoController.openDialog?.(),
   renderEmptyWorkspace: renderOrchestrator.renderEmptyWorkspace,
   resetEmptyRunState: () => {
@@ -1148,6 +1149,7 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
     if (activeTab === "context-evidence") renderPanel();
   },
   renderAskUserGateControls,
+  fillReasoningEffortSelect: (select, backend, model, selected = "") => runtimeOptions.fillReasoningEffortSelect(select, backend, model, selected),
   renderModelOptions: () => runtimeOptions.renderModelOptions(),
   renderPanel,
   requestRealtimeCatchup,

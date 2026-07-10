@@ -1348,6 +1348,7 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("task-visibility-filter", html)
                 self.assertNotIn("show-hidden", html)
                 self.assertIn('id="task-model"', html)
+                self.assertIn('id="task-reasoning-effort"', html)
                 self.assertIn('id="task-sandbox"', html)
                 self.assertIn('id="task-approval"', html)
                 self.assertNotIn('id="run-http-proxy"', html)

@@ -614,6 +614,7 @@ def _agent_navigation_candidates(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    reasoning_effort: str | None = None,
     agent: NavigationAgent | None = None,
     progress_callback: Callable[[str, dict], None] | None = None,
 ) -> tuple[list[dict] | None, dict]:
@@ -628,6 +629,7 @@ def _agent_navigation_candidates(
             "backend": backend,
             "model": model,
             "proxy_enabled": proxy_enabled,
+            "reasoning_effort": reasoning_effort,
             "config": config,
             "cwd": workspace_path,
             "workspace_path": workspace_path,
@@ -689,6 +691,7 @@ def prepare_project_navigation(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    reasoning_effort: str | None = None,
     agent: NavigationAgent | None = None,
     progress_callback: Callable[[str, dict], None] | None = None,
 ) -> dict:
@@ -715,6 +718,7 @@ def prepare_project_navigation(
         backend=backend,
         model=model,
         proxy_enabled=proxy_enabled,
+        reasoning_effort=reasoning_effort,
         agent=agent,
         progress_callback=progress_callback,
     )

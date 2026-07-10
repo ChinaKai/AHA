@@ -13,7 +13,7 @@ import zipfile
 
 from aha_cli.backends.claude import apply_claude_environment, claude_cli_model, claude_config_for_model, claude_resolved_model
 from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
-from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_model_selector, resolve_model
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_model_selector, normalize_reasoning_effort, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.commit_policy import generated_by_for_backend_model
@@ -29,6 +29,7 @@ from aha_cli.store.filesystem import (
     require_plan,
     run_dir,
     session_path,
+    task_snapshot,
     write_json,
 )
 
@@ -488,6 +489,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "model": state.get("model"),
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
+        "reasoning_effort": state.get("reasoning_effort"),
         "runtime_context_window": runtime_context_window,
         "runtime_context_usage": pressure_runtime_usage,
         "latest_usage": latest_usage,
@@ -597,6 +599,7 @@ def _agent_chat_command(
     codex_bin: str = "codex",
     claude_bin: str = "claude",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     sandbox: str = "workspace-write",
     approval: str = "never",
     interval: float = 1.0,
@@ -637,6 +640,8 @@ def _agent_chat_command(
         command.extend(["--model", command_model])
         if backend == "codex" and not model:
             command.extend(["--requested-model", ""])
+    if reasoning_effort:
+        command.extend(["--reasoning-effort", reasoning_effort])
     if from_start:
         command.append("--from-start")
     if no_json and backend == "codex":
@@ -685,6 +690,37 @@ def _backend_process_env(
     return env
 
 
+def _configured_reasoning_effort(cfg: dict, backend: str) -> str | None:
+    section = cfg.get(backend) if isinstance(cfg.get(backend), dict) else {}
+    return normalize_reasoning_effort(section.get("reasoning_effort"), backend)
+
+
+def _effective_backend_reasoning_effort(
+    root: Path,
+    run_id: str,
+    target: str,
+    task_id: str | None,
+    backend: str,
+    cfg: dict,
+    requested: str | None,
+) -> str | None:
+    if requested is not None:
+        return normalize_reasoning_effort(requested, backend)
+    if task_id:
+        try:
+            detail = task_snapshot(root, run_id, task_id)
+        except (KeyError, SystemExit):
+            return _configured_reasoning_effort(cfg, backend)
+        task = detail["task"]
+        agent = next((item for item in task.get("agents", []) if item.get("id") == target), {})
+        value = agent.get("reasoning_effort")
+        if value is None:
+            value = task.get("preferred_reasoning_effort")
+        if value is not None:
+            return normalize_reasoning_effort(value, backend)
+    return _configured_reasoning_effort(cfg, backend)
+
+
 def _add_user_backend_paths(env: dict[str, str]) -> None:
     add_user_backend_paths(env, home=Path.home())
 
@@ -698,6 +734,7 @@ def start_backend(
     codex_bin: str = "codex",
     claude_bin: str = "claude",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     sandbox: str = "workspace-write",
     approval: str = "never",
     interval: float = 1.0,
@@ -718,6 +755,7 @@ def start_backend(
         model = (cfg.get("claude", {}) or {}).get("model")
     requested_model = model
     model = normalize_model_selector(backend, model, cfg)
+    reasoning_effort = _effective_backend_reasoning_effort(root, run_id, target, task_id, backend, cfg, reasoning_effort)
     codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend == "codex" else None
     claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend == "claude" else None
     command_model = (
@@ -741,6 +779,7 @@ def start_backend(
             codex_bin=codex_bin,
             claude_bin=claude_bin,
             model=model,
+            reasoning_effort=reasoning_effort,
             sandbox=sandbox,
             approval=approval,
             interval=interval,
@@ -789,6 +828,7 @@ def start_backend(
             "command": command,
             "sandbox": sandbox,
             "approval": approval,
+            "reasoning_effort": reasoning_effort,
             "model": resolved_model,
             "requested_model": requested_model,
             "resolved_model": resolved_model,

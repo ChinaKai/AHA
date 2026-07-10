@@ -64,6 +64,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "description": "Use the attached notes and preserve existing behavior.",
                             "collaboration_mode": "team",
                             "workflow_template": "FAULT-DEBUG",
+                            "reasoning_effort": "high",
                             "dispatch": False,
                         },
                     )
@@ -82,6 +83,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(body["task"]["description"], "Use the attached notes and preserve existing behavior.")
         self.assertEqual(body["task"]["collaboration_mode"], "team")
         self.assertEqual(body["task"]["workflow_template"], "fault-debug")
+        self.assertEqual(body["task"]["preferred_reasoning_effort"], "high")
+        self.assertEqual(body["task"]["agents"][0]["reasoning_effort"], "high")
         self.assertEqual(body["task"]["delegation_policy"], "auto")
         self.assertEqual(body["task"]["max_sub_agents"], 2)
         self.assertEqual(body["task"]["preferred_sandbox"], "danger-full-access")
@@ -1401,6 +1404,7 @@ class WebTaskApiTests(unittest.TestCase):
                                 "task_id": "task-001",
                                 "agent_id": "main",
                                 "sandbox": "read-only",
+                                "reasoning_effort": "xhigh",
                                 "restart_backend": True,
                             },
                         )
@@ -1411,9 +1415,11 @@ class WebTaskApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(main_agent["sandbox"], "read-only")
+        self.assertEqual(main_agent["reasoning_effort"], "xhigh")
         stop_backend.assert_called_once()
         start_backend.assert_called_once()
         self.assertEqual(start_backend.call_args.kwargs["sandbox"], "read-only")
+        self.assertEqual(start_backend.call_args.kwargs["reasoning_effort"], "xhigh")
         self.assertTrue(any(event["type"] == "agent_backend_restarted" and event["data"].get("agent_id") == "main" for event in events))
 
     def test_supervision_host_backend_switch_uses_handoff_flow(self) -> None:

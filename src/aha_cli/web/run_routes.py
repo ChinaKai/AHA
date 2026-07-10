@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 from urllib.parse import unquote
 
-from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default
+from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, normalize_reasoning_effort
 from aha_cli.domain.models import default_config, normalize_integrations_config
 from aha_cli.services.observe_proxy import observe_proxy_status, observe_proxy_usage_summary
 from aha_cli.services.orchestrator import dispatch_task_to_main
@@ -532,6 +532,13 @@ def _session_policy(value: object, default: str) -> str:
     return policy
 
 
+def _reasoning_effort(value: object, backend: str) -> str | None:
+    try:
+        return normalize_reasoning_effort(value, backend)
+    except ValueError as exc:
+        raise ValueError(f"unknown {backend} reasoning_effort: {value}") from exc
+
+
 def _proxy_config_from_payload(value: object, field_name: str, fallback: dict | None = None) -> dict:
     fallback = fallback or {}
     payload = _object_value(value, field_name)
@@ -564,6 +571,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
     codex = {
         "bin": _string_or_default(codex_payload.get("bin"), str(codex_defaults["bin"])),
         "model": _optional_string(codex_payload.get("model")),
+        "reasoning_effort": _reasoning_effort(codex_payload.get("reasoning_effort"), "codex"),
         "sandbox": _config_sandbox(codex_payload.get("sandbox"), str(codex_defaults["sandbox"])),
         "approval": _string_or_default(codex_payload.get("approval"), str(codex_defaults["approval"])),
         "json": parse_optional_bool(codex_payload.get("json", codex_defaults["json"]), "codex.json"),
@@ -581,6 +589,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
     claude = {
         "bin": _string_or_default(claude_payload.get("bin"), str(claude_defaults["bin"])),
         "model": _optional_string(claude_payload.get("model")),
+        "reasoning_effort": _reasoning_effort(claude_payload.get("reasoning_effort"), "claude"),
         "sandbox": _config_sandbox(claude_payload.get("sandbox"), str(claude_defaults["sandbox"])),
         "permission_mode": _optional_string(claude_payload.get("permission_mode")),
         "session_policy": _session_policy(claude_payload.get("session_policy"), str(claude_defaults["session_policy"])),

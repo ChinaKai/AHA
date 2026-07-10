@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import signal
 
+from aha_cli.backends.registry import normalize_reasoning_effort
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_git import auto_commit_after_change
@@ -55,7 +56,16 @@ from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 
 
-def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, model, proxy_enabled=None, mode=None) -> None:
+def _default_dispatch_distill_job(
+    root: Path,
+    cfg: dict,
+    note_id: str,
+    backend,
+    model,
+    proxy_enabled=None,
+    mode=None,
+    reasoning_effort=None,
+) -> None:
     """Run a capture distill as a background daemon thread (non-blocking).
 
     Seam: tests replace ``dispatch_distill_job`` to run synchronously with a
@@ -69,7 +79,13 @@ def _default_dispatch_distill_job(root: Path, cfg: dict, note_id: str, backend, 
     threading.Thread(
         target=run_distill_job,
         args=(root, cfg, note_id),
-        kwargs={"backend": backend, "model": model, "proxy_enabled": proxy_enabled, "mode": mode or "organize"},
+        kwargs={
+            "backend": backend,
+            "model": model,
+            "proxy_enabled": proxy_enabled,
+            "mode": mode or "organize",
+            "reasoning_effort": reasoning_effort,
+        },
         daemon=True,
     ).start()
 
@@ -154,6 +170,7 @@ def run_project_nav_draft_job(
     backend: str | None = None,
     model: str | None = None,
     proxy_enabled: bool | None = None,
+    reasoning_effort: str | None = None,
     agent=None,
 ) -> dict:
     prompt = build_navigation_bootstrap_prompt(
@@ -179,6 +196,7 @@ def run_project_nav_draft_job(
         backend=backend,
         model=model,
         proxy_enabled=proxy_enabled,
+        reasoning_effort=reasoning_effort,
     )
     try:
         result = prepare_project_navigation(
@@ -190,6 +208,7 @@ def run_project_nav_draft_job(
             backend=backend,
             model=model,
             proxy_enabled=proxy_enabled,
+            reasoning_effort=reasoning_effort,
             agent=agent,
             progress_callback=_nav_progress_logger(root, cfg, draft_id),
         )
@@ -609,6 +628,15 @@ def _optional_bool(value, field: str) -> bool | None:
     raise ValueError(f"{field} must be a boolean")
 
 
+def _agent_backend_for_options(cfg: dict, backend: object) -> str:
+    allowed = {"codex", "claude"}
+    clean = str(backend or "").strip().lower()
+    if clean in allowed:
+        return clean
+    configured = str(cfg.get("backend") or "").strip().lower() if isinstance(cfg, dict) else ""
+    return configured if configured in allowed else "claude"
+
+
 def _apply_settings_patch(root: Path, payload: dict) -> dict:
     """Merge an allow-listed knowledge settings patch into config.json."""
     # Start from the raw on-disk config to avoid baking in every default.
@@ -986,6 +1014,13 @@ def knowledge_route_response(
             return json_response({"error": str(exc)}, "400 Bad Request")
         backend = _payload_value(payload, query, "backend") or None
         model = _payload_value(payload, query, "model") or None
+        try:
+            reasoning_effort = normalize_reasoning_effort(
+                _payload_value(payload, query, "reasoning_effort"),
+                _agent_backend_for_options(cfg, backend),
+            )
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
         project_key_value = context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
         if entry_exists(root, cfg, "project", "navigation", project_key_value, NAVIGATION_SLUG):
             return json_response({
@@ -1032,6 +1067,7 @@ def knowledge_route_response(
             "task_id": context.get("task_id"),
             "backend": backend,
             "model": model,
+            "reasoning_effort": reasoning_effort,
             "proxy_enabled": proxy_enabled,
             "summary": "Project nav generation running",
             "agent": {"status": "prompt_ready", "prompt_excerpt": _nav_prompt_excerpt(prompt)},
@@ -1041,6 +1077,7 @@ def knowledge_route_response(
                     "Project nav generation queued",
                     backend=backend,
                     model=model,
+                    reasoning_effort=reasoning_effort,
                     proxy_enabled=proxy_enabled,
                 )
             ],
@@ -1054,6 +1091,7 @@ def knowledge_route_response(
             project_key_value=project_key_value,
             backend=backend,
             model=model,
+            reasoning_effort=reasoning_effort,
             proxy_enabled=proxy_enabled,
             agent=project_navigation_agent,
         )
@@ -1321,11 +1359,33 @@ def knowledge_route_response(
             distill_mode = normalize_distill_mode(payload.get("distill_mode") or payload.get("mode"))
         except ValueError as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
+        try:
+            reasoning_effort = normalize_reasoning_effort(
+                payload.get("reasoning_effort"),
+                _agent_backend_for_options(cfg, payload.get("backend")),
+            )
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
         # Mark distilling synchronously so an immediate poll observes the job,
         # then run the slow model call off the request thread.
         capture.update_note(root, cfg, note_id, status="distilling", last_error="")
-        dispatch_distill_job(root, cfg, note_id, payload.get("backend"), payload.get("model"), proxy_enabled, distill_mode)
-        return json_response({"ok": True, "id": note_id, "status": "distilling", "distill_mode": distill_mode})
+        dispatch_distill_job(
+            root,
+            cfg,
+            note_id,
+            payload.get("backend"),
+            payload.get("model"),
+            proxy_enabled,
+            distill_mode,
+            reasoning_effort,
+        )
+        return json_response({
+            "ok": True,
+            "id": note_id,
+            "status": "distilling",
+            "distill_mode": distill_mode,
+            "reasoning_effort": reasoning_effort,
+        })
 
     if method in {"GET", "HEAD"} and path == "/api/kb/capture/distill-log":
         note_id = str(query.get("id", [""])[0] or "").strip()

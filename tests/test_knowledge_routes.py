@@ -170,8 +170,8 @@ def test_capture_api_crud_and_distill(tmp_path: Path, monkeypatch):
     # Distill runs synchronously through the seam with a stub agent.
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize", reasoning_effort=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, reasoning_effort=reasoning_effort, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     resp = json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -205,8 +205,8 @@ def test_capture_search_and_relationship_refs(tmp_path: Path, monkeypatch):
     nid = created["note"]["id"]
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize", reasoning_effort=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, reasoning_effort=reasoning_effort, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -256,8 +256,8 @@ def test_capture_reject_preserves_source_note(tmp_path: Path, monkeypatch):
     nid = created["note"]["id"]
     reply = _capture_sidecar('[{"kind":"wiki","title":"退避策略","body":"## 结论\\n用指数退避"}]')
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize", reasoning_effort=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, reasoning_effort=reasoning_effort, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -293,8 +293,8 @@ def test_capture_approve_deletes_source_note_after_last_candidate(tmp_path: Path
         "]"
     )
 
-    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
-        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, agent=lambda ctx: reply)
+    def sync_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize", reasoning_effort=None):
+        run_distill_job(root, cfg, note_id, proxy_enabled=proxy_enabled, mode=mode, reasoning_effort=reasoning_effort, agent=lambda ctx: reply)
 
     monkeypatch.setattr(kr, "dispatch_distill_job", sync_dispatch)
     json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid}))
@@ -450,19 +450,41 @@ def test_entry_image_upload_and_serve(tmp_path: Path):
     assert svg_body == svg
 
 
-def test_capture_distill_forwards_backend_model_and_proxy(tmp_path: Path, monkeypatch):
+def test_capture_distill_forwards_backend_model_proxy_and_reasoning_effort(tmp_path: Path, monkeypatch):
     import aha_cli.web.knowledge_routes as kr
 
     home = _setup(tmp_path)
     nid = json_response_body(_post(home, "/api/kb/capture", {"text": "raw"}))["note"]["id"]
     seen = {}
 
-    def record_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize"):
-        seen.update({"note_id": note_id, "backend": backend, "model": model, "proxy_enabled": proxy_enabled, "mode": mode})
+    def record_dispatch(root, cfg, note_id, backend, model, proxy_enabled=None, mode="organize", reasoning_effort=None):
+        seen.update({
+            "note_id": note_id,
+            "backend": backend,
+            "model": model,
+            "proxy_enabled": proxy_enabled,
+            "mode": mode,
+            "reasoning_effort": reasoning_effort,
+        })
 
     monkeypatch.setattr(kr, "dispatch_distill_job", record_dispatch)
-    json_response_body(_post(home, "/api/kb/capture/distill", {"id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False, "distill_mode": "generate"}))
-    assert seen == {"note_id": nid, "backend": "claude", "model": "claude-opus-4-8", "proxy_enabled": False, "mode": "generate"}
+    resp = json_response_body(_post(home, "/api/kb/capture/distill", {
+        "id": nid,
+        "backend": "claude",
+        "model": "claude-opus-4-8",
+        "proxy_enabled": False,
+        "distill_mode": "generate",
+        "reasoning_effort": "xhigh",
+    }))
+    assert resp["reasoning_effort"] == "xhigh"
+    assert seen == {
+        "note_id": nid,
+        "backend": "claude",
+        "model": "claude-opus-4-8",
+        "proxy_enabled": False,
+        "mode": "generate",
+        "reasoning_effort": "xhigh",
+    }
 
 
 def test_capture_distill_missing_note_is_404(tmp_path: Path):
@@ -662,6 +684,7 @@ def test_project_nav_generate_creates_completed_draft_without_pending_candidates
         "project_key": "demo-key",
         "backend": "codex",
         "model": "gpt-test",
+        "reasoning_effort": "high",
         "proxy_enabled": False,
     }))
 
@@ -674,6 +697,7 @@ def test_project_nav_generate_creates_completed_draft_without_pending_candidates
     assert drafts[0]["status"] == "completed"
     assert drafts[0]["backend"] == "codex"
     assert drafts[0]["model"] == "gpt-test"
+    assert drafts[0]["reasoning_effort"] == "high"
     assert drafts[0]["proxy_enabled"] is False
     assert "candidates" not in drafts[0]
     assert drafts[0]["validation"]["ok"] is True

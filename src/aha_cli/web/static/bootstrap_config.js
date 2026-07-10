@@ -181,6 +181,17 @@
     }).join("");
   }
 
+  function backendReasoningEffortSelectOptions(backend, model, current, context = {}) {
+    if (typeof context.reasoningEffortSelectOptions === "function") {
+      return context.reasoningEffortSelectOptions(backend, model, current);
+    }
+    const selected = configString(current);
+    return ["", "low", "medium", "high", "xhigh", "max"].map(value => {
+      const label = value || "default";
+      return `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+  }
+
   function officialOptions(backend, context = {}) {
     const backendModels = context.backendModels instanceof Map ? context.backendModels : new Map();
     return (backendModels.get(backend) || []).map(model => ({
@@ -332,6 +343,11 @@
               <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codex.model || envModelValue(codex.env_active), options)}</select>
               <div class="field-help">Official Codex model or custom OpenAI-compatible provider.</div>
             </label>
+            <label class="field-label">
+              <span>Reasoning effort</span>
+              <select data-bootstrap-config-field="codex.reasoning_effort">${backendReasoningEffortSelectOptions("codex", codex.model || envModelValue(codex.env_active), codex.reasoning_effort, options)}</select>
+              <div class="field-help">Default Codex thinking depth for tasks and distill jobs.</div>
+            </label>
           </div>
           <div class="bootstrap-config-grid">
             ${bootstrapProxyFieldsHtml("codex", codexProxy)}
@@ -357,6 +373,11 @@
               <span>Model</span>
               <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claude.model || envModelValue(claude.env_active), options)}</select>
               <div class="field-help">Official Claude model or custom env group model.</div>
+            </label>
+            <label class="field-label">
+              <span>Reasoning effort</span>
+              <select data-bootstrap-config-field="claude.reasoning_effort">${backendReasoningEffortSelectOptions("claude", claude.model || envModelValue(claude.env_active), claude.reasoning_effort, options)}</select>
+              <div class="field-help">Default Claude effort for tasks and distill jobs.</div>
             </label>
           </div>
           <div class="bootstrap-config-grid">
@@ -463,6 +484,11 @@
       const previous = String(select.value || "");
       select.innerHTML = bootstrapFormModelSelectOptions(form, backend, previous, context);
       if ([...select.options].some(item => item.value === previous)) select.value = previous;
+      const effortSelect = bootstrapConfigField(form, `${backend}.reasoning_effort`);
+      if (!effortSelect) continue;
+      const previousEffort = String(effortSelect.value || "");
+      effortSelect.innerHTML = backendReasoningEffortSelectOptions(backend, select.value || "", previousEffort, context);
+      if ([...effortSelect.options].some(item => item.value === previousEffort)) effortSelect.value = previousEffort;
     }
   }
 
@@ -500,6 +526,7 @@
       codex: {
         bin: bootstrapConfigText(form, "codex.bin") || "codex",
         model: bootstrapConfigCodexModel(form),
+        reasoning_effort: bootstrapConfigText(form, "codex.reasoning_effort"),
         sandbox: "auto",
         approval: "never",
         json: true,
@@ -516,6 +543,7 @@
       claude: {
         bin: bootstrapConfigText(form, "claude.bin") || "claude",
         model: bootstrapConfigClaudeModel(form),
+        reasoning_effort: bootstrapConfigText(form, "claude.reasoning_effort"),
         sandbox: "auto",
         permission_mode: "",
         session_policy: "sticky",

@@ -349,6 +349,7 @@ def handle_send_payload(
                 autostart["target"],
                 backend=autostart["backend"],
                 model=autostart["model"],
+                reasoning_effort=autostart.get("reasoning_effort"),
                 sandbox=autostart["sandbox"],
                 approval=autostart["approval"],
                 from_start=False,

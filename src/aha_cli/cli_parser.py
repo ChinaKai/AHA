@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 
-from aha_cli.backends.registry import agent_backend_names, backend_names
+from aha_cli.backends.registry import CLAUDE_REASONING_EFFORT_NAMES, REASONING_EFFORT_NAMES, agent_backend_names, backend_names
 from aha_cli.domain.run_lifecycle import RUN_LIFECYCLE_CHOICES
 from aha_cli.domain.workflow_templates import workflow_template_ids
 from aha_cli.services.app_version import aha_version
@@ -60,6 +60,7 @@ def add_codex_options(parser: argparse.ArgumentParser, prefix: str = "codex") ->
     approval_flag = "--approval" if prefix != "codex" else "--codex-approval"
     parser.add_argument(sandbox_flag, choices=["auto", "read-only", "workspace-write", "danger-full-access"], default=None if prefix == "codex" else "read-only")
     parser.add_argument(approval_flag, choices=["untrusted", "on-failure", "on-request", "never"], default=None if prefix == "codex" else "never")
+    parser.add_argument(f"--{prefix}-reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
 
 
 def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) -> argparse.ArgumentParser:
@@ -102,12 +103,14 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--codex-bin", default=None)
     run_p.add_argument("--codex-model", default=None)
+    run_p.add_argument("--codex-reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
     run_p.add_argument("--codex-sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default=None)
     run_p.add_argument("--codex-approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
     run_p.add_argument("--codex-extra-arg", action="append", default=[])
     run_p.add_argument("--no-codex-json", action="store_true")
     run_p.add_argument("--claude-bin", default=None)
     run_p.add_argument("--claude-model", default=None)
+    run_p.add_argument("--claude-reasoning-effort", choices=CLAUDE_REASONING_EFFORT_NAMES, default=None)
     run_p.add_argument("--claude-sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default=None)
     run_p.add_argument("--claude-permission-mode", choices=["default", "acceptEdits", "bypassPermissions", "plan"], default=None)
     run_p.add_argument("--claude-extra-arg", action="append", default=[])
@@ -493,6 +496,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     codex_runner_p = sub.add_parser("codex-runner")
     codex_runner_p.add_argument("--codex-bin", default="codex")
     codex_runner_p.add_argument("--model", default=None)
+    codex_runner_p.add_argument("--reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
     codex_runner_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="auto")
     codex_runner_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     codex_runner_p.add_argument("--extra-arg", action="append", default=[])
@@ -502,6 +506,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     claude_runner_p = sub.add_parser("claude-runner")
     claude_runner_p.add_argument("--claude-bin", default="claude")
     claude_runner_p.add_argument("--model", default=None)
+    claude_runner_p.add_argument("--reasoning-effort", choices=CLAUDE_REASONING_EFFORT_NAMES, default=None)
     claude_runner_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="auto")
     claude_runner_p.add_argument("--permission-mode", choices=["default", "acceptEdits", "bypassPermissions", "plan"], default=None)
     claude_runner_p.add_argument("--extra-arg", action="append", default=[])
@@ -519,6 +524,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     codex_chat_p.add_argument("--codex-bin", default="codex")
     codex_chat_p.add_argument("--model", default=None)
     codex_chat_p.add_argument("--requested-model", default=None)
+    codex_chat_p.add_argument("--reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
     codex_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
     codex_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     codex_chat_p.add_argument("--extra-arg", action="append", default=[])
@@ -537,6 +543,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     claude_chat_p.add_argument("--once", action="store_true")
     claude_chat_p.add_argument("--claude-bin", default="claude")
     claude_chat_p.add_argument("--model", default=None)
+    claude_chat_p.add_argument("--reasoning-effort", choices=CLAUDE_REASONING_EFFORT_NAMES, default=None)
     claude_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
     claude_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
     claude_chat_p.add_argument("--extra-arg", action="append", default=[])
@@ -561,6 +568,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     task_add.add_argument("--description", default=None)
     task_add.add_argument("--backend", choices=agent_backend_names(), default="codex")
     task_add.add_argument("--model", default=None)
+    task_add.add_argument("--reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
     task_add.add_argument("--workspace", default=None, help="Registered workspace id, such as ws-001")
     task_add.add_argument("--workspace-path", default=None)
     task_add.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
@@ -623,6 +631,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     agent_add.add_argument("--role", choices=["sub", "task-main"], default="sub")
     agent_add.add_argument("--backend", choices=agent_backend_names(), default="codex")
     agent_add.add_argument("--model", default=None)
+    agent_add.add_argument("--reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
     agent_add.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
     agent_add.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
     add_proxy_group = agent_add.add_mutually_exclusive_group()
@@ -636,6 +645,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     agent_set.add_argument("agent_id")
     agent_set.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], default=None)
     agent_set.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default=None)
+    agent_set.add_argument("--reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
     set_proxy_group = agent_set.add_mutually_exclusive_group()
     set_proxy_group.add_argument("--enable-proxy", dest="proxy_enabled", action="store_true")
     set_proxy_group.add_argument("--disable-proxy", dest="proxy_enabled", action="store_false")

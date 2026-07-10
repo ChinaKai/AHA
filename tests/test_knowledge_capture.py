@@ -317,6 +317,7 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
         "claude": {
             "bin": "/opt/claude/bin/claude",
             "model": "env:work",
+            "reasoning_effort": "max",
             "proxy": {
                 "enabled": True,
                 "http_proxy": "http://claude.proxy:7890",
@@ -346,6 +347,7 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
     assert seen["claude_bin"] == "/opt/claude/bin/claude"
     assert seen["model"] is None
     assert seen["claude_config"]["env_active"] == "work"
+    assert seen["reasoning_effort"] == "max"
     assert seen["claude_config"]["env"][0]["ANTHROPIC_API_KEY"] == "work-key"
     assert seen["proxy_env"]["HTTPS_PROXY"] == "http://claude.proxy:7890"
     assert seen["proxy_env"]["https_proxy"] == "http://claude.proxy:7890"
@@ -377,11 +379,12 @@ def test_default_capture_agent_passes_codex_runtime_config_without_env_group(tmp
         return 0, _sidecar_reply(_ONE_CANDIDATE), None
 
     monkeypatch.setattr("aha_cli.backends.codex.run_codex_exec", fake_run)
-    reply = default_capture_agent({"prompt": "organize", "backend": "codex", "model": "gpt-5.5", "config": cfg, "cwd": tmp_path})
+    reply = default_capture_agent({"prompt": "organize", "backend": "codex", "model": "gpt-5.5", "reasoning_effort": "xhigh", "config": cfg, "cwd": tmp_path})
 
     assert "aha_knowledge_candidates" in reply
     assert seen["codex_bin"] == "/opt/codex/bin/codex"
     assert seen["model"] == "gpt-5.5"
+    assert seen["reasoning_effort"] == "xhigh"
     assert "env" not in seen["codex_config"]
     assert seen["proxy_env"]["HTTP_PROXY"] == "http://codex.proxy:7890"
     assert seen["proxy_env"]["http_proxy"] == "http://codex.proxy:7890"

@@ -16,6 +16,7 @@
       return {
         backend: configString(config.backend, "codex"),
         model: configString(config.model),
+        reasoningEffort: configString(config.reasoningEffort || config.reasoning_effort),
         sandbox: configString(config.sandbox, "workspace-write"),
         approval: configString(config.approval, "never"),
         proxyEnabled: Boolean(config.proxyEnabled)
@@ -27,6 +28,7 @@
       return JSON.stringify([
         normalized.backend,
         normalized.model,
+        normalized.reasoningEffort,
         normalized.sandbox,
         normalized.approval,
         normalized.proxyEnabled
@@ -38,6 +40,7 @@
       return [
         normalized.backend,
         modelLabelForBackend(normalized.backend, normalized.model),
+        `effort ${normalized.reasoningEffort || "default"}`,
         normalized.sandbox,
         normalized.approval,
         `proxy ${normalized.proxyEnabled ? "on" : "off"}`
@@ -53,7 +56,7 @@
     function agentRuntimeConfigChanged(previousConfig, nextConfig) {
       const previous = normalizeAgentConfig(previousConfig);
       const next = normalizeAgentConfig(nextConfig);
-      return previous.sandbox !== next.sandbox || previous.approval !== next.approval || previous.proxyEnabled !== next.proxyEnabled;
+      return previous.reasoningEffort !== next.reasoningEffort || previous.sandbox !== next.sandbox || previous.approval !== next.approval || previous.proxyEnabled !== next.proxyEnabled;
     }
 
     function proxySelectOptions(current) {
@@ -70,6 +73,7 @@
       return normalizeAgentConfig({
         backend: card.querySelector('[data-agent-config-part="backend"]')?.value,
         model: card.querySelector('[data-agent-config-part="model"]')?.value,
+        reasoningEffort: card.querySelector('[data-agent-config-part="reasoning_effort"]')?.value,
         sandbox: card.querySelector('[data-agent-config-part="sandbox"]')?.value,
         approval: card.querySelector('[data-agent-config-part="approval"]')?.value,
         proxyEnabled: card.querySelector('[data-agent-config-part="proxy_enabled"]')?.value === "true"
@@ -92,7 +96,9 @@
     const configString = deps.configString || ((value, fallback = "") => String(value || fallback || "").trim());
     const escapeHtml = deps.escapeHtml || (value => String(value ?? ""));
     const envModelPrefix = deps.claudeEnvModelPrefix || "env:";
+    const preferredReasoningEffort = "xhigh";
     let backendModels = new Map();
+    let backendReasoningEfforts = new Map();
     let backendCommands = new Map();
     let workspaceData = [];
 
@@ -129,7 +135,8 @@
       const official = backendModels.get("codex") || [];
       const officialOptions = official.map(model => ({
         name: configString(model.name),
-        label: configString(model.label, model.name || "default")
+        label: configString(model.label, model.name || "default"),
+        reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null
       }));
       return [...officialOptions, ...envModelOptionsForBackend("codex")];
     }
@@ -138,7 +145,8 @@
       const official = backendModels.get("claude") || [];
       const officialOptions = official.map(model => ({
         name: configString(model.name),
-        label: configString(model.label, model.name || "default")
+        label: configString(model.label, model.name || "default"),
+        reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null
       }));
       return [...officialOptions, ...envModelOptionsForBackend("claude")];
     }
@@ -149,13 +157,85 @@
       return backendModels.get(backend) || [{ name: "", label: "default" }];
     }
 
+    function selectableModelOptionsForBackend(backend) {
+      const options = modelOptionsForBackend(backend);
+      const named = options.filter(model => configString(model.name));
+      return named.length ? named : options;
+    }
+
+    function firstModelForBackend(backend) {
+      const first = selectableModelOptionsForBackend(backend)[0];
+      return configString(first?.name);
+    }
+
     function backendModelSelectOptions(backend, current) {
       const selected = configString(current);
-      return modelOptionsForBackend(backend).map(model => {
+      const options = selectableModelOptionsForBackend(backend);
+      const selectedValue = options.some(model => configString(model.name) === selected) ? selected : firstModelForBackend(backend);
+      return options.map(model => {
         const name = configString(model.name);
         const label = configString(model.label, name || "default");
-        return `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+        return `<option value="${escapeHtml(name)}" ${name === selectedValue ? "selected" : ""}>${escapeHtml(label)}</option>`;
       }).join("");
+    }
+
+    function reasoningOptionsForBackend(backend, modelValue = "") {
+      const selectedModel = configString(modelValue);
+      const model = modelOptionsForBackend(backend).find(item => configString(item.name) === selectedModel);
+      return model?.reasoning_efforts || backendReasoningEfforts.get(backend) || [{ name: "", label: "default" }];
+    }
+
+    function selectableReasoningOptionsForBackend(backend, modelValue = "") {
+      const options = reasoningOptionsForBackend(backend, modelValue);
+      const named = options.filter(option => configString(option.name));
+      return named.length ? named : options;
+    }
+
+    function preferredReasoningEffortForBackend(backend, modelValue = "") {
+      const options = selectableReasoningOptionsForBackend(backend, modelValue);
+      const preferred = options.find(option => configString(option.name) === preferredReasoningEffort);
+      return configString(preferred?.name || options[0]?.name);
+    }
+
+    function reasoningEffortSelectOptions(backend, modelValue = "", current = "") {
+      const selected = configString(current);
+      const options = selectableReasoningOptionsForBackend(backend, modelValue);
+      const selectedValue = options.some(option => configString(option.name) === selected)
+        ? selected
+        : preferredReasoningEffortForBackend(backend, modelValue);
+      return options.map(option => {
+        const name = configString(option.name);
+        const label = configString(option.label, name || "default");
+        return `<option value="${escapeHtml(name)}" ${name === selectedValue ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }).join("");
+    }
+
+    function reasoningEffortLabelForBackend(backend, modelValue = "", value = "") {
+      const selected = configString(value);
+      const option = reasoningOptionsForBackend(backend, modelValue).find(item => configString(item.name) === selected);
+      return configString(option?.label, selected || "default");
+    }
+
+    function defaultReasoningEffortForBackend(backend) {
+      const cfg = deps.bootstrapConfigData?.();
+      return configString(cfg?.[backend]?.reasoning_effort);
+    }
+
+    function fillReasoningEffortSelect(select, backend, modelValue = "", selected = "") {
+      if (!select) return;
+      select.innerHTML = "";
+      for (const option of selectableReasoningOptionsForBackend(backend, modelValue)) {
+        const opt = document.createElement("option");
+        opt.value = configString(option.name);
+        opt.textContent = configString(option.label, option.name || "default");
+        select.appendChild(opt);
+      }
+      const values = [...select.options].map(item => item.value);
+      const requested = configString(selected);
+      const configured = defaultReasoningEffortForBackend(backend);
+      const preferred = preferredReasoningEffortForBackend(backend, modelValue);
+      const fallback = values.includes(requested) ? requested : values.includes(preferred) ? preferred : configured;
+      select.value = values.includes(fallback) ? fallback : "";
     }
 
     function defaultModelForBackend(backend) {
@@ -163,14 +243,14 @@
       if (backend === "claude") {
         const configured = configString(cfg?.claude?.model);
         const legacyEnv = configString(cfg?.claude?.env_active);
-        return configured || envModelValue(legacyEnv);
+        return firstModelForBackend(backend) || configured || envModelValue(legacyEnv);
       }
       if (backend === "codex") {
         const configured = configString(cfg?.codex?.model);
         const legacyEnv = configString(cfg?.codex?.env_active);
-        return configured || envModelValue(legacyEnv);
+        return firstModelForBackend(backend) || configured || envModelValue(legacyEnv);
       }
-      return "";
+      return firstModelForBackend(backend);
     }
 
     function modelLabelForBackend(backend, value) {
@@ -181,7 +261,7 @@
 
     function fillModelSelect(select, backend, selected = "") {
       if (!select) return;
-      const options = modelOptionsForBackend(backend);
+      const options = selectableModelOptionsForBackend(backend);
       select.innerHTML = "";
       for (const model of options) {
         const opt = document.createElement("option");
@@ -192,7 +272,8 @@
       const values = [...select.options].map(item => item.value);
       const requested = configString(selected);
       const configured = defaultModelForBackend(backend);
-      const fallback = values.includes(requested) ? requested : configured;
+      const first = firstModelForBackend(backend);
+      const fallback = values.includes(requested) ? requested : values.includes(first) ? first : configured;
       if (values.includes(fallback)) select.value = fallback;
     }
 
@@ -200,14 +281,22 @@
       const previous = elements.taskModelEl?.value || "";
       if (elements.taskModelEl) elements.taskModelEl.disabled = false;
       fillModelSelect(elements.taskModelEl, elements.taskBackendEl?.value, previous);
+      fillReasoningEffortSelect(
+        elements.taskReasoningEffortEl,
+        elements.taskBackendEl?.value,
+        elements.taskModelEl?.value,
+        elements.taskReasoningEffortEl?.value || ""
+      );
     }
 
     function applyBackendData(backends = []) {
       backendModels = new Map();
+      backendReasoningEfforts = new Map();
       backendCommands = new Map();
       if (elements.taskBackendEl) elements.taskBackendEl.innerHTML = "";
       for (const backend of backends) {
         backendModels.set(backend.name, backend.models || [{ name: "", label: "default" }]);
+        backendReasoningEfforts.set(backend.name, backend.reasoning_efforts || [{ name: "", label: "default" }]);
         backendCommands.set(backend.name, backend.commands || []);
         if (!elements.taskBackendEl) continue;
         const opt = document.createElement("option");
@@ -282,6 +371,7 @@
       backendCommandsFor: backend => backendCommands.get(backend) || [],
       backendModels: () => backendModels,
       backendModelSelectOptions,
+      fillReasoningEffortSelect,
       claudeEnvModelName: envModelName,
       claudeEnvModelValue: envModelValue,
       claudeModelOptions,
@@ -293,6 +383,9 @@
       loadWorkspaces,
       modelLabelForBackend,
       modelOptionsForBackend,
+      defaultReasoningEffortForBackend,
+      reasoningEffortLabelForBackend,
+      reasoningEffortSelectOptions,
       renderModelOptions,
       renderWorkspaceSelect,
       workspaceData: () => workspaceData

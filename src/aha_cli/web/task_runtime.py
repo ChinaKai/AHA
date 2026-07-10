@@ -78,6 +78,7 @@ def message_backend_autostart_config(root: Path, run_id: str, task_id: str | Non
         "target": target_id,
         "task_id": task_id,
         "model": agent.get("model") or task.get("preferred_model"),
+        "reasoning_effort": agent.get("reasoning_effort") or task.get("preferred_reasoning_effort"),
         "sandbox": agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
         "approval": agent.get("approval") or task.get("preferred_approval") or "never",
     }
@@ -104,6 +105,7 @@ def _backend_start_event_payload(autostart: dict, *, from_start: bool) -> dict:
         "task_id": str(autostart.get("task_id") or "") or None,
         "backend": str(autostart.get("backend") or ""),
         "model": autostart.get("model"),
+        "reasoning_effort": autostart.get("reasoning_effort"),
         "from_start": bool(from_start),
     }
 
@@ -115,6 +117,7 @@ def _start_backend_from_autostart(root: Path, run_id: str, autostart: dict, *, f
         autostart["target"],
         backend=autostart["backend"],
         model=autostart["model"],
+        reasoning_effort=autostart.get("reasoning_effort"),
         sandbox=autostart["sandbox"],
         approval=autostart["approval"],
         from_start=from_start,

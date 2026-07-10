@@ -15,7 +15,7 @@ from aha_cli.backends.codex import (
     mark_backend_auto_context_compact,
     tail_text,
 )
-from aha_cli.backends.registry import normalize_model_selector
+from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.native_subagents import (
@@ -346,16 +346,20 @@ def run_claude_exec(
     session: dict | None = None,
     proxy_env: dict[str, str] | None = None,
     claude_config: dict | None = None,
+    reasoning_effort: str | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
     start_new_session: bool = False,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     session_id = session.get("backend_session_id") if session else None
+    if reasoning_effort is None and isinstance(claude_config, dict):
+        reasoning_effort = claude_config.get("reasoning_effort")
     cmd = build_claude_exec_command(
         claude_bin=claude_bin,
         model=model,
         permission_mode=permission_mode,
         session_id=session_id,
+        reasoning_effort=reasoning_effort,
     )
     for raw in extra_args or []:
         cmd.extend(shlex.split(raw))
@@ -445,10 +449,14 @@ def build_claude_exec_command(
     model: str | None,
     permission_mode: str,
     session_id: str | None,
+    reasoning_effort: str | None = None,
 ) -> list[str]:
     cmd = [claude_bin, "-p", "--output-format", "stream-json", "--verbose"]
     if model:
         cmd.extend(["--model", model])
+    normalized_effort = normalize_reasoning_effort(reasoning_effort, "claude")
+    if normalized_effort:
+        cmd.extend(["--effort", normalized_effort])
     if permission_mode:
         cmd.extend(["--permission-mode", permission_mode])
     if permission_mode == "plan":
@@ -466,6 +474,9 @@ def claude_runner_command(args, cfg: dict) -> str:
     model = args.claude_model if args.claude_model is not None else claude_cfg.get("model")
     if model:
         parts.extend(["--model", shlex.quote(model)])
+    reasoning_effort = normalize_reasoning_effort(args.claude_reasoning_effort if args.claude_reasoning_effort is not None else claude_cfg.get("reasoning_effort"), "claude")
+    if reasoning_effort:
+        parts.extend(["--reasoning-effort", shlex.quote(reasoning_effort)])
     sandbox = args.claude_sandbox or claude_cfg.get("sandbox") or "auto"
     parts.extend(["--sandbox", shlex.quote(sandbox)])
     permission_mode = args.claude_permission_mode if args.claude_permission_mode is not None else claude_cfg.get("permission_mode")

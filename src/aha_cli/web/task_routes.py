@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import unquote
 
-from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names, normalize_reasoning_effort
 from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
 from aha_cli.services.hardware_io import append_hardware_io_record
@@ -49,6 +49,7 @@ from aha_cli.services.steward import apply_steward_decision, steward_decision_sn
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import (
+    AGENT_CONFIG_UNSET,
     append_event,
     add_agent,
     delete_task,
@@ -567,11 +568,15 @@ def validate_backend_name(name: str) -> str | None:
     return None
 
 
-def validate_runtime_options(sandbox: str | None, approval: str | None) -> str | None:
+def validate_runtime_options(sandbox: str | None, approval: str | None, reasoning_effort: str | None = None, backend: str | None = None) -> str | None:
     if sandbox is not None and sandbox not in SANDBOX_OPTIONS:
         return f"unknown sandbox: {sandbox}"
     if approval is not None and approval not in APPROVAL_OPTIONS:
         return f"unknown approval: {approval}"
+    try:
+        normalize_reasoning_effort(reasoning_effort, backend)
+    except ValueError:
+        return f"unknown reasoning_effort: {reasoning_effort}"
     return None
 
 
@@ -597,7 +602,8 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             return route_result({"error": error}, "400 Bad Request")
     sandbox = str(payload.get("sandbox", "") or "") or None
     approval = str(payload.get("approval", "") or "") or None
-    error = validate_runtime_options(sandbox, approval)
+    reasoning_effort = str(payload.get("reasoning_effort", "") or "") or None
+    error = validate_runtime_options(sandbox, approval, reasoning_effort, backend)
     if error:
         return route_result({"error": error}, "400 Bad Request")
     try:
@@ -644,6 +650,7 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             title,
             backend=backend,
             model=create_task_model_from_payload(backend, payload),
+            reasoning_effort=normalize_reasoning_effort(reasoning_effort, backend),
             workspace_path=workspace_path,
             workspace_id=workspace_id,
             sandbox=sandbox,
@@ -908,7 +915,8 @@ def handle_create_agent_route(root: Path, run_id: str, payload: dict) -> dict:
         return route_result({"error": error}, "400 Bad Request")
     sandbox = str(payload.get("sandbox", "") or "") or None
     approval = str(payload.get("approval", "") or "") or None
-    error = validate_runtime_options(sandbox, approval)
+    reasoning_effort = str(payload.get("reasoning_effort", "") or "") or None
+    error = validate_runtime_options(sandbox, approval, reasoning_effort, backend)
     if error:
         return route_result({"error": error}, "400 Bad Request")
     proxy_enabled = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None
@@ -918,6 +926,8 @@ def handle_create_agent_route(root: Path, run_id: str, payload: dict) -> dict:
         task_id,
         backend=backend,
         role=str(payload.get("role", "sub") or "sub"),
+        model=str(payload.get("model", "") or "") or None,
+        reasoning_effort=normalize_reasoning_effort(reasoning_effort, backend),
         sandbox=sandbox,
         approval=approval,
         proxy_enabled=proxy_enabled,
@@ -932,6 +942,8 @@ def handle_agent_config_route(root: Path, run_id: str, payload: dict) -> dict:
     model = str(payload.get("model", "") or "").strip() if "model" in payload else None
     sandbox = str(payload.get("sandbox", "") or "") or None
     approval = str(payload.get("approval", "") or "") or None
+    reasoning_effort_provided = "reasoning_effort" in payload
+    reasoning_effort = str(payload.get("reasoning_effort", "") or "") if reasoning_effort_provided else None
     proxy_enabled = parse_optional_bool(payload["proxy_enabled"], "proxy_enabled") if "proxy_enabled" in payload else None
     restart_backend = parse_optional_bool(payload["restart_backend"], "restart_backend") if "restart_backend" in payload else False
     if not task_id or not agent_id:
@@ -940,13 +952,26 @@ def handle_agent_config_route(root: Path, run_id: str, payload: dict) -> dict:
         error = validate_backend_name(backend)
         if error:
             return route_result({"error": error}, "400 Bad Request")
-    error = validate_runtime_options(sandbox, approval)
-    if error:
-        return route_result({"error": error}, "400 Bad Request")
     try:
+        detail = task_snapshot(root, run_id, task_id)
+        task = detail["task"]
+        target_agent = next((item for item in task.get("agents", []) if item.get("id") == agent_id), {})
+        validation_backend = backend or str(target_agent.get("backend") or task.get("preferred_backend") or "codex")
+        error = validate_runtime_options(sandbox, approval, reasoning_effort, validation_backend)
+        if error:
+            return route_result({"error": error}, "400 Bad Request")
         agent = None
-        if sandbox is not None or approval is not None or proxy_enabled is not None:
-            agent = update_agent_config(root, run_id, task_id, agent_id, sandbox=sandbox, approval=approval, proxy_enabled=proxy_enabled)
+        if sandbox is not None or approval is not None or reasoning_effort_provided or proxy_enabled is not None:
+            agent = update_agent_config(
+                root,
+                run_id,
+                task_id,
+                agent_id,
+                sandbox=sandbox,
+                approval=approval,
+                reasoning_effort=normalize_reasoning_effort(reasoning_effort, validation_backend) if reasoning_effort_provided else AGENT_CONFIG_UNSET,
+                proxy_enabled=proxy_enabled,
+            )
         backend_switch = None
         if backend is not None:
             switch_kwargs = {"model": model} if "model" in payload else {}
