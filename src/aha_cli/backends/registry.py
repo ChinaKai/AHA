@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import time
+
+from aha_cli.services.backend_paths import add_user_backend_paths
 
 CODEX_DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_MODEL_OPTION = {"name": "", "label": "default"}
+CODEX_MODEL_CATALOG_TIMEOUT_SECONDS = 3.0
+CODEX_MODEL_CATALOG_CACHE_TTL_SECONDS = 300.0
 
-MODEL_OPTIONS = [
-    {"name": "", "label": f"default ({CODEX_DEFAULT_MODEL})"},
-    {"name": "gpt-5.5", "label": "gpt-5.5"},
-    {"name": "gpt-5.4", "label": "gpt-5.4"},
-    {"name": "gpt-5.4-mini", "label": "gpt-5.4-mini"},
-    {"name": "gpt-5.3-codex", "label": "gpt-5.3-codex"},
-    {"name": "gpt-5.3-codex-spark", "label": "gpt-5.3-codex-spark"},
-    {"name": "gpt-5.2", "label": "gpt-5.2"},
-]
+CODEX_FALLBACK_MODEL_NAMES = (
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+)
+_CODEX_MODEL_OPTIONS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 DEFAULT_MODEL_OPTIONS = [DEFAULT_MODEL_OPTION]
 CLAUDE_MODEL_OPTIONS = [
@@ -32,11 +40,111 @@ CLAUDE_AGENT_COMMANDS = [
 ]
 
 BACKENDS = {
-    "codex": {"name": "codex", "kind": "agent", "models": MODEL_OPTIONS, "commands": CODEX_AGENT_COMMANDS, "native_commands": []},
+    "codex": {"name": "codex", "kind": "agent", "commands": CODEX_AGENT_COMMANDS, "native_commands": []},
     "claude": {"name": "claude", "kind": "agent", "models": CLAUDE_MODEL_OPTIONS, "commands": CLAUDE_AGENT_COMMANDS, "native_commands": []},
     "stub": {"name": "stub", "kind": "agent", "models": DEFAULT_MODEL_OPTIONS, "commands": STUB_AGENT_COMMANDS, "native_commands": []},
     "command": {"name": "command", "kind": "runner", "label": "Shell command runner", "models": DEFAULT_MODEL_OPTIONS},
 }
+
+
+def _copy_model_options(options: list[dict]) -> list[dict]:
+    return [dict(option) for option in options]
+
+
+def _codex_default_model_option() -> dict:
+    return {"name": "", "label": f"default ({CODEX_DEFAULT_MODEL})"}
+
+
+def _codex_fallback_model_options() -> list[dict]:
+    return [{"name": name, "label": name} for name in CODEX_FALLBACK_MODEL_NAMES]
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.environ.get(name, "") or default))
+    except ValueError:
+        return default
+
+
+def _codex_bin_from_config(config: dict | None = None) -> str:
+    if not isinstance(config, dict):
+        return "codex"
+    section = config.get("codex")
+    if not isinstance(section, dict):
+        section = config
+    return str(section.get("bin") or "codex").strip() or "codex"
+
+
+def _codex_catalog_model_options_from_payload(payload: object) -> list[dict]:
+    raw_models = payload.get("models") if isinstance(payload, dict) else payload
+    if not isinstance(raw_models, list):
+        return []
+
+    seen: set[str] = set()
+    sortable: list[tuple[int, int, dict]] = []
+    for index, item in enumerate(raw_models):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("slug") or item.get("name") or item.get("id") or "").strip()
+        if not name or name in seen:
+            continue
+        visibility = str(item.get("visibility") or "").strip().lower()
+        if visibility and visibility != "list":
+            continue
+        label = str(item.get("display_name") or item.get("label") or name).strip() or name
+        try:
+            priority = int(item.get("priority"))
+        except (TypeError, ValueError):
+            priority = 1000 + index
+        seen.add(name)
+        sortable.append((priority, index, {"name": name, "label": label}))
+
+    sortable.sort(key=lambda entry: (entry[0], entry[1]))
+    return [option for _priority, _index, option in sortable]
+
+
+def _load_codex_catalog_model_options(codex_bin: str) -> list[dict]:
+    timeout = _float_env("AHA_CODEX_MODEL_CATALOG_TIMEOUT_SECONDS", CODEX_MODEL_CATALOG_TIMEOUT_SECONDS)
+    env = dict(os.environ)
+    add_user_backend_paths(env)
+    commands = (
+        [codex_bin, "debug", "models"],
+        [codex_bin, "debug", "models", "--bundled"],
+    )
+    for command in commands:
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout, env=env)
+        except Exception:
+            continue
+        if completed.returncode != 0:
+            continue
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            continue
+        options = _codex_catalog_model_options_from_payload(payload)
+        if options:
+            return options
+    return []
+
+
+def _codex_model_options(config: dict | None = None) -> list[dict]:
+    codex_bin = _codex_bin_from_config(config)
+    now = time.monotonic()
+    ttl = _float_env("AHA_CODEX_MODEL_CATALOG_CACHE_TTL_SECONDS", CODEX_MODEL_CATALOG_CACHE_TTL_SECONDS)
+    cached = _CODEX_MODEL_OPTIONS_CACHE.get(codex_bin)
+    if cached and ttl and now - cached[0] < ttl:
+        options = _copy_model_options(cached[1])
+    else:
+        options = _load_codex_catalog_model_options(codex_bin) or _codex_fallback_model_options()
+        _CODEX_MODEL_OPTIONS_CACHE[codex_bin] = (now, _copy_model_options(options))
+    return [_codex_default_model_option(), *_copy_model_options(options)]
+
+
+def _backend_model_options(backend: str, config: dict | None = None) -> list[dict]:
+    if backend == "codex":
+        return _codex_model_options(config)
+    return _copy_model_options(BACKENDS.get(backend, {}).get("models", DEFAULT_MODEL_OPTIONS))
 
 
 def resolve_model(backend: str, model: str | None) -> str | None:
@@ -101,7 +209,7 @@ def normalize_model_selector(backend: str, model: object, config: dict | None = 
 
     for candidate in _candidate_model_values(backend, raw):
         key = _model_alias_key(candidate)
-        for option in model_options(backend):
+        for option in model_options(backend, config):
             name = str(option.get("name") or "").strip()
             label = str(option.get("label") or "").strip()
             if not name:
@@ -122,11 +230,11 @@ def agent_backend_names() -> list[str]:
     return [name for name, backend in BACKENDS.items() if backend.get("kind") == "agent"]
 
 
-def agent_backends() -> list[dict]:
+def agent_backends(config: dict | None = None) -> list[dict]:
     return [
         {
             "name": name,
-            "models": BACKENDS[name].get("models", DEFAULT_MODEL_OPTIONS),
+            "models": _backend_model_options(name, config),
             "commands": BACKENDS[name].get("commands", []),
             "native_commands": BACKENDS[name].get("native_commands", []),
         }
@@ -138,8 +246,8 @@ def agent_commands(backend: str = "codex") -> list[dict]:
     return list(BACKENDS.get(backend, {}).get("commands", []))
 
 
-def model_options(backend: str = "codex") -> list[dict]:
-    return list(BACKENDS.get(backend, {}).get("models", DEFAULT_MODEL_OPTIONS))
+def model_options(backend: str = "codex", config: dict | None = None) -> list[dict]:
+    return _backend_model_options(backend, config)
 
 
 def ensure_agent_backend(name: str) -> str:
@@ -155,4 +263,6 @@ def agent_backend_or_default(name: str | None, default: str = "codex") -> str:
 def require_backend(name: str) -> dict:
     if name not in BACKENDS:
         raise SystemExit(f"Unknown backend: {name}")
-    return BACKENDS[name]
+    backend = dict(BACKENDS[name])
+    backend["models"] = _backend_model_options(name)
+    return backend

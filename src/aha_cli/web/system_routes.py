@@ -18,6 +18,7 @@ from aha_cli.services.weixin import (
     status_snapshot as weixin_status_snapshot,
 )
 from aha_cli.services.weixin_notifications import notification_status, set_notifications_enabled
+from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_event
 from aha_cli.store.runs import run_exists
 from aha_cli.store.ui_state import read_global_ui_state, read_ui_state, update_global_ui_state, update_ui_state
@@ -501,12 +502,12 @@ def system_route_response(
             response.update(update_ui_state(root, run_id, {"last_selected_memo_id": payload.get("last_selected_memo_id")}))
         return json_response(response)
     if method in {"GET", "HEAD"} and path == "/api/backends":
-        return head_or_json(method, {"backends": agent_backends()})
+        return head_or_json(method, {"backends": agent_backends(load_config(root))})
     if method in {"GET", "HEAD"} and path == "/api/models":
         backend = query.get("backend", ["codex"])[0] or "codex"
         if backend not in agent_backend_names():
             return json_response({"error": f"unknown agent backend: {backend}"}, "400 Bad Request")
-        return head_or_json(method, {"backend": backend, "models": model_options(backend)})
+        return head_or_json(method, {"backend": backend, "models": model_options(backend, load_config(root))})
     if method in {"GET", "HEAD"} and path == "/api/backend":
         run_id = require_api_run_id(root, default_run_id, query)
         target = query.get("target", ["main"])[0] or "main"

@@ -175,7 +175,7 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "runs": runs,
         "memo_summary": task_memo_summary(root, selected_run_id),
         "workspaces": workspace_options(aha_home=root),
-        "backends": agent_backends(),
+        "backends": agent_backends(cfg),
         "workflow_templates": workflow_template_metadata(),
         "skill_options": discover_task_skill_options(root, cwd or Path.cwd()),
     }
