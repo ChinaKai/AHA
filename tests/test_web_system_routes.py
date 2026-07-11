@@ -242,7 +242,16 @@ class WebSystemRoutesTests(unittest.TestCase):
                 debug = system_route_response(root, "", "POST", "/api/debug/realtime", {}, debug_body)
                 restart = system_route_response(root, run_id, "POST", "/api/web/restart", {}, b"{}")
                 restart_requested = consume_web_restart_requested()
-                with mock.patch("aha_cli.web.system_routes.subprocess.Popen") as popen:
+                install_bin = root / "bin" / "aha"
+                upgrade_env = {
+                    "AHA_INSTALL_BIN": str(install_bin),
+                    "AHA_SERVICE_NAME": "aha.service",
+                    "AHA_RELEASE_REPO": "ChinaKai/AHA",
+                    "AHA_RELEASE_VERSION": "latest",
+                    "AHA_RELEASE_ASSET": "aha",
+                    "AHA_RELEASE_URL": "",
+                }
+                with mock.patch.dict(os.environ, upgrade_env, clear=False), mock.patch("aha_cli.web.system_routes.subprocess.Popen") as popen:
                     popen.return_value.pid = 12345
                     upgrade = system_route_response(root, run_id, "POST", "/api/web/upgrade", {}, b"{}")
                     upgrade_call = popen.call_args
@@ -258,45 +267,57 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(upgrade and upgrade.startswith(b"HTTP/1.1 200 OK"))
         upgrade_body = json_response_body(upgrade)
         self.assertTrue(upgrade_body["ok"])
-        self.assertEqual(upgrade_body["upgrade"], "install-user-service")
-        self.assertEqual(upgrade_body["command"], ["./scripts/install_user_service.sh", "--host", "0.0.0.0"])
+        self.assertEqual(upgrade_body["upgrade"], "service-upgrade-user")
+        expected_upgrade_command = [
+            str(install_bin),
+            "service",
+            "upgrade-user",
+            "--bin",
+            str(install_bin),
+            "--no-health-check",
+            "--json",
+            "--service-name",
+            "aha.service",
+            "--repo",
+            "ChinaKai/AHA",
+            "--version",
+            "latest",
+            "--asset-name",
+            "aha",
+        ]
+        self.assertEqual(upgrade_body["command"], expected_upgrade_command)
         self.assertEqual(upgrade_body["pid"], 12345)
-        self.assertEqual(upgrade_call.args[0], ["./scripts/install_user_service.sh", "--host", "0.0.0.0"])
-        self.assertTrue((Path(upgrade_call.kwargs["cwd"]) / "scripts" / "install_user_service.sh").is_file())
+        self.assertEqual(upgrade_call.args[0], expected_upgrade_command)
+        self.assertEqual(Path(upgrade_call.kwargs["cwd"]), Path.home())
         self.assertIn('"source": "client"', log_text)
         self.assertIn('"seq": 7', log_text)
         self.assertNotIn("ignored", log_text)
         self.assertTrue(any(event["type"] == "web_restart_requested" for event in events))
         self.assertTrue(any(event["type"] == "web_upgrade_requested" for event in events))
 
-    def test_web_upgrade_repo_root_does_not_use_runtime_cwd(self) -> None:
+    def test_web_upgrade_command_does_not_use_runtime_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = root / "other-workspace"
             (workspace / "scripts").mkdir(parents=True)
             (workspace / "scripts" / "install_user_service.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-            fake_module = root / "site-packages" / "aha_cli" / "web" / "system_routes.py"
-            fake_module.parent.mkdir(parents=True)
-            fake_module.write_text("", encoding="utf-8")
+            install_bin = root / "bin" / "aha"
             with (
-                mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": ""}, clear=False),
-                mock.patch.object(system_routes, "__file__", str(fake_module)),
+                mock.patch.dict(os.environ, {"AHA_INSTALL_BIN": str(install_bin), "AHA_SERVICE_NAME": "aha-test.service"}, clear=False),
                 mock.patch("pathlib.Path.cwd", return_value=workspace),
             ):
-                with self.assertRaises(FileNotFoundError):
-                    system_routes._web_upgrade_repo_root()
+                command = system_routes._web_upgrade_command()
 
-    def test_web_upgrade_repo_root_uses_installed_service_source_env(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as tmp:
-            fake_module = Path(tmp) / "site-packages" / "aha_cli" / "web" / "system_routes.py"
-            fake_module.parent.mkdir(parents=True)
-            fake_module.write_text("", encoding="utf-8")
-            with (
-                mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": str(repo_root)}, clear=False),
-                mock.patch.object(system_routes, "__file__", str(fake_module)),
-            ):
-                self.assertEqual(system_routes._web_upgrade_repo_root(), repo_root)
+        self.assertEqual(command[:5], [str(install_bin), "service", "upgrade-user", "--bin", str(install_bin)])
+        self.assertNotIn(str(workspace), " ".join(command))
+
+    def test_web_upgrade_command_requires_installed_onebin_for_source_runtime(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"AHA_INSTALL_BIN": ""}, clear=False),
+            mock.patch("sys.argv", ["/usr/bin/python3"]),
+        ):
+            with self.assertRaises(FileNotFoundError):
+                system_routes._web_upgrade_command()
 
     def test_realtime_debug_rejects_deleted_run_without_recreating_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

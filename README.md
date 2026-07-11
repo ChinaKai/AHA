@@ -50,18 +50,35 @@ onebin 包含 AHA Python 模块和浏览器静态文件。外部 agent CLI，例
 onebin 面板启动托管 backend 时，会通过同一个 onebin artifact 启动子 AHA
 backend 命令，不要求目标机器额外安装可 import 的 `aha_cli` Python 模块。
 
-## 从源码安装为 User Systemd 服务
+## 安装 / 升级 User Systemd 服务
 
-在源码目录里构建 onebin 到 `~/.local/bin/aha`，并安装、启动 user systemd 服务：
+不需要克隆源码时，可以直接使用 GitHub Release 里的安装脚本和 onebin：
 
 ```bash
-scripts/install_user_service.sh
+curl -fsSL -o /tmp/install_aha.sh \
+  https://github.com/ChinaKai/AHA/releases/latest/download/install_user_service.sh
+bash /tmp/install_aha.sh
+```
+
+默认会下载 `ChinaKai/AHA` latest release 的 `aha` artifact，安装到
+`~/.local/bin/aha`，并安装、启动 user systemd 服务。也可以安装指定版本或
+本地 artifact：
+
+```bash
+bash /tmp/install_aha.sh --version v0.1.0
+bash /tmp/install_aha.sh --artifact ./dist/aha
+```
+
+开发时如需从当前源码构建 onebin，再安装、启动 user systemd 服务：
+
+```bash
+scripts/install_user_service.sh --build-from-source
 ```
 
 默认服务命令是：
 
 ```text
-aha --home ~/.aha ui --host 0.0.0.0 --port 8788 --auth-token-file ~/.aha/web-token
+aha --home ~/.aha ui --host 127.0.0.1 --port 8788 --auth-token-file ~/.aha/web-token
 ```
 
 安装脚本默认启用 Web UI token 登录，并在 AHA home 下生成或复用
@@ -75,6 +92,10 @@ scripts/install_user_service.sh --port 8788 --aha-home ~/.aha
 scripts/install_user_service.sh --port 8788 --run-id <run-id>
 ```
 
+Web UI 的升级按钮会调用已安装 onebin 内置的
+`aha service upgrade-user`，按 systemd unit 中记录的 release 来源下载新
+artifact 并重启 `aha.service`，不再需要源码 checkout。
+
 查看服务状态：
 
 ```bash
@@ -87,5 +108,11 @@ journalctl --user -u aha.service -f
 ```bash
 sudo loginctl enable-linger "$USER"
 ```
+
+## 自动发布
+
+推送 `v*` tag 会触发 `.github/workflows/release.yml`：构建 onebin、运行
+release smoke、生成 `SHA256SUMS`，并把 `aha` 与 `install_user_service.sh`
+发布到 GitHub Release。
 
 更详细的设计说明在 `docs/` 目录。

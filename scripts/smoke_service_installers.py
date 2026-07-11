@@ -85,10 +85,19 @@ def check_onebin_dry_run(tmp_path: Path) -> dict:
         ],
         env=env,
     )
-    require("Dry-run: no files written, no executable built, no services changed" in result.stdout, "onebin dry-run banner missing")
+    require("Dry-run: no files written, no executable downloaded or built, no services changed" in result.stdout, "onebin dry-run banner missing")
+    require("Install source: release-download" in result.stdout, "onebin dry-run install source missing")
+    require("Release repo: ChinaKai/AHA" in result.stdout, "onebin dry-run release repo missing")
+    require("Release version: latest" in result.stdout, "onebin dry-run release version missing")
+    require("Release asset: aha" in result.stdout, "onebin dry-run release asset missing")
+    require("Download URL: https://github.com/ChinaKai/AHA/releases/latest/download/aha" in result.stdout, "onebin dry-run download URL missing")
     require(f"Service path: {service_path}" in result.stdout, "onebin dry-run service path mismatch")
     require(f'Environment="AHA_HOME={aha_home}"' in result.stdout, "onebin dry-run AHA_HOME missing")
-    require(f'Environment="AHA_SOURCE_ROOT={REPO_ROOT}"' in result.stdout, "onebin dry-run AHA_SOURCE_ROOT missing")
+    require(f'Environment="AHA_INSTALL_BIN={bin_path}"' in result.stdout, "onebin dry-run AHA_INSTALL_BIN missing")
+    require('Environment="AHA_SERVICE_NAME=aha-smoke.service"' in result.stdout, "onebin dry-run AHA_SERVICE_NAME missing")
+    require('Environment="AHA_RELEASE_REPO=ChinaKai/AHA"' in result.stdout, "onebin dry-run AHA_RELEASE_REPO missing")
+    require('Environment="AHA_RELEASE_VERSION=latest"' in result.stdout, "onebin dry-run AHA_RELEASE_VERSION missing")
+    require('Environment="AHA_RELEASE_ASSET=aha"' in result.stdout, "onebin dry-run AHA_RELEASE_ASSET missing")
     require("Health URL: http://127.0.0.1:18788/api/health" in result.stdout, "onebin dry-run health URL missing")
     require("Upgrade validation: 1" in result.stdout, "onebin dry-run upgrade validation missing")
     require("Auth required: 1" in result.stdout, "onebin dry-run auth requirement missing")
@@ -179,7 +188,7 @@ def run_smoke() -> dict:
             "checks": [
                 "bash -n install_user_service.sh",
                 "bash -n install_source_user_service.sh",
-                "onebin dry-run unit no-write",
+                "onebin release dry-run unit no-write",
                 "source dry-run unit no-write",
                 "service health check URL",
                 "entrypoint version validation",

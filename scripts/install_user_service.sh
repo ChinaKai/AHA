@@ -6,6 +6,12 @@ REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 
 INSTALL_BIN="${HOME}/.local/bin/aha"
 SERVICE_NAME="aha.service"
+RELEASE_REPO="${AHA_RELEASE_REPO:-ChinaKai/AHA}"
+RELEASE_VERSION="${AHA_RELEASE_VERSION:-latest}"
+RELEASE_ASSET="${AHA_RELEASE_ASSET:-aha}"
+DOWNLOAD_URL="${AHA_RELEASE_URL:-}"
+ARTIFACT_PATH=""
+BUILD_FROM_SOURCE=0
 AHA_HOME="${HOME}/.aha"
 HOST="127.0.0.1"
 PORT="8788"
@@ -25,12 +31,22 @@ usage() {
     cat <<'EOF'
 Usage: scripts/install_user_service.sh [options]
 
-Build and install AHA as a one-bin executable, then enable a user systemd
-service for the dashboard.
+Install AHA as a one-bin executable from a release artifact, then enable a
+user systemd service for the dashboard.
+
+By default the installer downloads the latest GitHub Release asset from
+ChinaKai/AHA. Use --artifact to install a local prebuilt onebin, --download-url
+for a direct release URL, or --build-from-source for the legacy source build.
 
 Options:
   --bin PATH           Install executable path (default: ~/.local/bin/aha)
   --service-name NAME  User systemd service name (default: aha.service)
+  --repo OWNER/REPO    GitHub release repository (default: ChinaKai/AHA)
+  --version VERSION    Release tag or "latest" (default: latest)
+  --asset-name NAME    Release asset name (default: aha)
+  --download-url URL   Download executable from an explicit URL
+  --artifact PATH      Install an existing local onebin artifact
+  --build-from-source  Build onebin from this source checkout before installing
   --aha-home PATH      AHA data directory passed to --home (default: ~/.aha)
   --host HOST          Dashboard bind host (default: 127.0.0.1)
   --port PORT          Dashboard bind port (default: 8788)
@@ -72,6 +88,35 @@ while (($#)); do
             need_arg "$1" "${2-}"
             SERVICE_NAME=$2
             shift 2
+            ;;
+        --repo)
+            need_arg "$1" "${2-}"
+            RELEASE_REPO=$2
+            shift 2
+            ;;
+        --version)
+            need_arg "$1" "${2-}"
+            RELEASE_VERSION=$2
+            shift 2
+            ;;
+        --asset-name)
+            need_arg "$1" "${2-}"
+            RELEASE_ASSET=$2
+            shift 2
+            ;;
+        --download-url)
+            need_arg "$1" "${2-}"
+            DOWNLOAD_URL=$2
+            shift 2
+            ;;
+        --artifact)
+            need_arg "$1" "${2-}"
+            ARTIFACT_PATH=$2
+            shift 2
+            ;;
+        --build-from-source)
+            BUILD_FROM_SOURCE=1
+            shift
             ;;
         --aha-home)
             need_arg "$1" "${2-}"
@@ -162,8 +207,28 @@ if [[ -z "${AUTH_TOKEN_FILE}" ]]; then
     AUTH_TOKEN_FILE="${AHA_HOME}/web-token"
 fi
 AUTH_TOKEN_FILE=$(python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "${AUTH_TOKEN_FILE}")
+if [[ -n "${ARTIFACT_PATH}" ]]; then
+    ARTIFACT_PATH=$(python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "${ARTIFACT_PATH}")
+fi
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 SERVICE_PATH="${SYSTEMD_USER_DIR}/${SERVICE_NAME}"
+
+SOURCE_COUNT=0
+[[ -n "${ARTIFACT_PATH}" ]] && SOURCE_COUNT=$((SOURCE_COUNT + 1))
+[[ -n "${DOWNLOAD_URL}" ]] && SOURCE_COUNT=$((SOURCE_COUNT + 1))
+((BUILD_FROM_SOURCE)) && SOURCE_COUNT=$((SOURCE_COUNT + 1))
+if ((SOURCE_COUNT > 1)); then
+    die "choose only one of --artifact, --download-url, or --build-from-source"
+fi
+
+INSTALL_SOURCE="release-download"
+if [[ -n "${ARTIFACT_PATH}" ]]; then
+    INSTALL_SOURCE="artifact"
+elif [[ -n "${DOWNLOAD_URL}" ]]; then
+    INSTALL_SOURCE="download-url"
+elif ((BUILD_FROM_SOURCE)); then
+    INSTALL_SOURCE="build-from-source"
+fi
 
 systemd_quote() {
     local value=$1
@@ -171,6 +236,15 @@ systemd_quote() {
     value=${value//\"/\\\"}
     value=${value//%/%%}
     printf '"%s"' "${value}"
+}
+
+systemd_env_line() {
+    local key=$1
+    local value=$2
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//%/%%}
+    printf 'Environment="%s=%s"\n' "${key}" "${value}"
 }
 
 health_host() {
@@ -241,6 +315,57 @@ binary_version() {
     "${bin}" --version 2>/dev/null | awk '{print $NF}' || true
 }
 
+release_asset_url() {
+    python3 - "${RELEASE_REPO}" "${RELEASE_VERSION}" "${RELEASE_ASSET}" <<'PY'
+from __future__ import annotations
+
+import sys
+from urllib.parse import quote
+
+repo, version, asset = sys.argv[1:4]
+asset_path = quote(asset, safe="")
+if version == "latest":
+    print(f"https://github.com/{repo}/releases/latest/download/{asset_path}")
+else:
+    print(f"https://github.com/{repo}/releases/download/{quote(version, safe='')}/{asset_path}")
+PY
+}
+
+download_artifact() {
+    local url=$1
+    local output=$2
+    python3 - "${url}" "${output}" <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import shutil
+import sys
+from urllib.request import Request, urlopen
+
+url, output = sys.argv[1:3]
+target = Path(output)
+request = Request(url, headers={"User-Agent": "aha-installer"})
+with urlopen(request, timeout=120) as response:
+    with target.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+PY
+}
+
+install_release_artifact() {
+    local staged=$1
+    local installed_version=""
+
+    chmod 0755 "${staged}"
+    if ((UPGRADE_VALIDATION)); then
+        installed_version=$(binary_version "${staged}")
+        [[ -n "${installed_version}" ]] || die "downloaded AHA executable did not report a version with --version"
+    fi
+
+    mkdir -p "$(dirname -- "${INSTALL_BIN}")"
+    install -m 0755 "${staged}" "${INSTALL_BIN}"
+    printf "%s" "${installed_version}"
+}
+
 run_health_check() {
     local expected_version=$1
     python3 - "${HEALTH_URL}" "${AHA_HOME}" "${expected_version}" "${HEALTH_TIMEOUT}" <<'PY'
@@ -304,10 +429,17 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h
-Environment="PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="AHA_HOME=${AHA_HOME}"
-Environment="AHA_SOURCE_ROOT=${REPO_ROOT}"
-Environment=PYTHONUNBUFFERED=1
+EOF
+    systemd_env_line "PATH" "${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    systemd_env_line "AHA_HOME" "${AHA_HOME}"
+    systemd_env_line "AHA_INSTALL_BIN" "${INSTALL_BIN}"
+    systemd_env_line "AHA_SERVICE_NAME" "${SERVICE_NAME}"
+    systemd_env_line "AHA_RELEASE_REPO" "${RELEASE_REPO}"
+    systemd_env_line "AHA_RELEASE_VERSION" "${RELEASE_VERSION}"
+    systemd_env_line "AHA_RELEASE_ASSET" "${RELEASE_ASSET}"
+    systemd_env_line "AHA_RELEASE_URL" "${DOWNLOAD_URL}"
+    systemd_env_line "PYTHONUNBUFFERED" "1"
+    cat <<EOF
 ExecStart=${exec_start}
 Restart=on-failure
 RestartSec=3
@@ -317,9 +449,26 @@ WantedBy=default.target
 EOF
 }
 
+RESOLVED_DOWNLOAD_URL=""
+if [[ "${INSTALL_SOURCE}" == "release-download" ]]; then
+    RESOLVED_DOWNLOAD_URL=$(release_asset_url)
+elif [[ "${INSTALL_SOURCE}" == "download-url" ]]; then
+    RESOLVED_DOWNLOAD_URL="${DOWNLOAD_URL}"
+fi
+
 if ((DRY_RUN)); then
-    echo "Dry-run: no files written, no executable built, no services changed"
+    echo "Dry-run: no files written, no executable downloaded or built, no services changed"
     echo "Install executable: ${INSTALL_BIN}"
+    echo "Install source: ${INSTALL_SOURCE}"
+    echo "Release repo: ${RELEASE_REPO}"
+    echo "Release version: ${RELEASE_VERSION}"
+    echo "Release asset: ${RELEASE_ASSET}"
+    if [[ -n "${RESOLVED_DOWNLOAD_URL}" ]]; then
+        echo "Download URL: ${RESOLVED_DOWNLOAD_URL}"
+    fi
+    if [[ -n "${ARTIFACT_PATH}" ]]; then
+        echo "Artifact path: ${ARTIFACT_PATH}"
+    fi
     echo "Service path: ${SERVICE_PATH}"
     echo "Service: ${SERVICE_NAME}"
     echo "AHA home: ${AHA_HOME}"
@@ -342,13 +491,25 @@ if ((UPGRADE_VALIDATION)) && [[ -x "${INSTALL_BIN}" ]]; then
     PREVIOUS_VERSION=$(binary_version "${INSTALL_BIN}")
 fi
 
-mkdir -p "$(dirname -- "${INSTALL_BIN}")"
-python3 "${REPO_ROOT}/scripts/build_onebin.py" --output "${INSTALL_BIN}"
-
 INSTALLED_VERSION=""
-if ((UPGRADE_VALIDATION)); then
-    INSTALLED_VERSION=$(binary_version "${INSTALL_BIN}")
-    [[ -n "${INSTALLED_VERSION}" ]] || die "installed AHA executable did not report a version with --version"
+if [[ "${INSTALL_SOURCE}" == "build-from-source" ]]; then
+    mkdir -p "$(dirname -- "${INSTALL_BIN}")"
+    python3 "${REPO_ROOT}/scripts/build_onebin.py" --output "${INSTALL_BIN}"
+    if ((UPGRADE_VALIDATION)); then
+        INSTALLED_VERSION=$(binary_version "${INSTALL_BIN}")
+        [[ -n "${INSTALLED_VERSION}" ]] || die "installed AHA executable did not report a version with --version"
+    fi
+else
+    TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/aha-install.XXXXXX")
+    trap 'rm -rf "${TMP_DIR}"' EXIT
+    STAGED_BIN="${TMP_DIR}/aha"
+    if [[ "${INSTALL_SOURCE}" == "artifact" ]]; then
+        [[ -f "${ARTIFACT_PATH}" ]] || die "artifact does not exist: ${ARTIFACT_PATH}"
+        cp "${ARTIFACT_PATH}" "${STAGED_BIN}"
+    else
+        download_artifact "${RESOLVED_DOWNLOAD_URL}" "${STAGED_BIN}"
+    fi
+    INSTALLED_VERSION=$(install_release_artifact "${STAGED_BIN}")
 fi
 
 ensure_auth_token_file

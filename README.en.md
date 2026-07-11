@@ -54,19 +54,36 @@ When the onebin dashboard starts managed backends, it launches child AHA backend
 commands through the same onebin artifact instead of requiring an installed
 `aha_cli` Python module.
 
-## Install As A User Systemd Service From Source
+## Install / Upgrade As A User Systemd Service
 
-From the source checkout, build and install the onebin to `~/.local/bin/aha`,
-then install and start a user systemd service:
+Without cloning the source checkout, download the installer from the latest
+GitHub Release and install the released onebin:
 
 ```bash
-scripts/install_user_service.sh
+curl -fsSL -o /tmp/install_aha.sh \
+  https://github.com/ChinaKai/AHA/releases/latest/download/install_user_service.sh
+bash /tmp/install_aha.sh
+```
+
+By default this downloads the `aha` artifact from the latest `ChinaKai/AHA`
+release, installs it to `~/.local/bin/aha`, and starts a user systemd service.
+You can install a specific tag or a local release artifact:
+
+```bash
+bash /tmp/install_aha.sh --version v0.1.0
+bash /tmp/install_aha.sh --artifact ./dist/aha
+```
+
+For local development, build from the current source checkout explicitly:
+
+```bash
+scripts/install_user_service.sh --build-from-source
 ```
 
 By default the service runs:
 
 ```text
-aha --home ~/.aha ui --host 0.0.0.0 --port 8788 --auth-token-file ~/.aha/web-token
+aha --home ~/.aha ui --host 127.0.0.1 --port 8788 --auth-token-file ~/.aha/web-token
 ```
 
 The install script enables Web UI token login by default and creates or reuses
@@ -80,6 +97,11 @@ scripts/install_user_service.sh --port 8788 --aha-home ~/.aha
 scripts/install_user_service.sh --port 8788 --run-id <run-id>
 ```
 
+The Web UI upgrade button calls the installed onebin's
+`aha service upgrade-user` command. It downloads the next release artifact using
+the release metadata recorded in the systemd unit, replaces the installed
+executable, and restarts `aha.service` without requiring a source checkout.
+
 Check the service:
 
 ```bash
@@ -92,5 +114,11 @@ If the service should start before login, enable lingering for the user:
 ```bash
 sudo loginctl enable-linger "$USER"
 ```
+
+## Automated Releases
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`. The workflow builds
+the onebin, runs release smokes, writes `SHA256SUMS`, and publishes both `aha`
+and `install_user_service.sh` to the GitHub Release.
 
 Detailed design notes live in `docs/`.

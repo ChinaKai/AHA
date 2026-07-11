@@ -353,20 +353,30 @@ run selection, maintenance refresh, and console errors, then deletes the smoke
 run. If Playwright or Chromium is unavailable it exits successfully with
 `status=skipped` unless `--require-playwright` is passed.
 
+For persistent release installs, `scripts/install_user_service.sh` downloads the
+published onebin artifact by default and installs `aha.service` as a user
+systemd service. The default release source is
+`https://github.com/ChinaKai/AHA/releases/latest/download/aha`; `--repo`,
+`--version`, `--asset-name`, `--download-url`, and `--artifact` can override the
+source. `--build-from-source` keeps the legacy source-checkout build path
+explicit for local development. The generated unit records `AHA_INSTALL_BIN`,
+`AHA_SERVICE_NAME`, and release metadata so Web-triggered upgrades can run from
+the installed onebin instead of locating a source checkout.
+
 For persistent local development, `scripts/install_source_user_service.sh`
 installs `aha-src.service` as a user systemd service. Its defaults mirror the
 source checkout convention: `PYTHONPATH=repo/src`, working directory set to the
 repo root, `--home repo/.aha`, and port 8766. This keeps source UI state separate
-from the onebin user service, which normally uses `~/.aha` on port 8788.
+from the release onebin user service, which normally uses `~/.aha` on port 8788.
 
-Both `scripts/install_user_service.sh` and
-`scripts/install_source_user_service.sh` support `--dry-run`. Dry-run mode prints
-the generated unit and install plan without building a onebin, writing
+Both service installers support `--dry-run`. Dry-run mode prints the generated
+unit and install plan without downloading/building a onebin, writing
 `~/.config/systemd/user`, or calling `systemctl`/`loginctl`, so automated tests
 can verify service content without touching the developer's real user services.
 `scripts/smoke_service_installers.py` runs those dry-runs under temporary homes
-and asserts the generated onebin/source units, health check URLs, entrypoint
-version validation, token-file auth wiring, and no-write behavior.
+and asserts the generated release/source units, health check URLs, entrypoint
+version validation, token-file auth wiring, release metadata, and no-write
+behavior.
 `scripts/preflight_service_upgrade.py` is the release-machine preflight wrapper:
 it validates the source entrypoint, optionally builds and checks a temporary
 onebin, reuses the installer dry-run smoke, and asserts the current user's
@@ -381,13 +391,19 @@ installers use this endpoint only after a real restart to verify that systemd is
 serving the expected AHA home and, when a version is known, the expected AHA
 build.
 
-Onebin service updates validate the freshly built `~/.local/bin/aha` with
+Onebin service updates validate the downloaded or copied release artifact with
 `aha --version` before writing/restarting the service. Source service updates
 validate `python -m aha_cli --version`. Both installers generate or reuse
 `AHA_HOME/web-token` and pass it to `aha ui --auth-token-file` by default; dry
-runs print the token file path but do not create it. These checks can be disabled with
-`--skip-upgrade-validation` for onebin or `--skip-version-validation` for source,
-and the post-restart health poll can be disabled with `--no-health-check`.
+runs print the token file path but do not create it. These checks can be disabled
+with `--skip-upgrade-validation` for onebin or `--skip-version-validation` for
+source, and the post-restart health poll can be disabled with
+`--no-health-check`.
+
+The Web upgrade action calls `aha service upgrade-user` from the installed
+onebin. That command downloads the configured release asset, validates it,
+atomically replaces `AHA_INSTALL_BIN`, and restarts the recorded user systemd
+service. Source checkouts are no longer part of the Web upgrade path.
 
 AHA Web UI is a local tool with optional token auth. `aha ui --auth-token` and
 `aha ui --auth-token-file` protect the UI, APIs, and WebSocket while leaving

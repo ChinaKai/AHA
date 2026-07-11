@@ -56,6 +56,14 @@ from aha_cli.services.run_retention_policy import (
 )
 from aha_cli.services.run_tasks import run_pending_tasks
 from aha_cli.services.session_compact import compact_reset_backend_session
+from aha_cli.services.service_upgrade import (
+    DEFAULT_RELEASE_ASSET,
+    DEFAULT_RELEASE_REPO,
+    DEFAULT_RELEASE_VERSION,
+    DEFAULT_SERVICE_NAME,
+    ServiceUpgradeError,
+    upgrade_user_service,
+)
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.web.auth import bind_host_exposes_network, resolve_auth_token
 from aha_cli.store.filesystem import (
@@ -1501,6 +1509,51 @@ def cmd_package(args: argparse.Namespace) -> int:
     raise SystemExit(f"Unknown package command: {args.package_cmd}")
 
 
+def _default_installed_aha_bin() -> str:
+    env_bin = os.environ.get("AHA_INSTALL_BIN", "").strip()
+    if env_bin:
+        return env_bin
+    candidate = Path(sys.argv[0]).expanduser()
+    if candidate.is_file() and os.access(candidate, os.X_OK) and not candidate.name.startswith("python"):
+        return str(candidate)
+    return ""
+
+
+def cmd_service(args: argparse.Namespace) -> int:
+    if args.service_cmd == "upgrade-user":
+        bin_value = args.bin or _default_installed_aha_bin()
+        if not bin_value:
+            print("--bin is required when $AHA_INSTALL_BIN is not set and the current executable is not a onebin", file=sys.stderr)
+            return 2
+        try:
+            result = upgrade_user_service(
+                bin_path=Path(bin_value),
+                service_name=args.service_name or os.environ.get("AHA_SERVICE_NAME") or DEFAULT_SERVICE_NAME,
+                repo=args.repo or os.environ.get("AHA_RELEASE_REPO") or DEFAULT_RELEASE_REPO,
+                version=args.version or os.environ.get("AHA_RELEASE_VERSION") or DEFAULT_RELEASE_VERSION,
+                asset_name=args.asset_name or os.environ.get("AHA_RELEASE_ASSET") or DEFAULT_RELEASE_ASSET,
+                download_url=args.download_url or os.environ.get("AHA_RELEASE_URL") or None,
+                artifact=Path(args.artifact) if args.artifact else None,
+                restart=not args.no_restart,
+                validate=not args.skip_upgrade_validation,
+            )
+        except ServiceUpgradeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps({"ok": True, **result}, indent=2, ensure_ascii=False))
+        else:
+            print(f"Upgraded AHA executable: {result['bin']}")
+            if result.get("previous_version"):
+                print(f"Previous AHA version: {result['previous_version']}")
+            if result.get("installed_version"):
+                print(f"Installed AHA version: {result['installed_version']}")
+            print(f"Service: {result['service']}")
+            print(f"Restarted: {1 if result['restarted'] else 0}")
+        return 0
+    raise SystemExit(f"Unknown service command: {args.service_cmd}")
+
+
 def _generated_by_from_task_context(root: Path, run_id: str, task_id: str, agent_id: str) -> str | None:
     try:
         detail = task_snapshot(root, run_id, task_id)
@@ -1650,6 +1703,7 @@ def command_handlers() -> dict[str, object]:
         "commit": cmd_commit,
         "commit-check": cmd_commit_check,
         "package": cmd_package,
+        "service": cmd_service,
         "codex-runner": cmd_codex_runner,
         "claude-runner": cmd_claude_runner,
         "codex-chat": cmd_codex_chat,

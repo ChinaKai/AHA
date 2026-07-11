@@ -40,6 +40,7 @@ COMMANDS = {
     "commit",
     "commit-check",
     "package",
+    "service",
     "codex-runner",
     "claude-runner",
     "codex-chat",
@@ -492,6 +493,22 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     onebin_p.add_argument("--no-compress", action="store_true", help="Store files without ZIP compression")
     onebin_p.add_argument("--source-root", default=None, help=argparse.SUPPRESS)
     onebin_p.set_defaults(func=handlers["package"])
+
+    service_p = sub.add_parser("service", help="Manage installed AHA services")
+    service_sub = service_p.add_subparsers(dest="service_cmd", required=True)
+    service_upgrade = service_sub.add_parser("upgrade-user", help="Upgrade the installed user service executable")
+    service_upgrade.add_argument("--bin", default=None, help="Installed AHA executable path; defaults to $AHA_INSTALL_BIN")
+    service_upgrade.add_argument("--service-name", default=None, help="User systemd service name; defaults to $AHA_SERVICE_NAME or aha.service")
+    service_upgrade.add_argument("--repo", default=None, help="GitHub release repository, OWNER/REPO")
+    service_upgrade.add_argument("--version", default=None, help="Release tag or latest")
+    service_upgrade.add_argument("--asset-name", default=None, help="Release asset name")
+    service_upgrade.add_argument("--download-url", default=None, help="Download executable from an explicit URL")
+    service_upgrade.add_argument("--artifact", default=None, help="Install an existing local onebin artifact")
+    service_upgrade.add_argument("--no-restart", action="store_true", help="Replace the executable without restarting systemd")
+    service_upgrade.add_argument("--no-health-check", action="store_true", help="Accepted for installer parity; no health poll is run")
+    service_upgrade.add_argument("--skip-upgrade-validation", action="store_true", help="Do not verify the downloaded executable with --version")
+    service_upgrade.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    service_upgrade.set_defaults(func=handlers["service"])
 
     codex_runner_p = sub.add_parser("codex-runner")
     codex_runner_p.add_argument("--codex-bin", default="codex")

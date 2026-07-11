@@ -84,10 +84,19 @@ class ServiceInstallerTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Dry-run: no files written, no executable built, no services changed", result.stdout)
+            self.assertIn("Dry-run: no files written, no executable downloaded or built, no services changed", result.stdout)
+            self.assertIn("Install source: release-download", result.stdout)
+            self.assertIn("Release repo: ChinaKai/AHA", result.stdout)
+            self.assertIn("Release version: latest", result.stdout)
+            self.assertIn("Release asset: aha", result.stdout)
+            self.assertIn("Download URL: https://github.com/ChinaKai/AHA/releases/latest/download/aha", result.stdout)
             self.assertIn(f"Service path: {service_path}", result.stdout)
             self.assertIn(f'Environment="AHA_HOME={aha_home}"', result.stdout)
-            self.assertIn(f'Environment="AHA_SOURCE_ROOT={REPO_ROOT}"', result.stdout)
+            self.assertIn(f'Environment="AHA_INSTALL_BIN={bin_path}"', result.stdout)
+            self.assertIn('Environment="AHA_SERVICE_NAME=aha-test.service"', result.stdout)
+            self.assertIn('Environment="AHA_RELEASE_REPO=ChinaKai/AHA"', result.stdout)
+            self.assertIn('Environment="AHA_RELEASE_VERSION=latest"', result.stdout)
+            self.assertIn('Environment="AHA_RELEASE_ASSET=aha"', result.stdout)
             self.assertIn("Health URL: http://127.0.0.1:18788/api/health", result.stdout)
             self.assertIn("Upgrade validation: 1", result.stdout)
             self.assertIn("Auth required: 1", result.stdout)
@@ -101,6 +110,30 @@ class ServiceInstallerTests(unittest.TestCase):
             self.assertFalse((tmp_path / "home" / ".aha").exists())
             self.assertFalse(service_path.exists())
             self.assertFalse(token_file.exists())
+
+    def test_onebin_installer_accepts_local_release_artifact(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aha-service-onebin-artifact-") as tmp:
+            tmp_path = Path(tmp)
+            artifact = tmp_path / "release" / "aha"
+            artifact.parent.mkdir()
+            artifact.write_text("#!/bin/sh\n", encoding="utf-8")
+            result = self.run_script(
+                [
+                    "bash",
+                    str(INSTALL_ONEBIN),
+                    "--dry-run",
+                    "--artifact",
+                    str(artifact),
+                    "--no-start",
+                    "--no-linger",
+                ],
+                tmp_path=tmp_path,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Install source: artifact", result.stdout)
+            self.assertIn(f"Artifact path: {artifact}", result.stdout)
+            self.assertNotIn("Download URL:", result.stdout)
 
     def test_onebin_installer_default_home_ignores_ambient_aha_home(self) -> None:
         with tempfile.TemporaryDirectory(prefix="aha-service-onebin-default-") as tmp:
@@ -203,7 +236,7 @@ class ServiceInstallerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
-        self.assertIn("onebin dry-run unit no-write", payload["checks"])
+        self.assertIn("onebin release dry-run unit no-write", payload["checks"])
         self.assertIn("source dry-run unit no-write", payload["checks"])
         self.assertIn("installer dry-run AHA home no-write", payload["checks"])
         self.assertFalse(payload["onebin"]["built_executable"])

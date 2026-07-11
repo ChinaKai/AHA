@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
@@ -205,32 +206,37 @@ def request_web_restart(root: Path, run_id: str) -> dict:
     return payload
 
 
-def _is_aha_source_root(candidate: Path) -> bool:
-    return (
-        (candidate / "scripts" / "install_user_service.sh").is_file()
-        and (candidate / "pyproject.toml").is_file()
-        and (candidate / "src" / "aha_cli").is_dir()
-    )
+def _web_upgrade_command() -> list[str]:
+    installed_bin = os.environ.get("AHA_INSTALL_BIN", "").strip()
+    executable = installed_bin or str(Path(sys.argv[0]).expanduser())
+    executable_path = Path(executable).expanduser()
+    if executable_path.is_file():
+        executable = str(executable_path.resolve())
+    if not installed_bin and (not executable_path.is_file() or executable_path.name.startswith("python")):
+        raise FileNotFoundError("AHA_INSTALL_BIN is not set; Web upgrade requires an installed AHA onebin executable")
 
-
-def _web_upgrade_repo_root() -> Path:
-    env_root = os.environ.get("AHA_SOURCE_ROOT", "").strip()
-    if env_root:
-        candidate = Path(env_root).expanduser().resolve()
-        if _is_aha_source_root(candidate):
-            return candidate
-        raise FileNotFoundError(
-            f"AHA_SOURCE_ROOT does not point to an AHA source checkout with scripts/install_user_service.sh: {candidate}"
-        )
-    for candidate in Path(__file__).resolve().parents:
-        if _is_aha_source_root(candidate):
-            return candidate
-    raise FileNotFoundError("AHA source checkout with scripts/install_user_service.sh not found from web package path")
+    target_bin = str(Path(installed_bin).expanduser().resolve()) if installed_bin else executable
+    command = [executable, "service", "upgrade-user", "--bin", target_bin, "--no-health-check", "--json"]
+    service_name = os.environ.get("AHA_SERVICE_NAME", "").strip()
+    if service_name:
+        command.extend(["--service-name", service_name])
+    release_url = os.environ.get("AHA_RELEASE_URL", "").strip()
+    if release_url:
+        command.extend(["--download-url", release_url])
+    else:
+        for env_name, flag in (
+            ("AHA_RELEASE_REPO", "--repo"),
+            ("AHA_RELEASE_VERSION", "--version"),
+            ("AHA_RELEASE_ASSET", "--asset-name"),
+        ):
+            value = os.environ.get(env_name, "").strip()
+            if value:
+                command.extend([flag, value])
+    return command
 
 
 def request_web_upgrade(root: Path, run_id: str) -> dict:
-    repo_root = _web_upgrade_repo_root()
-    command = ["./scripts/install_user_service.sh", "--host", "0.0.0.0"]
+    command = _web_upgrade_command()
     log_dir = root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "web-upgrade.log"
@@ -238,16 +244,16 @@ def request_web_upgrade(root: Path, run_id: str) -> dict:
         log_file.write(f"\n--- AHA web upgrade requested for {run_id} ---\n".encode("utf-8"))
         process = subprocess.Popen(  # noqa: S603 - fixed command, no shell.
             command,
-            cwd=repo_root,
+            cwd=Path.home(),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     payload = {
         "run_id": run_id,
-        "upgrade": "install-user-service",
+        "upgrade": "service-upgrade-user",
         "command": command,
-        "cwd": str(repo_root),
+        "cwd": str(Path.home()),
         "pid": process.pid,
         "log_path": str(log_path),
     }
