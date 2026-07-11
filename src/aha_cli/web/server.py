@@ -143,7 +143,7 @@ async def handle_ui_client(
             if response is None:
                 response = game_route_response(root, run_id, method, path)
             if response is None:
-                response = skill_route_response(root, method, path, body)
+                response = skill_route_response(root, method, path, query, body)
             if response is None:
                 response = system_route_response(
                     root,

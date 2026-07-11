@@ -299,6 +299,8 @@ def _render_readme() -> str:
         "- `projects/<project-key>/navigation/index.md` — the project navigation entry point\n"
         "- `projects/<project-key>/navigation/modules/*.md` — on-demand module docs\n"
         "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n"
+        "- `skills/<skill-id>/` — managed AHA task skills "
+        "copied from legacy `AHA_HOME/skills` and edited through the Skills UI\n"
         "- `capture/*.json` — raw user notes awaiting distill, kept syncable\n"
         "- `capture/assets/*` — raw note attachments, kept syncable\n\n"
         "Project navigation is incremental: read `navigation/index.md` first, then "

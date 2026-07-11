@@ -7,11 +7,15 @@ import shutil
 import threading
 import uuid
 
+from aha_cli.store.config import load_config
+from aha_cli.store.knowledge import init_knowledge_base, knowledge_root
 from aha_cli.store.paths import aha_home_path
 
 SKILL_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$|^[a-z0-9]$")
 SKILL_MD = "SKILL.md"
 OPENAI_YAML = "openai.yaml"
+KNOWLEDGE_SKILL_SOURCE = "knowledge"
+LEGACY_SKILL_SOURCE = "aha_home"
 
 
 class SkillManagementError(ValueError):
@@ -20,7 +24,17 @@ class SkillManagementError(ValueError):
         self.status = status
 
 
-def skills_root(root: Path) -> Path:
+def _config(root: Path, config: dict | None = None) -> dict:
+    return config if isinstance(config, dict) else load_config(root)
+
+
+def skills_root(root: Path, workspace: Path | str | None = None, config: dict | None = None) -> Path:
+    del workspace
+    cfg = _config(root, config)
+    return knowledge_root(root, cfg) / "skills"
+
+
+def legacy_skills_root(root: Path) -> Path:
     return aha_home_path(root) / "skills"
 
 
@@ -33,13 +47,21 @@ def validate_skill_id(skill_id: str) -> str:
     return value
 
 
-def _skill_dir(root: Path, skill_id: str) -> Path:
+def _safe_skill_dir(base: Path, skill_id: str) -> Path:
     safe_id = validate_skill_id(skill_id)
-    base = skills_root(root).resolve(strict=False)
+    base = base.resolve(strict=False)
     path = (base / safe_id).resolve(strict=False)
     if path != base / safe_id:
         raise SkillManagementError("invalid skill path")
     return path
+
+
+def _skill_dir(root: Path, skill_id: str, workspace: Path | str | None = None, config: dict | None = None) -> Path:
+    return _safe_skill_dir(skills_root(root, workspace, config), skill_id)
+
+
+def _legacy_skill_dir(root: Path, skill_id: str) -> Path:
+    return _safe_skill_dir(legacy_skills_root(root), skill_id)
 
 
 def _read_text(path: Path) -> str:
@@ -112,7 +134,7 @@ def _interface_metadata(openai_yaml: str) -> dict[str, str]:
     return fields
 
 
-def _skill_summary(root: Path, path: Path) -> dict[str, object]:
+def _skill_summary(path: Path, *, source: str) -> dict[str, object]:
     skill_md_path = path / SKILL_MD
     skill_md = _read_text(skill_md_path)
     openai_yaml_path = path / "agents" / OPENAI_YAML
@@ -131,30 +153,104 @@ def _skill_summary(root: Path, path: Path) -> dict[str, object]:
         "path": str(skill_md_path),
         "agents_path": str(openai_yaml_path) if openai_yaml_path.exists() else "",
         "has_agent_metadata": openai_yaml_path.exists(),
-        "source": "aha_home",
+        "source": source,
         "updated_at": stat.st_mtime,
         "size": stat.st_size,
     }
 
 
-def list_managed_skills(root: Path) -> list[dict[str, object]]:
-    base = skills_root(root)
-    if not base.is_dir():
-        return []
-    skills: list[dict[str, object]] = []
-    for item in sorted(base.iterdir(), key=lambda candidate: candidate.name.lower()):
-        if not item.is_dir() or not (item / SKILL_MD).is_file():
+def _copy_skill_tree(source: Path, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for item in source.rglob("*"):
+        if item.is_symlink():
             continue
-        skills.append(_skill_summary(root, item))
+        rel = item.relative_to(source)
+        dest = target / rel
+        if item.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+        elif item.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dest)
+
+
+def sync_legacy_skills_to_knowledge(
+    root: Path,
+    workspace: Path | str | None = None,
+    config: dict | None = None,
+) -> list[dict[str, str]]:
+    legacy_base = legacy_skills_root(root)
+    if not legacy_base.is_dir():
+        return []
+    legacy_skills = [
+        item for item in sorted(legacy_base.iterdir(), key=lambda candidate: candidate.name.lower())
+        if item.is_dir() and (item / SKILL_MD).is_file()
+    ]
+    if not legacy_skills:
+        return []
+
+    cfg = _config(root, config)
+    init_knowledge_base(root, cfg)
+    primary = skills_root(root, workspace, cfg)
+    migrated: list[dict[str, str]] = []
+    for item in legacy_skills:
+        try:
+            target = _safe_skill_dir(primary, item.name)
+        except SkillManagementError:
+            continue
+        if target.exists():
+            continue
+        _copy_skill_tree(item, target)
+        migrated.append({"id": item.name, "from": str(item), "to": str(target)})
+    return migrated
+
+
+def list_managed_skills(
+    root: Path,
+    workspace: Path | str | None = None,
+    config: dict | None = None,
+) -> list[dict[str, object]]:
+    cfg = _config(root, config)
+    sync_legacy_skills_to_knowledge(root, workspace, cfg)
+    skills: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+    base = skills_root(root, workspace, cfg)
+    if base.is_dir():
+        for item in sorted(base.iterdir(), key=lambda candidate: candidate.name.lower()):
+            if item.is_dir() and (item / SKILL_MD).is_file():
+                seen_ids.add(item.name)
+                skills.append(_skill_summary(item, source=KNOWLEDGE_SKILL_SOURCE))
+    legacy_base = legacy_skills_root(root)
+    if legacy_base.is_dir():
+        for item in sorted(legacy_base.iterdir(), key=lambda candidate: candidate.name.lower()):
+            if not item.is_dir() or not (item / SKILL_MD).is_file() or item.name in seen_ids:
+                continue
+            seen_ids.add(item.name)
+            skills.append(_skill_summary(item, source=LEGACY_SKILL_SOURCE))
     return skills
 
 
-def get_managed_skill(root: Path, skill_id: str) -> dict[str, object]:
-    path = _skill_dir(root, skill_id)
-    skill_md_path = path / SKILL_MD
-    if not skill_md_path.is_file():
+def get_managed_skill(
+    root: Path,
+    skill_id: str,
+    workspace: Path | str | None = None,
+    config: dict | None = None,
+) -> dict[str, object]:
+    cfg = _config(root, config)
+    sync_legacy_skills_to_knowledge(root, workspace, cfg)
+    summary: dict[str, object] | None = None
+    path: Path | None = None
+    candidate = _skill_dir(root, skill_id, workspace, cfg)
+    if (candidate / SKILL_MD).is_file():
+        path = candidate
+        summary = _skill_summary(candidate, source=KNOWLEDGE_SKILL_SOURCE)
+    if summary is None:
+        candidate = _legacy_skill_dir(root, skill_id)
+        if (candidate / SKILL_MD).is_file():
+            path = candidate
+            summary = _skill_summary(candidate, source=LEGACY_SKILL_SOURCE)
+    if summary is None or path is None:
         raise SkillManagementError(f"skill not found: {skill_id}", "404 Not Found")
-    summary = _skill_summary(root, path)
+    skill_md_path = path / SKILL_MD
     summary["skill_md"] = _read_text(skill_md_path)
     summary["openai_yaml"] = _read_text(path / "agents" / OPENAI_YAML)
     return summary
@@ -180,8 +276,16 @@ def default_skill_markdown(skill_id: str) -> str:
     )
 
 
-def save_managed_skill(root: Path, skill_id: str, payload: dict) -> dict[str, object]:
-    path = _skill_dir(root, skill_id)
+def save_managed_skill(
+    root: Path,
+    skill_id: str,
+    payload: dict,
+    workspace: Path | str | None = None,
+    config: dict | None = None,
+) -> dict[str, object]:
+    cfg = _config(root, config)
+    init_knowledge_base(root, cfg)
+    path = _skill_dir(root, skill_id, workspace, cfg)
     skill_md = str(payload.get("skill_md", payload.get("content", "")) or "")
     if not skill_md.strip():
         skill_md = default_skill_markdown(skill_id)
@@ -199,22 +303,43 @@ def save_managed_skill(root: Path, skill_id: str, payload: dict) -> dict[str, ob
         elif openai_path.exists():
             openai_path.unlink()
 
-    return get_managed_skill(root, skill_id)
+    return get_managed_skill(root, skill_id, workspace, cfg)
 
 
-def create_managed_skill(root: Path, payload: dict) -> dict[str, object]:
+def create_managed_skill(
+    root: Path,
+    payload: dict,
+    workspace: Path | str | None = None,
+    config: dict | None = None,
+) -> dict[str, object]:
     skill_id = validate_skill_id(str(payload.get("id", payload.get("name", "")) or ""))
-    path = _skill_dir(root, skill_id)
+    cfg = _config(root, config)
+    init_knowledge_base(root, cfg)
+    sync_legacy_skills_to_knowledge(root, workspace, cfg)
+    path = _skill_dir(root, skill_id, workspace, cfg)
     if (path / SKILL_MD).exists():
         raise SkillManagementError(f"skill already exists: {skill_id}", "409 Conflict")
-    return save_managed_skill(root, skill_id, payload)
+    return save_managed_skill(root, skill_id, payload, workspace, cfg)
 
 
-def delete_managed_skill(root: Path, skill_id: str) -> None:
-    path = _skill_dir(root, skill_id)
-    if not (path / SKILL_MD).is_file():
+def delete_managed_skill(
+    root: Path,
+    skill_id: str,
+    workspace: Path | str | None = None,
+    config: dict | None = None,
+) -> None:
+    cfg = _config(root, config)
+    deleted = False
+    path = _skill_dir(root, skill_id, workspace, cfg)
+    if (path / SKILL_MD).is_file():
+        shutil.rmtree(path)
+        deleted = True
+    legacy_path = _legacy_skill_dir(root, skill_id)
+    if (legacy_path / SKILL_MD).is_file():
+        shutil.rmtree(legacy_path)
+        deleted = True
+    if not deleted:
         raise SkillManagementError(f"skill not found: {skill_id}", "404 Not Found")
-    shutil.rmtree(path)
 
 
 __all__ = [
@@ -222,8 +347,10 @@ __all__ = [
     "create_managed_skill",
     "delete_managed_skill",
     "get_managed_skill",
+    "legacy_skills_root",
     "list_managed_skills",
     "save_managed_skill",
     "skills_root",
+    "sync_legacy_skills_to_knowledge",
     "validate_skill_id",
 ]
