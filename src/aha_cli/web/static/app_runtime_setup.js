@@ -142,6 +142,7 @@ const realtimeEventCacheLimit = 2000;
 const realtimeSeenEventCacheLimit = 4000;
 const pendingMessages = [];
 const interruptedContexts = new Set();
+const taskPageLimit = 80;
 const conversationPageLimit = 30;
 const CONVERSATION_SESSION_REFRESH_FALLBACK_MS = Math.max(5000, pollInterval * 5);
 const logPageLimit = 200;
@@ -665,6 +666,8 @@ const realtimeClient = window.AHARealtimeClient.createRealtimeClient({
   selectedTaskId: () => selectedTaskId,
   lastEventId: () => lastEventId,
   eventTailInitialized: () => eventTailInitialized,
+  taskPageLimit,
+  taskVisibilityFilter: () => taskVisibilityFilter,
   debugContext: () => ({
     target: agentTargetEl?.value || "",
     active_tab: activeTab,

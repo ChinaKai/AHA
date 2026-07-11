@@ -4,7 +4,11 @@
     const documentRef = deps.documentRef || windowRef.document || (typeof document !== "undefined" ? document : null);
     const escapeHtml = deps.escapeHtml || (value => String(value ?? ""));
     const taskDisplayStatus = deps.taskDisplayStatus || (task => String(task?.display_status || task?.outcome_status || task?.current_status || task?.status || "pending").toLowerCase());
+    const memoPageLimit = 80;
     let memos = [];
+    let memoTotal = 0;
+    let memoHasMore = false;
+    let memoNextOffset = 0;
     let selectedDate = isoDate(new Date());
     let selectedMemoId = "";
     let selectedMemoRunId = "";
@@ -717,12 +721,31 @@
       return Boolean(elements.taskMemoDialogEl?.open || elements.taskMemoDialogEl?.hasAttribute?.("open"));
     }
 
-    async function loadMemos() {
+    function mergeMemoPage(items, append) {
+      if (!append) return items;
+      const merged = memos.slice();
+      const indexById = new Map(merged.map((memo, index) => [String(memo?.id || ""), index]));
+      for (const memo of items) {
+        const id = String(memo?.id || "");
+        if (!id) continue;
+        if (indexById.has(id)) merged[indexById.get(id)] = memo;
+        else {
+          indexById.set(id, merged.length);
+          merged.push(memo);
+        }
+      }
+      return merged;
+    }
+
+    async function loadMemos(options = {}) {
       if (!currentRunId()) {
         renderMemoHomeWithoutRun();
         return [];
       }
-      const payload = await deps.fetchJson(deps.apiUrl("/api/task-memos"), {}, "Failed to load task memos");
+      const append = Boolean(options.append);
+      const params = { limit: String(memoPageLimit), offset: append ? String(memoNextOffset || memos.length) : "0" };
+      if (selectedMemoId) params.include_id = selectedMemoId;
+      const payload = await deps.fetchJson(deps.apiUrl("/api/task-memos", params), {}, "Failed to load task memos");
       const runId = currentRunId();
       if (selectedMemoRunId !== runId) {
         selectedMemoRunId = runId;
@@ -736,7 +759,10 @@
         taskPickerTasks = [];
         taskPickerRequestPromise = null;
       }
-      memos = Array.isArray(payload?.memos) ? payload.memos : [];
+      memos = mergeMemoPage(Array.isArray(payload?.memos) ? payload.memos : [], append);
+      memoTotal = Number(payload?.total || memos.length);
+      memoHasMore = Boolean(payload?.has_more);
+      memoNextOffset = Number(payload?.offset || 0) + Number(payload?.returned || payload?.memos?.length || 0);
       if (!selectedMemoId && editorMode === "empty") {
         const persistedMemoId = await preferredSelectedMemoId();
         if (persistedMemoId && memos.some(memo => memo.id === persistedMemoId)) {
@@ -752,6 +778,10 @@
       }
       render();
       return memos;
+    }
+
+    async function loadMoreMemos() {
+      return await loadMemos({ append: true });
     }
 
     async function refreshIfOpen() {
@@ -1004,6 +1034,7 @@
           return;
         }
         renderedSections.forEach(section => elements.taskMemoListEl.appendChild(section));
+        renderMemoLoadMore();
         return;
       }
       if (!items.length) {
@@ -1011,6 +1042,18 @@
         return;
       }
       items.forEach(memo => elements.taskMemoListEl.appendChild(memoButton(memo, { showDate })));
+      renderMemoLoadMore();
+    }
+
+    function renderMemoLoadMore() {
+      if (!memoHasMore || !elements.taskMemoListEl || !documentRef) return;
+      const button = documentRef.createElement("button");
+      button.type = "button";
+      button.className = "button-ghost task-memo-load-more";
+      button.dataset.memoLoadMore = "1";
+      button.textContent = t("memo.load_more", "Load more");
+      button.title = `${memos.length}/${memoTotal || memos.length}`;
+      elements.taskMemoListEl.appendChild(button);
     }
 
     function fillEditor(values = {}) {
@@ -1597,6 +1640,16 @@
         render();
       });
       const selectFromClick = event => {
+        const moreButton = event.target instanceof Element ? event.target.closest("[data-memo-load-more]") : null;
+        if (moreButton) {
+          event.preventDefault();
+          moreButton.disabled = true;
+          Promise.resolve(loadMoreMemos()).catch(err => {
+            moreButton.disabled = false;
+            reportError(err);
+          });
+          return;
+        }
         const button = event.target instanceof Element ? event.target.closest("[data-memo-id]") : null;
         if (!button) return;
         selectedMemoId = button.dataset.memoId || "";

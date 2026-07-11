@@ -726,6 +726,29 @@ def list_entry_summaries(
     return entries
 
 
+def iter_entry_summaries(
+    root: Path,
+    *,
+    config: dict | None,
+    scope: str,
+    kind: str,
+    project_key_value: str | None = None,
+):
+    """Yield tracked entry summaries without reading markdown bodies."""
+    kb_root = knowledge_root(root, config)
+    try:
+        target_dir = entry_dir(kb_root, scope, kind, project_key_value)
+    except ValueError:
+        return
+    if not target_dir.is_dir():
+        return
+    for path in _iter_entry_markdown(target_dir):
+        try:
+            yield read_entry_summary(path)
+        except (OSError, ValueError):
+            continue
+
+
 def iter_all_entries(root: Path, config: dict | None = None) -> list[dict]:
     """Return every tracked entry across all scopes and valid kinds."""
     kb_root = knowledge_root(root, config)
@@ -747,28 +770,29 @@ def iter_all_entries(root: Path, config: dict | None = None) -> list[dict]:
     return results
 
 
-def iter_all_entry_summaries(root: Path, config: dict | None = None) -> list[dict]:
-    """Return every tracked entry summary without reading markdown bodies."""
+def iter_all_entry_summary_records(root: Path, config: dict | None = None):
+    """Yield every tracked entry summary without reading markdown bodies."""
     kb_root = knowledge_root(root, config)
-    results: list[dict] = []
     for kind in entry_kinds_for_scope("general"):
-        results.extend(list_entry_summaries(root, config=config, scope="general", kind=kind))
+        yield from iter_entry_summaries(root, config=config, scope="general", kind=kind)
     for kind in entry_kinds_for_scope("personal"):
-        results.extend(list_entry_summaries(root, config=config, scope="personal", kind=kind))
+        yield from iter_entry_summaries(root, config=config, scope="personal", kind=kind)
     projects_root = kb_root / PROJECTS_DIR
     if projects_root.is_dir():
         for proj in sorted(p for p in projects_root.iterdir() if p.is_dir()):
             for kind in entry_kinds_for_scope("project"):
-                results.extend(
-                    list_entry_summaries(
-                        root,
-                        config=config,
-                        scope="project",
-                        kind=kind,
-                        project_key_value=proj.name,
-                    )
+                yield from iter_entry_summaries(
+                    root,
+                    config=config,
+                    scope="project",
+                    kind=kind,
+                    project_key_value=proj.name,
                 )
-    return results
+
+
+def iter_all_entry_summaries(root: Path, config: dict | None = None) -> list[dict]:
+    """Return every tracked entry summary without reading markdown bodies."""
+    return list(iter_all_entry_summary_records(root, config))
 
 
 def find_entry(root: Path, config: dict | None, identifier: str) -> dict | None:

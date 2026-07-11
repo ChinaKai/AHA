@@ -741,7 +741,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -1523,7 +1523,7 @@
       if (!state.entries.length) return state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
       const tree = groupEntries(state.entries);
       const total = Math.max(Number(state.entriesTotal || 0), state.entries.length);
-      const hasMore = state.entries.length < total;
+      const hasMore = Boolean(state.entriesHasMore) || state.entries.length < total;
       const showingText = hasMore
         ? formatText("knowledge.entries_showing_total", { count: state.entries.length, total }, `Showing ${state.entries.length} of ${total} entries`)
         : formatText("knowledge.entries_showing", { count: state.entries.length }, "Showing " + state.entries.length + " entries");
@@ -1786,7 +1786,9 @@
     async function loadEntries(options = {}) {
       const append = Boolean(options.append);
       const q = new URLSearchParams();
-      if ($("#f-search").value.trim()) q.set("q", $("#f-search").value.trim());
+      const searchText = $("#f-search").value.trim();
+      if (searchText) q.set("q", searchText);
+      else q.set("fast", "1");
       q.set("limit", String(ENTRIES_PAGE_LIMIT));
       if (append) q.set("offset", String(state.entries.length));
       const data = await api("/api/kb/entries?" + q.toString());
@@ -1795,6 +1797,7 @@
       state.entriesTotal = Number(data.count || state.entries.length);
       state.entriesOffset = Number(data.offset || 0);
       state.entriesLimit = Number(data.limit || ENTRIES_PAGE_LIMIT);
+      state.entriesHasMore = Boolean(data.has_more);
       if (!append) {
         state.entryCapture = data.capture_notes || [];
         state.activeEntry = null;

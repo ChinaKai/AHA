@@ -1287,12 +1287,24 @@ def status_snapshot(root: Path, run_id: str) -> dict:
     return _status_snapshot(root, run_id, ensure_session_func=ensure_session)
 
 
-def status_snapshot_projection(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
+def status_snapshot_projection(
+    root: Path,
+    run_id: str,
+    *,
+    lite: bool = False,
+    selected_task_id: str | None = None,
+    task_limit: int | None = None,
+    task_offset: int = 0,
+    task_filter: str | None = None,
+) -> dict:
     return _status_snapshot_projection(
         root,
         run_id,
         lite=lite,
         selected_task_id=selected_task_id,
+        task_limit=task_limit,
+        task_offset=task_offset,
+        task_filter=task_filter,
         ensure_session_func=ensure_session,
         event_stream_position_func=event_stream_position,
     )

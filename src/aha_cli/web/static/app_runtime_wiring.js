@@ -514,6 +514,8 @@ const statusController = window.AHAStatusController.createStatusController({
   runtimeOptions,
   selectedTaskNeedsAgentDetails,
   statusStore,
+  taskPageLimit,
+  taskVisibilityFilter: () => taskVisibilityFilter,
   windowRef: window
 });
 const runActions = window.AHARunActions.createRunActions({
@@ -772,6 +774,8 @@ taskController = window.AHATaskController.createTaskController({
   defaultTaskId,
   documentRef: document,
   dispatchAction: appActions.dispatch,
+  loadMoreTasks: () => loadStatus({ appendTasks: true, refreshRuntime: false }),
+  reloadTaskPage: () => loadStatus({ refreshRuntime: false }),
   closeTaskCreateDialog: () => uiShell.closeTaskCreateDialog(),
   closeTaskMemoPage: () => taskMemoController.closeDialog?.(),
   normalizeTaskVisibilityFilter,
@@ -813,6 +817,13 @@ taskController = window.AHATaskController.createTaskController({
   taskTimingLabel,
   taskVisibilityFilter: () => taskVisibilityFilter,
   taskVisibilityFilterHtml,
+  taskCounts: () => statusData?.task_counts || {},
+  taskPageInfo: () => ({
+    has_more: Boolean(statusData?.tasks_has_more),
+    returned: Number(statusData?.tasks_returned || (statusData?.tasks || []).length),
+    total: Number(statusData?.tasks_matching_total || statusData?.tasks_total || 0),
+    next_offset: Number(statusData?.tasks_next_offset || 0)
+  }),
   taskWorkflowSummary,
   pathName,
   visibleTasksForFilter: taskListVisibleTasks,

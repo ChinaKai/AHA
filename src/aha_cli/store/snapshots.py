@@ -116,6 +116,9 @@ def status_snapshot_projection(
     *,
     lite: bool = False,
     selected_task_id: str | None = None,
+    task_limit: int | None = None,
+    task_offset: int = 0,
+    task_filter: str | None = None,
     ensure_session_func: Callable[..., dict] = default_ensure_session,
     event_stream_position_func: Callable[[Path, str], int] = default_event_stream_position,
 ) -> dict:
@@ -128,23 +131,51 @@ def status_snapshot_projection(
     plan = require_plan(root, run_id)
     cfg = load_config(root)
     selected = str(selected_task_id or "").strip()
+    normalized_filter = _normalize_task_projection_filter(task_filter)
+    offset = max(0, int(task_offset or 0))
+    limited = task_limit is not None
+    limit = max(1, int(task_limit or 1)) if limited else None
     tasks: list[dict] = []
+    selected_task: dict | None = None
+    matched_seen = 0
+    page_seen = 0
+    total_count = 0
+    matching_count = 0
+    counts = {"active": 0, "closed": 0, "hidden": 0, "all": 0}
     for source_task in plan["tasks"]:
         if source_task.get("deleted_at"):
             continue
-        agents = source_task.get("agents") or []
-        include_agents = bool(selected and str(source_task.get("id") or "") == selected)
-        task = _task_status_item(
+        total_count += 1
+        visibility = _task_projection_visibility(source_task)
+        counts[visibility] = counts.get(visibility, 0) + 1
+        counts["all"] += 1
+        task_id = str(source_task.get("id") or "")
+        matches_filter = _task_projection_matches_filter(source_task, normalized_filter)
+        if matches_filter:
+            matching_count += 1
+        include_selected = bool(selected and task_id == selected)
+        include_page = matches_filter and (not limited or (matched_seen >= offset and page_seen < (limit or 0)))
+        if matches_filter:
+            matched_seen += 1
+        if not include_page and not include_selected:
+            continue
+        task = _project_task_status_item(
             root,
             run_id,
             plan,
             cfg,
             source_task,
-            include_agents=include_agents,
+            include_agents=include_selected,
             ensure_session_func=ensure_session_func,
         )
-        task["agent_count"] = len(agents)
+        if include_selected and not include_page:
+            selected_task = task
+            continue
         tasks.append(task)
+        if include_page:
+            page_seen += 1
+    if selected_task and all(task.get("id") != selected_task.get("id") for task in tasks):
+        tasks.insert(0, selected_task)
     snapshot = {
         "run_id": run_id,
         "goal": plan["goal"],
@@ -155,9 +186,61 @@ def status_snapshot_projection(
         "main_agent": plan.get("main_agent"),
         "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
         "tasks": tasks,
+        "task_counts": counts,
+        "tasks_total": total_count,
+        "tasks_matching_total": matching_count,
+        "tasks_offset": offset if limited else 0,
+        "tasks_limit": limit or 0,
+        "tasks_returned": len(tasks),
+        "tasks_next_offset": min(matching_count, offset + page_seen) if limited else matching_count,
+        "tasks_has_more": bool(limited and offset + page_seen < matching_count),
+        "tasks_filter": normalized_filter,
     }
     snapshot["snapshot_event_id"] = snapshot_event_id
     return snapshot
+
+
+def _project_task_status_item(
+    root: Path,
+    run_id: str,
+    plan: dict,
+    cfg: dict,
+    source_task: dict,
+    *,
+    include_agents: bool,
+    ensure_session_func: Callable[..., dict],
+) -> dict:
+    agents = source_task.get("agents") or []
+    task = _task_status_item(
+        root,
+        run_id,
+        plan,
+        cfg,
+        source_task,
+        include_agents=include_agents,
+        ensure_session_func=ensure_session_func,
+    )
+    task["agent_count"] = len(agents)
+    return task
+
+
+def _normalize_task_projection_filter(value: str | None) -> str:
+    text = str(value or "all").strip().lower()
+    return text if text in {"active", "closed", "hidden", "all"} else "all"
+
+
+def _task_projection_visibility(task: dict) -> str:
+    if task.get("hidden"):
+        return "hidden"
+    if str(task.get("status") or "pending").lower() == "completed":
+        return "closed"
+    return "active"
+
+
+def _task_projection_matches_filter(task: dict, task_filter: str) -> bool:
+    if task_filter == "all":
+        return True
+    return _task_projection_visibility(task) == task_filter
 
 
 def task_lookup(root: Path, run_id: str, task_id: str) -> tuple[dict, dict, Path]:

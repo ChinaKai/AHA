@@ -53,7 +53,7 @@
       if (!elements.taskVisibilityFilterEl) return;
       const normalized = filter();
       deps.setTaskVisibilityFilter?.(normalized);
-      elements.taskVisibilityFilterEl.innerHTML = taskVisibilityFilterHtml(allTasks(), normalized);
+      elements.taskVisibilityFilterEl.innerHTML = taskVisibilityFilterHtml(allTasks(), normalized, deps.taskCounts?.());
     }
 
     function taskSummaries(task) {
@@ -230,6 +230,15 @@
         });
         tasksEl.appendChild(item);
       }
+      const page = deps.taskPageInfo?.() || {};
+      if (page.has_more) {
+        const more = document.createElement("button");
+        more.className = "button-ghost task-load-more";
+        more.type = "button";
+        more.dataset.taskLoadMore = "1";
+        more.textContent = t("task.load_more", "Load more");
+        tasksEl.appendChild(more);
+      }
     }
 
     function renderHeaderWorkspace(task) {
@@ -349,6 +358,17 @@
 
       elements.tasksEl?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
+        const moreButton = target?.closest("[data-task-load-more]");
+        if (moreButton) {
+          event.preventDefault();
+          event.stopPropagation();
+          moreButton.disabled = true;
+          Promise.resolve(deps.loadMoreTasks?.()).catch(err => {
+            moreButton.disabled = false;
+            deps.consoleRef?.warn?.("Failed to load more tasks", err);
+          });
+          return;
+        }
         const button = target?.closest("[data-task-settings-trigger]");
         if (!button) return;
         event.preventDefault();
@@ -383,12 +403,16 @@
         const nextFilter = normalizeTaskVisibilityFilter(button.getAttribute("data-task-visibility-filter"));
         if (nextFilter === filter()) return;
         deps.setTaskVisibilityFilter?.(nextFilter);
-        const tasks = visibleTasks();
-        if (!tasks.some(task => task.id === deps.selectedTaskId?.())) {
-          deps.setSelectedTaskId?.(deps.defaultTaskId?.(tasks));
+        if (deps.reloadTaskPage) {
+          Promise.resolve(deps.reloadTaskPage()).catch(err => deps.consoleRef?.warn?.("Failed to reload tasks", err));
+        } else {
+          const tasks = visibleTasks();
+          if (!tasks.some(task => task.id === deps.selectedTaskId?.())) {
+            deps.setSelectedTaskId?.(deps.defaultTaskId?.(tasks));
+          }
+          renderAfterFilterChange();
         }
         deps.writeStoredSelectedTaskId?.(deps.selectedTaskId?.());
-        renderAfterFilterChange();
       });
 
       documentRef.addEventListener("pointerdown", event => {

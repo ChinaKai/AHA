@@ -92,7 +92,25 @@ def _parse_ws_cursor(query: dict[str, list[str]], max_event_id: int) -> tuple[in
 def _parse_ws_status_options(query: dict[str, list[str]]) -> dict:
     lite = str((query.get("lite") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
     selected_task_id = str((query.get("selected_task_id") or query.get("task_id") or [""])[0]).strip() or None
-    return {"lite": lite, "selected_task_id": selected_task_id}
+    task_limit = None
+    task_offset = 0
+    if lite:
+        raw_limit = str((query.get("task_limit") or query.get("limit") or [""])[0] or "").strip()
+        raw_offset = str((query.get("task_offset") or query.get("offset") or ["0"])[0] or "0").strip()
+        try:
+            task_limit = max(1, min(int(raw_limit), 500)) if raw_limit else None
+            task_offset = max(0, int(raw_offset or "0"))
+        except ValueError:
+            task_limit = None
+            task_offset = 0
+    task_filter = str((query.get("task_filter") or query.get("filter") or ["all"])[0] or "all").strip().lower()
+    return {
+        "lite": lite,
+        "selected_task_id": selected_task_id,
+        "task_limit": task_limit,
+        "task_offset": task_offset,
+        "task_filter": task_filter,
+    }
 
 
 async def ws_handshake_from_headers(
@@ -151,6 +169,9 @@ async def _send_status(root: Path, run_id: str, writer: asyncio.StreamWriter, st
                     run_id,
                     lite=bool(options.get("lite")),
                     selected_task_id=options.get("selected_task_id"),
+                    task_limit=options.get("task_limit"),
+                    task_offset=int(options.get("task_offset") or 0),
+                    task_filter=options.get("task_filter"),
                 ),
             },
             ensure_ascii=False,

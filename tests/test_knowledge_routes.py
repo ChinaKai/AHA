@@ -566,6 +566,26 @@ def test_entries_support_limit_offset_without_body_scan(tmp_path: Path, monkeypa
     assert [entry["title"] for entry in page["entries"]] == ["Beta", "Gamma"]
 
 
+def test_entries_fast_page_short_circuits_full_summary_collection(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    for title in ("Alpha", "Beta", "Gamma"):
+        write_entry(home, config=cfg, scope="general", kind="wiki", title=title, body=f"body {title}")
+
+    import aha_cli.web.knowledge_routes as kr
+
+    def fail_full_summary(*args, **kwargs):
+        raise AssertionError("fast page should not collect every entry summary")
+
+    monkeypatch.setattr(kr, "iter_all_entry_summaries", fail_full_summary)
+    page = _get(home, "/api/kb/entries", {"limit": ["2"], "fast": ["1"]})
+
+    assert page["returned"] == 2
+    assert page["has_more"] is True
+    assert page["count_exact"] is False
+    assert [entry["title"] for entry in page["entries"]] == ["Alpha", "Beta"]
+
+
 def test_entries_exclude_navigation_but_project_nav_api_lists_entry_points_and_can_read_children(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)

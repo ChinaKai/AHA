@@ -134,6 +134,10 @@
       if (runId) url.searchParams.set("run_id", runId);
       if (cursor) url.searchParams.set("last_event_id", cursor);
       url.searchParams.set("lite", "1");
+      const taskLimit = Number(options.taskPageLimit || 0);
+      if (taskLimit > 0) url.searchParams.set("task_limit", String(taskLimit));
+      const taskFilter = options.taskVisibilityFilter?.();
+      if (taskFilter) url.searchParams.set("task_filter", taskFilter);
       const taskId = selectedTaskId();
       if (taskId) url.searchParams.set("selected_task_id", taskId);
       return url.toString();

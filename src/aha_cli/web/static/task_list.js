@@ -110,9 +110,11 @@
     return counts;
   }
 
-  function taskVisibilityFilterViewItems(tasks = [], selectedFilter = "active") {
+  function taskVisibilityFilterViewItems(tasks = [], selectedFilter = "active", countsOverride = null) {
     const selected = normalizeTaskVisibilityFilter(selectedFilter);
-    const counts = taskVisibilityFilterCounts(tasks);
+    const counts = countsOverride && typeof countsOverride === "object"
+      ? { ...taskVisibilityFilterCounts(tasks), ...countsOverride }
+      : taskVisibilityFilterCounts(tasks);
     return taskVisibilityFilterOptions.map(filter => ({
       filter,
       selected: filter === selected,
@@ -121,8 +123,8 @@
     }));
   }
 
-  function taskVisibilityFilterHtml(tasks = [], selectedFilter = "active") {
-    return taskVisibilityFilterViewItems(tasks, selectedFilter).map(item => {
+  function taskVisibilityFilterHtml(tasks = [], selectedFilter = "active", countsOverride = null) {
+    return taskVisibilityFilterViewItems(tasks, selectedFilter, countsOverride).map(item => {
       return `<button class="task-list-filter${item.selected ? " active" : ""}" type="button" data-task-visibility-filter="${escapeHtml(item.filter)}" aria-pressed="${item.selected ? "true" : "false"}">${escapeHtml(item.label)}</button>`;
     }).join("");
   }

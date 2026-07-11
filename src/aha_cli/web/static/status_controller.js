@@ -129,6 +129,25 @@
       deps.statusStore?.applyStatusData(options);
     }
 
+    function mergeTaskPage(payload = {}, options = {}) {
+      if (!options.appendTasks) return payload;
+      const previous = statusData();
+      if (!previous || String(previous.run_id || "") !== String(payload.run_id || "")) return payload;
+      const mergedTasks = Array.isArray(previous.tasks) ? previous.tasks.slice() : [];
+      const indexById = new Map(mergedTasks.map((task, index) => [String(task?.id || ""), index]));
+      for (const task of Array.isArray(payload.tasks) ? payload.tasks : []) {
+        const id = String(task?.id || "");
+        if (!id) continue;
+        if (indexById.has(id)) {
+          mergedTasks[indexById.get(id)] = task;
+        } else {
+          indexById.set(id, mergedTasks.length);
+          mergedTasks.push(task);
+        }
+      }
+      return { ...payload, tasks: mergedTasks, tasks_returned: mergedTasks.length };
+    }
+
     async function loadStatus(options = {}) {
       const runId = currentRunId();
       if (!runId) {
@@ -141,10 +160,17 @@
         if (remoteSelectedTaskId) state.setSelectedTaskId?.(remoteSelectedTaskId);
       }
       const params = { lite: "1" };
+      const taskLimit = Number(deps.taskPageLimit || 0);
+      if (taskLimit > 0) params.task_limit = String(taskLimit);
+      params.task_offset = options.appendTasks
+        ? String(statusData()?.tasks_next_offset || statusData()?.tasks?.length || 0)
+        : "0";
+      const taskFilter = deps.taskVisibilityFilter?.();
+      if (taskFilter) params.task_filter = taskFilter;
       const requestedSelectedTaskId = selectedTaskId();
       if (requestedSelectedTaskId) params.selected_task_id = requestedSelectedTaskId;
       const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/tasks", params), {}, "Failed to load tasks");
-      state.setStatusData?.(payload);
+      state.setStatusData?.(mergeTaskPage(payload, options));
       deps.statusStore?.applyCachedAgentsRuntime();
       applyStatusData(options);
       const needsAgentDetails = deps.selectedTaskNeedsAgentDetails?.();

@@ -42,6 +42,7 @@ from aha_cli.store.knowledge import (
     find_entry,
     init_knowledge_base,
     iter_all_entries,
+    iter_all_entry_summary_records,
     iter_all_entry_summaries,
     knowledge_status,
     list_pending,
@@ -463,6 +464,58 @@ def _parse_entry_time(value: object) -> dt.datetime | None:
     return parsed.astimezone(dt.timezone.utc)
 
 
+def _query_bool_param(query: dict[str, list[str]], key: str) -> bool:
+    return str(query.get(key, [""])[0] or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _entry_list_summary_matches(entry: dict, *, scope: str | None, project: str | None, want_type: str | None) -> bool:
+    meta = entry.get("meta", {})
+    if meta.get("type") == "navigation":
+        return False
+    if scope and meta.get("scope") != scope:
+        return False
+    if project and project.lower() not in str(meta.get("project_key") or "").lower():
+        return False
+    if want_type and meta.get("type") != want_type:
+        return False
+    return True
+
+
+def _fast_entry_summary_page(
+    root: Path,
+    cfg: dict,
+    *,
+    scope: str | None,
+    project: str | None,
+    want_type: str | None,
+    offset: int,
+    limit: int,
+) -> dict:
+    entries: list[dict] = []
+    skipped = 0
+    has_more = False
+    for entry in iter_all_entry_summary_records(root, cfg):
+        if not _entry_list_summary_matches(entry, scope=scope, project=project, want_type=want_type):
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        if len(entries) >= limit:
+            has_more = True
+            break
+        entries.append(_entry_summary(entry))
+    count = offset + len(entries) + (1 if has_more else 0)
+    return {
+        "entries": entries,
+        "count": count,
+        "returned": len(entries),
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "count_exact": not has_more,
+    }
+
+
 def _entry_updated_value(entry: dict) -> tuple[dt.datetime, str] | None:
     meta = entry.get("meta", {})
     for key in ("updated_at", "created_at"):
@@ -783,17 +836,21 @@ def knowledge_route_response(
             return json_response({"error": str(exc)}, "400 Bad Request")
         if limit < 0:
             return json_response({"error": "limit must be non-negative"}, "400 Bad Request")
+        if _query_bool_param(query, "fast") and limit and not search:
+            payload = _fast_entry_summary_page(
+                root,
+                cfg,
+                scope=scope,
+                project=project,
+                want_type=want_type,
+                offset=offset,
+                limit=limit,
+            )
+            return _ok(method, payload)
         all_entries = iter_all_entries(root, cfg) if search else iter_all_entry_summaries(root, cfg)
         entries = []
         for entry in all_entries:
-            meta = entry.get("meta", {})
-            if meta.get("type") == "navigation":
-                continue
-            if scope and meta.get("scope") != scope:
-                continue
-            if project and project.lower() not in str(meta.get("project_key") or "").lower():
-                continue
-            if want_type and meta.get("type") != want_type:
+            if not _entry_list_summary_matches(entry, scope=scope, project=project, want_type=want_type):
                 continue
             if search and not _entry_matches_query(entry, search):
                 continue
@@ -817,6 +874,8 @@ def knowledge_route_response(
             "returned": len(page_entries),
             "offset": offset,
             "limit": limit,
+            "has_more": bool(offset + len(page_entries) < total_entries),
+            "count_exact": True,
         }
         if search:
             pending = list_pending(root, cfg)

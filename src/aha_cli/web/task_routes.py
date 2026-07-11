@@ -780,6 +780,14 @@ def task_memo_query_limit(query: dict[str, list[str]]) -> int:
         return 50
 
 
+def task_memo_query_offset(query: dict[str, list[str]]) -> int:
+    raw = task_memo_query_value(query, "offset")
+    try:
+        return max(0, int(raw or "0"))
+    except ValueError:
+        return 0
+
+
 def task_memo_matches_query(memo: dict, query_text: str) -> bool:
     if not query_text:
         return True
@@ -797,6 +805,7 @@ def filter_task_memos_for_query(root: Path, run_id: str, query: dict[str, list[s
     linked = task_memo_query_value(query, "linked").lower()
     include_id = task_memo_query_value(query, "include_id")
     limit = task_memo_query_limit(query)
+    offset = task_memo_query_offset(query)
 
     def matches(memo: dict) -> bool:
         if include_id and memo.get("id") == include_id:
@@ -816,12 +825,12 @@ def filter_task_memos_for_query(root: Path, run_id: str, query: dict[str, list[s
         return task_memo_matches_query(memo, query_text)
 
     if not query_text and not status and not linked and not include_id:
-        return enrich_task_memos(root, run_id, memos[:limit]), len(memos)
+        return enrich_task_memos(root, run_id, memos[offset : offset + limit]), len(memos)
     if query_text:
         filtered = [memo for memo in enrich_task_memos(root, run_id, memos) if matches(memo)]
-        return filtered[:limit], len(filtered)
+        return filtered[offset : offset + limit], len(filtered)
     filtered = [memo for memo in memos if matches(memo)]
-    return enrich_task_memos(root, run_id, filtered[:limit]), len(filtered)
+    return enrich_task_memos(root, run_id, filtered[offset : offset + limit]), len(filtered)
 
 
 def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, query: dict[str, list[str]], body: bytes) -> dict:
@@ -829,7 +838,17 @@ def handle_task_memos_route(root: Path, run_id: str, method: str, path: str, que
         if path == "/api/task-memos":
             if method in {"GET", "HEAD"}:
                 memos, total = filter_task_memos_for_query(root, run_id, query)
-                return route_result({"ok": True, "memos": memos, "total": total})
+                offset = task_memo_query_offset(query)
+                limit = task_memo_query_limit(query)
+                return route_result({
+                    "ok": True,
+                    "memos": memos,
+                    "total": total,
+                    "returned": len(memos),
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + len(memos) < total,
+                })
             if method == "POST":
                 return route_result({"ok": True, "memo": enrich_task_memo(root, run_id, create_task_memo(root, run_id, parse_json_body(body)))})
         if path.startswith("/api/task-memos/"):

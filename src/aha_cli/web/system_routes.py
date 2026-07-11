@@ -95,6 +95,24 @@ def selected_task_id(query: dict[str, list[str]]) -> str | None:
     return str(query.get("selected_task_id", [""])[0] or query.get("task_id", [""])[0] or "").strip() or None
 
 
+def task_page_params(query: dict[str, list[str]]) -> dict:
+    if not query_bool(query, "lite"):
+        return {}
+    limit_text = str(query.get("task_limit", query.get("limit", [""]))[0] or "").strip()
+    offset_text = str(query.get("task_offset", query.get("offset", ["0"]))[0] or "0").strip()
+    task_filter = str(query.get("task_filter", query.get("filter", ["all"]))[0] or "all").strip().lower()
+    try:
+        task_limit = max(1, min(int(limit_text), 500)) if limit_text else None
+        task_offset = max(0, int(offset_text or "0"))
+    except ValueError as exc:
+        raise ValueError("task_limit and task_offset must be valid integers") from exc
+    return {
+        "task_limit": task_limit,
+        "task_offset": task_offset,
+        "task_filter": task_filter,
+    }
+
+
 def service_health_payload(
     root: Path,
     default_run_id: str,
@@ -461,7 +479,17 @@ def system_route_response(
         )
     if method in {"GET", "HEAD"} and path == "/api/status":
         run_id = require_api_run_id(root, default_run_id, query)
-        payload = web_status_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))
+        try:
+            page_params = task_page_params(query)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        payload = web_status_snapshot(
+            root,
+            run_id,
+            lite=query_bool(query, "lite"),
+            selected_task_id=selected_task_id(query),
+            **page_params,
+        )
         return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/task-options":
         run_id = require_api_run_id(root, default_run_id, query)
@@ -480,7 +508,11 @@ def system_route_response(
         return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/tasks":
         run_id = require_api_run_id(root, default_run_id, query)
-        payload = web_tasks_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query))
+        try:
+            page_params = task_page_params(query)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        payload = web_tasks_snapshot(root, run_id, lite=query_bool(query, "lite"), selected_task_id=selected_task_id(query), **page_params)
         return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/ui-state":
         selected_run_id = str(query.get("run_id", [""])[0] or "").strip()

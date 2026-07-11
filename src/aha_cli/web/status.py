@@ -357,8 +357,19 @@ def web_tasks_snapshot(
     lite: bool = False,
     selected_task_id: str | None = None,
     include_outcomes: bool = False,
+    task_limit: int | None = None,
+    task_offset: int = 0,
+    task_filter: str | None = None,
 ) -> dict:
-    snapshot = status_snapshot_projection(root, run_id, lite=lite, selected_task_id=selected_task_id)
+    snapshot = status_snapshot_projection(
+        root,
+        run_id,
+        lite=lite,
+        selected_task_id=selected_task_id,
+        task_limit=task_limit,
+        task_offset=task_offset,
+        task_filter=task_filter,
+    )
     snapshot["aha_version"] = aha_version(root)
     task_ids = {str(task.get("id") or "") for task in snapshot.get("tasks", [])}
     outcomes = task_outcome_snapshots(root, run_id, task_ids) if include_outcomes else {}
@@ -571,8 +582,26 @@ def recover_stale_running_agents(
     }
 
 
-def web_status_snapshot(root: Path, run_id: str, *, lite: bool = False, selected_task_id: str | None = None) -> dict:
-    snapshot = web_tasks_snapshot(root, run_id, lite=lite, selected_task_id=selected_task_id, include_outcomes=True)
+def web_status_snapshot(
+    root: Path,
+    run_id: str,
+    *,
+    lite: bool = False,
+    selected_task_id: str | None = None,
+    task_limit: int | None = None,
+    task_offset: int = 0,
+    task_filter: str | None = None,
+) -> dict:
+    snapshot = web_tasks_snapshot(
+        root,
+        run_id,
+        lite=lite,
+        selected_task_id=selected_task_id,
+        include_outcomes=True,
+        task_limit=task_limit,
+        task_offset=task_offset,
+        task_filter=task_filter,
+    )
     if lite:
         return snapshot
     return attach_backend_runtime(root, run_id, snapshot, recover_stale=False)

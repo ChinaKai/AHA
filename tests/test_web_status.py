@@ -12,6 +12,7 @@ from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.store.event_views import conversation_events_page
 from aha_cli.store.filesystem import (
     add_agent,
+    add_task,
     complete_task,
     event_path,
     inbox_path,
@@ -194,6 +195,56 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(tasks["task-001"]["agents"][0]["session_id"], "task-001-main")
         self.assertEqual(tasks["task-002"]["agent_count"], 1)
         self.assertEqual(tasks["task-002"]["agents"], [])
+
+    def test_lite_status_projection_supports_task_window_and_selected_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Windowed projection", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for title in ("Second", "Third", "Fourth", "Fifth"):
+                    add_task(root, run_id, title, backend="codex")
+
+                ensured: list[tuple[str | None, str]] = []
+
+                def fake_ensure_session(
+                    _root: Path,
+                    _run_id: str,
+                    task_id: str | None,
+                    agent_id: str,
+                    _backend: str,
+                    **_kwargs: object,
+                ) -> dict:
+                    ensured.append((task_id, agent_id))
+                    return {
+                        "id": f"{task_id}-{agent_id}",
+                        "backend_session_id": None,
+                        "scope": "task",
+                        "status": "active",
+                        "updated_at": "2026-05-15T00:00:00+00:00",
+                    }
+
+                snapshot = raw_status_snapshot_projection(
+                    root,
+                    run_id,
+                    lite=True,
+                    selected_task_id="task-005",
+                    task_limit=2,
+                    task_offset=1,
+                    task_filter="all",
+                    ensure_session_func=fake_ensure_session,
+                    event_stream_position_func=lambda _root, _run_id: 99,
+                )
+
+        self.assertEqual([task["id"] for task in snapshot["tasks"]], ["task-005", "task-002", "task-003"])
+        self.assertEqual(snapshot["tasks_total"], 5)
+        self.assertEqual(snapshot["tasks_matching_total"], 5)
+        self.assertEqual(snapshot["tasks_next_offset"], 3)
+        self.assertTrue(snapshot["tasks_has_more"])
+        self.assertEqual(snapshot["task_counts"]["all"], 5)
+        self.assertEqual(ensured, [("task-005", "main")])
 
     def test_web_tasks_snapshot_skips_backend_status_and_outcome_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
