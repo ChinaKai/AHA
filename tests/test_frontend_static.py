@@ -69,6 +69,7 @@ class FrontendStaticTests(unittest.TestCase):
         root = static_root()
         runtime = (root / "runtime_config.js").read_text(encoding="utf-8")
         knowledge = (root / "knowledge.html").read_text(encoding="utf-8")
+        bootstrap = (root / "bootstrap_config.js").read_text(encoding="utf-8")
 
         self.assertIn('const preferredReasoningEffort = "xhigh";', runtime)
         self.assertIn("function selectableModelOptionsForBackend", runtime)
@@ -81,6 +82,47 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('configString(option.name) === "xhigh"', knowledge)
         self.assertIn("captureFirstModel(backendName) || configString(cfg.model)", knowledge)
         self.assertIn("values.includes(preferred) ? preferred : configured", knowledge)
+
+        self.assertIn("function selectableBootstrapModelOptions", bootstrap)
+        self.assertIn("const named = models.filter(model => configString(model?.name));", bootstrap)
+        self.assertIn("const codexModel = selectedBackendModel", bootstrap)
+        self.assertIn("const claudeModel = selectedBackendModel", bootstrap)
+
+    def test_bootstrap_model_selectors_prefer_first_named_model(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+const models = {
+  codex: [
+    { name: "", label: "default (hard-coded)" },
+    { name: "gpt-catalog-first", label: "Catalog first" },
+    { name: "gpt-catalog-second", label: "Catalog second" }
+  ],
+  claude: [{ name: "claude-first", label: "Claude first" }]
+};
+const html = config.bootstrapConfigFormHtml({
+  config: { codex: {}, claude: {} },
+  modelOptionsForBackend: backend => models[backend] || []
+});
+if (html.includes("default (hard-coded)")) process.exit(1);
+if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_web_upgrade_button_sits_next_to_restart(self) -> None:
         root = static_root()
@@ -3151,7 +3193,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('<script src="/static/i18n.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=reasoning-effort-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=token-saving-v8"></script>', html)

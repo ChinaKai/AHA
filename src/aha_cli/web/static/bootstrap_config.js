@@ -168,12 +168,35 @@
     return text.startsWith(claudeEnvModelPrefix) ? text.slice(claudeEnvModelPrefix.length).trim() : "";
   }
 
-  function backendModelSelectOptions(backend, current, context = {}) {
+  function selectableBootstrapModelOptions(models) {
+    const named = models.filter(model => configString(model?.name));
+    return named.length ? named : models;
+  }
+
+  function selectedBootstrapModelValue(models, current) {
+    const selected = configString(current);
+    if (models.some(model => configString(model?.name) === selected)) return selected;
+    return configString(models[0]?.name);
+  }
+
+  function backendModelOptions(backend, context = {}) {
     const modelOptionsForBackend = typeof context.modelOptionsForBackend === "function"
       ? context.modelOptionsForBackend
       : () => [];
     const models = modelOptionsForBackend(backend);
-    const selected = configString(current);
+    return Array.isArray(models) ? models : [];
+  }
+
+  function selectedBackendModel(backend, current, context = {}) {
+    return selectedBootstrapModelValue(
+      selectableBootstrapModelOptions(backendModelOptions(backend, context)),
+      current
+    );
+  }
+
+  function backendModelSelectOptions(backend, current, context = {}) {
+    const models = selectableBootstrapModelOptions(backendModelOptions(backend, context));
+    const selected = selectedBootstrapModelValue(models, current);
     return models.map(model => {
       const name = configString(model.name);
       const label = configString(model.label, name || "default");
@@ -215,8 +238,9 @@
   }
 
   function bootstrapFormModelSelectOptions(form, backend, current, context = {}) {
-    const selected = configString(current);
-    return bootstrapFormModelOptions(form, backend, context).map(model => {
+    const models = selectableBootstrapModelOptions(bootstrapFormModelOptions(form, backend, context));
+    const selected = selectedBootstrapModelValue(models, current);
+    return models.map(model => {
       const name = configString(model.name);
       const label = configString(model.label, name || "default");
       return `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
@@ -297,6 +321,8 @@
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
     const codexDetailsOpen = mode === "settings" ? "" : " open";
+    const codexModel = selectedBackendModel("codex", codex.model || envModelValue(codex.env_active), options);
+    const claudeModel = selectedBackendModel("claude", claude.model || envModelValue(claude.env_active), options);
     return `
       <form class="bootstrap-form" data-bootstrap-config-form data-bootstrap-config-mode="${escapeHtml(mode)}">
         <details class="bootstrap-config-section" open>
@@ -340,12 +366,12 @@
             </label>
             <label class="field-label">
               <span>Model</span>
-              <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codex.model || envModelValue(codex.env_active), options)}</select>
+              <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codexModel, options)}</select>
               <div class="field-help">Official Codex model or custom OpenAI-compatible provider.</div>
             </label>
             <label class="field-label">
               <span>Reasoning effort</span>
-              <select data-bootstrap-config-field="codex.reasoning_effort">${backendReasoningEffortSelectOptions("codex", codex.model || envModelValue(codex.env_active), codex.reasoning_effort, options)}</select>
+              <select data-bootstrap-config-field="codex.reasoning_effort">${backendReasoningEffortSelectOptions("codex", codexModel, codex.reasoning_effort, options)}</select>
               <div class="field-help">Default Codex thinking depth for tasks and distill jobs.</div>
             </label>
           </div>
@@ -371,12 +397,12 @@
             </label>
             <label class="field-label">
               <span>Model</span>
-              <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claude.model || envModelValue(claude.env_active), options)}</select>
+              <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claudeModel, options)}</select>
               <div class="field-help">Official Claude model or custom env group model.</div>
             </label>
             <label class="field-label">
               <span>Reasoning effort</span>
-              <select data-bootstrap-config-field="claude.reasoning_effort">${backendReasoningEffortSelectOptions("claude", claude.model || envModelValue(claude.env_active), claude.reasoning_effort, options)}</select>
+              <select data-bootstrap-config-field="claude.reasoning_effort">${backendReasoningEffortSelectOptions("claude", claudeModel, claude.reasoning_effort, options)}</select>
               <div class="field-help">Default Claude effort for tasks and distill jobs.</div>
             </label>
           </div>
