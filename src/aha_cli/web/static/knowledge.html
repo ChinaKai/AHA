@@ -1434,6 +1434,15 @@
         slug = index >= 0 ? path.slice(index + marker.length) : path.split("/").pop() || "";
       }
       const parts = slug.split("/").map((part) => part.trim()).filter(Boolean);
+      const type = String(entry?.type || "").trim();
+      if ((type === "task_worklog" || type === "worklog")
+        && parts.length > 4
+        && parts[0] === "tasks"
+        && /^\d{4}$/.test(parts[1])
+        && /^\d{2}$/.test(parts[2])
+        && /^\d{2}$/.test(parts[3])) {
+        return parts.slice(0, 3);
+      }
       return parts.length > 1 ? parts.slice(0, -1) : [];
     }
 

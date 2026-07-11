@@ -793,6 +793,8 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("function entryTreePathParts(entry)", html)
         self.assertIn("function renderEntryTreeNode(node, depth, indexPath)", html)
         self.assertIn("function renderEntryTree(tree)", html)
+        self.assertIn('type === "task_worklog" || type === "worklog"', html)
+        self.assertIn("return parts.slice(0, 3);", html)
         self.assertIn('parts.push({ key: "project:" + project, label: project });', html)
         self.assertIn("window.toggleEntryGroup", html)
         self.assertIn('onclick="toggleEntryGroup', html)

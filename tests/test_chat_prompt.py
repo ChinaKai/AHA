@@ -12,6 +12,7 @@ from aha_cli.cli import append_message, main
 from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.services import headroom_integration
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
+from aha_cli.services.context_planner import _task_worklog_reference
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -27,7 +28,7 @@ from aha_cli.store.filesystem import (
     update_task_token_saving_config,
     write_json,
 )
-from aha_cli.store.knowledge import write_entry
+from aha_cli.store.knowledge import entry_dir, write_entry
 from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.store.paths import config_path
 
@@ -443,11 +444,14 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Knowledge base entrypoints:", enabled_prompt)
         self.assertIn("agent-pull", enabled_prompt)
         self.assertIn("task_worklog:", enabled_prompt)
-        expected_date_path = f"{run_id[:4]}/{run_id[4:6]}/{run_id[6:8]}"
-        expected_worklog = f"worklog/tasks/{expected_date_path}/{run_id}-task-001.md"
+        expected_month_path = f"{run_id[:4]}/{run_id[4:6]}"
+        expected_date_prefix = run_id[:8]
+        expected_title_slug = "Map-the-relevant-files-concepts-and-terminology-for-the-goal"
+        expected_worklog = f"worklog/tasks/{expected_month_path}/{expected_date_prefix}-{expected_title_slug}.md"
         self.assertIn(expected_worklog, enabled_prompt)
-        self.assertIn(f'"slug":"tasks/{expected_date_path}/{run_id}-task-001"', enabled_prompt)
+        self.assertIn(f'"slug":"tasks/{expected_month_path}/{expected_date_prefix}-{expected_title_slug}"', enabled_prompt)
         self.assertNotIn("worklog/tasks/task-001.md", enabled_prompt)
+        self.assertNotIn(f"worklog/tasks/{run_id[:4]}/{run_id[4:6]}/{run_id[6:8]}/", enabled_prompt)
         self.assertNotIn('"id":"kb_task_worklog_task_001"', enabled_prompt)
         self.assertIn("task_worklog_frontmatter_json:", enabled_prompt)
         self.assertIn('"type":"task_worklog"', enabled_prompt)
@@ -464,6 +468,40 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Manual `/aha kb` feedback is only for candidate-review flows", enabled_prompt)
         self.assertNotIn("Project map", enabled_prompt)
         self.assertNotIn("drivers/net/foo.c", enabled_prompt)
+
+    def test_task_worklog_reference_uses_month_directory_and_title_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            kb_root = Path(tmp) / "knowledge"
+            project_key = "git-abc"
+            run_id = "20260711-180633-ec303e"
+
+            rel, exists = _task_worklog_reference(
+                kb_root,
+                [project_key],
+                run_id,
+                {"id": "task-001", "title": "AHA升级入口优化"},
+            )
+
+            self.assertFalse(exists)
+            self.assertEqual(
+                rel,
+                "projects/git-abc/worklog/tasks/2026/07/20260711-AHA升级入口优化.md",
+            )
+
+            old_slug = "tasks/2026/07/11/20260711-180633-ec303e-task-001"
+            old_path = entry_dir(kb_root, "project", "worklog", project_key) / f"{old_slug}.md"
+            old_path.parent.mkdir(parents=True, exist_ok=True)
+            old_path.write_text("---\n{}\n---\n\nold\n", encoding="utf-8")
+
+            old_rel, old_exists = _task_worklog_reference(
+                kb_root,
+                [project_key],
+                run_id,
+                {"id": "task-001", "title": "AHA升级入口优化"},
+            )
+
+            self.assertTrue(old_exists)
+            self.assertEqual(old_rel, f"projects/git-abc/worklog/{old_slug}.md")
 
     def test_sticky_delta_injects_context_pack_once_when_nav_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

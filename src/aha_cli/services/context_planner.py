@@ -144,29 +144,58 @@ def _navigation_index_reference(kb_root: Path, project_keys: list[str]) -> tuple
     return fallback, False
 
 
-def _safe_worklog_component(value: str, fallback: str) -> str:
-    clean = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-")
+def _safe_worklog_component(value: str, fallback: str, max_length: int = 80) -> str:
+    clean = re.sub(r"[^\w.-]+", "-", str(value or "").strip(), flags=re.UNICODE).strip("-_.")
+    clean = clean[:max(1, int(max_length))].strip("-_.")
     return clean or fallback
 
 
-def _worklog_date_path(run_id: str) -> str:
+def _worklog_date_parts(run_id: str) -> tuple[str, str, str] | None:
     match = re.match(r"^(\d{4})(\d{2})(\d{2})", str(run_id or "").strip())
     if not match:
+        return None
+    return match.groups()
+
+
+def _worklog_month_path(run_id: str) -> str:
+    parts = _worklog_date_parts(run_id)
+    if not parts:
         return "undated"
-    return "/".join(match.groups())
+    year, month, _day = parts
+    return f"{year}/{month}"
 
 
-def _task_worklog_slug(run_id: str, task_id: str) -> str:
+def _worklog_date_prefix(run_id: str) -> str:
+    parts = _worklog_date_parts(run_id)
+    if not parts:
+        return "undated"
+    return "".join(parts)
+
+
+def _task_worklog_slug(run_id: str, task: dict) -> str:
+    task_id = str((task or {}).get("id") or "").strip()
+    title = str((task or {}).get("title") or task_id).strip()
+    title_part = _safe_worklog_component(title, _safe_worklog_component(task_id, "task"))
+    task_part = _safe_worklog_component(task_id, "task")
+    if title_part == "task" and task_part != "task":
+        title_part = task_part
+    return f"tasks/{_worklog_month_path(run_id)}/{_worklog_date_prefix(run_id)}-{title_part}"
+
+
+def _legacy_task_worklog_slug(run_id: str, task_id: str) -> str:
     run_part = _safe_worklog_component(run_id, "run")
     task_part = _safe_worklog_component(task_id, "task")
-    return f"tasks/{_worklog_date_path(run_id)}/{run_part}-{task_part}"
+    parts = _worklog_date_parts(run_id)
+    date_path = "/".join(parts) if parts else "undated"
+    return f"tasks/{date_path}/{run_part}-{task_part}"
 
 
 def _task_worklog_reference(kb_root: Path, project_keys: list[str], run_id: str, task: dict) -> tuple[str, bool]:
     task_id = str((task or {}).get("id") or "").strip()
     if not task_id:
         return "", False
-    canonical_slug = _task_worklog_slug(run_id, task_id)
+    canonical_slug = _task_worklog_slug(run_id, task)
+    legacy_slug = _legacy_task_worklog_slug(run_id, task_id)
     legacy_name = f"{_safe_worklog_component(task_id, 'task')}.md"
     fallback = ""
     for key in project_keys:
@@ -177,6 +206,9 @@ def _task_worklog_reference(kb_root: Path, project_keys: list[str], run_id: str,
             fallback = rel_text
         if (kb_root / rel).exists():
             return rel_text, True
+        old_dated_rel = base / f"{legacy_slug}.md"
+        if (kb_root / old_dated_rel).exists():
+            return old_dated_rel.as_posix(), True
         legacy_rel = base / "tasks" / legacy_name
         if (kb_root / legacy_rel).exists():
             return legacy_rel.as_posix(), True
@@ -188,7 +220,7 @@ def _task_worklog_frontmatter(project_key_value: str, run_id: str, task: dict) -
     if not task_id:
         return ""
     title = str((task or {}).get("title") or task_id).strip()
-    slug = _task_worklog_slug(run_id, task_id)
+    slug = _task_worklog_slug(run_id, task)
     identity = hashlib.sha1(f"{run_id}/{task_id}".encode("utf-8")).hexdigest()[:12]
     meta = {
         "confidence": 0.8,
