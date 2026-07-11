@@ -55,3 +55,13 @@ def waiting_for_subagents_message(task: dict) -> str:
     names = ", ".join(agent.get("id", "-") for agent in pending)
     done = len(agents) - len(pending)
     return f"等待子 agent 完成：{names}。当前进度 {done}/{len(agents)}。"
+
+
+def continuing_with_subagents_message(task: dict) -> str:
+    agents = current_round_sub_agents(task)
+    pending = pending_current_round_sub_agents(task)
+    if not pending:
+        return "子 agent 已完成，task-main 将继续处理本轮汇总。"
+    names = ", ".join(agent.get("id", "-") for agent in pending)
+    done = len(agents) - len(pending)
+    return f"已分配子 agent 并让 task-main 继续主线工作；后台等待：{names}。当前进度 {done}/{len(agents)}。"

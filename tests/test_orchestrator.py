@@ -137,6 +137,114 @@ class OrchestratorTests(unittest.TestCase):
                 browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
                 self.assertIn("等待子 agent 完成", browser_messages[-1]["message"])
 
+    def test_execute_actions_spawn_sub_queues_main_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Spawn followup", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "Inspect one slice with enough context",
+                                "backend": "stub",
+                                "main_followup": "Continue main-owned integration while sub inspects the slice.",
+                                "reason": "parallel work",
+                            }
+                        ],
+                        "response": "delegating",
+                    }
+                )
+
+                executed = execute_actions(root, run_id, "task-001", reply)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(executed[0]["type"], "spawn_sub")
+        self.assertTrue(executed[0]["main_followup"])
+        followups = [message for message in main_messages if message.get("coordination") == "main_followup_after_delegation"]
+        self.assertEqual(len(followups), 1)
+        self.assertIn("Continue main-owned integration", followups[0]["message"])
+        self.assertIn("delegated_to: sub-001", followups[0]["message"])
+        self.assertTrue(any(event["type"] == "main_followup_queued" for event in events))
+
+    def test_codex_chat_spawn_sub_with_main_followup_keeps_main_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Spawn followup chat", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "delegate and continue", sender="browser", task_id="task-001", role="main")
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "Inspect one independent slice with enough context",
+                                "backend": "stub",
+                                "main_followup": "Continue the main-owned implementation path.",
+                                "reason": "parallel work",
+                            }
+                        ],
+                        "response": "delegating while continuing",
+                    }
+                )
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                main = next(agent for agent in detail["agents"] if agent["id"] == "main")
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertEqual(code, 0)
+        self.assertIn("delegating while continuing", output)
+        self.assertEqual(detail["status"], "running")
+        self.assertEqual(main["status"], "pending")
+        self.assertNotIn("waiting_reason", main)
+        self.assertIn("继续主线工作", browser_messages[-1]["message"])
+        self.assertTrue(any(message.get("coordination") == "main_followup_after_delegation" for message in main_messages))
+
+    def test_execute_actions_route_to_agent_queues_main_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Route followup", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="stub", role="sub", created_by="main")
+                set_agent_status(root, run_id, "task-001", sub["id"], "completed", 0)
+                reply = json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "type": "route_to_agent",
+                                "agent_id": sub["id"],
+                                "message": "Continue your owned scope with the latest context.",
+                                "main_followup": "Continue main-owned review while sub handles its scope.",
+                                "reason": "sub owns this scope",
+                            }
+                        ],
+                        "response": "routed",
+                    }
+                )
+
+                executed = execute_actions(root, run_id, "task-001", reply)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertEqual(executed[0]["type"], "route_to_agent")
+        self.assertTrue(executed[0]["main_followup"])
+        followups = [message for message in main_messages if message.get("coordination") == "main_followup_after_delegation"]
+        self.assertEqual(len(followups), 1)
+        self.assertIn(f"delegated_to: {sub['id']}", followups[0]["message"])
+
     def test_execute_actions_reuses_interrupted_sub_agent_at_max(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

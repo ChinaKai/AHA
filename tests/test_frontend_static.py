@@ -88,6 +88,16 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("const codexModel = selectedBackendModel", bootstrap)
         self.assertIn("const claudeModel = selectedBackendModel", bootstrap)
 
+    def test_waiting_for_subagents_does_not_block_main_input(self) -> None:
+        script = (static_root() / "backend_status.js").read_text(encoding="utf-8")
+        block = script[
+            script.index("function agentInputWaitBlocked") : script.index("function supervisionHostReviewActive")
+        ]
+
+        self.assertNotIn('reason === "subagents"', block)
+        self.assertIn('reason === "host"', block)
+        self.assertIn('reason === "agent_start"', block)
+
     def test_bootstrap_model_selectors_prefer_first_named_model(self) -> None:
         node = shutil.which("node")
         if not node:
@@ -4868,7 +4878,8 @@ if (!/class="message-body collapsed-message"[^>]* open>/.test(refreshedHtml)) {
 
         self.assertIn("window.AHABackendStatus.createBackendStatusController", app_controller_factory_script)
         self.assertIn("function agentInputWaitBlocked(agent)", backend_status_script)
-        self.assertIn('reason === "subagents" || reason === "host" || reason === "agent_start"', backend_status_script)
+        self.assertNotIn('reason === "subagents"', backend_status_script)
+        self.assertIn('reason === "host" || reason === "agent_start"', backend_status_script)
         self.assertIn("function supervisionHostReviewActive(host)", backend_status_script)
         self.assertIn("function taskHostInputBlocked(task)", backend_status_script)
         self.assertIn('if (host?.backend_session_id) return true;', backend_status_script)

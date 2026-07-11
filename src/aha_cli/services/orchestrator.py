@@ -60,6 +60,7 @@ from aha_cli.store.sessions import backend_session_usage_archive_fields
 REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
 WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3
 SUPERVISION_STUB_DECISION = "ask_user"
+MAIN_FOLLOWUP_KEYS = ("main_followup", "main_next", "main_continuation")
 
 
 def _feedback_updated_items(feedback: object) -> list[str]:
@@ -216,6 +217,57 @@ def reusable_sub_agent(task: dict, exclude_ids: set[str] | None = None) -> dict 
 
 def explicit_scope_id(action: dict) -> str:
     return str(action.get("scope_id") or action.get("scope") or "").strip()
+
+
+def main_followup_for_action(action: dict) -> str:
+    for key in MAIN_FOLLOWUP_KEYS:
+        value = action.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def queue_main_followup_after_delegation(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    action_type: str,
+    agent_id: str,
+    action: dict,
+) -> bool:
+    followup = main_followup_for_action(action)
+    if not followup:
+        return False
+    message = "\n".join(
+        [
+            "AHA delegated work to a sub-agent and task-main should continue its own work.",
+            f"- action: {action_type}",
+            f"- delegated_to: {agent_id}",
+            "",
+            followup,
+        ]
+    ).strip()
+    append_message(
+        root,
+        run_id,
+        "main",
+        message,
+        sender="aha",
+        task_id=task_id,
+        role="main",
+        from_agent="aha",
+        to_agent="main",
+        reply_target="browser",
+        coordination="main_followup_after_delegation",
+    )
+    append_event(
+        root,
+        run_id,
+        "main_followup_queued",
+        {"task_id": task_id, "action": action_type, "agent_id": agent_id, "chars": len(followup)},
+    )
+    return True
 
 
 def next_generation(agent: dict | None) -> int:
@@ -738,7 +790,17 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 else:
                     if backend_start_result_failed(start_result):
                         handle_sub_agent_start_failure(root, run_id, task_id, target_id, request_summary=False)
-            executed.append(route_to_agent_result(route_request))
+            result = route_to_agent_result(route_request)
+            if queue_main_followup_after_delegation(
+                root,
+                run_id,
+                task_id,
+                action_type="route_to_agent",
+                agent_id=target_id,
+                action=action,
+            ):
+                result["main_followup"] = True
+            executed.append(result)
             continue
         if action_type != "spawn_sub":
             continue
@@ -797,7 +859,17 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 reason="spawn_sub assigned to requested sub-agent",
             )
             used_sub_agent_ids.add(requested_agent_id)
-            executed.append({"type": "spawn_sub", "agent": agent, "reused": True, "requested_agent_id": requested_agent_id})
+            result = {"type": "spawn_sub", "agent": agent, "reused": True, "requested_agent_id": requested_agent_id}
+            if queue_main_followup_after_delegation(
+                root,
+                run_id,
+                task_id,
+                action_type="spawn_sub",
+                agent_id=str(agent.get("id") or requested_agent_id),
+                action=action,
+            ):
+                result["main_followup"] = True
+            executed.append(result)
             continue
         if current_active_sub_agents >= max_sub_agents:
             append_spawn_sub_skipped(root, run_id, task_id, reason="max_sub_agents reached", max_sub_agents=max_sub_agents)
@@ -817,7 +889,17 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
                 reason="spawn_sub reused idle sub-agent slot",
             )
             used_sub_agent_ids.add(agent_id)
-            executed.append({"type": "spawn_sub", "agent": agent, "reused": True})
+            result = {"type": "spawn_sub", "agent": agent, "reused": True}
+            if queue_main_followup_after_delegation(
+                root,
+                run_id,
+                task_id,
+                action_type="spawn_sub",
+                agent_id=str(agent.get("id") or agent_id),
+                action=action,
+            ):
+                result["main_followup"] = True
+            executed.append(result)
             continue
         backend = str(action.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex")
         model = normalize_model_selector(
@@ -882,7 +964,17 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             else:
                 if backend_start_result_failed(start_result):
                     handle_sub_agent_start_failure(root, run_id, task_id, agent["id"], request_summary=False)
-        executed.append({"type": "spawn_sub", "agent": agent})
+        result = {"type": "spawn_sub", "agent": agent}
+        if queue_main_followup_after_delegation(
+            root,
+            run_id,
+            task_id,
+            action_type="spawn_sub",
+            agent_id=str(agent.get("id") or ""),
+            action=action,
+        ):
+            result["main_followup"] = True
+        executed.append(result)
     if executed:
         try:
             fresh_task = task_snapshot(root, run_id, task_id)["task"]

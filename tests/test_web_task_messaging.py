@@ -10,6 +10,7 @@ from unittest import mock
 from aha_cli.cli import main
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
+    add_agent,
     complete_task,
     event_path,
     inbox_path,
@@ -66,6 +67,45 @@ class WebTaskMessagingTests(unittest.TestCase):
         start_backend.assert_called_once()
         self.assertFalse(start_backend.call_args.kwargs["from_start"])
         self.assertEqual([item["message"] for item in messages], ["continue"])
+
+    def test_send_to_main_while_waiting_for_subagents_autostarts_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Subagent wait send", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                sub = add_agent(root, run_id, "task-001", backend="codex", role="sub", created_by="main")
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+                set_agent_status(root, run_id, "task-001", sub["id"], "running")
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "message": "sub 还没返回时继续问 main",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+
+                offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+
+        self.assertEqual(result["backend"]["status"], "running")
+        start_backend.assert_called_once()
+        self.assertFalse(start_backend.call_args.kwargs["from_start"])
+        self.assertEqual([item["message"] for item in messages], ["sub 还没返回时继续问 main"])
 
     def test_aha_agent_routed_commands_queue_backend_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

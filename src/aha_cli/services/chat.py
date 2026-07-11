@@ -52,7 +52,11 @@ from aha_cli.services.progress_heartbeat import AgentProgressHeartbeat
 from aha_cli.services.prompt_artifacts import save_prompt_artifact
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import proxy_env_for_agent
-from aha_cli.services.subagent_state import task_has_incomplete_sub_agents, waiting_for_subagents_message
+from aha_cli.services.subagent_state import (
+    continuing_with_subagents_message,
+    task_has_incomplete_sub_agents,
+    waiting_for_subagents_message,
+)
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -1333,6 +1337,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         to_agent=reply_target,
                     )
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
+                    main_followup_after_delegation = bool(
+                        agent_id == "main" and any(action.get("main_followup") for action in delegating_actions)
+                    )
                     defer_supervision_for_subagents = False
                     if (
                         agent_id == "main"
@@ -1407,17 +1414,23 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         append_event(root, run_id, "agent_delegated", {"task_id": item_task_id, "count": len(delegating_actions)})
                         detail = task_snapshot(root, run_id, item_task_id) if item_task_id else None
                         if detail:
+                            if main_followup_after_delegation:
+                                message = continuing_with_subagents_message(detail["task"])
+                                coordination = "main_continuing_with_subagents"
+                            else:
+                                message = waiting_for_subagents_message(detail["task"])
+                                coordination = "waiting_for_subagents"
                             append_message(
                                 root,
                                 run_id,
                                 "browser",
-                                waiting_for_subagents_message(detail["task"]),
+                                message,
                                 sender="main",
                                 task_id=item_task_id,
                                 role="main",
                                 from_agent="main",
                                 to_agent="browser",
-                                coordination="waiting_for_subagents",
+                                coordination=coordination,
                             )
                     if manages_task_status:
                         final_status = status_from_agent_result(exit_code, reply)
@@ -1438,7 +1451,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         else:
                             detail = task_snapshot(root, run_id, item_task_id)
                             if delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
-                                set_agent_status(root, run_id, item_task_id, agent_id, "waiting", waiting_reason="subagents")
+                                if main_followup_after_delegation:
+                                    set_agent_status(root, run_id, item_task_id, agent_id, "pending")
+                                else:
+                                    set_agent_status(root, run_id, item_task_id, agent_id, "waiting", waiting_reason="subagents")
                                 set_task_status(root, run_id, item_task_id, "running")
                             elif item.get("coordination") == "subagents_complete":
                                 sub_agents = [
