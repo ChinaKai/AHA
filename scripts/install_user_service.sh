@@ -26,6 +26,7 @@ AUTH_REQUIRED=1
 AUTH_TOKEN_FILE=""
 ALLOW_UNSAFE_BIND=0
 CURRENT_USER="${USER:-$(id -un)}"
+DOWNLOAD_PROXY_SOURCE=""
 
 usage() {
     cat <<'EOF'
@@ -75,6 +76,82 @@ need_arg() {
     local name=$1
     local value=${2-}
     [[ -n "${value}" ]] || die "${name} requires a value"
+}
+
+apply_aha_config_proxy() {
+    local config_file="${AHA_HOME}/config.json"
+    [[ -f "${config_file}" ]] || return 0
+    local applied=0
+    while IFS=$'\t' read -r key value; do
+        [[ -n "${key}" ]] || continue
+        export "${key}=${value}"
+        applied=1
+    done < <(python3 - "${config_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+
+DEFAULT_NO_PROXY = "localhost,127.0.0.1,::1"
+
+
+def clean(value: object) -> str:
+    return str(value or "").strip()
+
+
+def enabled(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def proxy_from(raw: object) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+    if not enabled(raw.get("enabled", raw.get("proxy_enabled", False))):
+        return None
+    http_proxy = clean(raw.get("http_proxy"))
+    https_proxy = clean(raw.get("https_proxy"))
+    if not (http_proxy or https_proxy):
+        return None
+    no_proxy = clean(raw.get("no_proxy")) or DEFAULT_NO_PROXY
+    return {
+        "HTTP_PROXY": http_proxy,
+        "HTTPS_PROXY": https_proxy,
+        "NO_PROXY": no_proxy,
+    }
+
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+except Exception:
+    config = {}
+if not isinstance(config, dict):
+    config = {}
+
+candidates: list[object] = [config.get("proxy")]
+backend = clean(config.get("backend")).lower()
+if backend in {"codex", "claude"} and isinstance(config.get(backend), dict):
+    candidates.append((config.get(backend) or {}).get("proxy"))
+for name in ("codex", "claude"):
+    section = config.get(name)
+    if isinstance(section, dict):
+        candidates.append(section.get("proxy"))
+
+selected = next((proxy for proxy in (proxy_from(candidate) for candidate in candidates) if proxy), None)
+if selected:
+    for key, value in selected.items():
+        if value:
+            print(f"{key}\t{value}")
+            print(f"{key.lower()}\t{value}")
+PY
+)
+    if ((applied)); then
+        DOWNLOAD_PROXY_SOURCE="aha-config"
+    fi
 }
 
 while (($#)); do
@@ -210,6 +287,7 @@ AUTH_TOKEN_FILE=$(python3 -c 'import os, sys; print(os.path.abspath(os.path.expa
 if [[ -n "${ARTIFACT_PATH}" ]]; then
     ARTIFACT_PATH=$(python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "${ARTIFACT_PATH}")
 fi
+apply_aha_config_proxy
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 SERVICE_PATH="${SYSTEMD_USER_DIR}/${SERVICE_NAME}"
 
@@ -245,6 +323,17 @@ systemd_env_line() {
     value=${value//\"/\\\"}
     value=${value//%/%%}
     printf 'Environment="%s=%s"\n' "${key}" "${value}"
+}
+
+systemd_proxy_env_lines() {
+    local key=""
+    local value=""
+    for key in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+        value=${!key-}
+        if [[ -n "${value}" ]]; then
+            systemd_env_line "${key}" "${value}"
+        fi
+    done
 }
 
 health_host() {
@@ -438,6 +527,9 @@ EOF
     systemd_env_line "AHA_RELEASE_VERSION" "${RELEASE_VERSION}"
     systemd_env_line "AHA_RELEASE_ASSET" "${RELEASE_ASSET}"
     systemd_env_line "AHA_RELEASE_URL" "${DOWNLOAD_URL}"
+    if [[ "${DOWNLOAD_PROXY_SOURCE}" == "aha-config" ]]; then
+        systemd_proxy_env_lines
+    fi
     systemd_env_line "PYTHONUNBUFFERED" "1"
     cat <<EOF
 ExecStart=${exec_start}
@@ -468,6 +560,9 @@ if ((DRY_RUN)); then
     fi
     if [[ -n "${ARTIFACT_PATH}" ]]; then
         echo "Artifact path: ${ARTIFACT_PATH}"
+    fi
+    if [[ -n "${DOWNLOAD_PROXY_SOURCE}" ]]; then
+        echo "Download proxy: ${DOWNLOAD_PROXY_SOURCE}"
     fi
     echo "Service path: ${SERVICE_PATH}"
     echo "Service: ${SERVICE_NAME}"

@@ -319,6 +319,34 @@ class WebSystemRoutesTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 system_routes._web_upgrade_command()
 
+    def test_web_upgrade_env_uses_core_proxy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_home = root / ".aha"
+            aha_home.mkdir()
+            (aha_home / "config.json").write_text(
+                json.dumps(
+                    {
+                        "proxy": {
+                            "enabled": True,
+                            "http_proxy": "http://127.0.0.1:7897",
+                            "https_proxy": "http://127.0.0.1:7897",
+                            "no_proxy": "localhost,127.0.0.1,::1",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"HTTP_PROXY": "http://old", "HTTPS_PROXY": "http://old"}, clear=False):
+                env = system_routes._web_upgrade_env(root)
+
+        self.assertEqual(env["HTTP_PROXY"], "http://127.0.0.1:7897")
+        self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:7897")
+        self.assertEqual(env["NO_PROXY"], "localhost,127.0.0.1,::1")
+        self.assertEqual(env["http_proxy"], "http://127.0.0.1:7897")
+        self.assertEqual(env["https_proxy"], "http://127.0.0.1:7897")
+        self.assertEqual(env["no_proxy"], "localhost,127.0.0.1,::1")
+
     def test_realtime_debug_rejects_deleted_run_without_recreating_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

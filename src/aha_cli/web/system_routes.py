@@ -8,6 +8,7 @@ from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
+from aha_cli.services.proxy import apply_proxy_environment, core_proxy_config, proxy_configured
 from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
 from aha_cli.services.weixin import (
     WeixinError,
@@ -235,6 +236,29 @@ def _web_upgrade_command() -> list[str]:
     return command
 
 
+def _web_upgrade_env(root: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    try:
+        config = load_config(root)
+    except Exception:  # noqa: BLE001 - upgrade should still run without optional proxy config.
+        return env
+    proxy = core_proxy_config(config)
+    if not (proxy.get("enabled") and proxy_configured(proxy)):
+        return env
+    values = {
+        "HTTP_PROXY": proxy.get("http_proxy"),
+        "HTTPS_PROXY": proxy.get("https_proxy"),
+        "NO_PROXY": proxy.get("no_proxy"),
+    }
+    proxy_env: dict[str, str] = {}
+    for key, value in values.items():
+        text = str(value or "").strip()
+        if text:
+            proxy_env[key] = text
+            proxy_env[key.lower()] = text
+    return apply_proxy_environment(env, proxy_env)
+
+
 def request_web_upgrade(root: Path, run_id: str) -> dict:
     command = _web_upgrade_command()
     log_dir = root / "logs"
@@ -245,6 +269,7 @@ def request_web_upgrade(root: Path, run_id: str) -> dict:
         process = subprocess.Popen(  # noqa: S603 - fixed command, no shell.
             command,
             cwd=Path.home(),
+            env=_web_upgrade_env(root),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,

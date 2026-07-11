@@ -135,6 +135,46 @@ class ServiceInstallerTests(unittest.TestCase):
             self.assertIn(f"Artifact path: {artifact}", result.stdout)
             self.assertNotIn("Download URL:", result.stdout)
 
+    def test_onebin_installer_uses_aha_config_proxy_for_downloads(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aha-service-onebin-proxy-") as tmp:
+            tmp_path = Path(tmp)
+            aha_home = tmp_path / "aha-home"
+            aha_home.mkdir()
+            (aha_home / "config.json").write_text(
+                json.dumps(
+                    {
+                        "proxy": {
+                            "enabled": True,
+                            "http_proxy": "http://127.0.0.1:7897",
+                            "https_proxy": "http://127.0.0.1:7897",
+                            "no_proxy": "localhost,127.0.0.1,::1",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_script(
+                [
+                    "bash",
+                    str(INSTALL_ONEBIN),
+                    "--dry-run",
+                    "--aha-home",
+                    str(aha_home),
+                    "--no-start",
+                    "--no-linger",
+                ],
+                tmp_path=tmp_path,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Download proxy: aha-config", result.stdout)
+            self.assertIn('Environment="HTTP_PROXY=http://127.0.0.1:7897"', result.stdout)
+            self.assertIn('Environment="HTTPS_PROXY=http://127.0.0.1:7897"', result.stdout)
+            self.assertIn('Environment="NO_PROXY=localhost,127.0.0.1,::1"', result.stdout)
+            self.assertIn('Environment="http_proxy=http://127.0.0.1:7897"', result.stdout)
+            self.assertIn('Environment="https_proxy=http://127.0.0.1:7897"', result.stdout)
+            self.assertIn('Environment="no_proxy=localhost,127.0.0.1,::1"', result.stdout)
+
     def test_onebin_installer_default_home_ignores_ambient_aha_home(self) -> None:
         with tempfile.TemporaryDirectory(prefix="aha-service-onebin-default-") as tmp:
             tmp_path = Path(tmp)
