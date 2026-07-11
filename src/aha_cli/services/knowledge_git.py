@@ -131,6 +131,101 @@ def _has_changes(repo: Path) -> bool:
     return bool(res["ok"] and res["stdout"])
 
 
+def _sync_status_state(status: dict) -> str:
+    if not status.get("git_available", True):
+        return "git_unavailable"
+    if not status.get("is_repo"):
+        return "not_initialized"
+    if not status.get("remote"):
+        return "no_remote"
+    if status.get("remote_error"):
+        return "remote_error"
+    if status.get("ahead", 0) and status.get("behind", 0):
+        return "diverged"
+    if status.get("dirty"):
+        return "dirty"
+    if status.get("ahead", 0):
+        return "ahead"
+    if status.get("behind", 0):
+        return "behind"
+    return "clean"
+
+
+def sync_status(root: Path, config: dict | None = None, *, check_remote: bool = False) -> dict:
+    """Return KB git sync state without committing, rebasing, or pushing."""
+    git_cfg = _git_cfg(config)
+    branch = git_cfg.get("branch") or "main"
+    remote = (git_cfg.get("remote") or "").strip()
+    repo = knowledge_root(root, config)
+    status: dict = {
+        "ok": True,
+        "git_available": git_available(),
+        "repo": str(repo),
+        "is_repo": is_repo(repo),
+        "remote": remote or None,
+        "branch": branch,
+        "dirty": False,
+        "changed_count": 0,
+        "changed_paths": [],
+        "ahead": 0,
+        "behind": 0,
+        "local_head": None,
+        "remote_head": None,
+        "remote_error": "",
+        "needs_sync": False,
+    }
+    if not status["git_available"]:
+        status["ok"] = False
+        status["state"] = _sync_status_state(status)
+        return status
+    if not status["is_repo"]:
+        status["state"] = _sync_status_state(status)
+        return status
+
+    dirty = _run_git(repo, ["status", "--porcelain"])
+    if dirty["ok"]:
+        paths = _changed_paths_from_status(dirty["stdout"])
+        status["dirty"] = bool(paths)
+        status["changed_count"] = len(paths)
+        status["changed_paths"] = paths[:20]
+    else:
+        status["ok"] = False
+        status["remote_error"] = f"git status failed: {dirty['stderr']}"
+
+    local = _run_git(repo, ["rev-parse", "HEAD"])
+    if local["ok"]:
+        status["local_head"] = local["stdout"]
+
+    if check_remote and remote:
+        fetch = _run_git(repo, ["fetch", "origin", branch])
+        if not fetch["ok"]:
+            status["ok"] = False
+            status["remote_error"] = f"fetch failed: {fetch['stderr']}"
+        else:
+            remote_head = _run_git(repo, ["rev-parse", f"origin/{branch}"])
+            if remote_head["ok"]:
+                status["remote_head"] = remote_head["stdout"]
+                if status["local_head"]:
+                    counts = _run_git(repo, ["rev-list", "--left-right", "--count", f"HEAD...origin/{branch}"])
+                    if counts["ok"] and counts["stdout"]:
+                        left, _, right = counts["stdout"].partition("\t")
+                        if not right:
+                            left, _, right = counts["stdout"].partition(" ")
+                        try:
+                            status["ahead"] = int(left or 0)
+                            status["behind"] = int(right or 0)
+                        except ValueError:
+                            status["ok"] = False
+                            status["remote_error"] = f"rev-list returned invalid counts: {counts['stdout']}"
+                    elif not counts["ok"]:
+                        status["ok"] = False
+                        status["remote_error"] = f"rev-list failed: {counts['stderr']}"
+
+    status["state"] = _sync_status_state(status)
+    status["needs_sync"] = status["state"] in {"dirty", "ahead", "behind", "diverged"}
+    return status
+
+
 def _dedupe(values: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -319,7 +414,7 @@ def auto_pull_before_task(root: Path, config: dict | None = None) -> dict:
     """Pull before a task starts, if knowledge.git.auto_pull is on."""
     if not _enabled(config):
         return {"ok": True, "skipped": "git sync disabled"}
-    if not _git_cfg(config).get("auto_pull", True):
+    if not _git_cfg(config).get("auto_pull", False):
         return {"ok": True, "skipped": "auto_pull disabled"}
     return pull(root, config)
 
@@ -329,7 +424,7 @@ def auto_commit_after_change(root: Path, message: str, config: dict | None = Non
     if not _enabled(config):
         return {"ok": True, "skipped": "git sync disabled"}
     git_cfg = _git_cfg(config)
-    if not git_cfg.get("auto_commit", True):
+    if not git_cfg.get("auto_commit", False):
         return {"ok": True, "skipped": "auto_commit disabled"}
     result = commit_all(root, message, config)
     if result.get("committed") and git_cfg.get("auto_push", False):
@@ -347,7 +442,7 @@ def auto_commit_project_approved_entries_after_feedback(
     if not _enabled(config):
         return {"ok": True, "skipped": "git sync disabled"}
     git_cfg = _git_cfg(config)
-    if not git_cfg.get("auto_commit", True):
+    if not git_cfg.get("auto_commit", False):
         return {"ok": True, "skipped": "auto_commit disabled"}
     result = commit_project_approved_entries(root, message, project_keys, config)
     if result.get("committed") and git_cfg.get("auto_push", False):

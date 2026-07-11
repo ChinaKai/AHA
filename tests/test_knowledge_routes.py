@@ -1217,6 +1217,69 @@ def test_config_get_and_patch(tmp_path: Path):
     assert load_config(home)["knowledge"]["git"]["branch"] == "main"
 
 
+def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    calls = []
+
+    import aha_cli.web.knowledge_routes as kr
+
+    def fake_sync(root, cfg, *, message, do_pull, do_push):
+        calls.append({
+            "root": root,
+            "message": message,
+            "do_pull": do_pull,
+            "do_push": do_push,
+            "enabled": cfg["knowledge"]["enabled"],
+        })
+        return {"ok": True, "steps": {"ensure": {"ok": True}}}
+
+    monkeypatch.setattr(kr, "knowledge_sync", fake_sync)
+
+    out = json_response_body(_post(home, "/api/kb/sync", {}))
+
+    assert out["ok"] is True
+    assert len(calls) == 1
+    assert calls[0]["root"] == home
+    assert calls[0]["do_pull"] is True
+    assert calls[0]["do_push"] is True
+    assert calls[0]["enabled"] is True
+    assert calls[0]["message"].startswith("chore(knowledge): manual web sync ")
+
+
+def test_sync_status_endpoint_checks_remote(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    calls = []
+
+    import aha_cli.web.knowledge_routes as kr
+
+    def fake_sync_status(root, cfg, *, check_remote):
+        calls.append({
+            "root": root,
+            "check_remote": check_remote,
+            "enabled": cfg["knowledge"]["enabled"],
+        })
+        return {
+            "ok": True,
+            "is_repo": True,
+            "remote": "git@example.com:kb.git",
+            "dirty": True,
+            "changed_count": 1,
+            "ahead": 0,
+            "behind": 2,
+            "state": "dirty",
+            "needs_sync": True,
+        }
+
+    monkeypatch.setattr(kr, "knowledge_sync_status", fake_sync_status)
+
+    out = _get(home, "/api/kb/sync-status")
+
+    assert out["needs_sync"] is True
+    assert out["changed_count"] == 1
+    assert out["behind"] == 2
+    assert calls == [{"root": home, "check_remote": True, "enabled": True}]
+
+
 def test_config_patch_rejects_bad_gate(tmp_path: Path):
     home = _setup(tmp_path)
     resp = knowledge_route_response(

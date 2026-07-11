@@ -295,7 +295,7 @@ def _render_readme() -> str:
         "- `personal/wiki` — personal notes that should be searchable but not auto-injected\n"
         "- `personal/solutions` — personal reusable playbooks\n"
         "- `projects/<project-key>/solutions` — rare reusable project playbooks\n"
-        "- `projects/<project-key>/worklog/tasks/*.md` — live task plans, progress, requirement changes, decisions, and verification notes\n"
+        "- `projects/<project-key>/worklog/tasks/YYYY/MM/DD/<run-id>-<task-id>.md` — live task plans, progress, requirement changes, decisions, and verification notes\n"
         "- `projects/<project-key>/navigation/index.md` — the project navigation entry point\n"
         "- `projects/<project-key>/navigation/modules/*.md` — on-demand module docs\n"
         "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n"

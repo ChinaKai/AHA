@@ -443,6 +443,12 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Knowledge base entrypoints:", enabled_prompt)
         self.assertIn("agent-pull", enabled_prompt)
         self.assertIn("task_worklog:", enabled_prompt)
+        expected_date_path = f"{run_id[:4]}/{run_id[4:6]}/{run_id[6:8]}"
+        expected_worklog = f"worklog/tasks/{expected_date_path}/{run_id}-task-001.md"
+        self.assertIn(expected_worklog, enabled_prompt)
+        self.assertIn(f'"slug":"tasks/{expected_date_path}/{run_id}-task-001"', enabled_prompt)
+        self.assertNotIn("worklog/tasks/task-001.md", enabled_prompt)
+        self.assertNotIn('"id":"kb_task_worklog_task_001"', enabled_prompt)
         self.assertIn("task_worklog_frontmatter_json:", enabled_prompt)
         self.assertIn('"type":"task_worklog"', enabled_prompt)
         self.assertIn("must use one JSON object frontmatter", enabled_prompt)

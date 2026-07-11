@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from aha_cli.domain.models import normalize_task_token_saving
@@ -95,7 +96,7 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
         project_keys = project_key_aliases(workspace, goal=_plan_goal(root, run_id))
         kb_root = knowledge_root(root, config)
         nav_rel, nav_exists = _navigation_index_reference(kb_root, project_keys)
-        worklog_rel, worklog_exists = _task_worklog_reference(kb_root, project_keys, task)
+        worklog_rel, worklog_exists = _task_worklog_reference(kb_root, project_keys, run_id, task)
         worklog_frontmatter = _task_worklog_frontmatter(project_keys[0], run_id, task)
         text = "\n".join(
             [
@@ -143,18 +144,42 @@ def _navigation_index_reference(kb_root: Path, project_keys: list[str]) -> tuple
     return fallback, False
 
 
-def _task_worklog_reference(kb_root: Path, project_keys: list[str], task: dict) -> tuple[str, bool]:
+def _safe_worklog_component(value: str, fallback: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-")
+    return clean or fallback
+
+
+def _worklog_date_path(run_id: str) -> str:
+    match = re.match(r"^(\d{4})(\d{2})(\d{2})", str(run_id or "").strip())
+    if not match:
+        return "undated"
+    return "/".join(match.groups())
+
+
+def _task_worklog_slug(run_id: str, task_id: str) -> str:
+    run_part = _safe_worklog_component(run_id, "run")
+    task_part = _safe_worklog_component(task_id, "task")
+    return f"tasks/{_worklog_date_path(run_id)}/{run_part}-{task_part}"
+
+
+def _task_worklog_reference(kb_root: Path, project_keys: list[str], run_id: str, task: dict) -> tuple[str, bool]:
     task_id = str((task or {}).get("id") or "").strip()
     if not task_id:
         return "", False
+    canonical_slug = _task_worklog_slug(run_id, task_id)
+    legacy_name = f"{_safe_worklog_component(task_id, 'task')}.md"
     fallback = ""
     for key in project_keys:
-        rel = entry_dir(kb_root, "project", "worklog", key).relative_to(kb_root) / "tasks" / f"{task_id}.md"
+        base = entry_dir(kb_root, "project", "worklog", key).relative_to(kb_root)
+        rel = base / f"{canonical_slug}.md"
         rel_text = rel.as_posix()
         if not fallback:
             fallback = rel_text
         if (kb_root / rel).exists():
             return rel_text, True
+        legacy_rel = base / "tasks" / legacy_name
+        if (kb_root / legacy_rel).exists():
+            return legacy_rel.as_posix(), True
     return fallback, False
 
 
@@ -163,16 +188,18 @@ def _task_worklog_frontmatter(project_key_value: str, run_id: str, task: dict) -
     if not task_id:
         return ""
     title = str((task or {}).get("title") or task_id).strip()
+    slug = _task_worklog_slug(run_id, task_id)
+    identity = hashlib.sha1(f"{run_id}/{task_id}".encode("utf-8")).hexdigest()[:12]
     meta = {
         "confidence": 0.8,
         "created_at": "<ISO8601>",
         "distilled_by": "task-main",
-        "id": f"kb_task_worklog_{task_id.replace('-', '_')}",
+        "id": f"kb_task_worklog_{identity}",
         "navigation_role": "task_worklog",
         "outcome": "success",
         "project_key": project_key_value,
         "scope": "project",
-        "slug": f"tasks/{task_id}",
+        "slug": slug,
         "source_tasks": [f"{run_id}/{task_id}"],
         "tags": ["worklog", "task"],
         "title": f"{task_id} {title} 工作记录",

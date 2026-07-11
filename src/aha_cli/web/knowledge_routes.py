@@ -22,6 +22,8 @@ from aha_cli.backends.registry import normalize_reasoning_effort
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_git import auto_commit_after_change
+from aha_cli.services.knowledge_git import sync_status as knowledge_sync_status
+from aha_cli.services.knowledge_git import sync as knowledge_sync
 from aha_cli.services.knowledge_navigation import (
     build_navigation_bootstrap_prompt,
     prepare_project_navigation,
@@ -765,6 +767,9 @@ def knowledge_route_response(
     if method in {"GET", "HEAD"} and path == "/api/kb/status":
         return _ok(method, knowledge_status(root, cfg))
 
+    if method in {"GET", "HEAD"} and path == "/api/kb/sync-status":
+        return _ok(method, knowledge_sync_status(root, cfg, check_remote=True))
+
     if method in {"GET", "HEAD"} and path == "/api/kb/entries":
         scope = str(query.get("scope", [""])[0] or "").strip() or None
         project = str(query.get("project", [""])[0] or "").strip() or None
@@ -1341,6 +1346,19 @@ def knowledge_route_response(
         except ValueError as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
         return json_response({"ok": True, "knowledge": settings})
+
+    if method == "POST" and path == "/api/kb/sync":
+        payload = parse_json_body(body) if body.strip() else {}
+        message = str(payload.get("message") or f"chore(knowledge): manual web sync {utc_now()}").strip()
+        try:
+            pull_value = _optional_bool(payload.get("pull", True), "pull")
+            push_value = _optional_bool(payload.get("push", True), "push")
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        do_pull = True if pull_value is None else pull_value
+        do_push = True if push_value is None else push_value
+        result = knowledge_sync(root, cfg, message=message, do_pull=do_pull, do_push=do_push)
+        return json_response({"ok": bool(result.get("ok")), "sync": result})
 
     # --- Capture inbox (raw notes) ------------------------------------------ #
     if method == "POST" and path == "/api/kb/capture/distill":

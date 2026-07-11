@@ -34,8 +34,8 @@ from aha_cli.store.paths import config_path
 def test_default_config_has_knowledge_block():
     cfg = default_config()
     assert cfg["knowledge"]["enabled"] is False
-    assert cfg["knowledge"]["git"]["auto_pull"] is True
-    assert cfg["knowledge"]["git"]["auto_commit"] is True
+    assert cfg["knowledge"]["git"]["auto_pull"] is False
+    assert cfg["knowledge"]["git"]["auto_commit"] is False
     assert cfg["knowledge"]["git"]["auto_push"] is False
     assert cfg["knowledge"]["curation"]["gate"] == "manual"
     assert cfg["knowledge"]["project_nav"]["enabled"] is True

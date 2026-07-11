@@ -181,6 +181,36 @@ def test_sync_commits_local_dirty_then_rebases_and_pushes(tmp_path: Path):
     assert (clone / "general" / "solutions" / "local.md").exists()
 
 
+def test_sync_status_reports_dirty_and_remote_counts(tmp_path: Path):
+    root = tmp_path / ".aha"
+    remote = _bare_remote(tmp_path / "remote.git")
+    cfg = _config(remote)
+    write_entry(root, config=cfg, scope="general", kind="wiki", title="Base", body="base")
+    assert kg.sync(root, cfg, message="base", do_push=True)["ok"] is True
+
+    clean = kg.sync_status(root, cfg, check_remote=True)
+    assert clean["state"] == "clean"
+    assert clean["needs_sync"] is False
+
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", remote, str(clone)], check=True, capture_output=True)
+    (clone / "remote.md").write_text("remote\n", encoding="utf-8")
+    _git(clone, "add", "remote.md")
+    _git(clone, "commit", "-m", "remote")
+    _git(clone, "push", "origin", "main")
+
+    behind = kg.sync_status(root, cfg, check_remote=True)
+    assert behind["state"] == "behind"
+    assert behind["behind"] == 1
+    assert behind["needs_sync"] is True
+
+    write_entry(root, config=cfg, scope="general", kind="wiki", title="Dirty", body="dirty")
+    dirty = kg.sync_status(root, cfg, check_remote=False)
+    assert dirty["state"] == "dirty"
+    assert dirty["dirty"] is True
+    assert dirty["changed_count"] > 0
+
+
 def test_pull_unreachable_remote_returns_failure(tmp_path: Path):
     root = tmp_path / ".aha"
     # Remote path that does not exist -> unreachable, not "empty".
@@ -230,7 +260,7 @@ def test_auto_hooks_respect_flags(tmp_path: Path):
     assert "skipped" in kg.auto_pull_before_task(root, disabled)
 
     # Enabled, auto_commit on.
-    cfg = _config()
+    cfg = _config(auto_commit=True)
     write_entry(root, config=cfg, scope="general", kind="wiki", title="A", body="b")
     res = kg.auto_commit_after_change(root, "auto", cfg)
     assert res.get("committed") is True
@@ -243,7 +273,7 @@ def test_auto_hooks_respect_flags(tmp_path: Path):
 def test_auto_commit_pushes_when_auto_push_on(tmp_path: Path):
     root = tmp_path / ".aha"
     remote = _bare_remote(tmp_path / "remote.git")
-    cfg = _config(remote, auto_push=True)
+    cfg = _config(remote, auto_commit=True, auto_push=True)
     write_entry(root, config=cfg, scope="general", kind="wiki", title="A", body="b")
     res = kg.auto_commit_after_change(root, "auto", cfg)
     assert res.get("committed") is True
@@ -252,7 +282,7 @@ def test_auto_commit_pushes_when_auto_push_on(tmp_path: Path):
 
 def test_auto_commit_project_feedback_only_commits_approved_project_paths(tmp_path: Path):
     root = tmp_path / ".aha"
-    cfg = _config()
+    cfg = _config(auto_commit=True)
     assert kg.commit_all(root, "init", cfg)["committed"] is True
     repo = knowledge_root(root, cfg)
 

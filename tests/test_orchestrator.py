@@ -1146,6 +1146,7 @@ class OrchestratorTests(unittest.TestCase):
                 kb = default_knowledge_config()
                 kb["enabled"] = True
                 kb["git"]["enabled"] = True
+                kb["git"]["auto_commit"] = True
                 cfg = {"knowledge": kb}
                 write_json(root / ".aha" / "config.json", cfg)
                 code, plan_output = self.run_cli("plan", "KB auto commit", "--agents", "1")

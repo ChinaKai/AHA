@@ -15,6 +15,7 @@ Current-task evidence protocol:
 - Maintain task_worklog during the whole task lifecycle when plans, progress, decisions, requirement changes, verification, or KB/nav updates become useful; do not wait for only task start or task end.
 - Manual `/aha kb` feedback is only for candidate-review flows; ordinary project task evidence should be written directly to approved project navigation/solutions/worklog Markdown.
 - For ordinary project work, persist stable routes, flows, and diagnostics in project navigation, and task-specific execution history in task_worklog.
+- Use the exact `task_worklog` path supplied below when creating or updating worklogs; do not invent flat paths such as `worklog/tasks/<task-id>.md`.
 - Keep project navigation as a reachable parent-child hierarchy: `index.md` links top-level parent docs, non-index nav docs need a direct parent entry, and parent docs link only their direct child docs. Do not create orphan nav docs or keep adding every child link to `index.md`.
 - New approved KB Markdown entries must use one JSON object frontmatter between `---` fences. Do not use YAML frontmatter; Web/API listing depends on JSON frontmatter parsing.
 - Do not rebuild, rescan, or delete the full knowledge base as part of a task. For stale project entries, prefer a narrow deprecate/repair edit over physical deletion.

@@ -161,6 +161,47 @@
       min-height: 220px; resize: vertical; width: 100%;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
+    .kb-detail-scroll-body.kb-detail-editing {
+      display: flex; flex-direction: column; white-space: normal;
+    }
+    .kb-detail-scroll-body.kb-detail-editing > .kb-edit-form,
+    .kb-detail-scroll-body.kb-detail-editing > [data-capture-edit-form] {
+      flex: 1 1 auto; min-height: 0;
+    }
+    .kb-entry-edit-form,
+    .kb-capture-edit-form {
+      display: grid; gap: 10px; margin-top: 0; min-height: min(720px, calc(100dvh - 180px));
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .kb-edit-meta {
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm);
+      background: var(--color-surface-muted); overflow: hidden;
+    }
+    .kb-edit-meta summary {
+      cursor: pointer; padding: 8px 10px; font-size: 12px; font-weight: 650;
+      color: var(--color-text-strong); user-select: none;
+    }
+    .kb-edit-meta-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 10px; padding: 0 10px 10px;
+    }
+    .kb-edit-meta-grid > div { min-width: 0; }
+    .kb-edit-meta-grid .kb-field,
+    .kb-edit-body-pane .kb-field { margin: 0 0 4px; }
+    .kb-edit-meta-grid input,
+    .kb-edit-meta-grid select { width: 100%; box-sizing: border-box; }
+    .kb-edit-body-pane {
+      min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr);
+    }
+    .kb-edit-body-pane .kb-entry-markdown-editor {
+      min-height: 0; height: 100%;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .kb-edit-body-pane .kb-entry-edit-source,
+    .kb-edit-body-pane .kb-entry-edit-preview {
+      min-height: min(58vh, 640px); height: 100%; box-sizing: border-box;
+    }
+    .kb-edit-body-pane .kb-entry-edit-source { resize: vertical; }
     .kb-entry-markdown-editor {
       display: grid; gap: 8px; min-width: 0;
     }
@@ -269,6 +310,8 @@
     .kb-capture-form textarea, .kb-cap-edit { resize: vertical; }
     .kb-capture-form textarea { min-height: 180px; }
     .kb-cap-edit-tools { align-items: center; margin: 6px 0 0; }
+    .kb-capture-edit-form .kb-cap-edit-tools { margin: 0; justify-content: space-between; }
+    .kb-capture-edit-form .kb-cap-edit-actions { margin-left: auto; display: inline-flex; gap: 8px; }
     .kb-cap-images { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
     .kb-cap-thumb { position: relative; display: inline-flex; }
     .kb-cap-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--color-border, #ccc); }
@@ -363,6 +406,13 @@
       .kb-entry-edit-toolbar { display: grid; grid-template-columns: 1fr; }
       .kb-entry-edit-modes, .kb-entry-image-upload { width: 100%; }
       .kb-entry-edit-modes button { flex: 1 1 0; }
+      .kb-entry-edit-form,
+      .kb-capture-edit-form { min-height: calc(100dvh - 170px); }
+      .kb-edit-meta-grid { grid-template-columns: 1fr; }
+      .kb-capture-edit-form .kb-cap-edit-tools,
+      .kb-capture-edit-form .kb-cap-edit-actions {
+        display: grid; grid-template-columns: 1fr; width: 100%;
+      }
       .kb-detail-fullscreen > h3 { padding: 12px 12px 6px; font-size: 16px; }
       .kb-detail-fullscreen > .kb-muted { padding: 0 12px 10px; }
       .kb-detail-fullscreen .kb-modal-action-row {
@@ -547,15 +597,13 @@
           <input type="text" id="s-remote" placeholder="git@github.com:user/aha-kb.git" />
           <label class="kb-field" for="s-branch" data-i18n="knowledge.git_branch">Git branch</label>
           <input type="text" id="s-branch" />
-          <label class="kb-field" for="s-auto-pull" data-i18n="knowledge.auto_pull">Auto pull</label>
-          <select id="s-auto-pull"><option value="on">on</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-auto-commit" data-i18n="knowledge.auto_commit">Auto commit</label>
-          <select id="s-auto-commit"><option value="on">on</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-auto-push" data-i18n="knowledge.auto_push">Auto push</label>
-          <select id="s-auto-push"><option value="on">on</option><option value="off">off</option></select>
         </div>
       </div>
-      <div class="kb-row"><button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button></div>
+      <div class="kb-row">
+        <button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button>
+        <button class="button-ghost" id="settings-sync" type="button" data-i18n="knowledge.sync_now">Sync now</button>
+        <span class="kb-muted" id="settings-sync-status" data-i18n="knowledge.sync_status_checking">Checking sync status...</span>
+      </div>
     </form>
   </section>
 
@@ -671,7 +719,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -1192,6 +1240,7 @@
       if (!ref) {
         modal.hidden = true;
         $("#entry-ref-actions").innerHTML = "";
+        $("#entry-ref-body").classList.remove("kb-detail-editing");
         return;
       }
       const meta = ref.meta || {};
@@ -1204,6 +1253,7 @@
         sizeLine(ref),
       ].filter(Boolean).join(" · ");
       const body = $("#entry-ref-body");
+      body.classList.toggle("kb-detail-editing", Boolean(state.editingReference));
       body.innerHTML = "";
       $("#entry-ref-actions").innerHTML = state.editingReference ? "" : renderEntryModalActions(ref);
       if (state.editingReference) {
@@ -1440,11 +1490,11 @@
     function renderEntryBodyEditor(entry) {
       const meta = entry?.meta || {};
       const id = meta.id || meta.slug || "";
-      return `<div class="kb-entry-markdown-editor" data-mode="preview">
+      return `<div class="kb-entry-markdown-editor" data-mode="edit">
         <div class="kb-entry-edit-toolbar">
           <div class="kb-entry-edit-modes" role="group" aria-label="${esc(t("memo.markdown_mode", "Markdown mode"))}">
-            <button class="button-ghost active" type="button" data-entry-edit-mode="preview" onclick="setEntryEditMode(this, 'preview')">${esc(t("memo.preview_mode", "Preview"))}</button>
-            <button class="button-ghost" type="button" data-entry-edit-mode="edit" onclick="setEntryEditMode(this, 'edit')">${esc(t("knowledge.edit", "Edit"))}</button>
+            <button class="button-ghost" type="button" data-entry-edit-mode="preview" onclick="setEntryEditMode(this, 'preview')">${esc(t("memo.preview_mode", "Preview"))}</button>
+            <button class="button-ghost active" type="button" data-entry-edit-mode="edit" onclick="setEntryEditMode(this, 'edit')">${esc(t("knowledge.edit", "Edit"))}</button>
           </div>
           <label class="kb-entry-image-upload">${esc(t("knowledge.capture_add_image", "+ image"))}
             <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onchange="uploadEntryEditImage(this)" />
@@ -1456,21 +1506,43 @@
       </div>`;
     }
 
+    function renderEntryEditMetadata(meta) {
+      const label = t("knowledge.edit_metadata", "Metadata");
+      return `<details class="kb-edit-meta">
+        <summary>${esc(label)}</summary>
+        <div class="kb-edit-meta-grid">
+          <div>
+            <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
+            <input name="title" type="text" value="${esc(meta.title || "")}" />
+          </div>
+          <div>
+            <label class="kb-field">${esc(t("knowledge.edit_tags", "Tags"))}</label>
+            <input name="tags" type="text" value="${esc((meta.tags || []).join(", "))}" />
+          </div>
+          <div>
+            <label class="kb-field">${esc(t("knowledge.edit_related_files", "Related files"))}</label>
+            <input name="related_files" type="text" value="${esc((meta.related_files || []).join(", "))}" />
+          </div>
+          <div>
+            <label class="kb-field">${esc(t("knowledge.edit_invalid_when", "Invalid when"))}</label>
+            <input name="invalid_when" type="text" value="${esc(meta.invalid_when || "")}" />
+          </div>
+          <div>
+            <label class="kb-field">${esc(t("knowledge.edit_review_after", "Review after"))}</label>
+            <input name="review_after" type="text" value="${esc(meta.review_after || "")}" />
+          </div>
+        </div>
+      </details>`;
+    }
+
     function renderEditForm(entry) {
       const meta = entry?.meta || {};
-      return `<form class="kb-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntry(event, '${encodeURIComponent(meta.id || meta.slug || "")}')">
-        <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
-        <input name="title" type="text" value="${esc(meta.title || "")}" />
-        <label class="kb-field">${esc(t("knowledge.edit_tags", "Tags"))}</label>
-        <input name="tags" type="text" value="${esc((meta.tags || []).join(", "))}" />
-        <label class="kb-field">${esc(t("knowledge.edit_related_files", "Related files"))}</label>
-        <input name="related_files" type="text" value="${esc((meta.related_files || []).join(", "))}" />
-        <label class="kb-field">${esc(t("knowledge.edit_invalid_when", "Invalid when"))}</label>
-        <input name="invalid_when" type="text" value="${esc(meta.invalid_when || "")}" />
-        <label class="kb-field">${esc(t("knowledge.edit_review_after", "Review after"))}</label>
-        <input name="review_after" type="text" value="${esc(meta.review_after || "")}" />
-        <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
-        ${renderEntryBodyEditor(entry)}
+      return `<form class="kb-edit-form kb-entry-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntry(event, '${encodeURIComponent(meta.id || meta.slug || "")}')">
+        ${renderEntryEditMetadata(meta)}
+        <div class="kb-edit-body-pane">
+          <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
+          ${renderEntryBodyEditor(entry)}
+        </div>
         <div class="kb-card-actions">
           <button class="primary" type="submit">${esc(t("knowledge.save_entry", "Save entry"))}</button>
           <button class="button-ghost" type="button" onclick="cancelEdit()">${esc(t("common.cancel", "Cancel"))}</button>
@@ -1480,19 +1552,12 @@
 
     function renderReferenceEditForm(entry) {
       const meta = entry?.meta || {};
-      return `<form class="kb-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntryReference(event)">
-        <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
-        <input name="title" type="text" value="${esc(meta.title || "")}" />
-        <label class="kb-field">${esc(t("knowledge.edit_tags", "Tags"))}</label>
-        <input name="tags" type="text" value="${esc((meta.tags || []).join(", "))}" />
-        <label class="kb-field">${esc(t("knowledge.edit_related_files", "Related files"))}</label>
-        <input name="related_files" type="text" value="${esc((meta.related_files || []).join(", "))}" />
-        <label class="kb-field">${esc(t("knowledge.edit_invalid_when", "Invalid when"))}</label>
-        <input name="invalid_when" type="text" value="${esc(meta.invalid_when || "")}" />
-        <label class="kb-field">${esc(t("knowledge.edit_review_after", "Review after"))}</label>
-        <input name="review_after" type="text" value="${esc(meta.review_after || "")}" />
-        <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
-        ${renderEntryBodyEditor(entry)}
+      return `<form class="kb-edit-form kb-entry-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntryReference(event)">
+        ${renderEntryEditMetadata(meta)}
+        <div class="kb-edit-body-pane">
+          <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
+          ${renderEntryBodyEditor(entry)}
+        </div>
         <div class="kb-card-actions">
           <button class="primary" type="submit">${esc(t("knowledge.save_entry", "Save entry"))}</button>
           <button class="button-ghost" type="button" onclick="cancelEntryReferenceEdit()">${esc(t("common.cancel", "Cancel"))}</button>
@@ -1987,6 +2052,51 @@
       }
     }
 
+    function syncCaptureEditMode(form) {
+      const editor = form?.querySelector?.(".kb-capture-markdown-editor");
+      if (!editor) return;
+      const mode = editor.dataset.mode === "preview" ? "preview" : "edit";
+      editor.dataset.mode = mode;
+      state.captureEditMode = mode;
+      for (const button of form.querySelectorAll("[data-capture-edit-mode]")) {
+        const active = button.dataset.captureEditMode === mode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      }
+    }
+
+    function renderCaptureEditMarkdown(target) {
+      const forms = target
+        ? [target.closest?.("[data-capture-edit-form]") || target].filter(Boolean)
+        : Array.from(document.querySelectorAll("[data-capture-edit-form]"));
+      for (const form of forms) {
+        const textarea = form.querySelector?.(".kb-cap-edit");
+        const preview = form.querySelector?.("[data-capture-edit-preview]");
+        if (!textarea || !preview) continue;
+        preview.innerHTML = "";
+        if (window.AHATaskMemoMarkdown) {
+          window.AHATaskMemoMarkdown.renderMarkdownPreview(preview, textarea.value || "", {
+            documentRef: document,
+            t,
+            imageSrc: captureImageSrc,
+          });
+        } else {
+          preview.textContent = textarea.value || "";
+        }
+        if (!preview.childNodes.length) preview.appendChild(document.createElement("br"));
+        syncCaptureEditMode(form);
+      }
+    }
+
+    window.setCaptureEditMode = (button, mode) => {
+      const form = button.closest("[data-capture-edit-form]");
+      const editor = form?.querySelector(".kb-capture-markdown-editor");
+      if (!form || !editor) return;
+      editor.dataset.mode = mode === "preview" ? "preview" : "edit";
+      renderCaptureEditMarkdown(form);
+      if (editor.dataset.mode === "edit") form.querySelector(".kb-cap-edit")?.focus();
+    };
+
     function applyCaptureViewMode() {
       const agentView = state.captureViewMode === "agent"
         && state.activeDistillLogNote
@@ -2004,7 +2114,9 @@
         state.distillTarget = null;
         state.activeDistillLogNote = null;
         state.captureViewMode = "view";
+        state.captureEditMode = "edit";
         modal.hidden = true;
+        $("#cap-view-body").classList.remove("kb-detail-editing");
         $("#cap-view-body").innerHTML = "";
         $("#cap-view-refs").innerHTML = "";
         $("#cap-view-actions").innerHTML = "";
@@ -2022,9 +2134,11 @@
       $("#cap-view-actions").innerHTML = state.editingNote === note.id ? "" : renderCaptureNoteActions(note);
       $("#cap-view-distill").innerHTML = state.editingNote === note.id ? "" : renderCaptureDistillPanel(note);
       const body = $("#cap-view-body");
+      body.classList.toggle("kb-detail-editing", state.editingNote === note.id);
       body.innerHTML = "";
       if (state.editingNote === note.id) {
         body.innerHTML = renderCaptureNoteEditForm(note);
+        renderCaptureEditMarkdown(body.querySelector("[data-capture-edit-form]"));
       } else if (window.AHATaskMemoMarkdown) {
         window.AHATaskMemoMarkdown.renderMarkdownPreview(body, note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
       } else {
@@ -2039,6 +2153,7 @@
       state.activeCaptureNote = null;
       state.editingNote = null;
       state.distillTarget = null;
+      state.captureEditMode = "edit";
       closeDistillLogModal();
       renderCaptureNoteModal();
       renderCapture();
@@ -2105,13 +2220,41 @@
 
     function renderCaptureNoteEditForm(note) {
       const uploadLabel = `<label class="kb-cap-upload">${esc(t("knowledge.capture_add_image", "+ image"))}<input type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="uploadNoteImage('${esc(note.id)}', this)" /></label>`;
-      return `<div data-capture-edit-form data-note-id="${esc(note.id)}">
-        <input class="kb-cap-edit-title" data-id="${esc(note.id)}" type="text" value="${esc(note.title || "")}" placeholder="${esc(t("knowledge.capture_title_placeholder", "Optional title"))}" />
-        <textarea class="kb-cap-edit" data-id="${esc(note.id)}" rows="8" onpaste="pasteNoteEditImage(event, '${esc(note.id)}')">${esc(note.text || "")}</textarea>
-        <div class="kb-row kb-cap-edit-tools">${uploadLabel}
-          <select class="kb-cap-edit-scope" data-id="${esc(note.id)}">${captureScopeOptions(note.scope_hint)}</select>
-          <button class="primary" type="button" onclick="saveNote('${esc(note.id)}')">${esc(t("knowledge.save_entry", "Save"))}</button>
-          <button class="button-ghost" type="button" onclick="cancelNoteEdit()">${esc(t("common.cancel", "Cancel"))}</button>
+      const mode = state.captureEditMode === "preview" ? "preview" : "edit";
+      return `<div class="kb-capture-edit-form" data-capture-edit-form data-note-id="${esc(note.id)}">
+        <details class="kb-edit-meta">
+          <summary>${esc(t("knowledge.edit_metadata", "Metadata"))}</summary>
+          <div class="kb-edit-meta-grid">
+            <div>
+              <label class="kb-field">${esc(t("knowledge.edit_title", "Title"))}</label>
+              <input class="kb-cap-edit-title" data-id="${esc(note.id)}" type="text" value="${esc(note.title || "")}" placeholder="${esc(t("knowledge.capture_title_placeholder", "Optional title"))}" />
+            </div>
+            <div>
+              <label class="kb-field">${esc(t("knowledge.scope", "Scope"))}</label>
+              <select class="kb-cap-edit-scope" data-id="${esc(note.id)}">${captureScopeOptions(note.scope_hint)}</select>
+            </div>
+          </div>
+        </details>
+        <div class="kb-edit-body-pane">
+          <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
+          <div class="kb-entry-markdown-editor kb-capture-markdown-editor" data-mode="${esc(mode)}">
+            <div class="kb-entry-edit-toolbar">
+              <div class="kb-entry-edit-modes" role="group" aria-label="${esc(t("memo.markdown_mode", "Markdown mode"))}">
+                <button class="button-ghost${mode === "preview" ? " active" : ""}" type="button" data-capture-edit-mode="preview" onclick="setCaptureEditMode(this, 'preview')">${esc(t("memo.preview_mode", "Preview"))}</button>
+                <button class="button-ghost${mode === "edit" ? " active" : ""}" type="button" data-capture-edit-mode="edit" onclick="setCaptureEditMode(this, 'edit')">${esc(t("knowledge.edit", "Edit"))}</button>
+              </div>
+              ${uploadLabel}
+            </div>
+            <textarea class="kb-cap-edit kb-entry-edit-source" data-id="${esc(note.id)}" oninput="renderCaptureEditMarkdown(this.closest('[data-capture-edit-form]'))" onpaste="pasteNoteEditImage(event, '${esc(note.id)}')">${esc(note.text || "")}</textarea>
+            <div class="kb-body kb-entry-body kb-entry-edit-preview" data-capture-edit-preview tabindex="0" onpaste="pasteNoteEditImage(event, '${esc(note.id)}')" aria-label="${esc(t("memo.preview_mode", "Preview"))}"></div>
+          </div>
+        </div>
+        <div class="kb-row kb-cap-edit-tools">
+          <span class="kb-muted"></span>
+          <div class="kb-cap-edit-actions">
+            <button class="primary" type="button" onclick="saveNote('${esc(note.id)}')">${esc(t("knowledge.save_entry", "Save"))}</button>
+            <button class="button-ghost" type="button" onclick="cancelNoteEdit()">${esc(t("common.cancel", "Cancel"))}</button>
+          </div>
         </div>
       </div>`;
     }
@@ -2364,11 +2507,13 @@
       const note = state.capture.find((item) => item.id === id);
       if (note) state.activeCaptureNote = note;
       state.editingNote = id;
+      state.captureEditMode = "edit";
       renderCapture();
       renderCaptureNoteModal();
     };
     window.cancelNoteEdit = () => {
       state.editingNote = null;
+      state.captureEditMode = "edit";
       renderCapture();
       renderCaptureNoteModal();
     };
@@ -2388,7 +2533,7 @@
       const scope = document.querySelector(`.kb-cap-edit-scope[data-id="${id}"]`).value;
       try {
         await api("/api/kb/capture", { method: "PATCH", body: JSON.stringify({ id, title, text, scope_hint: scope }) });
-        state.editingNote = null; await loadCapture(); toast(t("knowledge.saved", "Saved"));
+        state.editingNote = null; state.captureEditMode = "edit"; await loadCapture(); toast(t("knowledge.saved", "Saved"));
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
     window.deleteNote = async (id) => {
@@ -2524,6 +2669,7 @@
         insertEntryEditImageMarkdown(editText, markdown, appendToEnd);
         insertedImages.push(image);
       }
+      renderCaptureEditMarkdown(editText.closest("[data-capture-edit-form]"));
       if (insertedImages.length) {
         await api("/api/kb/capture", {
           method: "PATCH",
@@ -2755,6 +2901,48 @@
       }
     });
 
+    function syncFailureMessage(result) {
+      const steps = result?.steps || {};
+      for (const [name, step] of Object.entries(steps)) {
+        if (step && step.ok === false) {
+          return step.error || step.reason || step.stderr || name;
+        }
+      }
+      return result?.error || result?.reason || t("knowledge.sync_failed", "Sync failed");
+    }
+
+    function syncStatusMessage(status) {
+      if (!status?.git_available) return t("knowledge.sync_status_git_unavailable", "git unavailable");
+      if (!status?.is_repo) return t("knowledge.sync_status_not_initialized", "Not initialized");
+      if (!status?.remote) return t("knowledge.sync_status_no_remote", "No remote");
+      if (status?.remote_error) {
+        return formatText("knowledge.sync_status_remote_error", { error: status.remote_error }, "Remote check failed: " + status.remote_error);
+      }
+      const parts = [];
+      if (status.changed_count) {
+        parts.push(formatText("knowledge.sync_status_dirty", { count: status.changed_count }, status.changed_count + " local change(s)"));
+      }
+      if (status.ahead) {
+        parts.push(formatText("knowledge.sync_status_ahead", { count: status.ahead }, "ahead by " + status.ahead));
+      }
+      if (status.behind) {
+        parts.push(formatText("knowledge.sync_status_behind", { count: status.behind }, "behind by " + status.behind));
+      }
+      return parts.length ? parts.join(" · ") : t("knowledge.sync_status_clean", "Up to date");
+    }
+
+    async function loadSyncStatus() {
+      const el = $("#settings-sync-status");
+      if (!el) return;
+      el.textContent = t("knowledge.sync_status_checking", "Checking sync status...");
+      try {
+        const status = await api("/api/kb/sync-status");
+        el.textContent = syncStatusMessage(status);
+      } catch (e) {
+        el.textContent = formatText("knowledge.sync_status_failed", { error: e.message }, "Sync status failed: " + e.message);
+      }
+    }
+
     async function loadSettings() {
       const s = await api("/api/kb/config");
       $("#s-enabled").value = boolMode(s.enabled);
@@ -2764,9 +2952,7 @@
       $("#s-git-enabled").value = boolMode(s.git.enabled);
       $("#s-remote").value = s.git.remote || "";
       $("#s-branch").value = s.git.branch || "main";
-      $("#s-auto-pull").value = boolMode(s.git.auto_pull);
-      $("#s-auto-commit").value = boolMode(s.git.auto_commit);
-      $("#s-auto-push").value = boolMode(s.git.auto_push);
+      await loadSyncStatus();
     }
 
     $("#settings-form").addEventListener("submit", async (ev) => {
@@ -2780,13 +2966,31 @@
           enabled: modeBool("#s-git-enabled"),
           remote: $("#s-remote").value.trim() || null,
           branch: $("#s-branch").value.trim() || "main",
-          auto_pull: modeBool("#s-auto-pull"),
-          auto_commit: modeBool("#s-auto-commit"),
-          auto_push: modeBool("#s-auto-push"),
+          auto_pull: false,
+          auto_commit: false,
+          auto_push: false,
         },
       };
-      try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); toast(t("knowledge.saved", "Saved")); await loadStatus(); }
+      try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); toast(t("knowledge.saved", "Saved")); await loadStatus(); await loadSyncStatus(); }
       catch (e) { toast(formatText("knowledge.save_failed_with_error", { error: e.message }, "Save failed: " + e.message)); }
+    });
+
+    $("#settings-sync").addEventListener("click", async () => {
+      const button = $("#settings-sync");
+      button.disabled = true;
+      button.textContent = t("knowledge.syncing", "Syncing...");
+      try {
+        const result = await api("/api/kb/sync", { method: "POST", body: JSON.stringify({ pull: true, push: true }) });
+        if (!result.ok) throw new Error(syncFailureMessage(result.sync));
+        toast(t("knowledge.sync_complete", "Sync complete"));
+        await loadStatus();
+        await loadSyncStatus();
+      } catch (e) {
+        toast(formatText("knowledge.sync_failed_with_error", { error: e.message }, "Sync failed: " + e.message));
+      } finally {
+        button.disabled = false;
+        button.textContent = t("knowledge.sync_now", "Sync now");
+      }
     });
 
     $("#nav-workspace-select").addEventListener("change", () => { syncProjectNavCustomWorkspace(); loadProjectNavDrafts(); loadNavigation(); });
@@ -2834,6 +3038,34 @@
         await loadProjectNavDrafts(); await loadNavigation();
       }
     });
+    function knowledgeModalOpen(selector) {
+      const modal = $(selector);
+      return Boolean(modal && !modal.hidden);
+    }
+    function closeTopKnowledgeModal() {
+      if (knowledgeModalOpen("#nav-agent-modal")) {
+        closeProjectNavAgentModal();
+        return true;
+      }
+      if (knowledgeModalOpen("#nav-draft-modal")) {
+        closeProjectNavDraftModal();
+        return true;
+      }
+      if (knowledgeModalOpen("#entry-ref-modal")) {
+        closeEntryReferenceModal();
+        return true;
+      }
+      if (knowledgeModalOpen("#cap-view-modal")) {
+        if (distillLogPanelVisible()) closeDistillLogModal();
+        else closeCaptureNoteModal();
+        return true;
+      }
+      if (knowledgeModalOpen("#cap-new-modal")) {
+        closeNewNoteModal(false);
+        return true;
+      }
+      return false;
+    }
     function openKnowledgeImage(target) {
       return Boolean(window.AHATaskMemoMarkdown?.openClickedImage?.(target, {
         root: document.querySelector(".kb-wrap"),
@@ -2846,6 +3078,10 @@
       event.preventDefault();
     });
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && closeTopKnowledgeModal()) {
+        event.preventDefault();
+        return;
+      }
       if (!["Enter", " "].includes(event.key)) return;
       if (!openKnowledgeImage(event.target)) return;
       event.preventDefault();

@@ -4,7 +4,7 @@
 > 维护方式: 本文档是「活文档」。实现过程中每完成一个步骤，更新对应复选框与「进度日志」。
 
 > **决策确认（2026-06-19，用户拍板按文档推荐值）**：D6 curation gate 默认 `manual`；
-> D7 第一刀做项目解决方案库；布局/字段按第 2、3 节；git 默认 `auto_pull=on / auto_commit=on / auto_push=off`。
+> D7 第一刀做项目解决方案库；布局/字段按第 2、3 节；当前产品策略收口为用户在 KB 设置页手动同步，git 自动项默认关闭。
 
 > **实现决策（frontmatter 格式）**：AHA 声明零第三方依赖（`pyproject.toml` `dependencies=[]`），
 > 不能依赖 PyYAML，故条目 frontmatter 采用 **JSON 块**而非 YAML（用 `---` 围栏，块内为 JSON）。
@@ -175,9 +175,9 @@ sidecar 产出的 `solutions` 正文建议使用更偏行动的固定段落：
         "enabled": False,
         "remote": None,         # e.g. git@github.com:user/aha-kb.git
         "branch": "main",
-        "auto_commit": True,    # 沉淀后自动 commit
+        "auto_commit": False,   # 默认不自动 commit，用户在 KB 设置页手动同步
         "auto_push": False,     # 自动 push 到 remote
-        "auto_pull": True,      # task 开始前自动 pull
+        "auto_pull": False,     # 默认不自动 pull，用户在 KB 设置页手动同步
         "author_name": "AHA",
         "author_email": "aha@local",
     },
@@ -366,7 +366,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 1. **D6 curation gate** → 默认 `manual`（人工确认入库）。
 2. **D7 第一刀范围** → 先做「项目解决方案库」。
 3. **存储布局 / 数据模型** → 按第 2、3 节实施（frontmatter 实现为零依赖 JSON，见顶部实现决策）。
-4. **git 默认行为** → `auto_pull=on / auto_commit=on / auto_push=off`。
+4. **git 默认行为** → 当前产品策略为手动同步，`auto_pull=off / auto_commit=off / auto_push=off`，设置页只暴露“立即同步”。
 
 ### 10.2 后续待定（进入对应阶段前再定）
 - **Phase 2**：远端鉴权方式（SSH key / token）与 push 冲突时的处理策略（rebase 后人工介入 vs 自动放弃）。
@@ -384,14 +384,14 @@ task 收尾 / round finalize 或 memo completion report 完成
 - **开关**：编辑 AHA home 的 `config.json`，把 `knowledge.enabled` 设为 `true`；
   或用 Web 控制台「设置」页（见下）；或 `PATCH /api/kb/config`。
 - **git 远端同步（可选）**：设 `knowledge.git.enabled=true` 与 `knowledge.git.remote=<url>`；
-  默认 `auto_pull=on / auto_commit=on / auto_push=off`（push 默认关，避免无意外泄）。
+  默认 `auto_pull=off / auto_commit=off / auto_push=off`。用户在 KB 设置页点击“立即同步”时显式执行 commit/pull/push。
 - **curation gate**：默认 `manual`（候选先入 `.pending` 待人工批准）；可设 `auto`（直写）/`off`（不沉淀）。
 - 初始化骨架：`aha kb init`（首次由 finalize 触发时也会自动建骨架与 `.gitignore`）。
 
 ### 11.2 Web 控制台
 - 启动 UI：`PYTHONPATH=src python3 -m aha_cli ui --host 127.0.0.1 --port 8788`。
 - 入口：主面板顶部 **Integrations 区的「知识库 / Knowledge base」**按钮 → 新标签打开整页控制台 `/static/knowledge.html`（自包含,样式继承全站 token,与微信操作台视觉一致；不接入 SPA 控制器图谱）。
-- 功能：条目浏览、`.pending` 审核（批准/拒绝）、knowledge 设置表单（enabled/path/git remote+branch+auto 标志/curation gate）。
+- 功能：条目浏览、`.pending` 审核（批准/拒绝）、knowledge 设置表单（enabled/path/git remote+branch/curation gate）、同步状态提示（未提交/领先/落后/远端错误）和手动“立即同步”按钮。
 
 ### 11.3 常用命令
 - `aha kb status`：路径 / 条目数 / pending / stale / git 状态。
@@ -404,7 +404,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 
 ### 11.4 闭环怎么跑
 - **沉淀（do→distill）**：开启后，task finalize 和 memo completion report 优先使用 sidecar 提炼高价值候选；普通 bug fix 默认空候选，项目结构/模块认知进入 navigation，少量可复用排障进入 solutions → `aha kb pending` 审核 → `approve` 入库。
-- **学习（learn）**：同项目下一个 task 派发前,`dispatch_task_to_main` 会先 `auto_pull` 再检索,把「项目已知经验」注入 task-main 的 prompt。
+- **学习（learn）**：同项目下一个 task 派发前，若显式启用 `auto_pull`，`dispatch_task_to_main` 会先拉取再检索；默认手动同步模式下使用本地 KB。
 - **项目导航（nav）**：注入时 `navigation/index` 始终置顶作为路由；`modules/*` / `flows/*` 只在任务标题/描述命中时逐层进入 prompt，无命中时不按最近更新时间兜底注入，避免大项目里读取无关模块文档。新增子文档时若直接父入口缺链接，沉淀链路会补一个最小父入口候选。
 - **更新复核**：distill 会附带检索到的既有相关知识；若新结论冲突，候选会提示审核时更新/废弃旧条目，避免过期知识静默误导后续任务。
 
