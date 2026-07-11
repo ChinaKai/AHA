@@ -243,7 +243,10 @@ class WebSystemRoutesTests(unittest.TestCase):
                 restart = system_route_response(root, run_id, "POST", "/api/web/restart", {}, b"{}")
                 restart_requested = consume_web_restart_requested()
                 install_bin = root / "bin" / "aha"
+                install_bin.parent.mkdir(parents=True)
+                install_bin.write_text("#!/bin/sh\n", encoding="utf-8")
                 upgrade_env = {
+                    "AHA_SOURCE_ROOT": "",
                     "AHA_INSTALL_BIN": str(install_bin),
                     "AHA_SERVICE_NAME": "aha.service",
                     "AHA_RELEASE_REPO": "ChinaKai/AHA",
@@ -302,8 +305,10 @@ class WebSystemRoutesTests(unittest.TestCase):
             (workspace / "scripts").mkdir(parents=True)
             (workspace / "scripts" / "install_user_service.sh").write_text("#!/bin/sh\n", encoding="utf-8")
             install_bin = root / "bin" / "aha"
+            install_bin.parent.mkdir(parents=True)
+            install_bin.write_text("#!/bin/sh\n", encoding="utf-8")
             with (
-                mock.patch.dict(os.environ, {"AHA_INSTALL_BIN": str(install_bin), "AHA_SERVICE_NAME": "aha-test.service"}, clear=False),
+                mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": "", "AHA_INSTALL_BIN": str(install_bin), "AHA_SERVICE_NAME": "aha-test.service"}, clear=False),
                 mock.patch("pathlib.Path.cwd", return_value=workspace),
             ):
                 command = system_routes._web_upgrade_command()
@@ -313,11 +318,34 @@ class WebSystemRoutesTests(unittest.TestCase):
 
     def test_web_upgrade_command_requires_installed_onebin_for_source_runtime(self) -> None:
         with (
-            mock.patch.dict(os.environ, {"AHA_INSTALL_BIN": ""}, clear=False),
+            mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": "", "AHA_INSTALL_BIN": ""}, clear=False),
             mock.patch("sys.argv", ["/usr/bin/python3"]),
         ):
             with self.assertRaises(FileNotFoundError):
                 system_routes._web_upgrade_command()
+
+    def test_web_upgrade_route_rejects_source_runtime_without_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Source upgrade hidden", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+            install_bin = root / "bin" / "aha"
+            install_bin.parent.mkdir(parents=True)
+            install_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            with (
+                mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": str(root), "AHA_INSTALL_BIN": str(install_bin)}, clear=False),
+                mock.patch("aha_cli.web.system_routes.subprocess.Popen") as popen,
+            ):
+                response = system_route_response(root, run_id, "POST", "/api/web/upgrade", {}, b"{}")
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 409 Conflict"))
+        body = json_response_body(response)
+        self.assertFalse(body["web_upgrade"]["available"])
+        self.assertEqual(body["web_upgrade"]["mode"], "source")
+        popen.assert_not_called()
 
     def test_web_upgrade_env_uses_core_proxy_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

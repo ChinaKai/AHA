@@ -575,6 +575,7 @@ const runActions = window.AHARunActions.createRunActions({
   syncCurrentRunDisplay,
   syncRealtimeEvents,
   webRestartInFlight: () => webRestartInFlight,
+  webUpgradeAvailable,
   windowRef: window
 });
 bootstrapController = window.AHABootstrapController.createBootstrapController({
@@ -962,6 +963,7 @@ const runController = window.AHARunController.createRunController({
   tokenUsageOpen: () => tokenUsageController.isOpen(),
   statusData: () => statusData,
   switchRun,
+  webUpgradeAvailable,
   updateStatusRunTitle: (runName, updatedAt) => {
     if (statusData) {
       statusData.goal = runName || statusData.goal;

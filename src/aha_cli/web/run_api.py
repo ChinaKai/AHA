@@ -21,6 +21,7 @@ from aha_cli.store.task_memos import (
     write_task_memo_summary_cache,
 )
 from aha_cli.store.ui_state import read_global_ui_state, read_ui_state
+from aha_cli.web.upgrade import web_upgrade_status
 
 
 class ApiRunNotFound(Exception):
@@ -166,6 +167,7 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
     return {
         "aha_home": str(root),
         "aha_version": aha_version(root),
+        "web_upgrade": web_upgrade_status(),
         "initialized": config_path(root).exists(),
         "config": cfg,
         "config_backend_options": ["codex", "claude"],

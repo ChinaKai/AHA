@@ -339,6 +339,7 @@
 
     async function upgradeWebService() {
       if (deps.webRestartInFlight?.()) return;
+      if (!deps.webUpgradeAvailable?.()) return;
       if (!currentRunId()) {
         alertUser(t("run.none", "No run selected"));
         return;

@@ -67,6 +67,11 @@ function knowledgeHomeUrl() {
   return currentRunId ? `/static/knowledge.html?run_id=${encodeURIComponent(currentRunId)}` : "/static/knowledge.html";
 }
 
+function webUpgradeAvailable() {
+  const capability = bootstrapData?.web_upgrade || statusData?.web_upgrade || null;
+  return Boolean(capability?.available);
+}
+
 function applyInitialKnowledgeHomeState() {
   if (!initialKnowledgeHomeActive) return;
   const knowledgeHome = document.getElementById("knowledge-home");

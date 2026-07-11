@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -84,6 +85,18 @@ class WebRunApiTests(unittest.TestCase):
         self.assertFalse(body["memo_summary"]["available"])
         self.assertEqual(body["memo_summary"]["counts"]["total"], 0)
         self.assertEqual(body["skill_options"], [])
+
+    def test_api_bootstrap_marks_source_web_upgrade_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            with mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": str(Path(tmp) / "checkout"), "AHA_INSTALL_BIN": ""}, clear=False):
+                response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertFalse(body["web_upgrade"]["available"])
+        self.assertEqual(body["web_upgrade"]["mode"], "source")
 
     def test_api_bootstrap_includes_discovered_skill_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

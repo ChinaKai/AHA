@@ -3,7 +3,6 @@ from __future__ import annotations
 import ipaddress
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
@@ -37,6 +36,7 @@ from aha_cli.web.status import (
     web_task_options_snapshot,
     web_tasks_snapshot,
 )
+from aha_cli.web.upgrade import web_upgrade_command, web_upgrade_status
 
 WEB_RESTART_EXIT_CODE = 75
 _web_restart_requested = False
@@ -114,6 +114,7 @@ def service_health_payload(
         "bind_host": bind_host_text,
         "bind_port": bind_port_text,
         "bind_network_visible": bind_host_exposes_network(bind_host_text) if bind_host_text else False,
+        "web_upgrade": web_upgrade_status(),
         "initialized": (root / "config.json").exists(),
         "default_run_id": selected_run_id,
         "default_run_available": bool(selected_run_id),
@@ -208,32 +209,7 @@ def request_web_restart(root: Path, run_id: str) -> dict:
 
 
 def _web_upgrade_command() -> list[str]:
-    installed_bin = os.environ.get("AHA_INSTALL_BIN", "").strip()
-    executable = installed_bin or str(Path(sys.argv[0]).expanduser())
-    executable_path = Path(executable).expanduser()
-    if executable_path.is_file():
-        executable = str(executable_path.resolve())
-    if not installed_bin and (not executable_path.is_file() or executable_path.name.startswith("python")):
-        raise FileNotFoundError("AHA_INSTALL_BIN is not set; Web upgrade requires an installed AHA onebin executable")
-
-    target_bin = str(Path(installed_bin).expanduser().resolve()) if installed_bin else executable
-    command = [executable, "service", "upgrade-user", "--bin", target_bin, "--no-health-check", "--json"]
-    service_name = os.environ.get("AHA_SERVICE_NAME", "").strip()
-    if service_name:
-        command.extend(["--service-name", service_name])
-    release_url = os.environ.get("AHA_RELEASE_URL", "").strip()
-    if release_url:
-        command.extend(["--download-url", release_url])
-    else:
-        for env_name, flag in (
-            ("AHA_RELEASE_REPO", "--repo"),
-            ("AHA_RELEASE_VERSION", "--version"),
-            ("AHA_RELEASE_ASSET", "--asset-name"),
-        ):
-            value = os.environ.get(env_name, "").strip()
-            if value:
-                command.extend([flag, value])
-    return command
+    return web_upgrade_command()
 
 
 def _web_upgrade_env(root: Path) -> dict[str, str]:
@@ -599,7 +575,7 @@ def system_route_response(
         try:
             upgrade = request_web_upgrade(root, run_id)
         except FileNotFoundError as exc:
-            return json_response({"error": str(exc)}, "500 Internal Server Error")
+            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "409 Conflict")
         return json_response({"ok": True, **upgrade})
     if method in {"GET", "HEAD"} and path == "/api/weixin":
         run_id = require_api_run_id(root, default_run_id, query)

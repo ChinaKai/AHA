@@ -130,12 +130,27 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
 
         self.assertIn('id="web-upgrade"', html)
+        self.assertIn('id="web-upgrade" class="button-ghost" type="button" hidden data-i18n="run.upgrade_web"', html)
         self.assertIn('data-i18n="run.upgrade_web"', html)
         self.assertIn('id="web-restart-state" class="meta" aria-live="polite"', html)
         self.assertLess(html.index('id="web-restart"'), html.index('id="web-upgrade"'))
         self.assertIn("header > div:first-child #web-restart-state.meta", (root / "styles.css").read_text(encoding="utf-8"))
         self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
         self.assertIn('"run.upgrade_web": "升级"', i18n)
+
+    def test_web_upgrade_button_is_capability_gated(self) -> None:
+        root = static_root()
+        setup = (root / "app_runtime_setup.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        controller = (root / "run_controller.js").read_text(encoding="utf-8")
+        actions = (root / "run_actions.js").read_text(encoding="utf-8")
+
+        self.assertIn("function webUpgradeAvailable()", setup)
+        self.assertIn("bootstrapData?.web_upgrade || statusData?.web_upgrade", setup)
+        self.assertIn("webUpgradeAvailable,", wiring)
+        self.assertIn("elements.webUpgradeEl.hidden = !upgradeAvailable;", controller)
+        self.assertIn("elements.webUpgradeEl.disabled = !upgradeAvailable", controller)
+        self.assertIn("if (!deps.webUpgradeAvailable?.()) return;", actions)
 
     def test_integrations_include_skills_console(self) -> None:
         root = static_root()
@@ -2704,6 +2719,7 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
 
         self.assertIn('async function waitForWebRestartAndReload(restartVersion = "", options = {})', run_actions_script)
         self.assertIn("async function upgradeWebService()", run_actions_script)
+        self.assertIn("if (!deps.webUpgradeAvailable?.()) return;", run_actions_script)
         self.assertIn('apiUrl("/api/web/upgrade")', run_actions_script)
         self.assertIn('t("run.upgrade_scheduling", "Starting upgrade...")', run_actions_script)
         self.assertIn('t("run.upgrade_waiting", "Upgrade started. Waiting for recovery...")', run_actions_script)
