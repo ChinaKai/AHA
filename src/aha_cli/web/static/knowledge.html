@@ -22,6 +22,14 @@
     .kb-console-head > div { min-width: 0; }
     .kb-console-head h1 { margin: 0; font-size: 18px; color: var(--color-text-strong); }
     .kb-console-head p { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
+    .kb-head-actions {
+      display: grid; justify-items: end; gap: 6px; min-width: 0;
+    }
+    .kb-sync-panel {
+      display: flex; align-items: center; justify-content: flex-end;
+      gap: 8px; min-width: 0; max-width: min(520px, 100%);
+    }
+    .kb-sync-panel .kb-muted { text-align: right; }
     .kb-tabs { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
     .kb-tabs button { min-width: 0; }
     .kb-tab.active {
@@ -78,6 +86,11 @@
     }
     .kb-entry-index-groups { display: grid; gap: 10px; min-width: 0; }
     .kb-entry-index-group { display: grid; gap: 6px; min-width: 0; padding-left: 8px; }
+    .kb-entry-tree-node { padding-left: 0; }
+    .kb-entry-tree-depth-0 > .kb-entry-index-group-head {
+      font-weight: 650; background: var(--color-surface-muted);
+    }
+    .kb-entry-tree-list { gap: 6px; }
     .kb-entry-index-group-head {
       display: flex; align-items: center; justify-content: space-between; gap: 10px;
       min-width: 0; width: 100%; padding: 8px 2px 4px 8px;
@@ -356,6 +369,9 @@
       .kb-wrap { padding: 0 8px 44px; }
       .kb-console-head { display: grid; gap: 10px; padding-top: 12px; }
       .kb-console-head .status { width: fit-content; max-width: 100%; }
+      .kb-head-actions { justify-items: start; }
+      .kb-sync-panel { justify-content: flex-start; flex-wrap: wrap; }
+      .kb-sync-panel .kb-muted { text-align: left; }
       .kb-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
       .kb-tabs button {
         width: 100%; min-height: 32px; padding: 0 4px;
@@ -431,7 +447,13 @@
       <h1 data-i18n="knowledge.title">AHA Knowledge Base</h1>
       <p data-i18n="knowledge.subtitle">Browse entries · Review pending candidates · Configure the knowledge base</p>
     </div>
-    <span id="kb-summary" class="status idle" data-i18n="knowledge.loading">Loading...</span>
+    <div class="kb-head-actions">
+      <span id="kb-summary" class="status idle" data-i18n="knowledge.loading">Loading...</span>
+      <div class="kb-sync-panel">
+        <button class="button-ghost" id="kb-sync" type="button" data-i18n="knowledge.sync_now">Sync now</button>
+        <span class="kb-muted" id="kb-sync-status" data-i18n="knowledge.sync_status_checking">Checking sync status...</span>
+      </div>
+    </div>
   </div>
 
   <nav class="kb-tabs">
@@ -719,7 +741,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -1402,47 +1424,101 @@
       return [...entries].sort((a, b) => entryTitle(a).localeCompare(entryTitle(b), undefined, { sensitivity: "base" }));
     }
 
-    function entryGroupLabel(entry) {
-      const owner = entry.project_key || entryScopeLabel(entry.scope);
-      return `${owner || "-"} / ${entryTypeLabel(entry.type)}`;
+    function entryDirectorySegments(entry) {
+      let slug = String(entry?.slug || "").trim().replace(/\\/g, "/").replace(/\.md$/i, "");
+      if (!slug && entry?.path) {
+        const path = String(entry.path || "").replace(/\\/g, "/").replace(/\.md$/i, "");
+        const type = String(entry.type || "").trim();
+        const marker = type ? `/${type}/` : "";
+        const index = marker ? path.lastIndexOf(marker) : -1;
+        slug = index >= 0 ? path.slice(index + marker.length) : path.split("/").pop() || "";
+      }
+      const parts = slug.split("/").map((part) => part.trim()).filter(Boolean);
+      return parts.length > 1 ? parts.slice(0, -1) : [];
+    }
+
+    function entryTreePathParts(entry) {
+      const scope = String(entry?.scope || "unknown").trim() || "unknown";
+      const parts = [{ key: "scope:" + scope, label: entryScopeLabel(scope) }];
+      if (scope === "project") {
+        const project = String(entry?.project_key || "-").trim() || "-";
+        parts.push({ key: "project:" + project, label: project });
+      }
+      const type = String(entry?.type || "-").trim() || "-";
+      parts.push({ key: "type:" + type, label: entryTypeLabel(type) });
+      for (const segment of entryDirectorySegments(entry)) {
+        parts.push({ key: "dir:" + segment, label: segment });
+      }
+      return parts;
+    }
+
+    function createEntryTreeNode(label, key) {
+      return { label, key, count: 0, children: new Map(), entries: [] };
     }
 
     function groupEntries(entries) {
-      const groups = new Map();
+      const root = createEntryTreeNode("root", "root");
       for (const entry of sortEntriesByTitle(entries)) {
-        const label = entryGroupLabel(entry);
-        if (!groups.has(label)) groups.set(label, []);
-        groups.get(label).push(entry);
+        let node = root;
+        node.count += 1;
+        for (const part of entryTreePathParts(entry)) {
+          const key = `${node.key}/${part.key}`;
+          if (!node.children.has(part.key)) node.children.set(part.key, createEntryTreeNode(part.label, key));
+          node = node.children.get(part.key);
+          node.count += 1;
+        }
+        node.entries.push(entry);
       }
-      return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
+      return root;
+    }
+
+    function sortedEntryTreeChildren(node) {
+      return [...node.children.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
     }
 
     function entryGroupControlId(index) {
-      return `kb-entry-index-group-${index}`;
+      return `kb-entry-index-group-${String(index || "root").replace(/[^A-Za-z0-9_-]+/g, "-")}`;
+    }
+
+    function entryTreeNodeCollapsed(node, depth) {
+      if (state.expandedEntryGroups.has(node.key)) return false;
+      if (state.collapsedEntryGroups.has(node.key)) return true;
+      return depth > 0;
+    }
+
+    function renderEntryTreeNode(node, depth, indexPath) {
+      const collapsed = entryTreeNodeCollapsed(node, depth);
+      const controlId = entryGroupControlId(indexPath);
+      const encodedKey = encodeURIComponent(node.key);
+      const childrenHtml = sortedEntryTreeChildren(node)
+        .map((child, index) => renderEntryTreeNode(child, depth + 1, `${indexPath}-${index}`))
+        .join("");
+      const entriesHtml = node.entries.map((entry) => renderEntryItem(entry, { feed: true })).join("");
+      return `<section class="kb-entry-index-group kb-entry-tree-node kb-entry-tree-depth-${Math.min(depth, 4)}${collapsed ? " collapsed" : ""}">
+        <button class="kb-entry-index-group-head" type="button" aria-expanded="${collapsed ? "false" : "true"}" aria-controls="${esc(controlId)}" onclick="toggleEntryGroup('${esc(encodedKey)}', ${collapsed ? "true" : "false"})">
+          <span class="kb-entry-index-group-title"><span class="kb-entry-index-group-chevron" aria-hidden="true"></span><span class="kb-entry-index-group-label">${esc(node.label)}</span></span>
+          <span class="kb-entry-index-group-count">${node.count}</span>
+        </button>
+        <div id="${esc(controlId)}" class="kb-entry-index-list kb-entry-tree-list"${collapsed ? " hidden" : ""}>${childrenHtml}${entriesHtml}</div>
+      </section>`;
+    }
+
+    function renderEntryTree(tree) {
+      const children = sortedEntryTreeChildren(tree);
+      return children.length
+        ? children.map((child, index) => renderEntryTreeNode(child, 0, String(index))).join("")
+        : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
     }
 
     function renderEntryIndex() {
       if (!state.entries.length) return state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
-      const groups = groupEntries(state.entries);
+      const tree = groupEntries(state.entries);
       const total = Math.max(Number(state.entriesTotal || 0), state.entries.length);
       const hasMore = state.entries.length < total;
       const showingText = hasMore
         ? formatText("knowledge.entries_showing_total", { count: state.entries.length, total }, `Showing ${state.entries.length} of ${total} entries`)
         : formatText("knowledge.entries_showing", { count: state.entries.length }, "Showing " + state.entries.length + " entries");
-      const groupHtml = groups.length
-        ? groups.map(([label, entries], index) => {
-          const collapsed = state.collapsedEntryGroups.has(label);
-          const controlId = entryGroupControlId(index);
-          const encodedLabel = encodeURIComponent(label);
-          return `<section class="kb-entry-index-group${collapsed ? " collapsed" : ""}">
-            <button class="kb-entry-index-group-head" type="button" aria-expanded="${collapsed ? "false" : "true"}" aria-controls="${esc(controlId)}" onclick="toggleEntryGroup('${esc(encodedLabel)}')">
-              <span class="kb-entry-index-group-title"><span class="kb-entry-index-group-chevron" aria-hidden="true"></span><span class="kb-entry-index-group-label">${esc(label)}</span></span>
-              <span class="kb-entry-index-group-count">${entries.length}</span>
-            </button>
-            <div id="${esc(controlId)}" class="kb-entry-index-list"${collapsed ? " hidden" : ""}>${entries.map((entry) => renderEntryItem(entry, { feed: true })).join("")}</div>
-          </section>`;
-        }).join("")
-        : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
+      const groupHtml = renderEntryTree(tree);
       return `<div class="kb-entry-index">
         <div class="kb-entry-index-head">
           <div>
@@ -1462,16 +1538,18 @@
       renderEntryMarkdown();
     }
 
-    window.toggleEntryGroup = (encodedLabel) => {
-      let label = "";
+    window.toggleEntryGroup = (encodedKey, wasCollapsed = false) => {
+      let key = "";
       try {
-        label = decodeURIComponent(String(encodedLabel || ""));
+        key = decodeURIComponent(String(encodedKey || ""));
       } catch (_err) {
-        label = String(encodedLabel || "");
+        key = String(encodedKey || "");
       }
-      if (!label) return;
-      if (state.collapsedEntryGroups.has(label)) state.collapsedEntryGroups.delete(label);
-      else state.collapsedEntryGroups.add(label);
+      if (!key) return;
+      state.collapsedEntryGroups.delete(key);
+      state.expandedEntryGroups.delete(key);
+      if (wasCollapsed) state.expandedEntryGroups.add(key);
+      else state.collapsedEntryGroups.add(key);
       renderEntries();
     };
 
@@ -2931,15 +3009,48 @@
       return parts.length ? parts.join(" · ") : t("knowledge.sync_status_clean", "Up to date");
     }
 
+    function syncStatusElements() {
+      return ["#kb-sync-status", "#settings-sync-status"].map((selector) => $(selector)).filter(Boolean);
+    }
+
+    function setSyncStatusText(text) {
+      for (const el of syncStatusElements()) el.textContent = text;
+    }
+
+    function syncButtons() {
+      return ["#kb-sync", "#settings-sync"].map((selector) => $(selector)).filter(Boolean);
+    }
+
+    function setSyncButtons(disabled, text) {
+      for (const button of syncButtons()) {
+        button.disabled = disabled;
+        button.textContent = text;
+      }
+    }
+
     async function loadSyncStatus() {
-      const el = $("#settings-sync-status");
-      if (!el) return;
-      el.textContent = t("knowledge.sync_status_checking", "Checking sync status...");
+      if (!syncStatusElements().length) return;
+      setSyncStatusText(t("knowledge.sync_status_checking", "Checking sync status..."));
       try {
         const status = await api("/api/kb/sync-status");
-        el.textContent = syncStatusMessage(status);
+        setSyncStatusText(syncStatusMessage(status));
       } catch (e) {
-        el.textContent = formatText("knowledge.sync_status_failed", { error: e.message }, "Sync status failed: " + e.message);
+        setSyncStatusText(formatText("knowledge.sync_status_failed", { error: e.message }, "Sync status failed: " + e.message));
+      }
+    }
+
+    async function runKnowledgeSync() {
+      setSyncButtons(true, t("knowledge.syncing", "Syncing..."));
+      try {
+        const result = await api("/api/kb/sync", { method: "POST", body: JSON.stringify({ pull: true, push: true }) });
+        if (!result.ok) throw new Error(syncFailureMessage(result.sync));
+        toast(t("knowledge.sync_complete", "Sync complete"));
+        await loadStatus();
+        await loadSyncStatus();
+      } catch (e) {
+        toast(formatText("knowledge.sync_failed_with_error", { error: e.message }, "Sync failed: " + e.message));
+      } finally {
+        setSyncButtons(false, t("knowledge.sync_now", "Sync now"));
       }
     }
 
@@ -2975,23 +3086,7 @@
       catch (e) { toast(formatText("knowledge.save_failed_with_error", { error: e.message }, "Save failed: " + e.message)); }
     });
 
-    $("#settings-sync").addEventListener("click", async () => {
-      const button = $("#settings-sync");
-      button.disabled = true;
-      button.textContent = t("knowledge.syncing", "Syncing...");
-      try {
-        const result = await api("/api/kb/sync", { method: "POST", body: JSON.stringify({ pull: true, push: true }) });
-        if (!result.ok) throw new Error(syncFailureMessage(result.sync));
-        toast(t("knowledge.sync_complete", "Sync complete"));
-        await loadStatus();
-        await loadSyncStatus();
-      } catch (e) {
-        toast(formatText("knowledge.sync_failed_with_error", { error: e.message }, "Sync failed: " + e.message));
-      } finally {
-        button.disabled = false;
-        button.textContent = t("knowledge.sync_now", "Sync now");
-      }
-    });
+    for (const button of syncButtons()) button.addEventListener("click", runKnowledgeSync);
 
     $("#nav-workspace-select").addEventListener("change", () => { syncProjectNavCustomWorkspace(); loadProjectNavDrafts(); loadNavigation(); });
     $("#nav-workspace-custom").addEventListener("keydown", (event) => {
@@ -3104,12 +3199,14 @@
       renderNavigationAgents();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();
+      loadSyncStatus();
     });
     window.addEventListener("storage", (event) => {
       if (event.key === window.AHAI18n?.languageStorageKey) window.AHAI18n.setLanguage(event.newValue);
     });
     syncChromeText();
     loadStatus();
+    loadSyncStatus();
     loadProjectNavWorkspaces().finally(() => showTab(state.activeTab));
   </script>
 </body>
