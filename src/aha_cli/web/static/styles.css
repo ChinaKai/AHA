@@ -4,6 +4,9 @@
   background: var(--color-bg);
   --app-viewport-height: 100vh;
   --mobile-keyboard-inset: 0px;
+  --local-terminal-keyboard-inset: 0px;
+  --local-terminal-mobile-height: calc(var(--app-viewport-height) - 84px - env(safe-area-inset-bottom));
+  --local-terminal-bottom-gap: 28px;
   --color-bg: #f5f7fa;
   --color-surface: #ffffff;
   --color-surface-muted: #f9fafb;
@@ -446,6 +449,7 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrat
 .session-menu.weixin-open,
 .session-menu.play-open,
 .session-menu.observe-proxy-open,
+.session-menu.local-terminal-open,
 .session-menu.skills-open,
 .session-menu.token-usage-open {
   overflow: visible;
@@ -453,13 +457,28 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrat
 body.settings-home .session-menu.weixin-open,
 body.settings-home .session-menu.play-open,
 body.settings-home .session-menu.observe-proxy-open,
+body.settings-home .session-menu.local-terminal-open,
 body.settings-home .session-menu.skills-open,
 body.settings-home .session-menu.token-usage-open {
   overflow: auto;
 }
+body.settings-home .session-menu.local-terminal-open {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+body.settings-home .session-menu.local-terminal-open .run-integrations-section {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
 body.settings-home .session-menu.weixin-open .weixin-console-popover,
 body.settings-home .session-menu.play-open .play-console-popover,
 body.settings-home .session-menu.observe-proxy-open .observe-proxy-popover,
+body.settings-home .session-menu.local-terminal-open .local-terminal-popover,
 body.settings-home .session-menu.skills-open .skills-console-popover,
 body.settings-home .session-menu.token-usage-open .token-usage-popover {
   position: static;
@@ -468,6 +487,11 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   overflow: visible;
   margin-top: 8px;
   box-shadow: none;
+}
+body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 .session-menu-head {
   display: flex;
@@ -858,6 +882,19 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
 }
+.local-terminal-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(860px, calc(100vw - 32px));
+  max-height: min(78dvh, 720px);
+  overflow: hidden;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
 .token-usage-popover {
   position: absolute;
   top: calc(100% + 8px);
@@ -875,6 +912,92 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   display: grid;
   gap: 12px;
   padding: 14px;
+}
+.local-terminal-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(320px, 1fr);
+  gap: 10px;
+  min-height: min(68dvh, 620px);
+  padding: 14px;
+}
+.local-terminal-head,
+.local-terminal-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.local-terminal-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.local-terminal-head p {
+  margin: 3px 0 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+.local-terminal-status {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 650;
+}
+.local-terminal-status.connected {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+.local-terminal-status.connecting {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.local-terminal-status.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+.local-terminal-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.local-terminal-xterm {
+  min-height: 320px;
+  max-height: calc(78dvh - 130px);
+  overflow: hidden;
+  border: 1px solid #101828;
+  border-radius: 6px;
+  outline: none;
+  background: #101828;
+  color: #f8fafc;
+}
+.local-terminal-xterm .xterm {
+  height: calc(100% - var(--local-terminal-bottom-gap));
+  background: #101828 !important;
+}
+.local-terminal-xterm .xterm-viewport {
+  background: #101828 !important;
+  overflow-y: auto !important;
+}
+.local-terminal-xterm .xterm-screen,
+.local-terminal-xterm .xterm-rows {
+  min-height: 100%;
+  background: #101828 !important;
+}
+.local-terminal-xterm:focus-within {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.28);
+}
+body.settings-home .session-menu.local-terminal-open .local-terminal-panel {
+  height: 100%;
+  min-height: 0;
+}
+body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
 }
 .observe-proxy-head,
 .observe-proxy-config-actions {
@@ -1404,6 +1527,7 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
 .weixin-console-popover[hidden],
 .play-console-popover[hidden],
 .observe-proxy-popover[hidden],
+.local-terminal-popover[hidden],
 .skills-console-popover[hidden],
 .token-usage-popover[hidden],
 .settings-popover[hidden],
@@ -6865,6 +6989,12 @@ body.empty-run .panel {
     width: clamp(560px, calc(100vw - 430px), 720px);
     max-height: min(calc(var(--app-viewport-height) - 80px), 720px);
   }
+  .session-menu.local-terminal-open .local-terminal-popover {
+    top: 0;
+    right: calc(100% + 10px);
+    width: clamp(620px, calc(100vw - 430px), 860px);
+    max-height: min(calc(var(--app-viewport-height) - 80px), 720px);
+  }
   .session-menu.skills-open .skills-console-popover {
     top: 0;
     right: calc(100% + 10px);
@@ -7082,6 +7212,25 @@ body.empty-run .panel {
     z-index: 80;
     width: auto;
     max-height: none;
+  }
+  body.settings-home .session-menu.local-terminal-open .local-terminal-popover,
+  .session-menu.local-terminal-open .local-terminal-popover {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    bottom: auto;
+    left: 12px;
+    z-index: 80;
+    width: auto;
+    height: var(--local-terminal-mobile-height);
+    max-height: none;
+    overflow: hidden;
+    margin-top: 0;
+    transform: translateZ(0);
+  }
+  body.mobile-keyboard-active .session-menu.local-terminal-open .local-terminal-popover,
+  .session-menu.local-terminal-open .local-terminal-popover.local-terminal-keyboard-active {
+    box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
   }
   .session-menu.skills-open .skills-console-popover {
     position: fixed;
@@ -7596,6 +7745,7 @@ body.empty-run .panel {
   .weixin-console-popover,
   .play-console-popover,
   .observe-proxy-popover,
+  .local-terminal-popover,
   .skills-console-popover,
   .token-usage-popover,
   .run-maintenance-popover {

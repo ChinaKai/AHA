@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=overlays-content">
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=token-saving-v8">
+  <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
+  <link rel="stylesheet" href="/static/styles.css?v=local-terminal-v9">
 </head>
 <body>
   <header>
@@ -126,12 +127,14 @@
                 <div class="web-service-actions">
                   <button id="skills-console" class="button-ghost" type="button" aria-controls="skills-console-popover" aria-expanded="false" data-i18n="skills.title">Skills</button>
                   <button id="observe-proxy" class="button-ghost" type="button" aria-controls="observe-proxy-popover" aria-expanded="false" data-i18n="observe_proxy.title">Observe Proxy</button>
+                  <button id="local-terminal" class="button-ghost" type="button" aria-controls="local-terminal-popover" aria-expanded="false" data-i18n="local_terminal.title">Local terminal</button>
                   <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
                   <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
                   <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
                 </div>
                 <div id="skills-console-popover" class="skills-console-popover" hidden></div>
                 <div id="observe-proxy-popover" class="observe-proxy-popover" hidden></div>
+                <div id="local-terminal-popover" class="local-terminal-popover" hidden></div>
                 <div id="token-usage-popover" class="token-usage-popover" hidden></div>
                 <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
                 <div id="play-console-popover" class="play-console-popover" hidden></div>
@@ -958,6 +961,8 @@
   <script src="/static/api_client.js"></script>
   <script src="/static/token_usage.js?v=usage-v8"></script>
   <script src="/static/observe_proxy_panel.js?v=observe-proxy-v1"></script>
+  <script src="/static/xterm.js?v=6.0.0"></script>
+  <script src="/static/local_terminal.js?v=local-terminal-v9"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>

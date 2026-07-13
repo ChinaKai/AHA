@@ -49,6 +49,8 @@
     runMaintenancePopoverEl: "run-maintenance-popover",
     observeProxyEl: "observe-proxy",
     observeProxyPopoverEl: "observe-proxy-popover",
+    localTerminalEl: "local-terminal",
+    localTerminalPopoverEl: "local-terminal-popover",
     weixinConsoleEl: "weixin-console",
     weixinConsolePopoverEl: "weixin-console-popover",
     skillsConsoleEl: "skills-console",

@@ -383,7 +383,7 @@
       agentRuntimeConfirmDialogEl, agentRuntimeConfirmMessageEl, agentTargetEl, agentsEl,
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
       messageImageFileEl, messageImageUploadEl,
-      observeProxyEl, observeProxyPopoverEl,
+      observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
       closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
       playConsolePopoverEl, selectedAgentInfoEl, sendFormEl, sessionMenuEl, settingsContentEl,
       skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
@@ -510,6 +510,23 @@
       applyBootstrapPayload: deps.applyBootstrapPayload,
       bootstrapData: deps.bootstrapData,
       fetchJson: deps.fetchJson,
+      setPlayConsoleOpen: deps.setPlayConsoleOpen,
+      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
+      setTokenUsageOpen: deps.setTokenUsageOpen,
+      setWeixinConsoleOpen: deps.setWeixinConsoleOpen,
+      windowRef: deps.windowRef
+    });
+
+    const localTerminalController = window.AHALocalTerminal.createLocalTerminalController({
+      localTerminalEl,
+      localTerminalPopoverEl,
+      sessionMenuEl
+    }, {
+      apiUrl: deps.apiUrl,
+      currentRunId: deps.currentRunId,
+      escapeHtml: deps.escapeHtml,
+      setObserveProxyOpen: deps.setObserveProxyOpen,
       setPlayConsoleOpen: deps.setPlayConsoleOpen,
       setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
       setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
@@ -755,6 +772,7 @@
 
     return Object.freeze({
       agentConfigController,
+      localTerminalController,
       observeProxyController,
       messageComposer,
       playConsoleController,

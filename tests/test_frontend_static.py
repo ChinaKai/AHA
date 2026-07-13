@@ -202,6 +202,102 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("window.AHASkillsConsole.createSkillsConsoleController", factory)
         self.assertIn("skillsConsoleController = featureControllers.skillsConsoleController", wiring)
 
+    def test_integrations_include_local_terminal(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        terminal_script = (root / "local_terminal.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="local-terminal"', html)
+        self.assertIn('id="local-terminal-popover"', html)
+        self.assertIn('<link rel="stylesheet" href="/static/xterm.css?v=6.0.0">', html)
+        self.assertIn('<script src="/static/xterm.js?v=6.0.0"></script>', html)
+        self.assertIn('<script src="/static/local_terminal.js?v=local-terminal-v9"></script>', html)
+        self.assertLess(html.index("/static/xterm.js?v=6.0.0"), html.index("/static/local_terminal.js?v=local-terminal-v9"))
+        self.assertTrue((root / "xterm.js").exists())
+        self.assertTrue((root / "xterm.css").exists())
+        self.assertTrue((root / "xterm.LICENSE").exists())
+        self.assertIn('"local_terminal.title": "Local terminal"', i18n)
+        self.assertIn('"local_terminal.title": "本机终端"', i18n)
+        self.assertIn(".local-terminal-popover", styles)
+        self.assertIn(".local-terminal-xterm", styles)
+        self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-popover", styles)
+        self.assertIn("body.settings-home .session-menu.local-terminal-open {\n  grid-template-rows: auto minmax(0, 1fr);", styles)
+        self.assertIn("body.settings-home .session-menu.local-terminal-open .run-integrations-section", styles)
+        self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-xterm", styles)
+        self.assertIn(".local-terminal-xterm .xterm-viewport", styles)
+        self.assertIn(".local-terminal-xterm .xterm-screen", styles)
+        self.assertIn("background: #101828 !important;", styles)
+        self.assertIn("overflow-y: auto !important;", styles)
+        self.assertIn(".local-terminal-popover[hidden]", styles)
+        self.assertIn('localTerminalEl: "local-terminal"', registry)
+        self.assertIn('localTerminalPopoverEl: "local-terminal-popover"', registry)
+        self.assertIn("window.AHALocalTerminal.createLocalTerminalController", factory)
+        self.assertIn("localTerminalController = featureControllers.localTerminalController", wiring)
+        self.assertIn("renderLocalTerminalPopover", wiring)
+        self.assertIn('"/ws/terminal"', terminal_script)
+        self.assertIn("new Terminal", terminal_script)
+        self.assertIn("term.onData", terminal_script)
+        self.assertIn("term.resize", terminal_script)
+        self.assertIn("function resizeSoon", terminal_script)
+        self.assertIn("ResizeObserver", terminal_script)
+        self.assertIn("attachViewportResizeListeners", terminal_script)
+        self.assertIn("currentViewportHeight", terminal_script)
+        self.assertIn("baselineViewportHeight", terminal_script)
+        self.assertIn("baselineInset", terminal_script)
+        self.assertIn("localKeyboardInset", terminal_script)
+        self.assertIn("keyboardAdjustedTerminalHeight", terminal_script)
+        self.assertIn("availableHeight", terminal_script)
+        self.assertIn("terminalBottomGapForElement", terminal_script)
+        self.assertIn("--local-terminal-bottom-gap", terminal_script)
+        self.assertIn("options.forceHeight || baselineTerminalHeight <= 0", terminal_script)
+        self.assertIn("--local-terminal-keyboard-inset", terminal_script)
+        self.assertIn("localTerminalMobileHeight", terminal_script)
+        self.assertIn("--local-terminal-mobile-height", terminal_script)
+        self.assertIn("windowRef.visualViewport", terminal_script)
+        self.assertIn("virtualKeyboard", terminal_script)
+        self.assertIn("--local-terminal-keyboard-inset: 0px;", styles)
+        self.assertIn("--local-terminal-mobile-height: calc(var(--app-viewport-height) - 84px - env(safe-area-inset-bottom));", styles)
+        self.assertIn("--local-terminal-bottom-gap: 28px;", styles)
+        self.assertIn("height: calc(100% - var(--local-terminal-bottom-gap));", styles)
+        self.assertIn("bottom: auto;", styles)
+        self.assertIn("height: var(--local-terminal-mobile-height);", styles)
+        self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-popover,\n  .session-menu.local-terminal-open .local-terminal-popover", styles)
+        self.assertIn("margin-top: 0;", styles)
+        self.assertIn("transform: translateZ(0);", styles)
+        self.assertIn("body.mobile-keyboard-active .session-menu.local-terminal-open .local-terminal-popover", styles)
+        self.assertIn(".local-terminal-popover.local-terminal-keyboard-active", styles)
+
+    def test_local_terminal_xterm_controller_uses_terminal_runtime(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("local_terminal.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: { AHAI18n: { t: (_key, fallback) => fallback }, location: { href: "http://127.0.0.1/" } }, Terminal: function() {} };
+context.window.window = context.window;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const api = context.window.AHALocalTerminal;
+if (!api.renderLocalTerminal({ connected: true, canConnect: true }).includes("data-local-terminal-xterm")) process.exit(1);
+const size = api.terminalSizeForElement({ getBoundingClientRect: () => ({ width: 840, height: 360 }) });
+if (size.cols < 40 || size.rows < 12) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_daily_token_usage_entry_is_available_from_run_console(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
@@ -220,7 +316,7 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=token-saving-v8">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=local-terminal-v9">', html)
         self.assertIn('<script src="/static/i18n.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/token_usage.js?v=usage-v8"></script>', html)
         self.assertIn('"run.token_usage": "Daily usage"', i18n)

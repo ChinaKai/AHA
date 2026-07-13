@@ -106,6 +106,7 @@
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
         deps.setObserveProxyOpen?.(false);
+        deps.setLocalTerminalOpen?.(false);
         deps.setSkillsConsoleOpen?.(false);
         deps.setTokenUsageOpen?.(false);
       }
@@ -685,6 +686,7 @@
         }
       }
       if (elements.observeProxyEl) elements.observeProxyEl.disabled = actionInFlight;
+      if (elements.localTerminalEl) elements.localTerminalEl.disabled = actionInFlight || !hasRun;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.playConsoleEl) elements.playConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.skillsConsoleEl) elements.skillsConsoleEl.disabled = actionInFlight;
@@ -700,15 +702,19 @@
         setRunMaintenanceConsoleOpen(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setLocalTerminalOpen?.(false);
         deps.setTokenUsageOpen?.(false);
         if (actionInFlight) {
           deps.setObserveProxyOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
         }
       } else if (runMaintenanceConsoleOpen && elements.runMaintenancePopoverEl) {
         renderRunMaintenance();
       } else if (deps.observeProxyOpen?.() && elements.observeProxyPopoverEl) {
         deps.renderObserveProxyPopover?.();
+      } else if (deps.localTerminalOpen?.() && elements.localTerminalPopoverEl) {
+        deps.renderLocalTerminalPopover?.();
       } else if (deps.skillsConsoleOpen?.() && elements.skillsConsolePopoverEl) {
         deps.renderSkillsConsolePopover?.();
       } else if (deps.tokenUsageOpen?.() && elements.tokenUsagePopoverEl) {
@@ -775,6 +781,7 @@
       if (!sessionMenuOpen) {
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
+        deps.setLocalTerminalOpen?.(false);
         deps.setSkillsConsoleOpen?.(false);
         deps.setTokenUsageOpen?.(false);
         closeSystemSettingsPanel();
@@ -983,6 +990,7 @@
         const nextOpen = !deps.weixinConsoleOpen?.();
         if (nextOpen) {
           deps.setPlayConsoleOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
           deps.setTokenUsageOpen?.(false);
         }
@@ -994,6 +1002,7 @@
         const nextOpen = !deps.playConsoleOpen?.();
         if (nextOpen) {
           deps.setWeixinConsoleOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
           deps.setTokenUsageOpen?.(false);
         }
@@ -1006,6 +1015,7 @@
         if (nextOpen) {
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setTokenUsageOpen?.(false);
         }
         deps.setSkillsConsoleOpen?.(nextOpen);
@@ -1017,10 +1027,24 @@
         if (nextOpen) {
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
           deps.setTokenUsageOpen?.(false);
         }
         deps.setObserveProxyOpen?.(nextOpen);
+      });
+      elements.localTerminalEl?.addEventListener("click", event => {
+        event.stopPropagation();
+        if (runActionInFlight() || !currentRunId()) return;
+        const nextOpen = !deps.localTerminalOpen?.();
+        if (nextOpen) {
+          deps.setWeixinConsoleOpen?.(false);
+          deps.setPlayConsoleOpen?.(false);
+          deps.setObserveProxyOpen?.(false);
+          deps.setSkillsConsoleOpen?.(false);
+          deps.setTokenUsageOpen?.(false);
+        }
+        deps.setLocalTerminalOpen?.(nextOpen);
       });
       elements.tokenUsageEl?.addEventListener("click", event => {
         event.stopPropagation();
@@ -1029,6 +1053,7 @@
         if (nextOpen) {
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
         }
         deps.setTokenUsageOpen?.(nextOpen);
@@ -1052,6 +1077,7 @@
       elements.weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.playConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.observeProxyPopoverEl?.addEventListener("click", event => event.stopPropagation());
+      elements.localTerminalPopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.skillsConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.tokenUsagePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.runImportEl?.addEventListener("click", () => {
@@ -1096,6 +1122,9 @@
         if (deps.observeProxyOpen?.() && !elements.observeProxyEl?.contains(target) && !elements.observeProxyPopoverEl?.contains(target)) {
           deps.setObserveProxyOpen?.(false);
         }
+        if (deps.localTerminalOpen?.() && !elements.localTerminalEl?.contains(target) && !elements.localTerminalPopoverEl?.contains(target)) {
+          deps.setLocalTerminalOpen?.(false);
+        }
         if (deps.skillsConsoleOpen?.() && !elements.skillsConsoleEl?.contains(target) && !elements.skillsConsolePopoverEl?.contains(target)) {
           deps.setSkillsConsoleOpen?.(false);
         }
@@ -1112,6 +1141,7 @@
           deps.setWeixinConsoleOpen?.(false);
           deps.setPlayConsoleOpen?.(false);
           deps.setObserveProxyOpen?.(false);
+          deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
           deps.setTokenUsageOpen?.(false);
         }

@@ -16,6 +16,7 @@ from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, no
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import config_path
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
+from aha_cli.websocket.server import ws_accept_from_headers
 from aha_cli.web.game_routes import game_route_response
 from aha_cli.web.auth import (
     append_response_headers,
@@ -29,6 +30,7 @@ from aha_cli.web.auth import (
 from aha_cli.web.http_utils import http_response, json_response, read_http_request, static_response
 from aha_cli.web.run_api import ApiRunNotFound, require_api_run_id, workspace_options
 from aha_cli.web.knowledge_routes import knowledge_route_response
+from aha_cli.web.local_terminal import handle_local_terminal_ws_connection, local_terminal_peer_allowed
 from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
 from aha_cli.web.skill_routes import skill_route_response
@@ -106,6 +108,24 @@ async def handle_ui_client(
                 writer.write(unauthorized_response(method))
                 await writer.drain()
                 return
+
+        if method == "GET" and path == "/ws/terminal" and headers.get("upgrade", "").lower() == "websocket":
+            terminal_peer_allowed = local_terminal_peer_allowed(writer.get_extra_info("peername")) or bool(auth_token)
+            if not terminal_peer_allowed:
+                writer.write(
+                    http_response(
+                        "403 Forbidden",
+                        b"local terminal requires loopback access or Web auth\n",
+                        "text/plain; charset=utf-8",
+                    )
+                )
+                await writer.drain()
+                return
+            selected_run_id = require_api_run_id(root, run_id, query)
+            ok = await ws_accept_from_headers(headers, writer)
+            if ok:
+                await handle_local_terminal_ws_connection(root, selected_run_id, target, reader, writer)
+            return
 
         if method == "GET" and path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
             selected_run_id = require_api_run_id(root, run_id, query)

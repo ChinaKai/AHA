@@ -65,6 +65,25 @@ def _http_error(status: str, message: str) -> bytes:
     ).encode("ascii") + body
 
 
+async def ws_accept_from_headers(headers: dict[str, str], writer: asyncio.StreamWriter) -> bool:
+    key = headers.get("sec-websocket-key")
+    if not key:
+        writer.write(_http_error("400 Bad Request", "missing Sec-WebSocket-Key"))
+        await writer.drain()
+        return False
+    accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode("ascii")).digest()).decode("ascii")
+    response = (
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Accept: {accept}\r\n"
+        "\r\n"
+    )
+    writer.write(response.encode("ascii"))
+    await writer.drain()
+    return True
+
+
 def _parse_ws_cursor(query: dict[str, list[str]], max_event_id: int) -> tuple[int | None, str | None]:
     cursor_name = ""
     values: list[str] = []
@@ -121,26 +140,13 @@ async def ws_handshake_from_headers(
     writer: asyncio.StreamWriter,
 ) -> tuple[bool, int | None, dict]:
     query = parse_qs(urlparse(target).query, keep_blank_values=True)
-    key = headers.get("sec-websocket-key")
-    if not key:
-        writer.write(_http_error("400 Bad Request", "missing Sec-WebSocket-Key"))
-        await writer.drain()
-        return False, None, {}
     cursor, cursor_error = _parse_ws_cursor(query, event_stream_position(root, run_id))
     if cursor_error:
         writer.write(_http_error("400 Bad Request", cursor_error))
         await writer.drain()
         return False, None, {}
-    accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode("ascii")).digest()).decode("ascii")
-    response = (
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Accept: {accept}\r\n"
-        "\r\n"
-    )
-    writer.write(response.encode("ascii"))
-    await writer.drain()
+    if not await ws_accept_from_headers(headers, writer):
+        return False, None, {}
     return True, cursor, _parse_ws_status_options(query)
 
 

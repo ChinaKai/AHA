@@ -1,7 +1,7 @@
 const domRefs = window.AHAControllerRegistry.collectDomRefs(document);
 const {
   agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerRunConsoleEl, headerRunTitleEl, headerWorkspaceDirEl,
-  observeProxyEl, observeProxyPopoverEl,
+  observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
   mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, openRunCreateEl, panelEl, pendingMessagesEl,
   playConsoleEl, playConsolePopoverEl, renameRunNameEl, runArchiveStateEl, runCreateFormEl, runExportEl,
   runCreateDialogEl, closeRunCreateEl, cancelRunCreateEl, runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
@@ -717,6 +717,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   selectedTaskId: () => selectedTaskId,
   setCreateProxyDefaultsFromInputs,
   setObserveProxyOpen: value => observeProxyController?.setObserveProxyOpen(value),
+  setLocalTerminalOpen: value => localTerminalController?.setLocalTerminalOpen(value),
   setPlayConsoleOpen,
   setRunMaintenanceConsoleOpen,
   setSelectedTaskId: value => { selectedTaskId = value || null; },
@@ -750,6 +751,7 @@ const {
   taskMemoController
 } = featureControllers;
 observeProxyController = featureControllers.observeProxyController;
+localTerminalController = featureControllers.localTerminalController;
 playConsoleController = featureControllers.playConsoleController;
 skillsConsoleController = featureControllers.skillsConsoleController;
 tokenUsageController = featureControllers.tokenUsageController;
@@ -872,6 +874,8 @@ const runController = window.AHARunController.createRunController({
   documentRef: document,
   observeProxyEl,
   observeProxyPopoverEl,
+  localTerminalEl,
+  localTerminalPopoverEl,
   openRunCreateEl,
   runCreateDialogEl,
   headerRunConsoleEl,
@@ -941,6 +945,7 @@ const runController = window.AHARunController.createRunController({
   loadRuns,
   logoutAuthSession,
   observeProxyOpen: () => observeProxyController.isOpen(),
+  localTerminalOpen: () => localTerminalController.isOpen(),
   playConsoleOpen: () => playConsoleController.isOpen(),
   renameCurrentRun: runActions.renameCurrentRun,
   apiUrl,
@@ -950,6 +955,7 @@ const runController = window.AHARunController.createRunController({
   formatMetricBytes,
   renderAccessControlStatus,
   renderObserveProxyPopover: () => observeProxyController.renderObserveProxyPopover(),
+  renderLocalTerminalPopover: () => localTerminalController.renderLocalTerminalPopover(),
   renderPlayConsolePopover,
   renderSkillsConsolePopover,
   renderTokenUsagePopover: () => tokenUsageController.renderTokenUsagePopover(),
@@ -970,6 +976,7 @@ const runController = window.AHARunController.createRunController({
   sessionOptionLabel,
   setPlayConsoleOpen,
   setObserveProxyOpen: value => observeProxyController.setObserveProxyOpen(value),
+  setLocalTerminalOpen: value => localTerminalController.setLocalTerminalOpen(value),
   setSkillsConsoleOpen,
   setTokenUsageOpen: value => tokenUsageController.setTokenUsageOpen(value),
   setWeixinConsoleOpen,
