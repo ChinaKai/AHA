@@ -605,6 +605,26 @@ def _entry_updated_value(entry: dict) -> tuple[dt.datetime, str] | None:
     return None
 
 
+def _prefer_full_entry(existing: dict, candidate: dict) -> dict:
+    existing_updated = _entry_updated_value(existing)
+    candidate_updated = _entry_updated_value(candidate)
+    if candidate_updated and (not existing_updated or candidate_updated[0] >= existing_updated[0]):
+        return candidate
+    return existing
+
+
+def _find_entry_for_read(root: Path, cfg: dict, identifier: str) -> dict | None:
+    slug_match: dict | None = None
+    id_match: dict | None = None
+    for entry in iter_all_entries(root, cfg):
+        meta = entry.get("meta", {})
+        if identifier == meta.get("slug"):
+            slug_match = entry if slug_match is None else _prefer_full_entry(slug_match, entry)
+        if identifier == meta.get("id"):
+            id_match = entry if id_match is None else _prefer_full_entry(id_match, entry)
+    return slug_match or id_match
+
+
 def _navigation_summaries(root: Path, cfg: dict, project_key_value: str | None = None) -> list[dict]:
     index_entries: list[dict] = []
     latest_by_project: dict[str, tuple[dt.datetime, str]] = {}
@@ -966,7 +986,7 @@ def knowledge_route_response(
         identifier = str(query.get("id", [""])[0] or query.get("slug", [""])[0] or "").strip()
         if not identifier:
             return json_response({"error": "id or slug required"}, "400 Bad Request")
-        entry = find_entry(root, cfg, identifier)
+        entry = _find_entry_for_read(root, cfg, identifier)
         if entry is None:
             return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
         source_note_id = str((entry.get("meta") or {}).get("source_note_id") or "").strip()
