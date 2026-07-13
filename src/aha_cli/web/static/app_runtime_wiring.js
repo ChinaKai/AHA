@@ -13,7 +13,7 @@ const {
   skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
   sessionTitleEl, sessionToggleEl, summaryEl, taskRunContextEl, taskSettingsActionsEl, taskSettingsCloseEl,
   taskSettingsPanelEl, taskSettingsSubtitleEl, tasksEl, taskVisibilityFilterEl,
-  webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
+  webPublishConsoleEl, webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
 } = domRefs;
 let taskController = null;
 const initialControllers = window.AHAAppControllerFactory.createInitialControllers(domRefs, {
@@ -577,6 +577,7 @@ const runActions = window.AHARunActions.createRunActions({
   syncCurrentRunDisplay,
   syncRealtimeEvents,
   webRestartInFlight: () => webRestartInFlight,
+  webUpgradeAction,
   webUpgradeAvailable,
   windowRef: window
 });
@@ -919,6 +920,7 @@ const runController = window.AHARunController.createRunController({
   tokenUsagePopoverEl,
   summaryEl,
   taskRunContextEl,
+  webPublishConsoleEl,
   webRestartEl,
   webRestartStateEl,
   webUpgradeEl,
@@ -926,6 +928,7 @@ const runController = window.AHARunController.createRunController({
   weixinConsolePopoverEl
 }, {
   createRun: runActions.createRun,
+  confirmDialogAction,
   currentRunId: () => currentRunId,
   currentRunSummary,
   currentAppVersion,
@@ -975,6 +978,7 @@ const runController = window.AHARunController.createRunController({
   statusData: () => statusData,
   switchRun,
   webUpgradeAvailable,
+  upgradeWebService: runActions.upgradeWebService,
   updateStatusRunTitle: (runName, updatedAt) => {
     if (statusData) {
       statusData.goal = runName || statusData.goal;
@@ -983,6 +987,7 @@ const runController = window.AHARunController.createRunController({
   },
   updateRunLifecycleFromMenu: runActions.updateRunLifecycleFromMenu,
   webRestartInFlight: () => webRestartInFlight,
+  webUpgradeAction,
   weixinConsoleOpen: () => weixinConsoleController.isOpen()
 });
 // Translate a keydown into the bytes a serial terminal would send. Returns null for keys

@@ -140,13 +140,17 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
 
         self.assertIn('id="web-upgrade"', html)
-        self.assertIn('id="web-upgrade" class="button-ghost" type="button" hidden data-i18n="run.upgrade_web"', html)
+        self.assertIn('id="web-upgrade" class="button-ghost" type="button" hidden aria-controls="web-publish-console" aria-expanded="false" data-i18n="run.upgrade_web"', html)
+        self.assertIn('id="web-publish-console" class="web-publish-console" hidden', html)
         self.assertIn('data-i18n="run.upgrade_web"', html)
         self.assertIn('id="web-restart-state" class="meta" aria-live="polite"', html)
         self.assertLess(html.index('id="web-restart"'), html.index('id="web-upgrade"'))
         self.assertIn("header > div:first-child #web-restart-state.meta", (root / "styles.css").read_text(encoding="utf-8"))
         self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
         self.assertIn('"run.upgrade_web": "升级"', i18n)
+        self.assertIn('"run.publish_web": "Publish"', i18n)
+        self.assertIn('"run.publish_web": "发布"', i18n)
+        self.assertIn('"run.publish_confirm_message"', i18n)
 
     def test_web_upgrade_button_is_capability_gated(self) -> None:
         root = static_root()
@@ -154,10 +158,21 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
         controller = (root / "run_controller.js").read_text(encoding="utf-8")
         actions = (root / "run_actions.js").read_text(encoding="utf-8")
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn("function webUpgradeAvailable()", setup)
+        self.assertIn("function webUpgradeAction()", setup)
         self.assertIn("bootstrapData?.web_upgrade || statusData?.web_upgrade", setup)
+        self.assertIn("webUpgradeAction,", wiring)
         self.assertIn("webUpgradeAvailable,", wiring)
+        self.assertIn("webPublishConsoleEl: \"web-publish-console\"", registry)
+        self.assertIn('upgradeAction === "publish" ? t("run.publish_web", "Publish") : t("run.upgrade_web", "Upgrade")', controller)
+        self.assertIn('deps.apiUrl?.("/api/web/publish/status")', controller)
+        self.assertIn("submitWebPublish(form)", controller)
+        self.assertIn("confirmDialogAction", controller)
+        self.assertIn('deps.upgradeWebService?.({ tag })', controller)
+        self.assertIn(".web-publish-status-grid", styles)
         self.assertIn("elements.webUpgradeEl.hidden = !upgradeAvailable;", controller)
         self.assertIn("elements.webUpgradeEl.disabled = !upgradeAvailable", controller)
         self.assertIn("if (!deps.webUpgradeAvailable?.()) return;", actions)
@@ -2738,9 +2753,13 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         ]
 
         self.assertIn('async function waitForWebRestartAndReload(restartVersion = "", options = {})', run_actions_script)
-        self.assertIn("async function upgradeWebService()", run_actions_script)
+        self.assertIn("async function upgradeWebService(options = {})", run_actions_script)
         self.assertIn("if (!deps.webUpgradeAvailable?.()) return;", run_actions_script)
-        self.assertIn('apiUrl("/api/web/upgrade")', run_actions_script)
+        self.assertIn('const endpoint = publish ? "/api/web/publish" : "/api/web/upgrade";', run_actions_script)
+        self.assertIn("deps.webUpgradeAction?.()", run_actions_script)
+        self.assertIn('const body = publish && options.tag ? { tag: String(options.tag || "").trim() } : {};', run_actions_script)
+        self.assertIn("deps.fetchWithTimeout(deps.apiUrl(endpoint), request, 300000)", run_actions_script)
+        self.assertIn('t("run.publish_complete", "Publish complete. Release tag pushed to remote.")', run_actions_script)
         self.assertIn('t("run.upgrade_scheduling", "Starting upgrade...")', run_actions_script)
         self.assertIn('t("run.upgrade_waiting", "Upgrade started. Waiting for recovery...")', run_actions_script)
         self.assertIn('t("run.upgrade_complete", "Upgrade complete.")', run_actions_script)
@@ -2784,6 +2803,7 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         favicon_response = static_response("aha-favicon.svg", "GET")
         version_scripts = "\n".join([
             app_entry_script(static_root),
+            (static_root / "run_controller.js").read_text(encoding="utf-8"),
             (static_root / "status_controller.js").read_text(encoding="utf-8"),
         ])
 
@@ -2805,6 +2825,8 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn(".app-version", styles)
         self.assertIn("appVersionEl", version_scripts)
         self.assertIn("statusData()?.aha_version", version_scripts)
+        self.assertIn("elements.appVersionEl.textContent = version || \"\";", version_scripts)
+        self.assertNotIn("`v${version}`", version_scripts)
         self.assertIn("max-width: min(34vw, 360px);", styles)
         self.assertIn("<title>AHA</title>", logo)
         self.assertIn("<title>AHA</title>", favicon)

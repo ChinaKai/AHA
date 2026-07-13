@@ -68,8 +68,16 @@ function knowledgeHomeUrl() {
 }
 
 function webUpgradeAvailable() {
-  const capability = bootstrapData?.web_upgrade || statusData?.web_upgrade || null;
+  const capability = webUpgradeCapability();
   return Boolean(capability?.available);
+}
+
+function webUpgradeCapability() {
+  return bootstrapData?.web_upgrade || statusData?.web_upgrade || null;
+}
+
+function webUpgradeAction() {
+  return String(webUpgradeCapability()?.action || "upgrade").trim().toLowerCase() || "upgrade";
 }
 
 function applyInitialKnowledgeHomeState() {

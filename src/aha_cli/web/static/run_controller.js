@@ -27,6 +27,20 @@
     let runLifecycleFilter = "active";
     let runSettingsOpenId = "";
     let settingsTab = readStoredSettingsTab();
+    let webPublishConsoleOpen = false;
+    let webPublishLoading = false;
+    let webPublishStatus = null;
+    let webPublishError = "";
+    let webPublishNotice = "";
+    let webPublishTag = "";
+
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
+    function format(key, values = {}, fallback = "") {
+      return window.AHAI18n?.format?.(key, values, fallback) || fallback;
+    }
 
     function normalizeSettingsTab(value) {
       const tab = String(value || "").trim().toLowerCase();
@@ -114,12 +128,16 @@
       return String(deps.currentAppVersion?.() || "");
     }
 
+    function webUpgradeAction() {
+      return String(deps.webUpgradeAction?.() || "upgrade").trim().toLowerCase() || "upgrade";
+    }
+
     function renderAppVersion() {
       if (!elements.appVersionEl) return;
       const version = currentAppVersion();
-      elements.appVersionEl.textContent = version ? `v${version}` : "";
+      elements.appVersionEl.textContent = version || "";
       elements.appVersionEl.title = version ? `AHA version ${version}` : "";
-      if (elements.documentRef) elements.documentRef.title = version ? `AHA v${version}` : "AHA Dashboard";
+      if (elements.documentRef) elements.documentRef.title = version ? `AHA ${version}` : "AHA Dashboard";
     }
 
     function closeHeaderRunConsole() {
@@ -487,6 +505,133 @@
       }
     }
 
+    function renderWebPublishConsole() {
+      const panel = elements.webPublishConsoleEl;
+      if (!panel) return;
+      const isPublish = webUpgradeAction() === "publish";
+      if (!webPublishConsoleOpen || !isPublish) {
+        panel.hidden = true;
+        panel.innerHTML = "";
+        return;
+      }
+      panel.hidden = false;
+      const status = webPublishStatus || {};
+      const dirty = Boolean(status.dirty);
+      const dirtyText = dirty
+        ? format("run.publish_dirty_count", { count: status.dirty_count || 0 }, `Dirty (${status.dirty_count || 0})`)
+        : t("run.publish_clean", "Clean");
+      const ahead = Number(status.ahead || 0);
+      const behind = Number(status.behind || 0);
+      const changedPaths = Array.isArray(status.changed_paths) ? status.changed_paths : [];
+      const changedHtml = changedPaths.length
+        ? `<details class="web-publish-changes"><summary>${escapeHtml(t("run.publish_changed_paths", "Changed paths"))}</summary><ul>${changedPaths.map(path => `<li><code>${escapeHtml(path)}</code></li>`).join("")}</ul></details>`
+        : "";
+      const tagValue = webPublishTag || status.next_tag || "";
+      const busy = webPublishLoading || Boolean(deps.webRestartInFlight?.());
+      const noteHtml = webPublishNotice ? `<div class="web-publish-message success">${escapeHtml(webPublishNotice)}</div>` : "";
+      const errorHtml = webPublishError ? `<div class="web-publish-message error">${escapeHtml(webPublishError)}</div>` : "";
+      const fetchErrorHtml = status.fetch_error ? `<div class="web-publish-message warning">${escapeHtml(status.fetch_error)}</div>` : "";
+      panel.innerHTML = `<section class="web-publish-panel">
+        <div class="web-publish-head">
+          <div>
+            <h3>${escapeHtml(t("run.publish_console_title", "Publish release"))}</h3>
+            <p>${escapeHtml(t("run.publish_console_hint", "Review the source checkout before pushing a release tag."))}</p>
+          </div>
+          <button class="button-ghost" type="button" data-web-publish-action="close">${escapeHtml(t("common.close", "Close"))}</button>
+        </div>
+        ${noteHtml}${errorHtml}${fetchErrorHtml}
+        <div class="web-publish-status-grid">
+          <section><span>${escapeHtml(t("run.publish_dirty", "Dirty"))}</span><strong class="${dirty ? "warning" : "success"}">${escapeHtml(dirtyText)}</strong></section>
+          <section><span>${escapeHtml(t("run.publish_ahead", "Ahead"))}</span><strong>${ahead}</strong></section>
+          <section><span>${escapeHtml(t("run.publish_behind", "Behind"))}</span><strong class="${behind ? "warning" : ""}">${behind}</strong></section>
+          <section><span>${escapeHtml(t("run.publish_latest_tag", "Latest tag"))}</span><code>${escapeHtml(status.latest_tag || "-")}</code></section>
+        </div>
+        ${changedHtml}
+        <form class="web-publish-form" data-web-publish-form>
+          <label class="field-label web-publish-tag-field">
+            <span>${escapeHtml(t("run.publish_next_tag", "Next release tag"))}</span>
+            <input id="web-publish-tag" name="tag" value="${escapeHtml(tagValue)}" pattern="v[0-9]+\\.[0-9]+\\.[0-9]+" ${busy ? "disabled" : ""}>
+          </label>
+          <div class="web-publish-actions">
+            <button class="button-ghost" type="button" data-web-publish-action="refresh" ${busy ? "disabled" : ""}>${escapeHtml(t("common.refresh", "Refresh"))}</button>
+            <button type="submit" ${busy || !tagValue ? "disabled" : ""}>${escapeHtml(t("run.publish_confirm", "Publish"))}</button>
+          </div>
+        </form>
+        ${webPublishLoading ? `<div class="web-publish-message">${escapeHtml(t("run.publish_loading", "Loading publish status..."))}</div>` : ""}
+      </section>`;
+    }
+
+    async function loadWebPublishStatus(options = {}) {
+      if (!webPublishConsoleOpen || webUpgradeAction() !== "publish") return;
+      webPublishLoading = true;
+      webPublishError = "";
+      if (!options.keepNotice) webPublishNotice = "";
+      renderWebPublishConsole();
+      try {
+        const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/web/publish/status"), {}, t("run.publish_status_failed", "Failed to load publish status"));
+        webPublishStatus = payload || null;
+        if (!options.keepTag) webPublishTag = String(payload?.next_tag || "");
+      } catch (err) {
+        webPublishError = err?.message || String(err || t("run.publish_status_failed", "Failed to load publish status"));
+      } finally {
+        webPublishLoading = false;
+        renderWebPublishConsole();
+      }
+    }
+
+    function setWebPublishConsoleOpen(value, options = {}) {
+      const nextOpen = Boolean(value && currentRunId() && webUpgradeAction() === "publish" && deps.webUpgradeAvailable?.());
+      webPublishConsoleOpen = nextOpen;
+      elements.sessionMenuEl?.classList?.toggle("web-publish-open", nextOpen);
+      elements.webUpgradeEl?.setAttribute("aria-expanded", String(nextOpen));
+      if (!nextOpen) {
+        webPublishError = "";
+        webPublishNotice = "";
+      }
+      renderWebPublishConsole();
+      if (nextOpen && options.load !== false) void loadWebPublishStatus();
+    }
+
+    async function submitWebPublish(form) {
+      const tagInput = form?.querySelector?.("#web-publish-tag");
+      const tag = String(tagInput?.value || webPublishTag || "").trim();
+      webPublishTag = tag;
+      if (!/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)) {
+        webPublishError = t("run.publish_tag_invalid", "Release tag must use vX.Y.Z format.");
+        webPublishNotice = "";
+        renderWebPublishConsole();
+        return;
+      }
+      const status = webPublishStatus || {};
+      const confirmed = await (deps.confirmDialogAction?.({
+        title: format("run.publish_confirm_title", { tag }, `Publish ${tag}?`),
+        message: t("run.publish_confirm_message", "This will commit current workspace changes, create the tag, and push the branch and tag to origin."),
+        confirmLabel: t("run.publish_confirm", "Publish"),
+        details: [
+          [t("run.publish_next_tag", "Next release tag"), tag],
+          [t("run.publish_dirty", "Dirty"), status.dirty ? String(status.dirty_count || 0) : t("run.publish_clean", "Clean")],
+          [t("run.publish_ahead", "Ahead"), String(status.ahead || 0)],
+          [t("run.publish_behind", "Behind"), String(status.behind || 0)],
+        ],
+      }) ?? Promise.resolve(true));
+      if (!confirmed) return;
+      webPublishLoading = true;
+      webPublishError = "";
+      webPublishNotice = "";
+      renderWebPublishConsole();
+      try {
+        const result = await deps.upgradeWebService?.({ tag });
+        const publishedTag = String(result?.tag || tag);
+        webPublishNotice = format("run.publish_done_tag", { tag: publishedTag }, `Published ${publishedTag}.`);
+        await loadWebPublishStatus({ keepNotice: true });
+      } catch (err) {
+        webPublishError = err?.message || String(err || t("run.publish_failed", "Failed to publish Web"));
+      } finally {
+        webPublishLoading = false;
+        renderWebPublishConsole();
+      }
+    }
+
     function renderSessionMenu() {
       const fallback = deps.fallbackCurrentRun?.();
       const rawRuns = deps.runsData?.();
@@ -529,8 +674,15 @@
       if (elements.webRestartEl) elements.webRestartEl.disabled = Boolean(deps.webRestartInFlight?.()) || !hasRun;
       if (elements.webUpgradeEl) {
         const upgradeAvailable = Boolean(deps.webUpgradeAvailable?.());
+        const upgradeAction = webUpgradeAction();
+        const label = upgradeAction === "publish" ? t("run.publish_web", "Publish") : t("run.upgrade_web", "Upgrade");
+        elements.webUpgradeEl.textContent = label;
+        elements.webUpgradeEl.title = label;
         elements.webUpgradeEl.hidden = !upgradeAvailable;
         elements.webUpgradeEl.disabled = !upgradeAvailable || Boolean(deps.webRestartInFlight?.()) || !hasRun;
+        if (upgradeAction !== "publish" || !upgradeAvailable || !hasRun) {
+          setWebPublishConsoleOpen(false, { load: false });
+        }
       }
       if (elements.observeProxyEl) elements.observeProxyEl.disabled = actionInFlight;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
@@ -568,6 +720,7 @@
       }
       renderRunLifecycleActions();
       renderRunMaintenance();
+      renderWebPublishConsole();
       deps.renderAccessControlStatus?.();
       renderRunArchiveState();
       renderSessionSummary();
@@ -798,7 +951,30 @@
       });
       elements.webUpgradeEl?.addEventListener("click", () => {
         if (!deps.webUpgradeAvailable?.()) return;
+        if (webUpgradeAction() === "publish") {
+          setWebPublishConsoleOpen(!webPublishConsoleOpen);
+          return;
+        }
         void deps.dispatchAction?.("web-upgrade");
+      });
+      elements.webPublishConsoleEl?.addEventListener("click", event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const actionEl = target?.closest("[data-web-publish-action]");
+        if (!actionEl) return;
+        const action = actionEl.getAttribute("data-web-publish-action") || "";
+        if (action === "close") setWebPublishConsoleOpen(false, { load: false });
+        if (action === "refresh") void loadWebPublishStatus();
+      });
+      elements.webPublishConsoleEl?.addEventListener("input", event => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.id === "web-publish-tag") webPublishTag = target.value || "";
+      });
+      elements.webPublishConsoleEl?.addEventListener("submit", event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const form = target?.closest("[data-web-publish-form]");
+        if (!form) return;
+        event.preventDefault();
+        void submitWebPublish(form);
       });
       elements.authLogoutEl?.addEventListener("click", deps.logoutAuthSession);
       elements.weixinConsoleEl?.addEventListener("click", event => {

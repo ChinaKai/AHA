@@ -36,7 +36,7 @@ from aha_cli.web.status import (
     web_task_options_snapshot,
     web_tasks_snapshot,
 )
-from aha_cli.web.upgrade import web_upgrade_command, web_upgrade_status
+from aha_cli.web.upgrade import publish_source_release, source_publish_preview, web_publish_status, web_upgrade_command, web_upgrade_status
 
 WEB_RESTART_EXIT_CODE = 75
 _web_restart_requested = False
@@ -277,6 +277,25 @@ def request_web_upgrade(root: Path, run_id: str) -> dict:
         "log_path": str(log_path),
     }
     append_event(root, run_id, "web_upgrade_requested", payload)
+    return payload
+
+
+def request_web_publish(root: Path, run_id: str, tag: str | None = None) -> dict:
+    publish = publish_source_release(tag)
+    payload = {
+        "run_id": run_id,
+        **publish,
+    }
+    append_event(root, run_id, "web_publish_requested", payload)
+    return payload
+
+
+def web_publish_preview_payload(root: Path, run_id: str) -> dict:
+    preview = source_publish_preview()
+    payload = {
+        "run_id": run_id,
+        **preview,
+    }
     return payload
 
 
@@ -609,6 +628,27 @@ def system_route_response(
         except FileNotFoundError as exc:
             return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "409 Conflict")
         return json_response({"ok": True, **upgrade})
+    if method in {"GET", "HEAD"} and path == "/api/web/publish/status":
+        run_id = require_api_run_id(root, default_run_id, query)
+        try:
+            preview = web_publish_preview_payload(root, run_id)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_publish_status()}, "409 Conflict")
+        except RuntimeError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_publish_status()}, "500 Internal Server Error")
+        return head_or_json(method, {"ok": True, **preview}, request_headers=headers)
+    if method == "POST" and path == "/api/web/publish":
+        payload = parse_json_body(body) if body.strip() else {}
+        run_id = require_api_run_id(root, default_run_id, query, payload)
+        try:
+            publish = request_web_publish(root, run_id, str(payload.get("tag") or "").strip() or None)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_publish_status()}, "409 Conflict")
+        except ValueError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_publish_status()}, "400 Bad Request")
+        except RuntimeError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_publish_status()}, "500 Internal Server Error")
+        return json_response({"ok": True, **publish})
     if method in {"GET", "HEAD"} and path == "/api/weixin":
         run_id = require_api_run_id(root, default_run_id, query)
         payload = weixin_status_snapshot(root, run_id)

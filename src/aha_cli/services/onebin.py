@@ -45,6 +45,12 @@ def build_version_for_source(source: Path) -> str:
         commit = _git_output(source, ["rev-parse", "--short=7", "HEAD"])
     except (OSError, subprocess.SubprocessError):
         return _existing_build_version(package_dir)
+    try:
+        tag = _git_output(source, ["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"])
+    except (OSError, subprocess.SubprocessError):
+        tag = ""
+    if tag and date and commit:
+        return f"{tag}.{date}.{commit}"
     return f"{date}.{commit}" if date and commit else _existing_build_version(package_dir)
 
 

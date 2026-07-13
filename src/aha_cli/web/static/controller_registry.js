@@ -42,6 +42,7 @@
     closeSettingsEl: "close-settings",
     settingsContentEl: "settings-content",
     webRestartEl: "web-restart",
+    webPublishConsoleEl: "web-publish-console",
     webUpgradeEl: "web-upgrade",
     authLogoutEl: "auth-logout",
     accessControlStatusEl: "access-control-status",

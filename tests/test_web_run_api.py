@@ -96,6 +96,7 @@ class WebRunApiTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertFalse(body["web_upgrade"]["available"])
+        self.assertEqual(body["web_upgrade"]["action"], "publish")
         self.assertEqual(body["web_upgrade"]["mode"], "source")
 
     def test_api_bootstrap_includes_discovered_skill_options(self) -> None:

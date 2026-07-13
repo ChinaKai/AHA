@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -24,6 +25,11 @@ class WebSystemRoutesTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def run_git(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if not shutil.which("git"):
+            self.skipTest("git is not available")
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
     def test_health_route_does_not_require_a_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -344,8 +350,85 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(response and response.startswith(b"HTTP/1.1 409 Conflict"))
         body = json_response_body(response)
         self.assertFalse(body["web_upgrade"]["available"])
+        self.assertEqual(body["web_upgrade"]["action"], "publish")
         self.assertEqual(body["web_upgrade"]["mode"], "source")
         popen.assert_not_called()
+
+    def test_web_publish_route_commits_next_tag_and_pushes_to_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "aha-home"
+            source = tmp_path / "source"
+            remote = tmp_path / "remote.git"
+            root.mkdir()
+            source.mkdir()
+            remote.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Publish release", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            self.run_git(remote, "init", "--bare", "--initial-branch=main")
+            self.run_git(source, "init", "--initial-branch=main")
+            self.run_git(source, "remote", "add", "origin", str(remote))
+            (source / "README.md").write_text("# AHA\n", encoding="utf-8")
+            self.run_git(source, "add", "README.md")
+            self.run_git(
+                source,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-m",
+                "chore: initial",
+            )
+            self.run_git(source, "tag", "v1.2.3")
+            self.run_git(source, "push", "-u", "origin", "main", "--tags")
+            (source / "CHANGELOG.md").write_text("release notes\n", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": str(source), "AHA_INSTALL_BIN": ""}, clear=False):
+                preview_response = system_route_response(root, run_id, "GET", "/api/web/publish/status", {}, b"")
+                response = system_route_response(root, run_id, "POST", "/api/web/publish", {}, json.dumps({"tag": "v1.2.9"}).encode("utf-8"))
+
+            events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+            self.assertTrue(preview_response and preview_response.startswith(b"HTTP/1.1 200 OK"))
+            preview = json_response_body(preview_response)
+            self.assertTrue(preview["ok"])
+            self.assertEqual(preview["publish"], "source-release-preview")
+            self.assertTrue(preview["dirty"])
+            self.assertEqual(preview["dirty_count"], 1)
+            self.assertIn("CHANGELOG.md", preview["changed_paths"])
+            self.assertEqual(preview["ahead"], 0)
+            self.assertEqual(preview["behind"], 0)
+            self.assertEqual(preview["latest_tag"], "v1.2.3")
+            self.assertEqual(preview["next_tag"], "v1.2.4")
+            self.assertTrue(response and response.startswith(b"HTTP/1.1 200 OK"))
+            body = json_response_body(response)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["publish"], "source-release")
+            self.assertEqual(body["previous_tag"], "v1.2.3")
+            self.assertEqual(body["tag"], "v1.2.9")
+            self.assertTrue(body["committed"])
+            self.assertEqual(body["branch"], "main")
+            self.assertIn("main", body["pushed"])
+            self.assertIn("v1.2.9", body["pushed"])
+            self.assertEqual(self.run_git(source, "status", "--porcelain").stdout.strip(), "")
+            self.assertEqual(self.run_git(source, "log", "-1", "--format=%s").stdout.strip(), "chore(release): publish v1.2.9")
+            self.assertEqual(self.run_git(source, "rev-parse", "HEAD").stdout.strip(), body["commit"])
+            remote_tag = self.run_git(source, "ls-remote", "--tags", "origin", "refs/tags/v1.2.9").stdout.strip()
+            self.assertIn("refs/tags/v1.2.9", remote_tag)
+            self.assertTrue(any(event["type"] == "web_publish_requested" for event in events))
+
+            with mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": str(source), "AHA_INSTALL_BIN": ""}, clear=False):
+                duplicate = system_route_response(root, run_id, "POST", "/api/web/publish", {}, json.dumps({"tag": "v1.2.9"}).encode("utf-8"))
+                invalid = system_route_response(root, run_id, "POST", "/api/web/publish", {}, json.dumps({"tag": "release-1"}).encode("utf-8"))
+            self.assertTrue(duplicate and duplicate.startswith(b"HTTP/1.1 400 Bad Request"))
+            self.assertIn("already exists", json_response_body(duplicate)["error"])
+            self.assertTrue(invalid and invalid.startswith(b"HTTP/1.1 400 Bad Request"))
+            self.assertIn("vX.Y.Z", json_response_body(invalid)["error"])
 
     def test_web_upgrade_env_uses_core_proxy_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1374,7 +1374,7 @@ class CliCoreTests(unittest.TestCase):
             self.assertTrue(os.access(artifact, os.X_OK))
             with zipfile.ZipFile(artifact) as archive:
                 build_version = archive.read("aha_cli/_build_version.py").decode("utf-8")
-            self.assertRegex(build_version, r"BUILD_VERSION = '\d{8}\.[0-9a-f]{7}'")
+            self.assertRegex(build_version, r"BUILD_VERSION = 'v\d+\.\d+\.\d+\.\d{8}\.[0-9a-f]{7}'")
 
             help_run = subprocess.run([str(artifact), "--help"], capture_output=True, text=True, timeout=10)
             self.assertEqual(help_run.returncode, 0, help_run.stderr)

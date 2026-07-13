@@ -337,32 +337,53 @@
       }
     }
 
-    async function upgradeWebService() {
+    async function upgradeWebService(options = {}) {
       if (deps.webRestartInFlight?.()) return;
       if (!deps.webUpgradeAvailable?.()) return;
       if (!currentRunId()) {
         alertUser(t("run.none", "No run selected"));
         return;
       }
+      const action = String(deps.webUpgradeAction?.() || "upgrade").trim().toLowerCase() || "upgrade";
+      const publish = action === "publish";
+      const endpoint = publish ? "/api/web/publish" : "/api/web/upgrade";
+      const schedulingText = publish ? t("run.publish_scheduling", "Publishing...") : t("run.upgrade_scheduling", "Starting upgrade...");
+      const failedText = publish ? t("run.publish_failed", "Failed to publish Web") : t("run.upgrade_failed", "Failed to upgrade Web");
       const restartVersion = deps.currentAppVersion?.();
       setWebRestartInFlight(true);
-      deps.setWebRestartState?.(t("run.upgrade_scheduling", "Starting upgrade..."));
+      deps.setWebRestartState?.(schedulingText);
       deps.renderSessionMenu?.();
       try {
-        await deps.fetchJson(deps.apiUrl("/api/web/upgrade"), {
+        const body = publish && options.tag ? { tag: String(options.tag || "").trim() } : {};
+        const request = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({})
-        }, t("run.upgrade_failed", "Failed to upgrade Web"));
+          body: JSON.stringify(body)
+        };
+        let payload = null;
+        if (publish && deps.fetchWithTimeout && deps.readJsonResponse) {
+          const response = await deps.fetchWithTimeout(deps.apiUrl(endpoint), request, 300000);
+          payload = await deps.readJsonResponse(response, failedText);
+        } else {
+          payload = await deps.fetchJson(deps.apiUrl(endpoint), request, failedText);
+        }
+        if (publish) {
+          setWebRestartInFlight(false);
+          deps.setWebRestartState?.(t("run.publish_complete", "Publish complete. Release tag pushed to remote."));
+          deps.renderSessionMenu?.();
+          return payload;
+        }
         deps.setWebRestartState?.(t("run.upgrade_waiting", "Upgrade started. Waiting for recovery..."));
         waitForWebRestartAndReload(restartVersion, {
           completeMessage: t("run.upgrade_complete", "Upgrade complete."),
           manualMessage: t("run.upgrade_manual", "Upgrade started. Check the upgrade log or start the service manually if the page does not recover.")
         });
+        return payload;
       } catch (err) {
         setWebRestartInFlight(false);
-        deps.setWebRestartState?.(err?.message || String(err || t("run.upgrade_failed", "Failed to upgrade Web")), true);
+        deps.setWebRestartState?.(err?.message || String(err || failedText), true);
         deps.renderSessionMenu?.();
+        if (publish) throw err;
       }
     }
 
