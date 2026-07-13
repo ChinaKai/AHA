@@ -116,6 +116,40 @@ def test_entries_mark_dirty_knowledge_files(tmp_path: Path, monkeypatch):
     assert detail["dirty"] is True
 
 
+def test_entries_dedupe_duplicate_ids_prefers_latest_worklog(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    kb_root = knowledge_root(home, cfg)
+    base = kb_root / "projects" / "git-abc" / "worklog" / "tasks" / "2026" / "07"
+    base.mkdir(parents=True, exist_ok=True)
+    duplicate_id = "kb_task_worklog_duplicate"
+    for slug, updated_at in (
+        ("tasks/2026/07/20260708-AHA知识库优化", "2026-07-13T05:49:05+00:00"),
+        ("tasks/2026/07/20260713-AHA知识库优化", "2026-07-13T14:31:00+08:00"),
+    ):
+        meta = {
+            "id": duplicate_id,
+            "type": "task_worklog",
+            "scope": "project",
+            "project_key": "git-abc",
+            "title": "task-001 AHA知识库优化 工作记录",
+            "slug": slug,
+            "created_at": "2026-07-13T05:41:04+00:00",
+            "updated_at": updated_at,
+            "tags": ["worklog", "task"],
+        }
+        (base / f"{Path(slug).name}.md").write_text(serialize_entry(meta, "body"), encoding="utf-8")
+
+    entries = _get(home, "/api/kb/entries", {"kind": ["worklog"]})
+    assert entries["count"] == 1
+    assert entries["entries"][0]["id"] == duplicate_id
+    assert entries["entries"][0]["slug"] == "tasks/2026/07/20260713-AHA知识库优化"
+
+    fast = _get(home, "/api/kb/entries", {"kind": ["worklog"], "fast": ["1"], "limit": ["120"]})
+    assert fast["count"] == 1
+    assert fast["entries"][0]["slug"] == "tasks/2026/07/20260713-AHA知识库优化"
+
+
 def test_entries_kind_filter_includes_navigation(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)

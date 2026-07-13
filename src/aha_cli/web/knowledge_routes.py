@@ -476,6 +476,49 @@ def _mark_dirty_entries(entries: list[dict], root: Path, cfg: dict) -> None:
             entry["dirty"] = True
 
 
+def _entry_identity(entry: dict) -> str:
+    return str(entry.get("id") or entry.get("slug") or entry.get("path") or "").strip()
+
+
+def _entry_public_updated_value(entry: dict) -> tuple[dt.datetime, str] | None:
+    for key in ("updated_at", "created_at"):
+        value = str(entry.get(key) or "").strip()
+        parsed = _parse_entry_time(value)
+        if parsed is not None:
+            return parsed, value
+    path = entry.get("path")
+    if path:
+        try:
+            updated = dt.datetime.fromtimestamp(Path(str(path)).stat().st_mtime, tz=dt.timezone.utc).replace(microsecond=0)
+        except OSError:
+            return None
+        return updated, updated.isoformat()
+    return None
+
+
+def _prefer_entry(existing: dict, candidate: dict) -> dict:
+    existing_updated = _entry_public_updated_value(existing)
+    candidate_updated = _entry_public_updated_value(candidate)
+    if candidate_updated and (not existing_updated or candidate_updated[0] >= existing_updated[0]):
+        return candidate
+    return existing
+
+
+def _dedupe_entries_by_identity(entries: list[dict]) -> list[dict]:
+    deduped: dict[str, dict] = {}
+    order: list[str] = []
+    for entry in entries:
+        key = _entry_identity(entry)
+        if not key:
+            key = str(len(order))
+        if key not in deduped:
+            deduped[key] = entry
+            order.append(key)
+            continue
+        deduped[key] = _prefer_entry(deduped[key], entry)
+    return [deduped[key] for key in order]
+
+
 def _parse_entry_time(value: object) -> dt.datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -532,6 +575,7 @@ def _fast_entry_summary_page(
             break
         entries.append(_entry_summary(entry))
     _mark_dirty_entries(entries, root, cfg)
+    entries = _dedupe_entries_by_identity(entries)
     count = offset + len(entries) + (1 if has_more else 0)
     return {
         "entries": entries,
@@ -883,6 +927,7 @@ def knowledge_route_response(
             if search and not _entry_matches_query(entry, search):
                 continue
             entries.append(_entry_summary(entry))
+        entries = _dedupe_entries_by_identity(entries)
         total_entries = len(entries)
         page_entries = entries[offset : offset + limit] if limit else entries[offset:]
         _mark_dirty_entries(page_entries, root, cfg)

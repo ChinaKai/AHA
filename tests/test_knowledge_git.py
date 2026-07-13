@@ -211,6 +211,24 @@ def test_sync_status_reports_dirty_and_remote_counts(tmp_path: Path):
     assert dirty["changed_count"] > 0
 
 
+def test_changed_paths_preserves_unicode_paths(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _config()
+    assert kg.commit_all(root, "init", cfg)["committed"] is True
+    repo = knowledge_root(root, cfg)
+    rel = Path("projects/git-abc/worklog/tasks/2026/07/20260713-AHA知识库优化.md")
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("dirty\n", encoding="utf-8")
+
+    paths = kg.changed_paths(root, cfg)
+    status = kg.sync_status(root, cfg, check_remote=False)
+
+    assert rel.as_posix() in paths
+    assert rel.as_posix() in status["changed_paths"]
+    assert not any("\\347" in item or item.startswith('"') for item in paths)
+
+
 def test_pull_unreachable_remote_returns_failure(tmp_path: Path):
     root = tmp_path / ".aha"
     # Remote path that does not exist -> unreachable, not "empty".

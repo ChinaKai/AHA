@@ -70,7 +70,7 @@ def _run_git(repo: Path, args: list[str], *, author: dict | None = None) -> dict
     return {
         "ok": proc.returncode == 0,
         "rc": proc.returncode,
-        "stdout": proc.stdout.strip(),
+        "stdout": proc.stdout.rstrip("\n"),
         "stderr": proc.stderr.strip(),
         "args": args,
     }
@@ -182,9 +182,9 @@ def sync_status(root: Path, config: dict | None = None, *, check_remote: bool = 
         status["state"] = _sync_status_state(status)
         return status
 
-    dirty = _run_git(repo, ["status", "--porcelain"])
+    dirty = _changed_paths(repo)
     if dirty["ok"]:
-        paths = _changed_paths_from_status(dirty["stdout"])
+        paths = dirty["paths"]
         status["dirty"] = bool(paths)
         status["changed_count"] = len(paths)
         status["changed_paths"] = paths[:20]
@@ -286,15 +286,43 @@ def _changed_paths_from_status(stdout: str) -> list[str]:
     return paths
 
 
+def _changed_paths_from_status_z(stdout: str) -> list[str]:
+    paths: list[str] = []
+    parts = (stdout or "").split("\0")
+    index = 0
+    while index < len(parts):
+        raw = parts[index]
+        index += 1
+        if len(raw) < 4:
+            continue
+        status = raw[:2]
+        path = raw[3:]
+        if path:
+            paths.append(path)
+        if "R" in status or "C" in status:
+            index += 1
+    return paths
+
+
+def _changed_paths(repo: Path, pathspecs: list[str] | None = None) -> dict:
+    args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+    if pathspecs:
+        args.extend(["--", *pathspecs])
+    status = _run_git(repo, args)
+    if not status["ok"]:
+        return {"ok": False, "paths": [], "stderr": status["stderr"]}
+    return {"ok": True, "paths": _changed_paths_from_status_z(status["stdout"]), "stderr": ""}
+
+
 def changed_paths(root: Path, config: dict | None = None) -> list[str]:
     """Return dirty paths in the knowledge git repository without remote I/O."""
     repo = knowledge_root(root, config)
     if not git_available() or not is_repo(repo):
         return []
-    status = _run_git(repo, ["status", "--porcelain"])
+    status = _changed_paths(repo)
     if not status["ok"]:
         return []
-    return _changed_paths_from_status(status["stdout"])
+    return list(status["paths"])
 
 
 def commit_all(root: Path, message: str, config: dict | None = None) -> dict:

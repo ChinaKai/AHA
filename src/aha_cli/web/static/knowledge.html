@@ -86,6 +86,9 @@
     }
     .kb-entry-index-groups { display: grid; gap: 10px; min-width: 0; }
     .kb-entry-index-group { display: grid; gap: 6px; min-width: 0; padding-left: 8px; }
+    .kb-entry-dirty-group > .kb-entry-index-group-head {
+      border-top-color: #fed7aa; background: #fff7ed; color: #9a3412;
+    }
     .kb-entry-tree-node { padding-left: 0; }
     .kb-entry-tree-depth-0 > .kb-entry-index-group-head {
       font-weight: 650; background: var(--color-surface-muted);
@@ -1534,6 +1537,23 @@
         : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
     }
 
+    function renderDirtyEntryGroup(entries) {
+      const dirtyEntries = sortEntriesByTitle(entries.filter((entry) => entry?.dirty));
+      if (!dirtyEntries.length) return "";
+      const key = "dirty";
+      const collapsed = state.collapsedEntryGroups.has(key) && !state.expandedEntryGroups.has(key);
+      const controlId = "kb-entry-index-dirty";
+      const encodedKey = encodeURIComponent(key);
+      const entriesHtml = dirtyEntries.map((entry) => renderEntryItem(entry, { feed: true })).join("");
+      return `<section class="kb-entry-index-group kb-entry-dirty-group${collapsed ? " collapsed" : ""}">
+        <button class="kb-entry-index-group-head" type="button" aria-expanded="${collapsed ? "false" : "true"}" aria-controls="${esc(controlId)}" onclick="toggleEntryGroup('${esc(encodedKey)}', ${collapsed ? "true" : "false"})">
+          <span class="kb-entry-index-group-title"><span class="kb-entry-index-group-chevron" aria-hidden="true"></span><span class="kb-entry-index-group-label">${esc(t("knowledge.entry_dirty", "Dirty"))}</span></span>
+          <span class="kb-entry-index-group-count">${dirtyEntries.length}</span>
+        </button>
+        <div id="${esc(controlId)}" class="kb-entry-index-list"${collapsed ? " hidden" : ""}>${entriesHtml}</div>
+      </section>`;
+    }
+
     function renderEntryIndex() {
       if (!state.entries.length) return state.entryCapture.length ? "" : `<p class="kb-muted">${esc(t("knowledge.entries_empty", "No entries yet"))}</p>`;
       const tree = groupEntries(state.entries);
@@ -1542,7 +1562,8 @@
       const showingText = hasMore
         ? formatText("knowledge.entries_showing_total", { count: state.entries.length, total }, `Showing ${state.entries.length} of ${total} entries`)
         : formatText("knowledge.entries_showing", { count: state.entries.length }, "Showing " + state.entries.length + " entries");
-      const groupHtml = renderEntryTree(tree);
+      const dirtyHtml = renderDirtyEntryGroup(state.entries);
+      const groupHtml = dirtyHtml + renderEntryTree(tree);
       return `<div class="kb-entry-index">
         <div class="kb-entry-index-head">
           <div>
