@@ -461,7 +461,9 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Do not create orphan nav docs", enabled_prompt)
         self.assertIn("Write project-scoped KB Markdown", enabled_prompt)
         self.assertIn("in Chinese by default", enabled_prompt)
-        self.assertIn("Maintain task_worklog throughout the task lifecycle", enabled_prompt)
+        self.assertIn("Required first action: if task_worklog is shown as not found yet", enabled_prompt)
+        self.assertIn("before repository inspection, analysis, implementation, or delegation", enabled_prompt)
+        self.assertIn("Update task_worklog in real time", enabled_prompt)
         self.assertIn("If navigation_index is not found yet, create a minimal project navigation/index.md", enabled_prompt)
         self.assertIn("directly edit the approved KB Markdown files", enabled_prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", enabled_prompt)
@@ -502,6 +504,25 @@ class ChatPromptTests(unittest.TestCase):
 
             self.assertTrue(old_exists)
             self.assertEqual(old_rel, f"projects/git-abc/worklog/{old_slug}.md")
+
+    def test_task_worklog_reference_uses_task_created_at_before_run_date(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            kb_root = Path(tmp) / "knowledge"
+            project_key = "git-abc"
+            run_id = "20260514-161750-e948e3"
+            task = {
+                "id": "task-173",
+                "title": "VEGA内存管理优化",
+                "created_at": "2026-07-13T04:53:18+00:00",
+            }
+
+            rel, exists = _task_worklog_reference(kb_root, [project_key], run_id, task)
+
+            self.assertFalse(exists)
+            self.assertEqual(
+                rel,
+                "projects/git-abc/worklog/tasks/2026/07/20260713-VEGA内存管理优化.md",
+            )
 
     def test_sticky_delta_injects_context_pack_once_when_nav_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -561,7 +582,9 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("task_worklog:", prompt)
         self.assertIn("Write project-scoped KB Markdown", prompt)
         self.assertIn("in Chinese by default", prompt)
-        self.assertIn("Maintain task_worklog throughout the task lifecycle", prompt)
+        self.assertIn("Required first action: if task_worklog is shown as not found yet", prompt)
+        self.assertIn("before repository inspection, analysis, implementation, or delegation", prompt)
+        self.assertIn("Update task_worklog in real time", prompt)
         self.assertIn("If navigation_index is not found yet, create a minimal project navigation/index.md", prompt)
         self.assertIn("directly edit the approved KB Markdown files", prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", prompt)

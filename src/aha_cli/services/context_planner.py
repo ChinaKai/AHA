@@ -112,7 +112,9 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
                 "- Start with navigation/index for broad orientation, then choose modules/* or flows/* yourself.",
                 "- If navigation_index is not found yet, create a minimal evidence-based navigation/index.md during the task after verifying source entrypoints.",
                 "- Read solutions/wiki only when the current task is semantically similar; skip irrelevant entries.",
-                "- Maintain task_worklog throughout the task lifecycle when plans, progress, decisions, requirement changes, verification, or KB/nav updates have durable value.",
+                "- Required first action: if task_worklog is shown as not found yet, create it at the supplied path with task_worklog_frontmatter_json before repository inspection, analysis, implementation, or delegation; after the file exists, continue the task.",
+                "- Update task_worklog in real time as plans, progress, decisions, requirement changes, verification, or KB/nav updates happen. Do not wait until task end.",
+                "- Keep project navigation/solutions current during the task when current evidence proves a durable route, reusable diagnostic, fix, stale entry, or missing entry.",
                 "- Treat KB as routing memory, not truth. Read current source before analysis or edits.",
             ]
         ).rstrip()
@@ -150,36 +152,50 @@ def _safe_worklog_component(value: str, fallback: str, max_length: int = 80) -> 
     return clean or fallback
 
 
-def _worklog_date_parts(run_id: str) -> tuple[str, str, str] | None:
-    match = re.match(r"^(\d{4})(\d{2})(\d{2})", str(run_id or "").strip())
+def _worklog_date_parts(value: str) -> tuple[str, str, str] | None:
+    text = str(value or "").strip()
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", text)
+    if match:
+        return match.groups()
+    match = re.match(r"^(\d{4})(\d{2})(\d{2})", text)
     if not match:
         return None
     return match.groups()
 
 
-def _worklog_month_path(run_id: str) -> str:
-    parts = _worklog_date_parts(run_id)
+def _task_worklog_date_parts(run_id: str, task: dict) -> tuple[str, str, str] | None:
+    for key in ("created_at", "started_at"):
+        parts = _worklog_date_parts(str((task or {}).get(key) or ""))
+        if parts:
+            return parts
+    return _worklog_date_parts(run_id)
+
+
+def _worklog_month_path(parts: tuple[str, str, str] | None) -> str:
     if not parts:
         return "undated"
     year, month, _day = parts
     return f"{year}/{month}"
 
 
-def _worklog_date_prefix(run_id: str) -> str:
-    parts = _worklog_date_parts(run_id)
+def _worklog_date_prefix(parts: tuple[str, str, str] | None) -> str:
     if not parts:
         return "undated"
     return "".join(parts)
 
 
-def _task_worklog_slug(run_id: str, task: dict) -> str:
+def _task_worklog_slug_for_parts(parts: tuple[str, str, str] | None, task: dict) -> str:
     task_id = str((task or {}).get("id") or "").strip()
     title = str((task or {}).get("title") or task_id).strip()
     title_part = _safe_worklog_component(title, _safe_worklog_component(task_id, "task"))
     task_part = _safe_worklog_component(task_id, "task")
     if title_part == "task" and task_part != "task":
         title_part = task_part
-    return f"tasks/{_worklog_month_path(run_id)}/{_worklog_date_prefix(run_id)}-{title_part}"
+    return f"tasks/{_worklog_month_path(parts)}/{_worklog_date_prefix(parts)}-{title_part}"
+
+
+def _task_worklog_slug(run_id: str, task: dict) -> str:
+    return _task_worklog_slug_for_parts(_task_worklog_date_parts(run_id, task), task)
 
 
 def _legacy_task_worklog_slug(run_id: str, task_id: str) -> str:

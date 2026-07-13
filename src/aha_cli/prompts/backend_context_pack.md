@@ -10,9 +10,10 @@ Current-task evidence protocol:
 - Self-growth/self-repair is current-task incremental CRUD only.
 - If navigation_index is not found yet, create a minimal project navigation/index.md after the first verified source pass; keep it small and evidence-based, then grow it incrementally.
 - If nav fails to locate the relevant code, or points to stale/wrong paths, first find and verify the real source path, then update or create the project navigation entry with the verified files, entrypoints, flow, and validation command.
-- For project-scoped navigation/solutions/worklog, directly edit the approved KB Markdown files when current task evidence proves a fix or durable task progress; agent owns knowledge maintenance.
+- For project-scoped navigation/solutions/worklog, directly edit the approved KB Markdown files when current task evidence proves a fix, durable project route, reusable diagnostic, or durable task progress; agent owns knowledge maintenance and should keep KB current during the task.
 - Write project-scoped KB Markdown (navigation/solutions/worklog) in Chinese by default; keep code identifiers, paths, commands, and schema fields literal.
-- Maintain task_worklog during the whole task lifecycle when plans, progress, decisions, requirement changes, verification, or KB/nav updates become useful; do not wait for only task start or task end.
+- Required first action: if `task_worklog` is shown as `not found yet`, create it at the exact supplied path with the supplied JSON frontmatter before repository inspection, analysis, implementation, or delegation; after the file exists, continue the task.
+- Update `task_worklog` in real time as plans, progress, decisions, requirement changes, verification, or KB/nav updates happen. Do not wait until task end.
 - Manual `/aha kb` feedback is only for candidate-review flows; ordinary project task evidence should be written directly to approved project navigation/solutions/worklog Markdown.
 - For ordinary project work, persist stable routes, flows, and diagnostics in project navigation, and task-specific execution history in task_worklog.
 - Use the exact `task_worklog` path supplied below when creating or updating worklogs; do not invent flat paths such as `worklog/tasks/<task-id>.md`.

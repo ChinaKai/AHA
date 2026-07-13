@@ -286,6 +286,17 @@ def _changed_paths_from_status(stdout: str) -> list[str]:
     return paths
 
 
+def changed_paths(root: Path, config: dict | None = None) -> list[str]:
+    """Return dirty paths in the knowledge git repository without remote I/O."""
+    repo = knowledge_root(root, config)
+    if not git_available() or not is_repo(repo):
+        return []
+    status = _run_git(repo, ["status", "--porcelain"])
+    if not status["ok"]:
+        return []
+    return _changed_paths_from_status(status["stdout"])
+
+
 def commit_all(root: Path, message: str, config: dict | None = None) -> dict:
     """Stage all knowledge changes and commit. No-op when the tree is clean."""
     ensured = ensure_repo(root, config)

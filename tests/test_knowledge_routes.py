@@ -14,6 +14,7 @@ from aha_cli.store.knowledge import (
     init_knowledge_base,
     list_entries,
     list_pending,
+    knowledge_root,
     parse_entry,
     project_key,
     serialize_entry,
@@ -89,6 +90,30 @@ def test_status_and_entries(tmp_path: Path):
     by_kind = _get(home, "/api/kb/entries", {"kind": ["solutions"]})
     assert by_kind["count"] == 1 and by_kind["entries"][0]["id"].startswith("kb_")
     assert by_kind["entries"][0]["size_bytes"] > 0
+
+
+def test_entries_mark_dirty_knowledge_files(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    path = write_entry(
+        home,
+        config=cfg,
+        scope="general",
+        kind="wiki",
+        title="Dirty topic",
+        body="changed locally",
+    )
+    rel = path.relative_to(knowledge_root(home, cfg)).as_posix()
+
+    import aha_cli.web.knowledge_routes as kr
+
+    monkeypatch.setattr(kr, "knowledge_changed_paths", lambda root, cfg: [rel])
+
+    entries = _get(home, "/api/kb/entries")
+    assert entries["entries"][0]["dirty"] is True
+
+    detail = _get(home, "/api/kb/entry", {"id": [entries["entries"][0]["id"]]})
+    assert detail["dirty"] is True
 
 
 def test_entries_kind_filter_includes_navigation(tmp_path: Path):
@@ -1266,7 +1291,7 @@ def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
     assert calls[0]["message"].startswith("chore(knowledge): manual web sync ")
 
 
-def test_sync_status_endpoint_checks_remote(tmp_path: Path, monkeypatch):
+def test_sync_status_endpoint_checks_local_by_default_and_remote_on_request(tmp_path: Path, monkeypatch):
     home = _setup(tmp_path)
     calls = []
 
@@ -1297,6 +1322,10 @@ def test_sync_status_endpoint_checks_remote(tmp_path: Path, monkeypatch):
     assert out["needs_sync"] is True
     assert out["changed_count"] == 1
     assert out["behind"] == 2
+    assert calls == [{"root": home, "check_remote": False, "enabled": True}]
+
+    calls.clear()
+    _get(home, "/api/kb/sync-status", {"remote": ["1"]})
     assert calls == [{"root": home, "check_remote": True, "enabled": True}]
 
 

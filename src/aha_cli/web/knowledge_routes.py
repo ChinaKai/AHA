@@ -22,6 +22,7 @@ from aha_cli.backends.registry import normalize_reasoning_effort
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_git import auto_commit_after_change
+from aha_cli.services.knowledge_git import changed_paths as knowledge_changed_paths
 from aha_cli.services.knowledge_git import sync_status as knowledge_sync_status
 from aha_cli.services.knowledge_git import sync as knowledge_sync
 from aha_cli.services.knowledge_navigation import (
@@ -45,6 +46,7 @@ from aha_cli.store.knowledge import (
     iter_all_entry_summary_records,
     iter_all_entry_summaries,
     knowledge_status,
+    knowledge_root,
     list_pending,
     project_key as derive_project_key,
     remove_pending,
@@ -449,6 +451,31 @@ def _entry_summary(entry: dict) -> dict:
     }
 
 
+def _entry_relative_path(entry: dict, repo: Path) -> str:
+    path = str(entry.get("path") or "").strip()
+    if not path:
+        return ""
+    try:
+        return Path(path).resolve().relative_to(repo.resolve()).as_posix()
+    except (OSError, ValueError):
+        return Path(path).as_posix()
+
+
+def _dirty_entry_paths(root: Path, cfg: dict) -> set[str]:
+    return {str(path).replace("\\", "/") for path in knowledge_changed_paths(root, cfg)}
+
+
+def _mark_dirty_entries(entries: list[dict], root: Path, cfg: dict) -> None:
+    dirty_paths = _dirty_entry_paths(root, cfg)
+    if not dirty_paths:
+        return
+    repo = knowledge_root(root, cfg)
+    for entry in entries:
+        rel = _entry_relative_path(entry, repo)
+        if rel and rel in dirty_paths:
+            entry["dirty"] = True
+
+
 def _parse_entry_time(value: object) -> dt.datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -504,6 +531,7 @@ def _fast_entry_summary_page(
             has_more = True
             break
         entries.append(_entry_summary(entry))
+    _mark_dirty_entries(entries, root, cfg)
     count = offset + len(entries) + (1 if has_more else 0)
     return {
         "entries": entries,
@@ -821,7 +849,7 @@ def knowledge_route_response(
         return _ok(method, knowledge_status(root, cfg))
 
     if method in {"GET", "HEAD"} and path == "/api/kb/sync-status":
-        return _ok(method, knowledge_sync_status(root, cfg, check_remote=True))
+        return _ok(method, knowledge_sync_status(root, cfg, check_remote=_query_bool_param(query, "remote")))
 
     if method in {"GET", "HEAD"} and path == "/api/kb/entries":
         scope = str(query.get("scope", [""])[0] or "").strip() or None
@@ -857,6 +885,7 @@ def knowledge_route_response(
             entries.append(_entry_summary(entry))
         total_entries = len(entries)
         page_entries = entries[offset : offset + limit] if limit else entries[offset:]
+        _mark_dirty_entries(page_entries, root, cfg)
         source_note_ids = {
             str(entry.get("source_note_id") or "")
             for entry in page_entries
@@ -903,6 +932,7 @@ def knowledge_route_response(
             meta["source_note_exists"] = source_note_exists
             entry["meta"] = meta
             entry["source_note_exists"] = source_note_exists
+        _mark_dirty_entries([entry], root, cfg)
         return _ok(method, entry)
 
     if method in {"GET", "HEAD"} and path == "/api/kb/entry/image":

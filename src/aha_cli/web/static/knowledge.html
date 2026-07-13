@@ -147,6 +147,9 @@
     .kb-entry-result-meta .kb-entry-status {
       border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; font-weight: 650;
     }
+    .kb-entry-result-meta .kb-entry-dirty {
+      border-color: #fed7aa; background: #fff7ed; color: #c2410c; font-weight: 650;
+    }
     .kb-entry-result-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }
     .kb-entry-result-actions {
       display: none; justify-content: flex-end; flex-wrap: nowrap; margin: 0;
@@ -684,6 +687,9 @@
     function sizeLine(item) {
       const formatted = formatFileSize(item?.size_bytes);
       return formatted ? `${t("knowledge.file_size", "Size")} ${formatted}` : "";
+    }
+    function dirtyLabel(item) {
+      return item?.dirty ? t("knowledge.entry_dirty", "Dirty") : "";
     }
     function navRefSlug(path) {
       const clean = String(path || "").trim().split("#", 1)[0].split("?", 1)[0].replace(/^\.\//, "").replace(/\.md$/i, "");
@@ -1273,6 +1279,7 @@
         meta.slug || meta.id || "-",
         timeLine(meta),
         sizeLine(ref),
+        dirtyLabel(ref),
       ].filter(Boolean).join(" · ");
       const body = $("#entry-ref-body");
       body.classList.toggle("kb-detail-editing", Boolean(state.editingReference));
@@ -1390,12 +1397,20 @@
       const isEditing = state.editingEntry === entryId && isActive;
       const encodedId = encodeURIComponent(entryId);
       const status = e.status || "active";
-      const metaLine = `${entryScopeLabel(e.scope)}/${entryTypeLabel(e.type)} · ${e.project_key || "-"} · ${entryId} · ${status}`;
+      const dirty = dirtyLabel(e);
+      const metaLine = [
+        `${entryScopeLabel(e.scope)}/${entryTypeLabel(e.type)}`,
+        e.project_key || "-",
+        entryId,
+        status,
+        dirty,
+      ].filter(Boolean).join(" · ");
       const tagHtml = (e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("");
       const compactMetaHtml = `<div class="kb-entry-result-meta">
         <span>${esc(entryTypeLabel(e.type))}</span>
         <span>${esc(e.project_key || e.scope || "-")}</span>
         <span class="kb-entry-status">${esc(status)}</span>
+        ${dirty ? `<span class="kb-entry-dirty">${esc(dirty)}</span>` : ""}
       </div>`;
       const actions = `<div class="kb-card-actions kb-entry-actions${options.feed ? " kb-entry-result-actions" : ""}"${options.feed ? ' onclick="event.stopPropagation()"' : ""}>
         <button class="button-ghost" type="button" onclick="toggleEntry('${encodedId}')">${esc(t("knowledge.view", "View"))}</button>
