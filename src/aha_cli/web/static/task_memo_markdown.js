@@ -382,11 +382,12 @@
       listEl = null;
       listType = "";
     };
-    const ensureList = type => {
+    const ensureList = (type, start = 1) => {
       if (listEl && listType === type) return listEl;
       closeList();
       listType = type;
       listEl = documentRef.createElement(type);
+      if (type === "ol" && start !== 1) listEl.start = start;
       parent.appendChild(listEl);
       return listEl;
     };
@@ -411,6 +412,16 @@
         continue;
       }
       if (!line.trim()) {
+        let nextIndex = index + 1;
+        while (nextIndex < lines.length && !lines[nextIndex].trim()) nextIndex += 1;
+        const nextLine = lines[nextIndex] || "";
+        const nextListType = /^\s*\d+\.\s+(.+)$/.test(nextLine)
+          ? "ol"
+          : /^\s*[-*+]\s+(.+)$/.test(nextLine) ? "ul" : "";
+        if (listEl && nextListType === listType) {
+          index = nextIndex - 1;
+          continue;
+        }
         closeList();
         parent.appendChild(documentRef.createElement("br"));
         continue;
@@ -450,11 +461,11 @@
         ensureList("ul").appendChild(item);
         continue;
       }
-      const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
+      const ordered = /^\s*(\d+)\.\s+(.+)$/.exec(line);
       if (ordered) {
         const item = documentRef.createElement("li");
-        appendInlineMarkdown(item, ordered[1], previewOptions);
-        ensureList("ol").appendChild(item);
+        appendInlineMarkdown(item, ordered[2], previewOptions);
+        ensureList("ol", Number.parseInt(ordered[1], 10)).appendChild(item);
         continue;
       }
       const quote = /^>\s?(.*)$/.exec(line);

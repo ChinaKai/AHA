@@ -25,6 +25,69 @@ def app_entry_script(root: Path | None = None) -> str:
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_markdown_ordered_lists_keep_numbering_across_blank_lines(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        renderer = static_root() / "task_memo_markdown.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+class MiniElement {
+  constructor(tagName, ownerDocument) {
+    this.tagName = String(tagName).toUpperCase();
+    this.ownerDocument = ownerDocument;
+    this.children = [];
+    this.classList = { add() {} };
+  }
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+}
+
+const documentRef = {
+  createElement(tagName) {
+    return new MiniElement(tagName, documentRef);
+  },
+  createTextNode(text) {
+    return { nodeType: 3, textContent: String(text), ownerDocument: documentRef };
+  }
+};
+
+const root = documentRef.createElement("div");
+window.AHATaskMemoMarkdown.renderMarkdownPreview(
+  root,
+  "1. first\n\n2. second\n\n3. third",
+  { documentRef }
+);
+if (root.children.length !== 1 || root.children[0].tagName !== "OL") {
+  throw new Error("blank lines split one ordered list into multiple lists");
+}
+if (root.children[0].children.length !== 3) {
+  throw new Error("ordered list items were not grouped");
+}
+
+const customStartRoot = documentRef.createElement("div");
+window.AHATaskMemoMarkdown.renderMarkdownPreview(
+  customStartRoot,
+  "3. third\n4. fourth",
+  { documentRef }
+);
+if (customStartRoot.children[0].start !== 3) {
+  throw new Error("ordered list start marker was not preserved");
+}
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(renderer)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_knowledge_console_inline_scripts_parse_when_node_is_available(self) -> None:
         node = shutil.which("node")
         if not node:
