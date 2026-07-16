@@ -22,6 +22,7 @@ Rules:
 - Do not overload `index` with every detailed child doc. Use parent module/flow docs as grouping nodes; every non-index doc must be reachable from `index` through direct parent links, and parent docs should link only direct children.
 - Each module/flow doc stays lightweight: responsibility, key files, entry points, common task routing hints, caveats, and relevant tests only.
 - Slugs must already be normalized: `index`, `modules/<name>`, or `flows/<name>`.
+- `slug` is required on every candidate and is persisted into Markdown frontmatter; never omit it or rely on the destination filename. The index candidate must use `"slug":"index"`.
 - If there is not enough evidence for a module/flow doc, omit it instead of creating empty template noise.
 
 workspace_path: $workspace_path
