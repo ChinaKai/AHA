@@ -48,33 +48,52 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(projection["token_saving"]["provider"], "nav")
         self.assertFalse(projection["observe_proxy"]["enabled"])
         self.assertEqual(projection["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
-        self.assertTrue(projection["hardware_debug"]["enabled"])
-        hardware_channel = projection["hardware_debug"]["channels"][0]
-        self.assertEqual(hardware_channel["type"], "uart")
-        self.assertEqual(
-            hardware_channel["settings"],
-            {"port": "/dev/ttyUSB0", "baudrate": 115200, "username": "", "password": ""},
-        )
-        self.assertNotIn("operation_skill_path", hardware_channel)
-        self.assertTrue(hardware_channel["permissions"]["write"])
-        self.assertNotIn("reset", hardware_channel["permissions"])
+        self.assertEqual(projection["hardware_debug"]["mode"], "serial")
+        self.assertEqual(projection["hardware_debug"]["serial"], {"device": "/dev/ttyUSB0", "baudrate": 115200})
+        self.assertEqual(projection["hardware_debug"]["network"], {"device_ip": ""})
+        self.assertEqual(projection["hardware_debug"]["credentials"], {"username": "", "password": ""})
+        self.assertEqual(projection["hardware_debug"]["permissions"], {"access": "read_write"})
+        self.assertNotIn("channels", projection["hardware_debug"])
 
-    def test_hardware_debug_master_switch_independent_of_channels(self) -> None:
+    def test_hardware_debug_v2_modes_and_legacy_channel_upgrade(self) -> None:
         from aha_cli.domain.models import normalize_task_hardware_debug
 
-        # Legacy configs without a master switch derive enabled from channel presence.
-        self.assertFalse(normalize_task_hardware_debug({"channels": []})["enabled"])
-        self.assertTrue(
-            normalize_task_hardware_debug({"channels": [{"type": "uart", "settings": {"port": "/dev/ttyUSB0"}}]})["enabled"]
+        self.assertEqual(normalize_task_hardware_debug({"channels": []})["mode"], "off")
+        upgraded = normalize_task_hardware_debug(
+            {
+                "channels": [
+                    {"type": "uart", "settings": {"port": "/dev/ttyUSB0", "username": "root"}},
+                    {"type": "telnet", "settings": {"host": "192.168.1.20", "username": "root", "password": "secret"}},
+                ]
+            }
         )
+        self.assertEqual(upgraded["mode"], "both")
+        self.assertEqual(upgraded["serial"]["device"], "/dev/ttyUSB0")
+        self.assertEqual(upgraded["network"]["device_ip"], "192.168.1.20")
+        self.assertEqual(upgraded["credentials"], {"username": "root", "password": "secret"})
+        self.assertEqual(upgraded["permissions"], {"access": "read_only"})
 
-        # The master switch is independent: turning it off preserves configured channels
-        # so toggling it back on restores the previous setup.
-        disabled = normalize_task_hardware_debug(
-            {"enabled": False, "channels": [{"type": "uart", "settings": {"port": "/dev/ttyUSB0"}}]}
+        canonical = normalize_task_hardware_debug(
+            {
+                "mode": "network",
+                "serial": {"device": "/dev/ttyUSB0", "baudrate": 9600},
+                "network": {"device_ip": "192.168.1.21"},
+                "credentials": {"username": "admin", "password": "pw"},
+            }
         )
-        self.assertFalse(disabled["enabled"])
-        self.assertEqual([channel["type"] for channel in disabled["channels"]], ["uart"])
+        self.assertEqual(canonical["mode"], "network")
+        self.assertEqual(canonical["serial"]["baudrate"], 9600)
+        self.assertEqual(canonical["network"]["device_ip"], "192.168.1.21")
+        self.assertEqual(canonical["permissions"], {"access": "read_write"})
+
+        explicit_read_only = normalize_task_hardware_debug(
+            {
+                "mode": "serial",
+                "serial": {"device": "/dev/ttyUSB1", "baudrate": 115200},
+                "permissions": {"access": "read_only"},
+            }
+        )
+        self.assertEqual(explicit_read_only["permissions"], {"access": "read_only"})
 
     def test_old_plan_compatibility_fills_task_metadata_and_status_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -127,7 +146,8 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertFalse(enriched_task["token_saving"]["enabled"])
         self.assertEqual(enriched_task["token_saving"]["provider"], "nav")
         self.assertFalse(enriched_task["observe_proxy"]["enabled"])
-        self.assertEqual(enriched_task["hardware_debug"]["channels"], [])
+        self.assertEqual(enriched_task["hardware_debug"]["mode"], "off")
+        self.assertEqual(enriched_task["hardware_debug"]["permissions"], {"access": "read_only"})
         self.assertEqual(enriched_task["task_skills"]["enabled_paths"], [])
         self.assertEqual(snapshot_task["workspace_id"], "ws-legacy")
         self.assertEqual(snapshot_task["preferred_sub_backend"], "claude")

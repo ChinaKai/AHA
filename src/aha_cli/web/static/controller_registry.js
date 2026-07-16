@@ -316,6 +316,8 @@
       syncBootstrapProxyDefaultsForInput: deps.syncBootstrapProxyDefaultsForInput,
       openTaskCreateDialog: deps.openTaskCreateDialog,
       hardwareBridgeControl: deps.hardwareBridgeControl,
+      hardwareTakeover: deps.hardwareTakeover,
+      hardwareSelectTransport: deps.hardwareSelectTransport,
       hardwareSendKey: deps.hardwareSendKey,
       hardwareToggleRawMode: deps.hardwareToggleRawMode,
       addBootstrapConfigRow: deps.addBootstrapConfigRow,

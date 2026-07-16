@@ -69,41 +69,60 @@
     }
 
     function renderHardwareBridgeToolbarHtml(state = {}) {
-      if (!state.device) return "";
+      if (!state.endpoint && !state.device) return "";
       const bridge = state.bridge || {};
       const paused = Boolean(bridge.paused);
       const alive = Boolean(bridge.alive);
+      const owner = bridge.device_owner || {};
+      const occupied = Boolean(bridge.error && owner.pid);
+      const canTakeover = Boolean(occupied && owner.can_terminate === true);
       // Reuse the task-status pill vocabulary so the bridge state reads like a status.
-      const variant = state.readOnly ? "idle" : paused ? "awaiting_user" : alive ? "running" : "idle";
-      const label = state.readOnly ? "read-only" : paused ? "paused" : alive ? "live" : "connecting…";
+      const variant = state.readOnly ? "idle" : occupied ? "failed" : paused ? "awaiting_user" : alive ? "running" : "idle";
+      const label = state.readOnly
+        ? "read-only"
+        : occupied
+          ? "occupied"
+          : paused ? "paused" : alive ? "live" : "connecting…";
       const toggle = state.readOnly
         ? ""
         : `<button type="button" class="hardware-bridge-toggle" data-hardware-bridge-action="${paused ? "resume" : "pause"}">${paused ? "Resume" : "Pause"}</button>`;
-      // Identity (device + status) sits together on the left; the only action up here is
-      // Pause, kept apart on the right.
+      const takeover = state.readOnly
+        ? ""
+        : `<button type="button" class="hardware-bridge-toggle danger" data-hardware-takeover="true" data-owner-pid="${escapeHtml(String(owner.pid || ""))}" data-owner-process="${escapeHtml(String(owner.process || "process"))}" ${canTakeover ? "" : "hidden"}>Take over</button>`;
+      const clear = '<button type="button" class="hardware-bridge-toggle" data-hardware-terminal-action="clear">Clear</button>';
+      const ownerIdentity = `${owner.process || "process"} (PID ${owner.pid || "unknown"}${owner.uid === null || owner.uid === undefined ? "" : `, UID ${owner.uid}`})`;
+      const detail = occupied
+        ? canTakeover
+          ? `Serial device is in use by ${ownerIdentity}. Take over sends SIGTERM only.`
+          : `Serial device is in use by ${ownerIdentity}. AHA has no permission to terminate it; close it manually.`
+        : bridge.error ? String(bridge.error) : "";
+      const transports = Array.isArray(state.transports) ? state.transports : [];
+      const transportPicker = transports.length > 1
+        ? `<span class="hardware-transport-picker">${transports.map(item => (
+            `<button type="button" class="hardware-transport-btn ${item === state.transport ? "active" : ""}" data-hardware-transport="${escapeHtml(item)}">${escapeHtml(item === "serial" ? "Serial" : "Network")}</button>`
+          )).join("")}</span>`
+        : `<span class="hardware-transport-label">${escapeHtml(state.transport === "network" ? "Network" : "Serial")}</span>`;
+      // Identity (transport + endpoint + status) stays left; local-screen and bridge
+      // controls stay together on the right.
       return `
         <div class="hardware-bridge-bar">
           <span class="hardware-bridge-identity">
-            <span class="hardware-bridge-device" title="${escapeHtml(String(state.device))}">${escapeHtml(String(state.device))}</span>
-            <span class="status hardware-bridge-status ${variant}">${escapeHtml(label)}</span>
+            ${transportPicker}
+            <span class="hardware-bridge-device" title="${escapeHtml(String(state.endpoint || state.device))}">${escapeHtml(String(state.endpoint || state.device))}</span>
+            <span class="status hardware-bridge-status ${variant}" data-hardware-terminal-status>${escapeHtml(label)}</span>
           </span>
-          <span class="hardware-bridge-controls">${toggle}</span>
+          <span class="hardware-bridge-controls">${clear}${takeover}${toggle}</span>
+          <div class="hardware-bridge-error" data-hardware-owner-detail ${detail ? "" : "hidden"}>${escapeHtml(detail)}</div>
         </div>
       `;
     }
 
-    // Sits directly above the composer (the input box). A single scrollable quick-key row.
-    // Input is always line mode (type in the box, live preview in the terminal, Send = Enter),
-    // identical on desktop and mobile. The raw per-keystroke toggle is hidden for now; the
-    // keys below still send their bytes live (Ctrl-C interrupt, arrows for shell history, etc.).
+    // A single scrollable accessory-key row below xterm. These buttons send raw bytes live
+    // and cover keys mobile soft keyboards often omit (Esc, Tab, Ctrl, arrows, Home/End).
     function renderHardwareBottomBarHtml(state = {}) {
       if (!state.device || state.readOnly) return "";
-      const keys = [
-        ["enter", "⏎"], ["esc", "Esc"], ["tab", "Tab"], ["ctrl-c", "^C"], ["ctrl-d", "^D"],
-        ["ctrl-z", "^Z"], ["ctrl-l", "^L"], ["up", "↑"], ["down", "↓"], ["left", "←"],
-        ["right", "→"], ["home", "Home"], ["end", "End"]
-      ]
-        .map(([key, glyph]) => `<button type="button" class="hardware-key-btn" data-hardware-key="${key}" title="Send ${escapeHtml(key)}">${escapeHtml(glyph)}</button>`)
+      const keys = (window.AHATerminalUi?.terminalKeys?.() || [])
+        .map(item => `<button type="button" class="hardware-key-btn" data-hardware-key="${escapeHtml(item.name)}" title="Send ${escapeHtml(item.name)}">${escapeHtml(item.label)}</button>`)
         .join("");
       return `
         <div class="hardware-keybar">
@@ -112,85 +131,18 @@
       `;
     }
 
-    // The board speaks like a terminal: carriage returns overwrite the current line,
-    // backspaces erase, and ANSI escape sequences colour/move the cursor. A <pre> would
-    // render those raw (countdown frames pile up, escapes show as garbage), so collapse
-    // them to the text a terminal would actually display.
-    function decodeTerminalText(text) {
-      let s = String(text || "");
-      s = s.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "");
-      s = s.replace(/\x1b[@-Z\\\]^_]/g, "");
-      s = s.replace(/\r\n/g, "\n");
-      if (s.indexOf("\r") === -1 && s.indexOf("\b") === -1) return s;
-      const lines = [];
-      let line = "";
-      let col = 0;
-      for (let i = 0; i < s.length; i++) {
-        const ch = s[i];
-        if (ch === "\n") { lines.push(line); line = ""; col = 0; }
-        else if (ch === "\r") { col = 0; }
-        else if (ch === "\b") { col = Math.max(0, col - 1); }
-        else { line = line.slice(0, col) + ch + line.slice(col + 1); col += 1; }
-      }
-      lines.push(line);
-      return lines.join("\n");
-    }
-
     function renderHardwareIoPanelHtml(state = {}) {
       if (!state.initialized && state.loading) return '<div class="empty">Loading hardware I/O...</div>';
       const toolbar = renderHardwareBridgeToolbarHtml(state);
       const bottomBar = renderHardwareBottomBarHtml(state);
-      // Raw mode captures keystrokes on the composer textarea (persistent, flood-proof),
-      // not on the terminal — so the <pre> is display-only in every mode.
-      const raw = Boolean(state.rawMode) && !state.readOnly && Boolean(state.device);
-      const viewClass = raw ? "hardware-io-view hardware-io-view-raw" : "hardware-io-view";
-      // Line mode: mirror the composer's current text live at the prompt, so the terminal and
-      // the input box stay in sync (you see what you're typing in context). The board echoes
-      // the real line once you Send (= Enter), which replaces this preview.
-      const pending = !raw ? String(state.pendingInput || "") : "";
-      const pendingHtml = pending ? `<span class="hio-pending">${escapeHtml(pending)}</span>` : "";
-      const events = Array.isArray(state.events) ? state.events : [];
-      if (!events.length) {
-        return `<div class="${viewClass}">${toolbar}<pre class="hardware-terminal">${pendingHtml}</pre>${bottomBar}</div>`;
-      }
-      const parts = [];
-      let rxBuf = "";
-      const flushRx = () => {
-        if (!rxBuf) return;
-        // Decode the RX run as a whole so carriage returns/backspaces that straddle chunk
-        // boundaries still overwrite correctly.
-        parts.push(`<span class="hio-rx">${escapeHtml(decodeTerminalText(rxBuf))}</span>`);
-        rxBuf = "";
-      };
-      for (const item of events) {
-        const direction = String(item.direction || "system").toLowerCase();
-        const data = String(item.data || "");
-        const truncated = item.truncated ? " …" : "";
-        const ts = escapeHtml(localizeTimestampText(item.ts || ""));
-        if (direction === "rx") {
-          rxBuf += data + (item.truncated ? " …" : "");
-          continue;
-        }
-        const rawSource = String(item.source || "");
-        if (direction === "tx") {
-          // The board echoes interactively-typed commands back over RX, so also rendering
-          // our own local TX would show every command twice. Suppress the local echo for
-          // user/agent sends and rely on the device echo; keep non-echoed sends visible
-          // (e.g. armed-rule auto-reactions, which fire faster than any echo round-trip).
-          if (rawSource === "web" || rawSource === "interactive") continue;
-          flushRx();
-          const source = escapeHtml(rawSource);
-          const title = [ts, source].filter(Boolean).join(" · ");
-          parts.push(`<span class="hio-tx" title="${title}">⮞ ${escapeHtml(decodeTerminalText(data))}${truncated}</span>`);
-          continue;
-        }
-        flushRx();
-        const source = rawSource ? escapeHtml(rawSource) : "";
-        const tag = source ? `${direction} ${source}` : direction;
-        parts.push(`<span class="hio-sys" title="${ts}">‹${escapeHtml(tag)}› ${escapeHtml(data)}${truncated}\n</span>`);
-      }
-      flushRx();
-      return `<div class="${viewClass}">${toolbar}<pre class="hardware-terminal">${parts.join("")}${pendingHtml}</pre>${bottomBar}</div>`;
+      const key = `${String(state.taskId || "")}:${String(state.transport || "serial")}`;
+      return `
+        <div class="hardware-io-view" data-hardware-terminal-root data-hardware-terminal-key="${escapeHtml(key)}">
+          ${toolbar}
+          <div class="hardware-terminal-xterm aha-terminal-xterm" data-hardware-terminal-xterm tabindex="0" aria-label="Hardware terminal"></div>
+          ${bottomBar}
+        </div>
+      `;
     }
 
     function renderContextPanelHtml({ rawPromptHtml = "", promptMetricsHtml = "" } = {}) {

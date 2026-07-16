@@ -212,6 +212,7 @@
   function taskHardwareDebugEnabled(task) {
     const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : null;
     if (!policy) return false;
+    if (typeof policy.mode === "string") return policy.mode !== "off";
     if (typeof policy.enabled === "boolean") return policy.enabled;
     return Array.isArray(policy.channels) && policy.channels.length > 0;
   }

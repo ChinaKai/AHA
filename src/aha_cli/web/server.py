@@ -18,6 +18,7 @@ from aha_cli.store.paths import config_path
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
 from aha_cli.websocket.server import ws_accept_from_headers
 from aha_cli.web.game_routes import game_route_response
+from aha_cli.web.hardware_terminal import handle_hardware_terminal_ws_connection
 from aha_cli.web.auth import (
     append_response_headers,
     auth_cookie_header,
@@ -108,6 +109,13 @@ async def handle_ui_client(
                 writer.write(unauthorized_response(method))
                 await writer.drain()
                 return
+
+        if method == "GET" and path == "/ws/hardware-terminal" and headers.get("upgrade", "").lower() == "websocket":
+            selected_run_id = require_api_run_id(root, run_id, query)
+            ok = await ws_accept_from_headers(headers, writer)
+            if ok:
+                await handle_hardware_terminal_ws_connection(root, selected_run_id, target, reader, writer)
+            return
 
         if method == "GET" and path == "/ws/terminal" and headers.get("upgrade", "").lower() == "websocket":
             terminal_peer_allowed = local_terminal_peer_allowed(writer.get_extra_info("peername")) or bool(auth_token)

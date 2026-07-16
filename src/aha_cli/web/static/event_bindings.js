@@ -152,6 +152,21 @@
         handlers.hardwareBridgeControl?.(bridgeToggle.getAttribute("data-hardware-bridge-action"));
         return;
       }
+      const hardwareTakeover = target?.closest("[data-hardware-takeover]");
+      if (hardwareTakeover) {
+        event.preventDefault();
+        handlers.hardwareTakeover?.({
+          pid: hardwareTakeover.getAttribute("data-owner-pid") || "",
+          process: hardwareTakeover.getAttribute("data-owner-process") || "process"
+        });
+        return;
+      }
+      const hardwareTransport = target?.closest("[data-hardware-transport]");
+      if (hardwareTransport) {
+        event.preventDefault();
+        handlers.hardwareSelectTransport?.(hardwareTransport.getAttribute("data-hardware-transport"));
+        return;
+      }
       const hardwareKey = target?.closest("[data-hardware-key]");
       if (hardwareKey) {
         event.preventDefault();

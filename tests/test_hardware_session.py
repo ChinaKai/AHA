@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import select
+import termios
 import threading
 import time
 import tty
@@ -17,6 +18,7 @@ from aha_cli.services.hardware_session import (
     ArmedRuleEngine,
     FdTransport,
     HardwareSessionDaemon,
+    _configure_tty,
     append_session_control,
     decode_escapes,
     hardware_session_control_path,
@@ -44,6 +46,27 @@ class DecodeEscapesTests(unittest.TestCase):
         self.assertEqual(decode_escapes("\\x03"), "\x03")  # Ctrl-C
         self.assertEqual(decode_escapes("plain"), "plain")
         self.assertEqual(decode_escapes("back\\\\slash"), "back\\slash")
+
+
+class UartConfigurationTests(unittest.TestCase):
+    def test_uart_explicitly_disables_software_and_hardware_flow_control(self) -> None:
+        master, slave = os.openpty()
+        try:
+            attrs = termios.tcgetattr(slave)
+            attrs[0] |= termios.IXON | termios.IXOFF | getattr(termios, "IXANY", 0)
+            attrs[2] |= getattr(termios, "CRTSCTS", 0)
+            termios.tcsetattr(slave, termios.TCSANOW, attrs)
+
+            _configure_tty(slave, 115200)
+
+            configured = termios.tcgetattr(slave)
+            self.assertFalse(configured[0] & (termios.IXON | termios.IXOFF | getattr(termios, "IXANY", 0)))
+            self.assertFalse(configured[2] & getattr(termios, "CRTSCTS", 0))
+            self.assertTrue(configured[2] & termios.CLOCAL)
+            self.assertTrue(configured[2] & termios.CREAD)
+        finally:
+            os.close(master)
+            os.close(slave)
 
 
 class ArmedRuleEngineTests(unittest.TestCase):
@@ -201,7 +224,11 @@ class HardwareSessionDaemonTests(unittest.TestCase):
             # is resolved from the task's UART channel config.
             update_task_hardware_debug_config(
                 root, run_id, task_id,
-                channels=[{"type": "uart", "settings": {"port": device, "baudrate": 115200}}],
+                channels=[{
+                    "type": "uart",
+                    "settings": {"port": device, "baudrate": 115200},
+                    "permissions": {"write": True},
+                }],
             )
             # Pre-seed a live-looking bridge so ensure_bridge sees an owner (this test
             # process) and does not spawn a real bridge subprocess.
@@ -234,6 +261,36 @@ class HardwareSessionDaemonTests(unittest.TestCase):
             self.assertEqual(arm["pattern"], "stop autoboot")
             self.assertEqual(arm["send"], "\\r")
             self.assertEqual(arm["max_fires"], 1)
+
+    def test_cli_write_commands_respect_read_only_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self._bootstrap(root)
+            task_id = "task-001"
+            home = str(root / ".aha")
+            update_task_hardware_debug_config(
+                root,
+                run_id,
+                task_id,
+                mode="serial",
+                serial={"device": str(root / "pty-uart"), "baudrate": 115200},
+                permissions={"access": "read_only"},
+            )
+
+            self.assertEqual(
+                cli_main([
+                    "--home", home, "hardware-send", run_id, task_id,
+                    "--channel", "serial", "--data", "help\\r",
+                ]),
+                2,
+            )
+            self.assertEqual(
+                cli_main([
+                    "--home", home, "hardware-arm", run_id, task_id,
+                    "--channel", "serial", "--pattern", "stop autoboot", "--send", "\\r",
+                ]),
+                2,
+            )
 
     def _await_bytes(self, fd: int, needle: bytes, *, timeout: float) -> bytes:
         deadline = time.time() + timeout

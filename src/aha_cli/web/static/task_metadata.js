@@ -210,6 +210,15 @@
     return permissions;
   }
 
+  function hardwareDebugAccess(value, defaultAccess = "read_only") {
+    const raw = value && typeof value === "object" ? value : {};
+    const explicit = String(raw.access || "").trim().toLowerCase().replaceAll("-", "_");
+    if (["read_only", "read_write"].includes(explicit)) return explicit;
+    if (Object.prototype.hasOwnProperty.call(raw, "write")) return raw.write ? "read_write" : "read_only";
+    if (Object.prototype.hasOwnProperty.call(raw, "serial_write")) return raw.serial_write ? "read_write" : "read_only";
+    return defaultAccess;
+  }
+
   function normalizeHardwareDebugChannel(value) {
     if (!value || typeof value !== "object") return null;
     const type = String(value.type || value.kind || "").trim().toLowerCase();
@@ -255,23 +264,64 @@
 
   function taskHardwareDebugPolicy(task) {
     const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : {};
+    if (Object.prototype.hasOwnProperty.call(policy, "mode")) {
+      const mode = ["off", "serial", "network", "both"].includes(String(policy.mode)) ? String(policy.mode) : "off";
+      return {
+        mode,
+        enabled: mode !== "off",
+        serial: {
+          device: String(policy.serial?.device || ""),
+          baudrate: Number(policy.serial?.baudrate || 115200) || 115200
+        },
+        network: {
+          device_ip: String(policy.network?.device_ip || "")
+        },
+        credentials: {
+          username: String(policy.credentials?.username || ""),
+          password: String(policy.credentials?.password || ""),
+          password_configured: Boolean(policy.credentials?.password_configured || policy.credentials?.password)
+        },
+        permissions: {
+          access: hardwareDebugAccess(policy.permissions, mode === "off" ? "read_only" : "read_write")
+        }
+      };
+    }
     const rawChannels = Array.isArray(policy.channels) ? policy.channels : [];
     const channels = rawChannels.length
       ? rawChannels.map(normalizeHardwareDebugChannel).filter(Boolean)
       : legacyHardwareDebugChannels(policy);
     const enabled = typeof policy.enabled === "boolean" ? policy.enabled : channels.length > 0;
+    const uart = channels.find(channel => channel.type === "uart");
+    const telnet = channels.find(channel => channel.type === "telnet");
+    const nfs = channels.find(channel => channel.type === "nfs");
+    const hasSerial = Boolean(uart);
+    const hasNetwork = Boolean(telnet || nfs);
+    const mode = !enabled ? "off" : (hasSerial && hasNetwork ? "both" : (hasNetwork ? "network" : "serial"));
+    const login = telnet?.settings || uart?.settings || {};
     return {
+      mode,
       enabled,
-      channels
+      serial: {
+        device: String(uart?.settings?.port || uart?.settings?.path || ""),
+        baudrate: Number(uart?.settings?.baudrate || uart?.settings?.baud || 115200) || 115200
+      },
+      network: {
+        device_ip: String(telnet?.settings?.host || nfs?.settings?.server || "")
+      },
+      credentials: {
+        username: String(login.username || login.user || ""),
+        password: String(login.password || ""),
+        password_configured: Boolean(login.password)
+      },
+      permissions: {
+        access: channels.some(channel => channel.permissions?.write) ? "read_write" : "read_only"
+      }
     };
   }
 
   function taskHardwareDebugSummary(task) {
     const policy = taskHardwareDebugPolicy(task);
-    if (!policy.enabled) return "off";
-    if (!policy.channels.length) return "on | no channels";
-    const types = policy.channels.map(channel => channel.type.toUpperCase()).join(", ");
-    return `${policy.channels.length} channel${policy.channels.length === 1 ? "" : "s"} | ${types}`;
+    return policy.enabled ? `${policy.mode} · ${policy.permissions.access.replace("_", "-")}` : "off";
   }
 
   function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates, hostOptions = {}) {
@@ -323,6 +373,7 @@
     taskObserveProxySummary,
     defaultHardwareDebugPermissions,
     normalizeHardwareDebugPermissions,
+    hardwareDebugAccess,
     normalizeHardwareDebugChannel,
     splitTaskSkillPaths,
     taskSkillsPolicy,

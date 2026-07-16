@@ -1004,6 +1004,10 @@ def update_task_hardware_debug_config(
     run_id: str,
     task_id: str,
     *,
+    mode: object = UNSET,
+    serial: object = UNSET,
+    network: object = UNSET,
+    credentials: object = UNSET,
     channels: object = UNSET,
     enabled: object = UNSET,
     devices: object = UNSET,
@@ -1015,16 +1019,38 @@ def update_task_hardware_debug_config(
         if task is None or task.get("deleted_at"):
             raise SystemExit(f"Task not found: {task_id}")
         hardware_debug = normalize_task_hardware_debug(task.get("hardware_debug"))
-        if channels is not UNSET:
-            hardware_debug["channels"] = channels
-            if enabled is UNSET:
-                hardware_debug["enabled"] = bool(channels)
-        elif any(item is not UNSET for item in (devices, permissions)):
-            existing_uart = next(
-                (channel for channel in hardware_debug.get("channels") or [] if isinstance(channel, dict) and channel.get("type") == "uart"),
-                {},
+        canonical_permissions_only = permissions is not UNSET and channels is UNSET and devices is UNSET
+        if any(item is not UNSET for item in (mode, serial, network, credentials)) or canonical_permissions_only:
+            if mode is not UNSET:
+                hardware_debug["mode"] = mode
+            if serial is not UNSET:
+                hardware_debug["serial"] = serial
+            if network is not UNSET:
+                hardware_debug["network"] = network
+            if credentials is not UNSET:
+                next_credentials = dict(credentials) if isinstance(credentials, dict) else credentials
+                if isinstance(next_credentials, dict):
+                    existing_password = str(hardware_debug.get("credentials", {}).get("password") or "")
+                    clear_password = bool(next_credentials.pop("clear_password", False))
+                    if clear_password:
+                        next_credentials["password"] = ""
+                    elif not str(next_credentials.get("password") or "") and existing_password:
+                        next_credentials["password"] = existing_password
+                hardware_debug["credentials"] = next_credentials
+            if permissions is not UNSET:
+                hardware_debug["permissions"] = permissions
+        elif channels is not UNSET:
+            hardware_debug = normalize_task_hardware_debug(
+                {
+                    "channels": channels,
+                    "enabled": bool(channels) if enabled is UNSET else bool(enabled),
+                }
             )
-            legacy_device = existing_uart.get("settings") if isinstance(existing_uart.get("settings"), dict) else {}
+        elif any(item is not UNSET for item in (devices, permissions)):
+            legacy_device = {
+                "port": hardware_debug.get("serial", {}).get("device", ""),
+                "baudrate": hardware_debug.get("serial", {}).get("baudrate", 115200),
+            }
             if devices is not UNSET:
                 if isinstance(devices, list) and devices:
                     legacy_device = devices[0]
@@ -1032,32 +1058,41 @@ def update_task_hardware_debug_config(
                     legacy_device = devices
                 else:
                     legacy_device = {}
-            hardware_debug["channels"] = [
+            hardware_debug = normalize_task_hardware_debug(
                 {
-                    "type": "uart",
-                    "settings": legacy_device,
-                    "permissions": permissions if permissions is not UNSET else existing_uart.get("permissions", {}),
+                    "channels": [
+                        {
+                            "type": "uart",
+                            "settings": legacy_device,
+                            "permissions": {} if permissions is UNSET else permissions,
+                        }
+                    ],
+                    "enabled": True if enabled is UNSET else bool(enabled),
                 }
-            ]
-            if enabled is UNSET:
-                hardware_debug["enabled"] = bool(hardware_debug["channels"])
-        # The master switch only controls visibility/activation; it never discards
-        # configured channels so toggling it back on restores the previous setup.
+            )
+        # Compatibility for clients that still only toggle the old master switch.
         if enabled is not UNSET:
-            hardware_debug["enabled"] = bool(enabled)
+            if not bool(enabled):
+                hardware_debug["mode"] = "off"
+            elif hardware_debug.get("mode") == "off":
+                has_serial = bool(hardware_debug.get("serial", {}).get("device"))
+                has_network = bool(hardware_debug.get("network", {}).get("device_ip"))
+                hardware_debug["mode"] = "both" if has_serial and has_network else "network" if has_network else "serial"
         task["hardware_debug"] = normalize_task_hardware_debug(hardware_debug)
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
-    channels = task["hardware_debug"].get("channels") or []
+    mode_value = str(task["hardware_debug"].get("mode") or "off")
+    transports = [name for name in ("serial", "network") if mode_value in {name, "both"}]
     append_event(
         root,
         run_id,
         "task_hardware_debug_config_updated",
         {
             "task_id": task_id,
-            "channel_count": len(channels),
-            "channel_types": [str(channel.get("type") or "") for channel in channels if isinstance(channel, dict)],
+            "mode": mode_value,
+            "transports": transports,
+            "access": task["hardware_debug"].get("permissions", {}).get("access"),
         },
     )
     return task

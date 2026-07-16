@@ -550,7 +550,7 @@
 
     function hardwareIoState(taskId) {
       if (!hardwareIoStates.has(taskId)) {
-        hardwareIoStates.set(taskId, { events: [], afterOffset: 0, initialized: false, loading: false, autoFollow: true });
+        hardwareIoStates.set(taskId, { events: [], afterOffset: 0, transport: "", transports: [], initialized: false, loading: false, autoFollow: true });
       }
       return hardwareIoStates.get(taskId);
     }
@@ -584,11 +584,15 @@
       stateValue.loading = true;
       try {
         const params = new URLSearchParams({ limit: "500" });
+        if (stateValue.transport) params.set("transport", stateValue.transport);
         const payload = await deps.fetchJson(deps.apiUrl(`/api/task/${encodeURIComponent(taskId)}/hardware-io`, params), {}, "Failed to load hardware I/O");
         stateValue.events = Array.isArray(payload.events) ? payload.events : [];
         stateValue.afterOffset = Number(payload.after_offset || 0);
         stateValue.bridge = payload.bridge || null;
-        stateValue.device = payload.device || null;
+        stateValue.transport = payload.transport || stateValue.transport || "";
+        stateValue.transports = Array.isArray(payload.transports) ? payload.transports : [];
+        stateValue.endpoint = payload.endpoint || payload.device || null;
+        stateValue.device = stateValue.endpoint;
         stateValue.readOnly = Boolean(payload.read_only);
         stateValue.initialized = true;
         return stateValue;

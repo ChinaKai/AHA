@@ -3,7 +3,9 @@ from __future__ import annotations
 from aha_cli.domain.models import (
     DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT,
     DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
+    TASK_HARDWARE_DEBUG_ACCESS_MODES,
     TASK_HARDWARE_DEBUG_PERMISSION_KEYS,
+    TASK_HARDWARE_DEBUG_MODES,
     TASK_SUPERVISION_ASK_USER_GATES,
 )
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
@@ -123,6 +125,27 @@ def parse_task_observe_proxy_fields(payload: dict) -> dict[str, object]:
 
 def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
     update: dict[str, object] = {}
+    if "mode" in payload:
+        mode = str(payload.get("mode") or "off").strip().lower()
+        if mode not in TASK_HARDWARE_DEBUG_MODES:
+            raise ValueError(f"mode must be one of: {', '.join(TASK_HARDWARE_DEBUG_MODES)}")
+        update["mode"] = mode
+    for key in ("serial", "network", "credentials"):
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if not isinstance(value, dict):
+            raise ValueError(f"{key} must be an object")
+        update[key] = value
+    mode = update.get("mode")
+    if mode in {"serial", "both"}:
+        serial = update.get("serial") or {}
+        if not str(serial.get("device") or serial.get("port") or "").strip():
+            raise ValueError("serial.device is required for serial hardware debug")
+    if mode in {"network", "both"}:
+        network = update.get("network") or {}
+        if not str(network.get("device_ip") or network.get("host") or "").strip():
+            raise ValueError("network.device_ip is required for network hardware debug")
     if "channels" in payload:
         channels = payload.get("channels")
         if not isinstance(channels, (list, dict)):
@@ -141,11 +164,17 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
         permissions = payload.get("permissions")
         if not isinstance(permissions, dict):
             raise ValueError("permissions must be an object")
-        update["permissions"] = {
+        update["permissions"] = {}
+        if "access" in permissions:
+            access = str(permissions.get("access") or "").strip().lower().replace("-", "_")
+            if access not in TASK_HARDWARE_DEBUG_ACCESS_MODES:
+                raise ValueError(f"permissions.access must be one of: {', '.join(TASK_HARDWARE_DEBUG_ACCESS_MODES)}")
+            update["permissions"]["access"] = access
+        update["permissions"].update({
             key: parse_optional_bool(permissions.get(key), key)
             for key in TASK_HARDWARE_DEBUG_PERMISSION_KEYS
             if key in permissions
-        }
+        })
         for old_key, new_key in {"serial_read": "read", "serial_write": "write"}.items():
             if old_key in permissions:
                 update["permissions"][new_key] = parse_optional_bool(permissions.get(old_key), old_key)

@@ -16,6 +16,13 @@ const {
   webPublishConsoleEl, webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
 } = domRefs;
 let taskController = null;
+const hardwareTerminalController = window.AHAHardwareTerminal.createHardwareTerminalController({
+  panelEl
+}, {
+  apiUrl,
+  currentRunId: () => currentRunId,
+  windowRef: window
+});
 const initialControllers = window.AHAAppControllerFactory.createInitialControllers(domRefs, {
   accessControlData: () => accessControlData,
   accessControlError: () => accessControlError,
@@ -85,6 +92,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   loadStatus,
   logState,
   hardwareIoState,
+  hardwareTerminalController,
   messageComposer: () => messageComposer,
   navigatorRef: navigator,
   normalizeAskUserGates,
@@ -353,7 +361,8 @@ const messageFlow = window.AHAMessageFlow.createMessageFlow({
   renderPanel,
   setConversationAutoFollow: value => { conversationAutoFollow = Boolean(value); },
   agentTarget: () => agentTargetEl.value || "main",
-  activeTab: () => activeTab
+  activeTab: () => activeTab,
+  hardwareTransport: () => selectedTaskId ? (hardwareIoState(selectedTaskId).transport || "") : ""
 });
 const {
   renderPendingMessages,
@@ -1032,16 +1041,7 @@ function hardwareRawKeyToBytes(event) {
 
 // Named on-screen keys -> the bytes a serial terminal would send.
 function hardwareNamedKeyBytes(name) {
-  const map = {
-    enter: "\r", tab: "\t", esc: "\u001b", space: " ", backspace: "\u007f",
-    up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D",
-    home: "\u001b[H", end: "\u001b[F", "page-up": "\u001b[5~", "page-down": "\u001b[6~",
-    delete: "\u001b[3~",
-    "ctrl-a": "\u0001", "ctrl-c": "\u0003", "ctrl-d": "\u0004", "ctrl-e": "\u0005",
-    "ctrl-k": "\u000b", "ctrl-l": "\u000c", "ctrl-r": "\u0012", "ctrl-u": "\u0015",
-    "ctrl-w": "\u0017", "ctrl-z": "\u001a"
-  };
-  return map[name] || "";
+  return window.AHATerminalUi?.terminalKeyBytes?.(name) || "";
 }
 
 // Raw-mode keystroke handler bound to the composer textarea. Returns true when it consumed
@@ -1063,11 +1063,15 @@ function handleHardwareRawKey(event) {
 async function sendHardwareRawBytes(bytes) {
   const taskId = selectedTaskId;
   if (!taskId || !bytes) return;
+  if (hardwareTerminalController.sendInput(bytes)) return;
   try {
     await fetchJson(apiUrl(`/api/task/${encodeURIComponent(taskId)}/hardware-send`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(runScopedPayload({ data: bytes }))
+      body: JSON.stringify(runScopedPayload({
+        transport: hardwareIoState(taskId).transport || "",
+        data: bytes
+      }))
     }, "Failed to send key");
   } catch (err) {
     return;
@@ -1110,11 +1114,48 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
       await fetchJson(apiUrl(`/api/task/${encodeURIComponent(selectedTaskId)}/${endpoint}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(runScopedPayload({}))
+        body: JSON.stringify(runScopedPayload({ transport: hardwareIoState(selectedTaskId).transport || "" }))
       }, "Failed to control hardware bridge");
     } catch (err) {
       return;
     }
+    try {
+      await conversationController.loadHardwareIoPage(selectedTaskId, true);
+    } catch (err) {
+      return;
+    }
+    if (activeTab === "hardware") renderPanel();
+  },
+  hardwareTakeover: async owner => {
+    if (!selectedTaskId) return;
+    const identity = `${owner?.process || "process"}${owner?.pid ? ` (PID ${owner.pid})` : ""}`;
+    if (!window.confirm(`Take over the serial device from ${identity}? AHA will send SIGTERM and will not use SIGKILL.`)) return;
+    try {
+      await fetchJson(apiUrl(`/api/task/${encodeURIComponent(selectedTaskId)}/hardware-takeover`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(runScopedPayload({ transport: "serial" }))
+      }, "Failed to take over serial device");
+    } catch (err) {
+      alert(err?.message || String(err));
+      return;
+    }
+    try {
+      await conversationController.loadHardwareIoPage(selectedTaskId, true);
+    } catch (err) {
+      return;
+    }
+    if (activeTab === "hardware") renderPanel();
+  },
+  hardwareSelectTransport: async transport => {
+    if (!selectedTaskId || !["serial", "network"].includes(transport)) return;
+    const st = hardwareIoState(selectedTaskId);
+    if (st.transport === transport) return;
+    hardwareTerminalController.unmount();
+    st.transport = transport;
+    st.events = [];
+    st.afterOffset = 0;
+    st.initialized = false;
     try {
       await conversationController.loadHardwareIoPage(selectedTaskId, true);
     } catch (err) {
@@ -1129,10 +1170,8 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
     if (!selectedTaskId) return;
     const bytes = hardwareNamedKeyBytes(key);
     if (!bytes) return;
-    void sendHardwareRawBytes(bytes);
-    // Keep the composer focused so a mobile soft keyboard does not collapse between taps.
-    const input = document.getElementById("message");
-    if (input && typeof input.focus === "function") input.focus({ preventScroll: true });
+    if (!hardwareTerminalController.sendInput(bytes)) void sendHardwareRawBytes(bytes);
+    hardwareTerminalController.focus();
   },
   hardwareToggleRawMode: () => {
     // Raw mode sends every keystroke live (real minicom-style input): Tab completion, arrows,
@@ -1209,6 +1248,7 @@ window.AHAAppRuntime = Object.freeze({
         // The device bridge writes a machine-level stream (not the run event bus),
         // so the live Hardware console refreshes by polling while it is open.
         if (activeTab !== "hardware" || !selectedTaskId) return;
+        if (hardwareTerminalController.isMounted()) return;
         const st = hardwareIoState(selectedTaskId);
         const before = st.afterOffset;
         try {

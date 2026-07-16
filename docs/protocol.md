@@ -203,68 +203,124 @@ When a selected skill is relevant, the backend prompt tells the agent to read
 the referenced `SKILL.md` before acting. Skills are independent from device
 configuration and can be reused for non-hardware capabilities.
 
-The Web settings integrations surface can manage service-home skills through
-`/api/skills`. The API lists skills discovered under `aha_home_path(root)/skills`,
+The Web Knowledge surface manages service-home skills through `/api/skills`.
+The API lists skills discovered under `aha_home_path(root)/skills`,
 reads a skill's `SKILL.md` plus optional `agents/openai.yaml`, saves or creates a
 skill at `/api/skills/<id>`, and deletes managed skill directories. Skill ids
 must use lowercase letters, digits, and hyphens so writes remain confined to the
-AHA skills root.
+AHA skills root. Skill details also enumerate bundled files such as scripts and
+executables. Skill instructions resolve those tools relative to their selected
+`SKILL.md` parent directory rather than assuming a knowledge-base install path.
 
 Tasks may also carry optional board-side automation context under
 `hardware_debug`. The setting is disabled by default for archive and old-plan
-compatibility. New tasks store a list of hardware channels. An empty channel
-list means `NONE`; one task can expose multiple channels such as `UART`, `NFS`,
-and `TELNET` at the same time. Each channel stores connection settings
-(including optional `username`/`password` for UART/TELNET) and read/write
-permissions. Hardware operation instructions belong in task-level skills under
-`task_skills`, not in per-channel fields. When channels are configured, AHA
-injects a compact hardware debug block into task assignment and chat prompts;
-passwords are intentionally omitted from prompts:
+compatibility. New tasks select `off`, `serial`, `network`, or `both`. The task
+stores only the connection facts needed to reach the board: the host serial
+device and baudrate, the board IP, optional board login credentials, and a task
+access level. New tasks default to `read_only`; existing active v2 records that
+predate the field retain write-compatible behavior during normalization.
+Hardware operation instructions and tools such as NFS belong in task-level
+skills under `task_skills`. AHA injects a compact terminal summary into task
+assignment and chat prompts; the password value is never included. Web task
+and status responses return an empty password plus `password_configured`:
 
 ```json
 {
   "hardware_debug": {
-    "channels": [
-      {
-        "type": "uart",
-        "settings": {
-          "port": "/dev/ttyUSB0",
-          "baudrate": 115200,
-          "username": "board",
-          "password": "secret"
-        },
-        "permissions": {
-          "read": true,
-          "write": true
-        }
-      },
-      {
-        "type": "nfs",
-        "settings": {
-          "server": "192.168.1.10",
-          "remote_path": "/srv/nfs/rootfs",
-          "mount_path": "/mnt/rootfs"
-        },
-        "permissions": {
-          "read": true,
-          "write": false
-        }
-      }
-    ]
+    "mode": "both",
+    "serial": {
+      "device": "/dev/ttyUSB0",
+      "baudrate": 115200
+    },
+    "network": {
+      "device_ip": "192.168.1.20"
+    },
+    "credentials": {
+      "username": "root",
+      "password": "secret"
+    },
+    "permissions": {
+      "access": "read_only"
+    }
   }
 }
 ```
 
-Channel entries describe the hardware access target. Permission flags are
-task-local policy for the agent; AHA stores and prompts them, but hardware
-resource locking and device-specific command wrappers are a separate runtime
-capability. Device operations such as reset, entering U-Boot, NFS mount
-workflow, flashing, and env inspection belong in enabled task skills rather
-than in `hardware_debug`. Legacy `enabled`/`devices`/`serial_*` payloads are
-accepted as compatibility input and normalized to a `uart` channel.
+`read_only` permits live terminal observation, replay, bridge status, bounded
+service discovery, pause/stop, and skill query/dry-run flows. `read_write` also
+permits terminal input, automatic response rules, serial takeover, board/NFS
+writes, flashing, and relay operations. REST, CLI, and Hardware WebSocket input
+all enforce the terminal write boundary; enabled skill instructions apply the
+same access level to their state-changing tools.
 
-Hardware channel input/output can be mirrored to the Web UI through task-local
-hardware I/O records. AHA stores records under
+Serial and Network are terminal categories. A bounded skill tool probes SSH 22
+and Telnet 23 for the configured board IP, preferring SSH when both respond.
+The current shared Network bridge implements Telnet; an SSH result uses the
+recommended system `ssh` command in Local Terminal. The Web Terminal view and the
+`hardware-attach`/`hardware-send` helpers use the same machine-level bridge for
+agent and manual interaction. In `both` mode the view can switch between Serial
+and Network. Future network transports can be added without changing the task's
+board IP.
+
+The browser renders this shared stream with xterm.js and connects through
+`/ws/hardware-terminal?task_id=<id>&transport=serial|network`. Its realtime path
+is event-driven: `xterm -> WebSocket -> 0600 Unix socket -> machine bridge ->
+UART/Telnet`. WebSocket `input` frames are forwarded as literal terminal bytes
+(without CLI-style backslash escape decoding), and bridge RX is pushed directly
+back as `output` frames with ANSI sequences intact. JSONL `control.jsonl` remains
+the compatible CLI/agent command inbox; `stream.jsonl` remains the audit log and
+reconnect history, but neither is polled for live Web Terminal I/O.
+
+Each IPC client first receives the exact stream byte offset captured when the
+bridge accepts it. The WebSocket replays recent RX only through that boundary,
+then consumes offset-tagged live frames, preventing gaps or duplicates at the
+history/live transition. IPC frames and per-client buffers are bounded; a slow
+client is disconnected instead of blocking the physical bridge. `resize` frames
+update the local xterm geometry and, for Telnet, send NAWS window-size
+negotiation; terminal type negotiation reports `xterm-256color`. The WebSocket
+never opens a second physical UART or Telnet connection.
+
+Serial TX is also bounded and event-driven. The UART descriptor is non-blocking,
+so one `write()` may accept only part of an input frame or temporarily return no
+progress. The bridge retains unsent bytes in order (up to 256 KiB), includes the
+UART fd in writable readiness, and records TX only after the complete segment is
+accepted. Pause/stop discards any remaining queue with an explicit system audit
+record rather than silently reporting unsent bytes as transmitted. Opening a
+Serial transport explicitly disables XON/XOFF and RTS/CTS so settings left by a
+previous terminal program cannot stall input. The bridge sends the first byte
+immediately and paces subsequent queued bytes at 1 ms intervals; this protects
+small bootloader/console receivers from host-side paste and key-repeat bursts
+without adding perceptible single-key latency.
+
+Physical Serial ownership is coordinated with the traditional UUCP lock
+`/run/lock/LCK..<tty>`. AHA atomically acquires this lock before opening the tty
+and refuses to compete with a live minicom, picocom, flasher, or another AHA
+bridge; otherwise two readers would split RX bytes and create apparent random
+output loss. Pause, stop, and exceptional transport close release only AHA's own
+PID-matching lock. The Web panel reports the owning process/PID and offers an
+explicit, confirmed **Take over** action that sends `SIGTERM` and waits briefly;
+it never escalates to `SIGKILL`, and permission failures are surfaced to the
+operator. Resume waits in a blocked state until the external owner releases the
+device, then re-acquires it automatically.
+
+NFS is a network debugging tool rather than a terminal transport. Its server,
+export path, board mount path, module-loading requirements, and cleanup workflow
+belong in an enabled board skill. Reset, entering U-Boot, relay control,
+flashing, and env inspection likewise remain skill/tool workflows.
+
+Legacy `enabled`/`devices`/`channels` payloads remain accepted as compatibility
+input. UART becomes `serial`; Telnet becomes `network`; an old NFS server is
+used only as a migration fallback for the board IP. Newly saved task state uses
+only `mode`/`serial`/`network`/`credentials`.
+
+Terminal streams are stored at machine scope because a physical serial device
+or Telnet endpoint can outlive and be shared by task views. Serial streams live
+under `hardware/devices/`; network streams live under `hardware/network/`.
+Opening the Web Terminal view lazily starts the selected bridge, and terminal
+tasks expose the saved stream read-only.
+
+Tools can additionally mirror milestones to task-local hardware I/O records.
+AHA stores those records under
 `runs/<run-id>/tasks/<task-id>/hardware_io.jsonl` and also appends a
 `hardware_io` event to the run event stream for realtime WebSocket updates:
 
@@ -274,7 +330,7 @@ hardware I/O records. AHA stores records under
   "data": {
     "task_id": "task-087",
     "agent_id": "main",
-    "channel": "uart",
+    "channel": "serial",
     "endpoint": "/dev/ttyUSB0@115200",
     "direction": "tx",
     "encoding": "text",
@@ -287,7 +343,7 @@ Agents and channel operation skills should use the helper entrypoint when they
 want user-visible TX/RX traces:
 
 ```text
-aha hardware-io <run-id> <task-id> --agent-id main --channel uart --endpoint /dev/ttyUSB0@115200 --direction tx --data 'reset\r'
+aha hardware-io <run-id> <task-id> --agent-id main --channel serial --endpoint /dev/ttyUSB0@115200 --direction tx --data 'reset\r'
 ```
 
 The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard execution controls. If `task-main` needs sub-agents or must route follow-up work to an existing owner, it can include a JSON action payload in its response:

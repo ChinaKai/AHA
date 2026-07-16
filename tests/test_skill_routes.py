@@ -94,6 +94,7 @@ class SkillRoutesTests(unittest.TestCase):
             detail_body = json_response_body(detail_response)
             self.assertEqual(detail_body["skill"]["skill_md"], skill_md)
             self.assertEqual(detail_body["skill"]["openai_yaml"], openai_yaml)
+            self.assertEqual(detail_body["skill"]["bundled_files"], [])
 
             updated_md = skill_md.replace("Use UART safely.", "Use UART and Telnet safely.")
             update_response = asyncio.run(
@@ -161,6 +162,41 @@ class SkillRoutesTests(unittest.TestCase):
         self.assertEqual(body["skills"][0]["path"], str(migrated / "SKILL.md"))
         self.assertEqual(migrated_skill_md, "# Legacy Board Debug\n\nUse UART safely.\n")
         self.assertEqual(migrated_checklist, "- power\n")
+
+    def test_skill_detail_lists_bundled_tools_without_following_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            skill = root / "knowledge" / "skills" / "board-debug"
+            (skill / "scripts").mkdir(parents=True)
+            (skill / "SKILL.md").write_text("# Board Debug\n", encoding="utf-8")
+            script = skill / "scripts" / "probe.py"
+            script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            script.chmod(0o755)
+            tool = skill / "relay_control"
+            tool.write_bytes(b"tool")
+            tool.chmod(0o755)
+            (skill / "references").mkdir()
+            (skill / "references" / "notes.md").write_text("notes\n", encoding="utf-8")
+            outside = Path(tmp) / "secret.txt"
+            outside.write_text("secret\n", encoding="utf-8")
+            (skill / "leak").symlink_to(outside)
+
+            response = asyncio.run(fetch_ui_response(root, "", "/api/skills/board-debug"))
+            body = json_response_body(response)
+            files = body["skill"]["bundled_files"]
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(
+            [(item["path"], item["kind"], item["executable"]) for item in files],
+            [
+                ("references/notes.md", "reference", False),
+                ("relay_control", "tool", True),
+                ("scripts/probe.py", "script", True),
+            ],
+        )
+        self.assertEqual(body["skill"]["bundled_file_count"], 3)
+        self.assertEqual(body["skill"]["tool_count"], 2)
 
     def test_task_skill_options_use_knowledge_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

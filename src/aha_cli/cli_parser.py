@@ -31,6 +31,7 @@ COMMANDS = {
     "auto-reply",
     "hardware-io",
     "hardware-bridge",
+    "hardware-network-bridge",
     "hardware-attach",
     "hardware-send",
     "hardware-arm",
@@ -391,9 +392,17 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_bridge_p.add_argument("--baudrate", type=int, default=115200)
     hardware_bridge_p.set_defaults(func=handlers["hardware-bridge"])
 
+    hardware_network_bridge_p = sub.add_parser(
+        "hardware-network-bridge",
+        help="Run the machine-level Telnet terminal bridge (managed by the AHA runtime; blocks)",
+    )
+    hardware_network_bridge_p.add_argument("host")
+    hardware_network_bridge_p.add_argument("--port", type=int, default=23)
+    hardware_network_bridge_p.set_defaults(func=handlers["hardware-network-bridge"])
+
     hardware_attach_p = sub.add_parser(
         "hardware-attach",
-        help="Hold a UART/serial port open, stream RX to the timeline, and run armed rules (blocks)",
+        help="Watch a persistent serial or network hardware terminal and run armed rules (blocks)",
     )
     hardware_attach_p.add_argument("run_id")
     hardware_attach_p.add_argument("task_id")

@@ -20,10 +20,9 @@
     const policy = payload.hardware_debug && typeof payload.hardware_debug === "object"
       ? payload.hardware_debug
       : {};
-    const channels = Array.isArray(policy.channels) ? policy.channels : [];
-    if (!channels.length) return "off";
-    const types = channels.map(channel => String(channel?.type || "").toUpperCase()).filter(Boolean).join(", ");
-    return `${channels.length} channel${channels.length === 1 ? "" : "s"}${types ? ` (${types})` : ""}`;
+    const mode = String(policy.mode || "off");
+    const access = String(policy.permissions?.access || (mode === "off" ? "read_only" : "read_write"));
+    return mode === "off" ? mode : `${mode} · ${access.replace("_", "-")}`;
   }
 
   function observeProxyConfirmLabel(payload) {

@@ -5,8 +5,10 @@
   --app-viewport-height: 100vh;
   --mobile-keyboard-inset: 0px;
   --local-terminal-keyboard-inset: 0px;
+  --hardware-terminal-keyboard-inset: 0px;
   --local-terminal-mobile-height: calc(var(--app-viewport-height) - 84px - env(safe-area-inset-bottom));
-  --local-terminal-bottom-gap: 28px;
+  --terminal-prompt-row-height: 17.2px;
+  --local-terminal-bottom-gap: var(--terminal-prompt-row-height);
   --color-bg: #f5f7fa;
   --color-surface: #ffffff;
   --color-surface-muted: #f9fafb;
@@ -463,17 +465,18 @@ body.settings-home .session-menu.token-usage-open {
   overflow: auto;
 }
 body.settings-home .session-menu.local-terminal-open {
-  grid-template-rows: auto minmax(0, 1fr);
-  align-content: stretch;
-  overflow: hidden;
+  grid-template-rows: auto auto;
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 body.settings-home .session-menu.local-terminal-open .run-integrations-section {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
   gap: 10px;
-  height: 100%;
+  height: auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 body.settings-home .session-menu.weixin-open .weixin-console-popover,
 body.settings-home .session-menu.play-open .play-console-popover,
@@ -489,9 +492,9 @@ body.settings-home .session-menu.token-usage-open .token-usage-popover {
   box-shadow: none;
 }
 body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
+  height: auto;
+  min-height: min(68dvh, 620px);
+  overflow: visible;
 }
 .session-menu-head {
   display: flex;
@@ -915,7 +918,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
 }
 .local-terminal-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(320px, 1fr);
+  grid-template-rows: auto auto minmax(320px, 1fr) auto;
   gap: 10px;
   min-height: min(68dvh, 620px);
   padding: 14px;
@@ -926,6 +929,16 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+.local-terminal-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.local-terminal-close {
+  min-height: 28px;
+  padding: 0 10px;
 }
 .local-terminal-head h3 {
   margin: 0;
@@ -965,38 +978,42 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   flex-wrap: wrap;
 }
 .local-terminal-xterm {
+  --terminal-bottom-gap: var(--local-terminal-bottom-gap);
   min-height: 320px;
   max-height: calc(78dvh - 130px);
-  overflow: hidden;
   border: 1px solid #101828;
   border-radius: 6px;
   outline: none;
-  background: #101828;
+}
+.aha-terminal-xterm {
+  overflow: hidden;
+  background: #101828 !important;
   color: #f8fafc;
 }
-.local-terminal-xterm .xterm {
-  height: calc(100% - var(--local-terminal-bottom-gap));
+.aha-terminal-xterm .xterm {
+  height: calc(100% - var(--terminal-bottom-gap, 0px));
   background: #101828 !important;
 }
-.local-terminal-xterm .xterm-viewport {
+.aha-terminal-xterm .xterm-viewport {
   background: #101828 !important;
   overflow-y: auto !important;
+  overscroll-behavior: contain;
 }
-.local-terminal-xterm .xterm-screen,
-.local-terminal-xterm .xterm-rows {
+.aha-terminal-xterm .xterm-screen,
+.aha-terminal-xterm .xterm-rows {
   min-height: 100%;
   background: #101828 !important;
 }
-.local-terminal-xterm:focus-within {
+.aha-terminal-xterm:focus-within {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.28);
 }
 body.settings-home .session-menu.local-terminal-open .local-terminal-panel {
-  height: 100%;
-  min-height: 0;
+  height: auto;
+  min-height: min(68dvh, 620px);
 }
 body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
-  height: 100%;
-  min-height: 0;
+  height: min(56dvh, 520px);
+  min-height: 320px;
   max-height: none;
 }
 .observe-proxy-head,
@@ -2701,9 +2718,9 @@ body.auth-required .login-view:not(.hidden) {
 }
 .hardware-bridge-bar {
   flex: 0 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   padding: 7px 10px;
   border: 1px solid var(--color-border-subtle);
@@ -2715,6 +2732,33 @@ body.auth-required .login-view:not(.hidden) {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+.hardware-transport-picker {
+  display: inline-flex;
+  gap: 3px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.hardware-transport-btn {
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.hardware-transport-btn.active {
+  background: var(--color-primary-surface);
+  color: var(--color-primary-strong);
+}
+.hardware-transport-label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.hardware-terminal-settings {
+  display: grid;
+  gap: 10px;
 }
 .hardware-bridge-device {
   min-width: 0;
@@ -2728,8 +2772,18 @@ body.auth-required .login-view:not(.hidden) {
 .hardware-bridge-controls {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.hardware-bridge-error {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: var(--color-danger, #b42318);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 .hardware-keybar {
   flex: 0 0 auto;
@@ -2838,35 +2892,21 @@ body.auth-required .login-view:not(.hidden) {
   font-size: 12px;
   line-height: 1.45;
 }
-.hardware-terminal {
+.hardware-terminal-xterm {
+  --terminal-bottom-gap: var(--terminal-prompt-row-height);
   flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  margin: 0;
-  padding: 10px 12px;
+  min-height: 180px;
+  overflow: hidden;
+  padding: 8px 10px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
-  background: #0b1020;
-  color: #d7dde8;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
+  background: #101828;
 }
-.hardware-terminal .hio-rx { color: #d7dde8; }
-/* The live preview of the not-yet-sent composer line, shown right at the prompt. */
-.hardware-terminal .hio-pending {
-  color: #7fd1ff;
-  border-bottom: 1px solid rgba(127, 209, 255, 0.5);
+.hardware-terminal-xterm .xterm {
+  height: calc(100% - var(--terminal-bottom-gap));
 }
-.hardware-terminal .hio-tx {
-  color: #fbbf24;
-  font-weight: 600;
-}
-.hardware-terminal .hio-sys {
-  color: #7c8aa5;
-  font-style: italic;
+.hardware-terminal-xterm .xterm-viewport {
+  overscroll-behavior: contain;
 }
 .hardware-master-toggle {
   font-weight: 600;
@@ -7228,9 +7268,66 @@ body.empty-run .panel {
     margin-top: 0;
     transform: translateZ(0);
   }
+  body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
+    position: static;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    z-index: auto;
+    width: 100%;
+    height: auto;
+    min-height: min(68dvh, 620px);
+    margin-top: 8px;
+    transform: none;
+  }
+  body.mobile-keyboard-active.settings-home .session-menu.local-terminal-open {
+    padding-bottom: calc(12px + var(--mobile-keyboard-inset));
+    scroll-padding-bottom: calc(96px + var(--mobile-keyboard-inset));
+  }
+  .hardware-io-view.terminal-keyboard-active {
+    height: auto;
+    min-height: calc(290px + var(--hardware-terminal-keyboard-inset));
+    padding-bottom: var(--hardware-terminal-keyboard-inset);
+  }
+  .hardware-io-view.terminal-keyboard-active .hardware-terminal-xterm {
+    --terminal-min-rows: 2;
+    flex: 0 0 var(--terminal-adaptive-height, 180px);
+    height: var(--terminal-adaptive-height, 180px);
+    min-height: 0;
+  }
+  body.mobile-keyboard-active.settings-home .session-menu.local-terminal-open .local-terminal-popover,
+  .session-menu.local-terminal-open .local-terminal-popover.local-terminal-keyboard-active {
+    min-height: 0;
+  }
+  body.mobile-keyboard-active.settings-home .session-menu.local-terminal-open .local-terminal-panel,
+  .session-menu.local-terminal-open .local-terminal-popover.local-terminal-keyboard-active .local-terminal-panel {
+    grid-template-rows: auto auto auto auto;
+    min-height: 0;
+  }
+  body.mobile-keyboard-active.settings-home .session-menu.local-terminal-open .local-terminal-xterm,
+  .session-menu.local-terminal-open .local-terminal-popover.local-terminal-keyboard-active .local-terminal-xterm {
+    --terminal-min-rows: 2;
+    height: var(--terminal-adaptive-height, 180px);
+    min-height: 0;
+  }
   body.mobile-keyboard-active .session-menu.local-terminal-open .local-terminal-popover,
   .session-menu.local-terminal-open .local-terminal-popover.local-terminal-keyboard-active {
     box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
+  }
+  body.settings-home .session-menu.skills-open .skills-console-list {
+    max-height: none;
+    overflow: visible;
+  }
+  body.settings-home .session-menu.skills-open .skills-console-list-item {
+    min-height: 0;
+  }
+  body.settings-home .session-menu.skills-open .skills-console-list-item strong,
+  body.settings-home .session-menu.skills-open .skills-console-list-item span {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .session-menu.skills-open .skills-console-popover {
     position: fixed;

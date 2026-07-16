@@ -19,18 +19,18 @@
 
   function createDefaultSkillMarkdown(id) {
     const safeId = String(id || "new-skill").trim() || "new-skill";
-    const title = safeId.split("-").filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || "New Skill";
+    const title = safeId.split("-").filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || "新技能";
     return [
       "---",
       `name: ${safeId}`,
-      "description: Describe what this skill does and when Codex should use it.",
+      "description: 说明这个技能提供的能力，以及应在什么场景下使用。",
       "---",
       "",
       `# ${title}`,
       "",
-      "## Workflow",
+      "## 工作流程",
       "",
-      "- Add the concrete steps this skill should guide.",
+      "- 在这里补充这个技能需要指导的具体步骤。",
       ""
     ].join("\n");
   }

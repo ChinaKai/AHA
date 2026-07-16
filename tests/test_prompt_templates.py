@@ -32,6 +32,7 @@ SAMPLE_VALUES = {
     "browser_latest_request": "Please check this.",
     "browser_to_host_notes": "(none)",
     "channels": "- channel 1: type=uart",
+    "terminals": "- serial terminal: device=/dev/ttyUSB0, baudrate=115200",
     "chars": "123",
     "chain_count": "1",
     "chains": "Chain 1:\n- message",

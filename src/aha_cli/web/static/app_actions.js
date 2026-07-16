@@ -31,7 +31,7 @@
       if (changedTask) deps.resetEventWebSocketReconnectState?.("task_selected");
       deps.resetTaskConfigEditing?.();
       setConversationAutoFollow(true);
-      // The Hardware tab only exists for hardware-enabled tasks: if we land on a task
+      // The Terminal tab only exists for hardware-enabled tasks: if we land on a task
       // without it while that tab is active, fall back to the conversation view.
       if (activeTab() === "hardware" && !hardwareTabEnabledFor(taskId)) {
         setActiveTab("conversation");

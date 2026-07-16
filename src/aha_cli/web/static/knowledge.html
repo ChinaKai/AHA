@@ -352,6 +352,49 @@
     .kb-form-grid label.kb-field { display: flex; align-items: center; gap: 6px; }
     .kb-form-grid label.kb-field input[type=checkbox] { flex: none; margin: 0; }
     .kb-settings-card { padding: 14px; }
+    .kb-skills-toolbar { justify-content: space-between; margin: 0 0 10px; }
+    .kb-skills-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .kb-skills-layout {
+      display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+      gap: 12px; min-width: 0; align-items: start;
+    }
+    .kb-skills-list, .kb-skills-detail {
+      min-width: 0; border: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-md); background: var(--color-surface);
+    }
+    .kb-skills-list { display: grid; gap: 4px; padding: 8px; }
+    .kb-skill-list-item {
+      display: grid; gap: 3px; width: 100%; min-width: 0; padding: 9px 10px;
+      border: 1px solid transparent; border-radius: var(--radius-sm);
+      background: transparent; color: var(--color-text); text-align: left; cursor: pointer;
+    }
+    .kb-skill-list-item:hover { background: var(--color-surface-muted); }
+    .kb-skill-list-item.active {
+      border-color: var(--color-primary); background: var(--color-primary-surface);
+      color: var(--color-primary-strong);
+    }
+    .kb-skill-list-item strong, .kb-skill-list-item span {
+      min-width: 0; overflow-wrap: anywhere; white-space: normal;
+    }
+    .kb-skill-list-item span { color: var(--color-text-subtle); font-size: 11px; line-height: 1.4; }
+    .kb-skills-detail { padding: 12px; }
+    .kb-skills-form { display: grid; gap: 10px; min-width: 0; }
+    .kb-skills-form input, .kb-skills-form textarea { width: 100%; box-sizing: border-box; }
+    .kb-skills-editor {
+      min-height: 260px; resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .kb-skills-agent-editor { min-height: 120px; }
+    .kb-skill-tools { display: grid; gap: 7px; }
+    .kb-skill-tool {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px;
+      padding: 8px 10px; border: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-sm); background: var(--color-surface-muted);
+    }
+    .kb-skill-tool code { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+    .kb-skill-tool-meta { color: var(--color-text-subtle); font-size: 11px; white-space: nowrap; }
+    .kb-skills-empty { padding: 18px 12px; color: var(--color-text-subtle); font-size: 12px; }
     .kb-project-nav-panel { gap: 8px; }
     .kb-project-nav-panel .kb-row { margin-bottom: 0; }
     .kb-project-nav-panel select { min-width: min(360px, 100%); }
@@ -378,7 +421,7 @@
       .kb-head-actions { justify-items: start; }
       .kb-sync-panel { justify-content: flex-start; flex-wrap: wrap; }
       .kb-sync-panel .kb-muted { text-align: left; }
-      .kb-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+      .kb-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
       .kb-tabs button {
         width: 100%; min-height: 32px; padding: 0 4px;
         justify-content: center; white-space: nowrap; font-size: 11px;
@@ -424,6 +467,13 @@
       .kb-pending-body { max-height: 38vh; }
       .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
       .kb-settings-card { padding: 12px; }
+      .kb-skills-layout { grid-template-columns: 1fr; }
+      .kb-skills-list { max-height: none; overflow: visible; }
+      .kb-skills-detail { padding: 10px; }
+      .kb-skills-toolbar, .kb-skills-toolbar-actions { display: grid; grid-template-columns: 1fr; width: 100%; }
+      .kb-skills-toolbar button { width: 100%; }
+      .kb-skill-tool { grid-template-columns: 1fr; }
+      .kb-skill-tool-meta { white-space: normal; }
       .kb-project-nav-controls { overflow-x: visible; }
       .kb-entry-edit-toolbar { display: grid; grid-template-columns: 1fr; }
       .kb-entry-edit-modes, .kb-entry-image-upload { width: 100%; }
@@ -467,6 +517,7 @@
     <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Nav</span></button>
     <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
     <button data-tab="capture" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_capture">Capture</span></button>
+    <button data-tab="skills" class="button-ghost kb-tab" type="button"><span data-i18n="skills.title">Skills</span></button>
     <button data-tab="settings" class="button-ghost kb-tab" type="button"><span data-i18n="common.settings">Settings</span></button>
   </nav>
 
@@ -514,6 +565,23 @@
       <button class="primary" id="cap-new-open" type="button" data-i18n="knowledge.capture_add">New note</button>
     </div>
     <div id="capture-list"></div>
+  </section>
+
+  <section id="tab-skills" hidden>
+    <div class="kb-row kb-skills-toolbar">
+      <div>
+        <strong data-i18n="skills.title">Skills</strong>
+        <div id="skills-root" class="kb-muted"></div>
+      </div>
+      <div class="kb-skills-toolbar-actions">
+        <button class="button-ghost" id="skills-refresh" type="button" data-i18n="common.refresh">Refresh</button>
+        <button class="primary" id="skills-new" type="button" data-i18n="skills.new">New skill</button>
+      </div>
+    </div>
+    <div class="kb-skills-layout">
+      <div id="skills-list" class="kb-skills-list"></div>
+      <div id="skills-detail" class="kb-skills-detail"></div>
+    </div>
   </section>
 
   <div id="cap-new-modal" class="kb-modal" hidden>
@@ -726,7 +794,7 @@
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
-    const KB_TABS = ["entries", "navigation", "pending", "capture", "settings"];
+    const KB_TABS = ["entries", "navigation", "pending", "capture", "skills", "settings"];
     const ENTRIES_PAGE_LIMIT = 120;
 
     function normalizedTabName(name) {
@@ -750,7 +818,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -768,8 +836,176 @@
       }
       if (tab === "pending") loadPending();
       if (tab === "capture") loadCapture();
+      if (tab === "skills") loadSkills();
       if (tab === "settings") loadSettings();
       if (tab === "entries") loadEntries();
+    }
+
+    function defaultSkillMarkdown(id) {
+      const safeId = String(id || "new-skill").trim() || "new-skill";
+      const title = safeId.split("-").filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || "新技能";
+      return [
+        "---",
+        `name: ${safeId}`,
+        "description: 说明这个技能提供的能力，以及应在什么场景下使用。",
+        "---",
+        "",
+        `# ${title}`,
+        "",
+        "## 工作流程",
+        "",
+        "- 在这里补充这个技能需要指导的具体步骤。",
+        ""
+      ].join("\n");
+    }
+
+    function skillKindLabel(kind) {
+      const labels = {
+        script: t("skills.kind_script", "脚本"),
+        tool: t("skills.kind_tool", "工具"),
+        source: t("skills.kind_source", "源码"),
+        reference: t("skills.kind_reference", "参考资料"),
+        asset: t("skills.kind_asset", "资源"),
+        file: t("skills.kind_file", "文件")
+      };
+      return labels[String(kind || "file")] || labels.file;
+    }
+
+    function renderSkillTools(detail) {
+      const files = Array.isArray(detail?.bundled_files) ? detail.bundled_files : [];
+      if (!files.length) return `<div class="kb-skills-empty">${esc(t("skills.no_tools", "这个技能没有携带其它脚本或工具。"))}</div>`;
+      return `<div class="kb-skill-tools">${files.map(file => {
+        const meta = [skillKindLabel(file.kind), formatFileSize(file.size)];
+        if (file.executable) meta.push(t("skills.executable", "可执行"));
+        return `<div class="kb-skill-tool"><code>${esc(file.path)}</code><span class="kb-skill-tool-meta">${esc(meta.filter(Boolean).join(" · "))}</span></div>`;
+      }).join("")}</div>`;
+    }
+
+    function renderSkills() {
+      const list = $("#skills-list");
+      const detail = $("#skills-detail");
+      $("#skills-root").textContent = state.skillsRoot ? `${t("skills.storage_path", "存储目录")}: ${state.skillsRoot}` : "";
+      if (state.skillsLoading && !state.skillsLoaded) {
+        list.innerHTML = `<div class="kb-skills-empty">${esc(t("skills.loading", "技能加载中..."))}</div>`;
+      } else if (!state.skills.length) {
+        list.innerHTML = `<div class="kb-skills-empty">${esc(t("skills.empty", "暂无技能"))}</div>`;
+      } else {
+        list.innerHTML = state.skills.map(skill => {
+          const active = !state.skillDraftNew && skill.id === state.skillSelectedId;
+          const description = skill.short_description || skill.description || skill.path || "";
+          const toolCount = Number(skill.tool_count || 0);
+          const tools = toolCount ? ` · ${formatText("skills.tool_count", { count: toolCount }, `${toolCount} 个工具`)}` : "";
+          return `<button class="kb-skill-list-item ${active ? "active" : ""}" type="button" data-skill-id="${esc(skill.id)}"><strong>${esc(skill.label || skill.id)}</strong><span>${esc(description + tools)}</span></button>`;
+        }).join("");
+      }
+
+      const selected = state.skillDetail;
+      if (!state.skillDraftNew && !selected) {
+        detail.innerHTML = `<div class="kb-skills-empty">${esc(t("skills.select_empty", "选择或新建一个技能。"))}</div>`;
+        return;
+      }
+      const id = state.skillDraftNew ? "" : String(selected?.id || "");
+      const skillMd = state.skillDraftNew ? defaultSkillMarkdown("new-skill") : String(selected?.skill_md || "");
+      const openaiYaml = state.skillDraftNew ? "" : String(selected?.openai_yaml || "");
+      detail.innerHTML = `
+        <form id="skills-form" class="kb-skills-form">
+          <label><span class="kb-field">${esc(t("skills.id", "技能 ID"))}</span><input id="skill-id" value="${esc(id)}" ${state.skillDraftNew ? "" : "readonly"} autocomplete="off" /></label>
+          <label><span class="kb-field">${esc(t("skills.body", "技能正文（SKILL.md）"))}</span><textarea id="skill-md" class="kb-skills-editor" wrap="soft">${esc(skillMd)}</textarea></label>
+          <label><span class="kb-field">${esc(t("skills.agent_metadata", "界面元数据（agents/openai.yaml）"))}</span><textarea id="skill-openai-yaml" class="kb-skills-editor kb-skills-agent-editor" wrap="soft">${esc(openaiYaml)}</textarea></label>
+          <div><span class="kb-field">${esc(t("skills.bundled_tools", "携带的工具与文件"))}</span>${renderSkillTools(selected)}</div>
+          <div class="kb-card-actions">
+            <button class="primary" type="submit">${esc(t("common.save", "保存"))}</button>
+            ${state.skillDraftNew ? "" : `<button class="kb-reject" id="skill-delete" type="button">${esc(t("skills.delete", "删除"))}</button>`}
+          </div>
+        </form>`;
+    }
+
+    async function loadSkill(skillId) {
+      const id = String(skillId || "").trim();
+      if (!id) return;
+      try {
+        const payload = await api(`/api/skills/${encodeURIComponent(id)}`);
+        state.skillDetail = payload.skill || null;
+        state.skillSelectedId = String(state.skillDetail?.id || id);
+        state.skillDraftNew = false;
+      } catch (error) {
+        toast(error.message);
+      }
+      renderSkills();
+    }
+
+    async function loadSkills(force = false) {
+      if (state.skillsLoading || (state.skillsLoaded && !force)) {
+        renderSkills();
+        return;
+      }
+      state.skillsLoading = true;
+      renderSkills();
+      try {
+        const payload = await api("/api/skills");
+        state.skills = Array.isArray(payload.skills) ? payload.skills : [];
+        state.skillsRoot = String(payload.skills_root || "");
+        state.skillsLoaded = true;
+        if (!state.skillDraftNew && !state.skills.some(skill => skill.id === state.skillSelectedId)) {
+          state.skillSelectedId = String(state.skills[0]?.id || "");
+          state.skillDetail = null;
+        }
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        state.skillsLoading = false;
+      }
+      renderSkills();
+      if (!state.skillDraftNew && state.skillSelectedId && state.skillDetail?.id !== state.skillSelectedId) {
+        await loadSkill(state.skillSelectedId);
+      }
+    }
+
+    function newSkillDraft() {
+      state.skillDraftNew = true;
+      state.skillSelectedId = "";
+      state.skillDetail = null;
+      renderSkills();
+      $("#skill-id")?.focus();
+    }
+
+    async function saveSkill(event) {
+      event.preventDefault();
+      const id = String($("#skill-id")?.value || state.skillSelectedId || "").trim();
+      if (!id) {
+        $("#skill-id")?.focus();
+        return;
+      }
+      const creating = state.skillDraftNew;
+      try {
+        const payload = await api(creating ? "/api/skills" : `/api/skills/${encodeURIComponent(id)}`, {
+          method: creating ? "POST" : "PUT",
+          body: JSON.stringify({ id, skill_md: $("#skill-md")?.value || "", openai_yaml: $("#skill-openai-yaml")?.value || "" })
+        });
+        state.skillDetail = payload.skill || null;
+        state.skillSelectedId = id;
+        state.skillDraftNew = false;
+        state.skillsLoaded = false;
+        toast(t("skills.saved", "技能已保存。"));
+        await loadSkills(true);
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function deleteSkill() {
+      const id = String(state.skillSelectedId || "").trim();
+      if (!id || !window.confirm(formatText("skills.delete_title", { id }, `删除 ${id}？`))) return;
+      try {
+        await api(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+        state.skillSelectedId = "";
+        state.skillDetail = null;
+        state.skillsLoaded = false;
+        toast(t("skills.deleted", "技能已删除。"));
+        await loadSkills(true);
+      } catch (error) {
+        toast(error.message);
+      }
     }
 
     async function loadStatus() {
@@ -3230,6 +3466,26 @@
       event.preventDefault();
     });
     for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+    $("#skills-refresh").addEventListener("click", () => loadSkills(true));
+    $("#skills-new").addEventListener("click", newSkillDraft);
+    $("#skills-list").addEventListener("click", event => {
+      const button = event.target instanceof Element ? event.target.closest("[data-skill-id]") : null;
+      if (button) loadSkill(button.getAttribute("data-skill-id"));
+    });
+    $("#skills-detail").addEventListener("submit", event => {
+      if (event.target?.matches("#skills-form")) saveSkill(event);
+    });
+    $("#skills-detail").addEventListener("click", event => {
+      if (event.target instanceof Element && event.target.closest("#skill-delete")) deleteSkill();
+    });
+    $("#skills-detail").addEventListener("input", event => {
+      const input = event.target;
+      if (!state.skillDraftNew || !(input instanceof HTMLInputElement) || input.id !== "skill-id") return;
+      const editor = $("#skill-md");
+      if (editor instanceof HTMLTextAreaElement && editor.value.includes("name: new-skill")) {
+        editor.value = defaultSkillMarkdown(input.value || "new-skill");
+      }
+    });
     $("#f-search-submit").addEventListener("click", loadEntries);
     $("#f-search").addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadEntries();
@@ -3245,6 +3501,7 @@
       renderProjectNavAgentModal();
       renderProjectNavWorkspaceSelect();
       renderNavigationAgents();
+      renderSkills();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();
       loadSyncStatus();

@@ -306,8 +306,10 @@
     const eventBindings = window.AHAEventBindings;
     const panelController = window.AHAPanelController.createPanelController({
       panelEl,
+      sendFormEl,
       documentRef: deps.documentRef
     }, {
+      hardwareTerminalController: deps.hardwareTerminalController,
       activeTab: deps.activeTab,
       setActiveTab: deps.setActiveTab,
       currentRunId: deps.currentRunId,
@@ -641,6 +643,7 @@
       setCreateProxyDefaultsFromInputs: deps.setCreateProxyDefaultsFromInputs,
       setSelectedTaskId: deps.setSelectedTaskId,
       taskSkillOptions: () => deps.bootstrapData?.()?.skill_options || [],
+      taskHardwareDebugPolicy: deps.taskHardwareDebugPolicy,
       syncCreateTaskSupervisionModeFields: deps.syncCreateTaskSupervisionModeFields,
       taskOptionsController: deps.taskOptionsController,
       taskSupervisionPayloadFromMode: deps.taskSupervisionPayloadFromMode,

@@ -4,9 +4,11 @@ import json
 import os
 import select
 import signal
+import socket
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 import tempfile
 
@@ -18,11 +20,13 @@ from aha_cli.services.hardware_bridge import (
     device_key,
     device_stream_page,
     device_stream_path,
+    device_terminal_socket_path,
     ensure_bridge,
     pid_alive,
     read_bridge_state,
 )
 from aha_cli.store.io import append_jsonl, iter_jsonl_from
+from aha_cli.services.serial_lock import SerialDeviceBusyError
 
 
 def _await_bytes(fd: int, needle: bytes, *, timeout: float) -> bytes:
@@ -60,6 +64,19 @@ class DeviceKeyTests(unittest.TestCase):
         self.assertFalse(pid_alive(0))
         self.assertFalse(pid_alive(2_000_000_000))
 
+    def test_pid_alive_rejects_zombie_process(self) -> None:
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        try:
+            self.assertTrue(_wait_until(
+                lambda: Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split(") ", 1)[1].startswith("Z"),
+                timeout=2.0,
+            ))
+            self.assertFalse(pid_alive(pid))
+        finally:
+            os.waitpid(pid, 0)
+
 
 class DeviceBridgeDaemonTests(unittest.TestCase):
     def _pty(self):
@@ -96,6 +113,142 @@ class DeviceBridgeDaemonTests(unittest.TestCase):
             tx = [r for r in rows if r["direction"] == "tx"]
             self.assertTrue(any(r["data"] == "ps\r" and r.get("source") == "interactive" for r in tx))
             self.assertEqual(read_bridge_state(root, device)["status"], "stopped")
+
+    def test_live_external_lock_keeps_bridge_blocked_without_opening_device(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device = "/dev/ttyUSB-occupied"
+            owner = {
+                "path": "/run/lock/LCK..ttyUSB-occupied",
+                "pid": 321,
+                "alive": True,
+                "process": "minicom",
+            }
+            daemon = DeviceBridgeDaemon(root, device, 115200, poll_interval=0.005, self_reap=False)
+            with mock.patch(
+                "aha_cli.services.hardware_bridge.open_uart_transport",
+                side_effect=SerialDeviceBusyError(device, owner),
+            ) as opener:
+                thread = threading.Thread(target=daemon.run, daemon=True)
+                thread.start()
+                try:
+                    self.assertTrue(_wait_until(
+                        lambda: (read_bridge_state(root, device) or {}).get("status") == "blocked",
+                        timeout=2.0,
+                    ))
+                    status = bridge_status(root, device)
+                    self.assertTrue(status["alive"])
+                    self.assertEqual(status["status"], "blocked")
+                    self.assertEqual(status["device_owner"]["pid"], 321)
+                    self.assertIn("minicom", status["error"])
+                finally:
+                    append_bridge_control(root, device, {"cmd": "stop"})
+                    thread.join(timeout=2.0)
+            self.assertGreaterEqual(opener.call_count, 1)
+
+    def test_realtime_ipc_pushes_rx_and_sends_input_without_jsonl_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            master, device = self._pty()
+            daemon = DeviceBridgeDaemon(root, device, 115200, poll_interval=0.02, self_reap=False)
+            thread = threading.Thread(target=daemon.run, daemon=True)
+            thread.start()
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                ipc_path = device_terminal_socket_path(root, device)
+                self.assertTrue(_wait_until(ipc_path.exists, timeout=2.0))
+                client.settimeout(2.0)
+                client.connect(str(ipc_path))
+                stream = client.makefile("rb")
+                hello = json.loads(stream.readline())
+                self.assertEqual(hello["type"], "ready")
+
+                client.sendall(b'{"type":"input","data":"help\\r"}\n')
+                self.assertIn(b"help\r", _await_bytes(master, b"help\r", timeout=1.0))
+
+                burst = b"x" * 2048
+                client.sendall(b'{"type":"input","data":"x"}\n' * len(burst))
+                self.assertEqual(_await_bytes(master, burst, timeout=4.0), burst)
+
+                os.write(master, b"\x1b[32mREADY\x1b[0m\r\n")
+                messages = []
+                while not any(item.get("type") == "output" for item in messages):
+                    messages.append(json.loads(stream.readline()))
+                output = next(item for item in messages if item.get("type") == "output")
+                self.assertIn("\x1b[32mREADY", output["data"])
+                self.assertGreater(output["offset"], hello["after_offset"])
+            finally:
+                client.close()
+                append_bridge_control(root, device, {"cmd": "stop"})
+                thread.join(timeout=2.0)
+                os.close(master)
+
+    def test_tx_queue_retries_partial_and_temporarily_blocked_writes(self) -> None:
+        class PartialTransport:
+            def __init__(self) -> None:
+                self.received = bytearray()
+                self.results = iter((2, 0, 2, 2))
+
+            def write(self, data: bytes) -> int:
+                accepted = min(next(self.results), len(data))
+                self.received.extend(data[:accepted])
+                return accepted
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            daemon = DeviceBridgeDaemon(root, "/dev/test-partial", tx_byte_interval=0, self_reap=False)
+            transport = PartialTransport()
+            daemon.transport = transport
+
+            daemon._send("abcdef", source="test")
+            self.assertEqual(bytes(transport.received), b"ab")
+            self.assertEqual(daemon._tx_pending_bytes, 4)
+            daemon._flush_tx()
+
+            self.assertEqual(bytes(transport.received), b"abcdef")
+            self.assertEqual(daemon._tx_pending_bytes, 0)
+            tx = [row for row in self._rows(root, daemon.device) if row.get("direction") == "tx"]
+            self.assertEqual([(row["data"], row["source"]) for row in tx], [("abcdef", "test")])
+
+    def test_tx_queue_paces_serial_bytes_without_delaying_first_byte(self) -> None:
+        class Clock:
+            now = 10.0
+
+            def __call__(self) -> float:
+                return self.now
+
+        class RecordingTransport:
+            def __init__(self) -> None:
+                self.writes: list[bytes] = []
+
+            def write(self, data: bytes) -> int:
+                self.writes.append(data)
+                return len(data)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            clock = Clock()
+            daemon = DeviceBridgeDaemon(
+                Path(tmp),
+                "/dev/test-paced",
+                clock=clock,
+                tx_byte_interval=0.001,
+                self_reap=False,
+            )
+            transport = RecordingTransport()
+            daemon.transport = transport
+
+            daemon._send("abc", source="test")
+            self.assertEqual(transport.writes, [b"a"])
+            daemon._flush_tx()
+            self.assertEqual(transport.writes, [b"a"])
+
+            clock.now += 0.001
+            daemon._flush_tx()
+            self.assertEqual(transport.writes, [b"a", b"b"])
+            clock.now += 0.001
+            daemon._flush_tx()
+            self.assertEqual(transport.writes, [b"a", b"b", b"c"])
+            self.assertEqual(daemon._tx_pending_bytes, 0)
 
     def test_rx_utf8_split_across_reads_decodes_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -219,8 +372,9 @@ class DeviceStreamPageTests(unittest.TestCase):
             device = "/dev/ttyUSB-tail"
             stream = device_stream_path(root, device)
             stream.parent.mkdir(parents=True, exist_ok=True)
+            offsets = []
             for i in range(50):
-                append_jsonl(stream, {"ts": f"t{i:03d}", "direction": "rx", "data": f"line{i}"})
+                offsets.append(append_jsonl(stream, {"ts": f"t{i:03d}", "direction": "rx", "data": f"line{i}"}))
 
             page = device_stream_page(root, device, after=None, limit=10)
             self.assertEqual(len(page["events"]), 10)
@@ -232,6 +386,10 @@ class DeviceStreamPageTests(unittest.TestCase):
             follow = device_stream_page(root, device, after=0, limit=5)
             self.assertEqual([e["ts"] for e in follow["events"]], ["t000", "t001", "t002", "t003", "t004"])
             self.assertTrue(follow["has_more"])
+
+            replay = device_stream_page(root, device, before=offsets[44], limit=5)
+            self.assertEqual([e["ts"] for e in replay["events"]], ["t040", "t041", "t042", "t043", "t044"])
+            self.assertEqual(replay["after_offset"], offsets[44])
 
 
 class BridgeStatusTests(unittest.TestCase):

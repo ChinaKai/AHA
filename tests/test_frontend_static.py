@@ -240,27 +240,28 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("elements.webUpgradeEl.disabled = !upgradeAvailable", controller)
         self.assertIn("if (!deps.webUpgradeAvailable?.()) return;", actions)
 
-    def test_integrations_include_skills_console(self) -> None:
+    def test_knowledge_base_includes_skills_management(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
+        knowledge = (root / "knowledge.html").read_text(encoding="utf-8")
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
-        styles = (root / "styles.css").read_text(encoding="utf-8")
         registry = (root / "controller_registry.js").read_text(encoding="utf-8")
         factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
         wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
 
-        self.assertIn('id="skills-console"', html)
+        self.assertNotIn('<button id="skills-console"', html)
         self.assertIn('id="skills-console-popover"', html)
         self.assertIn('<script src="/static/skills_console.js"></script>', html)
+        self.assertIn('data-tab="skills"', knowledge)
+        self.assertIn('id="tab-skills"', knowledge)
+        self.assertIn('id="skills-list"', knowledge)
+        self.assertIn('id="skills-detail"', knowledge)
+        self.assertIn('detail?.bundled_files', knowledge)
+        self.assertIn('api("/api/skills")', knowledge)
+        self.assertIn('grid-template-columns: repeat(3, minmax(0, 1fr))', knowledge)
         self.assertIn('"skills.title": "Skills"', i18n)
-        self.assertIn('"skills.subtitle": "管理当前 AHA home 中发现的技能。"', i18n)
-        self.assertIn(".skills-console-popover", styles)
-        self.assertIn(".skills-console-body", styles)
-        self.assertIn(".skills-console-head button", styles)
-        self.assertIn(".skills-console-editor textarea", styles)
-        self.assertIn("white-space: pre-wrap;", styles)
-        self.assertIn("overflow-wrap: anywhere;", styles)
-        self.assertIn('wrap="soft"', (root / "skills_console.js").read_text(encoding="utf-8"))
+        self.assertIn('"skills.title": "技能"', i18n)
+        self.assertIn('wrap="soft"', knowledge)
         self.assertIn('skillsConsoleEl: "skills-console"', registry)
         self.assertIn("window.AHASkillsConsole.createSkillsConsoleController", factory)
         self.assertIn("skillsConsoleController = featureControllers.skillsConsoleController", wiring)
@@ -273,14 +274,19 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         registry = (root / "controller_registry.js").read_text(encoding="utf-8")
         factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
         wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        terminal_ui_script = (root / "terminal_ui.js").read_text(encoding="utf-8")
         terminal_script = (root / "local_terminal.js").read_text(encoding="utf-8")
 
         self.assertIn('id="local-terminal"', html)
         self.assertIn('id="local-terminal-popover"', html)
         self.assertIn('<link rel="stylesheet" href="/static/xterm.css?v=6.0.0">', html)
         self.assertIn('<script src="/static/xterm.js?v=6.0.0"></script>', html)
-        self.assertIn('<script src="/static/local_terminal.js?v=local-terminal-v9"></script>', html)
-        self.assertLess(html.index("/static/xterm.js?v=6.0.0"), html.index("/static/local_terminal.js?v=local-terminal-v9"))
+        self.assertIn('<script src="/static/terminal_ui.js?v=terminal-ui-v9"></script>', html)
+        self.assertIn('<script src="/static/local_terminal.js?v=terminal-ui-v9"></script>', html)
+        self.assertIn('<script src="/static/hardware_terminal.js?v=terminal-ui-v9"></script>', html)
+        self.assertLess(html.index("/static/xterm.js?v=6.0.0"), html.index("/static/terminal_ui.js?v=terminal-ui-v9"))
+        self.assertLess(html.index("/static/terminal_ui.js?v=terminal-ui-v9"), html.index("/static/local_terminal.js?v=terminal-ui-v9"))
+        self.assertLess(html.index("/static/terminal_ui.js?v=terminal-ui-v9"), html.index("/static/hardware_terminal.js?v=terminal-ui-v9"))
         self.assertTrue((root / "xterm.js").exists())
         self.assertTrue((root / "xterm.css").exists())
         self.assertTrue((root / "xterm.LICENSE").exists())
@@ -289,11 +295,12 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn(".local-terminal-popover", styles)
         self.assertIn(".local-terminal-xterm", styles)
         self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-popover", styles)
-        self.assertIn("body.settings-home .session-menu.local-terminal-open {\n  grid-template-rows: auto minmax(0, 1fr);", styles)
+        self.assertIn("body.settings-home .session-menu.local-terminal-open {\n  grid-template-rows: auto auto;", styles)
+        self.assertIn("overflow-y: auto;", styles[styles.index("body.settings-home .session-menu.local-terminal-open {"):])
         self.assertIn("body.settings-home .session-menu.local-terminal-open .run-integrations-section", styles)
         self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-xterm", styles)
-        self.assertIn(".local-terminal-xterm .xterm-viewport", styles)
-        self.assertIn(".local-terminal-xterm .xterm-screen", styles)
+        self.assertIn(".aha-terminal-xterm .xterm-viewport", styles)
+        self.assertIn(".aha-terminal-xterm .xterm-screen", styles)
         self.assertIn("background: #101828 !important;", styles)
         self.assertIn("overflow-y: auto !important;", styles)
         self.assertIn(".local-terminal-popover[hidden]", styles)
@@ -315,8 +322,11 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("localKeyboardInset", terminal_script)
         self.assertIn("keyboardAdjustedTerminalHeight", terminal_script)
         self.assertIn("availableHeight", terminal_script)
-        self.assertIn("terminalBottomGapForElement", terminal_script)
-        self.assertIn("--local-terminal-bottom-gap", terminal_script)
+        self.assertIn("terminalBottomGapForElement", terminal_ui_script)
+        self.assertIn("fitTerminalToContent", terminal_ui_script)
+        self.assertIn("fitTerminalContent", terminal_script)
+        self.assertIn("--terminal-bottom-gap", terminal_ui_script)
+        self.assertIn("terminalUi().terminalOptions", terminal_script)
         self.assertIn("options.forceHeight || baselineTerminalHeight <= 0", terminal_script)
         self.assertIn("--local-terminal-keyboard-inset", terminal_script)
         self.assertIn("localTerminalMobileHeight", terminal_script)
@@ -325,8 +335,9 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("virtualKeyboard", terminal_script)
         self.assertIn("--local-terminal-keyboard-inset: 0px;", styles)
         self.assertIn("--local-terminal-mobile-height: calc(var(--app-viewport-height) - 84px - env(safe-area-inset-bottom));", styles)
-        self.assertIn("--local-terminal-bottom-gap: 28px;", styles)
-        self.assertIn("height: calc(100% - var(--local-terminal-bottom-gap));", styles)
+        self.assertIn("--terminal-prompt-row-height: 17.2px;", styles)
+        self.assertIn("--local-terminal-bottom-gap: var(--terminal-prompt-row-height);", styles)
+        self.assertIn("height: calc(100% - var(--terminal-bottom-gap, 0px));", styles)
         self.assertIn("bottom: auto;", styles)
         self.assertIn("height: var(--local-terminal-mobile-height);", styles)
         self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-popover,\n  .session-menu.local-terminal-open .local-terminal-popover", styles)
@@ -334,23 +345,139 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("transform: translateZ(0);", styles)
         self.assertIn("body.mobile-keyboard-active .session-menu.local-terminal-open .local-terminal-popover", styles)
         self.assertIn(".local-terminal-popover.local-terminal-keyboard-active", styles)
+        self.assertIn('data-local-terminal-action="close"', terminal_script)
+        self.assertIn('if (action === "close") setOpen(false)', terminal_script)
+        self.assertIn('if (!popover.querySelector(".local-terminal-panel"))', terminal_script)
+        self.assertIn("data-local-terminal-key", terminal_script)
+        self.assertIn("terminalUi().terminalKeyBytes", terminal_script)
+        self.assertIn("terminalKeys", terminal_ui_script)
+        self.assertIn("terminalKeyBytes", terminal_ui_script)
+        self.assertIn("body.mobile-keyboard-active.settings-home .session-menu.local-terminal-open", styles)
+        self.assertIn("--terminal-adaptive-height", styles)
+        self.assertIn("--terminal-min-rows: 2;", styles)
+        settings_mobile = styles[styles.index("@media (max-width: 980px)") :]
+        self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-popover {\n    position: static;", settings_mobile)
 
     def test_local_terminal_xterm_controller_uses_terminal_runtime(self) -> None:
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not available")
-        script = static_root().joinpath("local_terminal.js").read_text(encoding="utf-8")
+        root = static_root()
+        script = "\n".join([
+            root.joinpath("terminal_ui.js").read_text(encoding="utf-8"),
+            root.joinpath("local_terminal.js").read_text(encoding="utf-8"),
+        ])
         assertion = r'''
 const fs = require("fs");
 const vm = require("vm");
-const context = { window: { AHAI18n: { t: (_key, fallback) => fallback }, location: { href: "http://127.0.0.1/" } }, Terminal: function() {} };
+const context = {
+  window: { AHAI18n: { t: (_key, fallback) => fallback }, location: { href: "http://127.0.0.1/" } },
+  Terminal: function() {},
+  getComputedStyle: () => ({
+    getPropertyValue: name => name === "--terminal-bottom-gap" ? "17.2px" : name === "--terminal-min-rows" ? "2" : ""
+  })
+};
 context.window.window = context.window;
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(0, "utf8"), context);
 const api = context.window.AHALocalTerminal;
-if (!api.renderLocalTerminal({ connected: true, canConnect: true }).includes("data-local-terminal-xterm")) process.exit(1);
+const rendered = api.renderLocalTerminal({ connected: true, canConnect: true });
+if (!rendered.includes("data-local-terminal-xterm") || !rendered.includes('data-local-terminal-action="close"')) process.exit(1);
 const size = api.terminalSizeForElement({ getBoundingClientRect: () => ({ width: 840, height: 360 }) });
 if (size.cols < 40 || size.rows < 12) process.exit(1);
+const values = {};
+const adaptiveEl = {
+  style: {
+    getPropertyValue: name => values[name] || "",
+    setProperty: (name, value) => { values[name] = value; },
+    removeProperty: name => { delete values[name]; }
+  }
+};
+const primary = { cursorY: 6 };
+const alternate = { cursorY: 0 };
+const terminal = { buffer: { active: primary, alternate } };
+if (!context.window.AHATerminalUi.fitTerminalToContent(terminal, adaptiveEl, { active: true, maxHeight: 320 })) process.exit(1);
+if (values["--terminal-adaptive-height"] !== "173px") process.exit(1);
+terminal.buffer.active = alternate;
+context.window.AHATerminalUi.fitTerminalToContent(terminal, adaptiveEl, { active: true, maxHeight: 320 });
+if (values["--terminal-adaptive-height"] !== "320px") process.exit(1);
+context.window.AHATerminalUi.fitTerminalToContent(terminal, adaptiveEl, { active: false, maxHeight: 320 });
+if (values["--terminal-adaptive-height"]) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_hardware_terminal_xterm_controller_streams_raw_io(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        root = static_root()
+        script = "\n".join([
+            root.joinpath("terminal_ui.js").read_text(encoding="utf-8"),
+            root.joinpath("hardware_terminal.js").read_text(encoding="utf-8"),
+        ])
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+class FakeTerminal {
+  constructor() { FakeTerminal.last = this; this.writes = []; }
+  open() {}
+  onData(fn) { this.input = fn; return { dispose() {} }; }
+  onResize(fn) { this.resizeHandler = fn; return { dispose() {} }; }
+  resize() {}
+  reset() { this.resetCalled = true; }
+  write(data) { this.writes.push(data); }
+  focus() {}
+  dispose() {}
+}
+class FakeWebSocket {
+  static OPEN = 1;
+  constructor(url) { this.url = url; this.readyState = 0; this.listeners = {}; this.sent = []; FakeWebSocket.last = this; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  send(data) { this.sent.push(JSON.parse(data)); }
+  close() { this.readyState = 3; }
+  emit(name, data = {}) { this.listeners[name]?.(data); }
+}
+const terminalEl = { getBoundingClientRect: () => ({ width: 840, height: 360 }) };
+const statusEl = { textContent: "", className: "", setAttribute() {} };
+const root = { querySelector: selector => selector.includes("xterm") ? terminalEl : selector.includes("status") ? statusEl : null };
+const panel = { querySelector: () => root };
+const windowObject = { Terminal: FakeTerminal, WebSocket: FakeWebSocket, URL, location: { href: "http://127.0.0.1/" } };
+windowObject.window = windowObject;
+const context = { window: windowObject, URL, setTimeout, clearTimeout };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const api = context.window.AHAHardwareTerminal;
+const controller = api.createHardwareTerminalController({ panelEl: panel }, {
+  apiUrl: path => path,
+  currentRunId: () => "run-1",
+  windowRef: windowObject
+});
+if (!controller.mount("task-1", { transport: "serial", bridge: { alive: true } })) process.exit(1);
+FakeTerminal.last.input("queued\r");
+if (FakeWebSocket.last.sent.some(item => item.type === "input")) process.exit(1);
+FakeWebSocket.last.readyState = 1;
+FakeWebSocket.last.emit("open");
+if (FakeWebSocket.last.sent.some(item => item.type === "input")) process.exit(1);
+FakeWebSocket.last.emit("message", { data: JSON.stringify({ type: "ready", bridge: { alive: true, status: "running" } }) });
+FakeWebSocket.last.emit("message", { data: JSON.stringify({ type: "output", data: "\u001b[31mREADY\u001b[0m" }) });
+FakeTerminal.last.input("ps\r");
+if (!FakeTerminal.last.resetCalled || FakeTerminal.last.writes[0] !== "\u001b[31mREADY\u001b[0m") process.exit(1);
+if (!FakeWebSocket.last.sent.some(item => item.type === "input" && item.data === "queued\r")) process.exit(1);
+if (!FakeWebSocket.last.sent.some(item => item.type === "input" && item.data === "ps\r")) process.exit(1);
+FakeWebSocket.last.emit("message", { data: JSON.stringify({ type: "status", bridge: { alive: true, paused: true, status: "paused" } }) });
+FakeTerminal.last.input("after-resume\r");
+if (FakeWebSocket.last.sent.some(item => item.type === "input" && item.data === "after-resume\r")) process.exit(1);
+FakeWebSocket.last.emit("message", { data: JSON.stringify({ type: "status", bridge: { alive: true, paused: false, status: "running" } }) });
+if (!FakeWebSocket.last.sent.some(item => item.type === "input" && item.data === "after-resume\r")) process.exit(1);
+if (!FakeWebSocket.last.url.includes("/ws/hardware-terminal")) process.exit(1);
+controller.unmount();
 '''
         result = subprocess.run(
             [node, "-e", assertion],
@@ -379,8 +506,8 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=local-terminal-v9">', html)
-        self.assertIn('<script src="/static/i18n.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=terminal-ui-v10">', html)
+        self.assertIn('<script src="/static/i18n.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/token_usage.js?v=usage-v8"></script>', html)
         self.assertIn('"run.token_usage": "Daily usage"', i18n)
         self.assertIn('"run.token_usage": "每日用量"', i18n)
@@ -469,7 +596,7 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         integration_start = html.index('<div class="web-service-actions">')
         integration_actions = html[integration_start : html.index('<div id="skills-console-popover"', integration_start)]
         self.assertIn('id="observe-proxy"', integration_actions)
-        self.assertLess(integration_actions.index('id="skills-console"'), integration_actions.index('id="observe-proxy"'))
+        self.assertNotIn('id="skills-console"', integration_actions)
         self.assertLess(integration_actions.index('id="observe-proxy"'), integration_actions.index('id="token-usage"'))
         self.assertIn('"observe_proxy.title": "Observe Proxy"', i18n)
         self.assertIn('observeProxyEl: "observe-proxy"', registry)
@@ -833,7 +960,7 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn("opt.dataset.workspaceId = workspace.id || \"\"", html)
         self.assertIn("opt.textContent = workspace.label || workspace.name || workspace.path", html)
         self.assertIn("workspace_path: workspacePath || null", html)
-        self.assertIn('const KB_TABS = ["entries", "navigation", "pending", "capture", "settings"]', html)
+        self.assertIn('const KB_TABS = ["entries", "navigation", "pending", "capture", "skills", "settings"]', html)
         self.assertNotIn("renderProjectMapWorkspaceSelect", html)
         self.assertNotIn("selectedProjectMapWorkspacePath", html)
         self.assertNotIn('state.activeTab !== "map"', html)
@@ -1055,7 +1182,7 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn("@media (max-width: 640px)", html)
         self.assertIn(".kb-wrap { width: 100%; max-width: none; margin: 0; padding: 0 12px 56px; }", html)
         self.assertNotIn(".kb-wrap { width: min(100%, 960px);", html)
-        self.assertIn(".kb-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }", html)
+        self.assertIn(".kb-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }", html)
         self.assertIn(".kb-row { display: grid; grid-template-columns: 1fr; }", html)
         self.assertIn(".kb-inline-actions { display: flex; grid-template-columns: none; }", html)
         self.assertIn(".kb-entry-actions.kb-inline-actions {", html)
@@ -1428,31 +1555,31 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn('id="task-skill-select"', html)
         self.assertIn('id="task-skill-select" class="skill-option-list"', html)
         self.assertNotIn('select id="task-skill-select"', html)
-        self.assertIn('data-create-hardware-channels', html)
-        self.assertIn('data-hardware-channel="uart"', html)
-        self.assertIn('data-hardware-channel="nfs"', html)
-        self.assertIn('data-hardware-channel="telnet"', html)
-        self.assertIn('id="task-hardware-uart-port"', html)
-        self.assertIn('id="task-hardware-uart-username"', html)
-        self.assertIn('id="task-hardware-uart-password"', html)
-        self.assertIn('id="task-hardware-uart-permission-read"', html)
-        self.assertIn('id="task-hardware-uart-permission-write"', html)
-        self.assertIn('id="task-hardware-telnet-password"', html)
-        self.assertIn('class="hardware-permission-list"', html)
-        self.assertIn("TELNET", html)
+        self.assertIn('id="task-hardware-mode" data-hardware-mode', html)
+        self.assertIn('id="task-hardware-access" data-hardware-permission="access"', html)
+        self.assertIn('<option value="off"', html)
+        self.assertIn('<option value="serial"', html)
+        self.assertIn('<option value="network"', html)
+        self.assertIn('<option value="both"', html)
+        self.assertIn('id="task-hardware-serial-device"', html)
+        self.assertIn('data-hardware-field="serial.baudrate"', html)
+        self.assertIn('id="task-hardware-device-ip"', html)
+        self.assertIn('id="task-hardware-username"', html)
+        self.assertIn('id="task-hardware-password"', html)
+        self.assertNotIn('data-hardware-channel="nfs"', html)
+        self.assertNotIn('task-hardware-nfs-server', html)
+        self.assertNotIn('task-hardware-telnet-host', html)
         self.assertNotIn("Enable board-side debug context", html)
         self.assertIn('id="task-skills-form"', html)
         self.assertIn('id="selected-task-skill-select"', html)
         self.assertIn('id="selected-task-skill-select" class="skill-option-list"', html)
         self.assertNotIn('select id="selected-task-skill-select"', html)
-        self.assertIn('data-selected-hardware-channels', html)
-        self.assertIn('id="selected-task-hardware-uart-enabled"', html)
-        self.assertIn('id="selected-task-hardware-uart-port"', html)
-        self.assertIn('id="selected-task-hardware-uart-username"', html)
-        self.assertIn('id="selected-task-hardware-uart-password"', html)
-        self.assertIn('id="selected-task-hardware-uart-permission-read"', html)
-        self.assertIn('id="selected-task-hardware-uart-permission-write"', html)
-        self.assertIn('id="selected-task-hardware-telnet-password"', html)
+        self.assertIn('id="selected-task-hardware-mode" data-hardware-mode', html)
+        self.assertIn('id="selected-task-hardware-access" data-hardware-permission="access"', html)
+        self.assertIn('id="selected-task-hardware-serial-device"', html)
+        self.assertIn('id="selected-task-hardware-device-ip"', html)
+        self.assertIn('id="selected-task-hardware-username"', html)
+        self.assertIn('id="selected-task-hardware-password"', html)
         self.assertNotIn('id="task-hardware-skill-paths"', html)
         self.assertNotIn('id="selected-task-hardware-skill-paths"', html)
         self.assertNotIn('id="task-hardware-uart-operation-skill"', html)
@@ -1472,14 +1599,18 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn("createHardwareDebugPayload()", create_controller)
         self.assertIn("syncCreateHardwareDebugFields", create_controller)
         self.assertIn("syncTaskHardwareDebugFields", config_controller)
-        self.assertIn("readTaskHardwareChannel", config_controller)
-        self.assertIn("channels", create_controller + config_controller + form)
+        self.assertNotIn("readTaskHardwareChannel", config_controller)
+        self.assertIn('mode: String(form?.querySelector("[data-hardware-mode]")', create_controller + config_controller)
+        self.assertIn("device_ip", create_controller + config_controller + metadata)
+        self.assertIn("permissions: {", create_controller + config_controller)
+        self.assertIn('data-hardware-permission="access"', create_controller + config_controller)
+        self.assertIn("hardwareDebugAccess", metadata)
         self.assertIn("data-task-skill-path", create_controller + config_controller)
-        self.assertIn("data-hardware-channel", create_controller + config_controller)
-        self.assertIn('data-hardware-setting="password"', html)
-        self.assertIn('data-hardware-setting="username"', html)
+        self.assertIn("data-hardware-field", create_controller + config_controller)
+        self.assertIn('data-hardware-field="credentials.password"', html)
+        self.assertIn('data-hardware-field="credentials.username"', html)
         self.assertIn("skill-option-chip", create_controller + config_controller + styles)
-        self.assertIn("hardware-channel-card", styles)
+        self.assertIn("hardware-terminal-settings", styles)
         self.assertIn(".skills-form button", styles)
         self.assertIn(".hardware-form button", styles)
         self.assertIn(".task-skills-editor", styles)
@@ -1491,12 +1622,10 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn('api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-debug`)', config_controller)
         self.assertIn("renderTaskHardwareEditor", factory + wiring)
         self.assertIn("isTaskHardwareEditing", factory + wiring)
-        # Master switch gates the card/tab and is sent to the backend on save/create.
-        self.assertIn('data-hardware-master-toggle', html)
-        self.assertIn('id="selected-task-hardware-enabled"', html)
-        self.assertIn('id="task-hardware-enabled"', html)
-        self.assertIn('<div class="hardware-channel-list compact" data-create-hardware-channels hidden>', html)
-        self.assertIn("enabled", config_controller)
+        # Mode selection gates conditional fields and is sent to the backend on save/create.
+        self.assertIn('data-hardware-serial-settings hidden', html)
+        self.assertIn('data-hardware-network-settings hidden', html)
+        self.assertIn('mode: String(form?.querySelector("[data-hardware-mode]")', config_controller)
 
     def test_hardware_card_visibility_is_gated_by_master_switch(self) -> None:
         root = static_root()
@@ -1548,22 +1677,43 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn("hardwareBridgeControl", wiring)
         self.assertIn("hardware-pause", wiring)
         self.assertIn("hardware-resume", wiring)
+        self.assertIn("data-hardware-takeover", conversation_panel)
+        self.assertIn("data-hardware-takeover", event_bindings)
+        self.assertIn("hardwareTakeover", event_bindings)
+        self.assertIn("hardware-takeover", wiring)
+        self.assertIn("window.confirm", wiring)
+        self.assertIn("SIGTERM", wiring)
+        self.assertIn("owner.can_terminate === true", conversation_panel)
+        self.assertIn("data-hardware-owner-detail", conversation_panel)
+        self.assertIn("close it manually", conversation_panel)
+        self.assertIn(".hardware-bridge-error", styles)
+        self.assertIn("grid-column: 1 / -1;", styles)
+        self.assertIn("overflow-wrap: anywhere;", styles)
+        # Tasks configured for both transports can switch the shared terminal view.
+        self.assertIn("data-hardware-transport", conversation_panel)
+        self.assertIn("data-hardware-transport", event_bindings)
+        self.assertIn("hardwareSelectTransport", wiring)
         # Bridge status renders as a task-style status pill.
         self.assertIn('class="status hardware-bridge-status', conversation_panel)
-        # Terminal is its own scroller with a pinned toolbar header (toolbar must not scroll).
+        # Hardware output is a persistent xterm mount; status controls remain outside it.
         panel_controller = (root / "panel_controller.js").read_text(encoding="utf-8")
         factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
-        self.assertIn('querySelector(".hardware-terminal")', panel_controller)
-        self.assertIn("wasAtBottom", panel_controller)
-        self.assertIn("overflow: auto", styles[styles.index(".hardware-terminal {"):])
+        hardware_terminal = (root / "hardware_terminal.js").read_text(encoding="utf-8")
+        terminal_ui = (root / "terminal_ui.js").read_text(encoding="utf-8")
+        self.assertIn("data-hardware-terminal-xterm", conversation_panel)
+        self.assertIn("hardwareTerminalController?.mount", panel_controller)
+        self.assertIn("hardwareTerminalController?.unmount", panel_controller)
+        self.assertIn("new WebSocketImpl(terminalWsUrl())", hardware_terminal)
+        self.assertIn('"/ws/hardware-terminal"', hardware_terminal)
+        self.assertIn("term.onData", hardware_terminal)
+        self.assertIn("term.onResize", hardware_terminal)
+        self.assertIn(".hardware-terminal-xterm", styles)
+        self.assertIn("--terminal-bottom-gap: var(--terminal-prompt-row-height);", styles)
+        self.assertIn("height: calc(100% - var(--terminal-bottom-gap));", styles)
         self.assertIn(".hardware-bridge-bar", styles)
-        # Serial output is decoded like a terminal (CR/backspace overwrite, ANSI stripped).
-        self.assertIn("decodeTerminalText", conversation_panel)
-        # Interactively-typed commands are not echoed locally (the board echoes them) —
-        # avoids the double display of every command.
-        self.assertIn('rawSource === "web" || rawSource === "interactive"', conversation_panel)
-        # A poll refresh must not wipe an in-progress text selection (copy).
-        self.assertIn("hasSelectionWithin", panel_controller)
+        # ANSI/CR/cursor behavior is handled by xterm without stripping the device stream.
+        self.assertNotIn("decodeTerminalText", conversation_panel)
+        self.assertIn("term?.write", hardware_terminal)
         # Quick keys are wired to a send handler.
         self.assertIn("data-hardware-key", event_bindings)
         self.assertIn("hardwareSendKey", event_bindings)
@@ -1574,7 +1724,8 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         bind_args = wiring[wiring.index("bindTopLevelEvents(domRefs, {"):]
         self.assertIn("hardwareSendKey", bind_args)
         self.assertIn("hardwareBridgeControl", bind_args)
-        self.assertIn("\\u0003", wiring)  # Ctrl+C (ETX)
+        self.assertIn("hardwareTakeover", bind_args)
+        self.assertIn("\\u0003", terminal_ui)  # Ctrl+C (ETX)
         self.assertIn(".hardware-key-btn", styles)
         # Device + status sit together on the left of the bar (status no longer before Pause).
         self.assertIn("hardware-bridge-identity", conversation_panel)
@@ -1587,40 +1738,32 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         # The raw per-keystroke toggle is hidden for now — input is always line mode, so the
         # toggle button must not be rendered (its dormant handler/CSS may remain).
         self.assertNotIn("data-hardware-rawmode-toggle", conversation_panel)
-        self.assertIn('data-hardware-key="${key}"', conversation_panel)  # keys are templated
-        for key in ("enter", "ctrl-c", "esc", "tab", "up", "down", "left", "right", "ctrl-d", "ctrl-z"):
-            self.assertIn(f'["{key}"', conversation_panel)
+        self.assertIn('data-hardware-key="${escapeHtml(item.name)}"', conversation_panel)
+        for key in ("enter", "ctrl-c", "esc", "tab", "up", "down", "left", "right", "home", "end"):
+            self.assertIn(f'name: "{key}"', terminal_ui)
+        for key in ("ctrl-d", "ctrl-z", "ctrl-l"):
+            self.assertNotIn(f'name: "{key}"', terminal_ui)
         # The key row scrolls horizontally so keys never overflow the screen.
         self.assertIn(".hardware-keybar-keys", styles)
         keybar_css = styles[styles.index(".hardware-keybar-keys {"):]
         self.assertIn("overflow-x: auto", keybar_css)
-        # A poll re-render must preserve the key row's horizontal scroll (so a user who
-        # scrolled to the right-hand keys can still tap them) and must not fire when idle.
-        self.assertIn("keybarScrollLeft", panel_controller)
-        self.assertIn("afterOffset === before", wiring)
-        # Line mode mirrors the composer text into the terminal as a live "pending line", kept
-        # in sync via the composer input event; Send is already Enter (sends line + CR).
-        self.assertIn("hio-pending", conversation_panel)
-        self.assertIn(".hio-pending", styles)
-        self.assertIn("pendingInput", panel_controller)
-        self.assertIn("onComposerInput", wiring)
-        self.assertIn("onInput: deps.onComposerInput", factory)
-        composer_js = (root / "message_composer.js").read_text(encoding="utf-8")
-        self.assertIn("options.onInput", composer_js)
+        # The WebSocket terminal owns live updates, so the legacy HTTP poll stands down while
+        # xterm is mounted and the chat composer is hidden on the Hardware tab.
+        self.assertIn("hardwareTerminalController.isMounted()", wiring)
+        self.assertIn('sendFormEl.hidden = tab === "hardware"', panel_controller)
         # The toggle handler is wired through bindTopLevelEvents -> bindPanelEvents.
         self.assertIn("hardwareToggleRawMode", bind_args)
         registry = (root / "controller_registry.js").read_text(encoding="utf-8")
-        for handler in ("hardwareSendKey", "hardwareBridgeControl", "hardwareToggleRawMode"):
+        for handler in ("hardwareSendKey", "hardwareBridgeControl", "hardwareTakeover", "hardwareToggleRawMode"):
             self.assertIn(f"{handler}: deps.{handler}", registry)
-        # Raw keystrokes are captured on the persistent composer textarea (flood-proof input),
-        # not on the re-rendering terminal: the composer consults handleRawKey first.
-        self.assertIn("handleHardwareRawKey", wiring)
-        self.assertIn("handleRawKey: deps.handleHardwareRawKey", factory)
-        message_composer = (root / "message_composer.js").read_text(encoding="utf-8")
-        self.assertIn("options.handleRawKey", message_composer)
-        # Byte table covers the new keys (Backspace = DEL, arrows = CSI).
-        self.assertIn("hardwareRawKeyToBytes", wiring)
+        # Input is captured by xterm; the byte table still backs the mobile accessory keys.
+        self.assertIn("sendInput(data)", hardware_terminal)
         self.assertIn("hardwareNamedKeyBytes", wiring)
+        self.assertIn("createTerminalViewportMonitor", hardware_terminal)
+        self.assertIn("terminal-keyboard-active", hardware_terminal)
+        self.assertIn("fitTerminalContent", hardware_terminal)
+        self.assertIn("fitTerminalToContent", hardware_terminal)
+        self.assertIn(".hardware-io-view.terminal-keyboard-active", styles)
         self.assertIn("\\u007f", wiring)  # Backspace (DEL)
         self.assertIn("\\u001b[A", wiring)  # ArrowUp (CSI)
 
@@ -3445,25 +3588,25 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
-        self.assertIn('<script src="/static/task_metadata.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
-        self.assertIn('<script src="/static/task_form.js?v=reasoning-effort-v1"></script>', html)
-        self.assertIn('<script src="/static/task_config_controller.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/task_config_controller.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
         self.assertIn('<script src="/static/run_metadata.js"></script>', html)
         self.assertIn('<script src="/static/run_lifecycle_view.js"></script>', html)
         self.assertIn('<script src="/static/run_maintenance.js"></script>', html)
         self.assertIn('<script src="/static/agent_metadata.js"></script>', html)
-        self.assertIn('<script src="/static/task_list.js"></script>', html)
+        self.assertIn('<script src="/static/task_list.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_controller.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/agent_controller.js"></script>', html)
         self.assertIn('<script src="/static/conversation_metadata.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/conversation_state.js"></script>', html)
-        self.assertIn('<script src="/static/conversation_panel.js?v=token-ledger-v11"></script>', html)
-        self.assertIn('<script src="/static/conversation_controller.js?v=token-ledger-v11"></script>', html)
+        self.assertIn('<script src="/static/conversation_panel.js?v=terminal-ui-v7"></script>', html)
+        self.assertIn('<script src="/static/conversation_controller.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/compact_reset.js"></script>', html)
         self.assertIn('<script src="/static/timeline_view.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/optimistic_events.js"></script>', html)
@@ -3486,24 +3629,24 @@ if (size.cols < 40 || size.rows < 12) process.exit(1);
         self.assertIn('<script src="/static/auth_controller.js"></script>', html)
         self.assertIn('<script src="/static/backend_status.js"></script>', html)
         self.assertIn('<script src="/static/message_composer.js"></script>', html)
-        self.assertIn('<script src="/static/event_bindings.js"></script>', html)
-        self.assertIn('<script src="/static/panel_controller.js"></script>', html)
+        self.assertIn('<script src="/static/event_bindings.js?v=terminal-ui-v6"></script>', html)
+        self.assertIn('<script src="/static/panel_controller.js?v=hardware-xterm-v1"></script>', html)
         self.assertIn('<script src="/static/render_orchestrator.js"></script>', html)
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
         self.assertIn('<script src="/static/run_actions.js"></script>', html)
-        self.assertIn('<script src="/static/task_create_controller.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/task_create_controller.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
         self.assertIn('<script src="/static/settings_controller.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/message_flow.js"></script>', html)
+        self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
-        self.assertIn('<script src="/static/controller_registry.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/controller_registry.js?v=terminal-ui-v6"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=hardware-xterm-v1"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=terminal-ui-v6"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

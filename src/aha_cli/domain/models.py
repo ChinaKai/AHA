@@ -166,6 +166,9 @@ TASK_COLLABORATION_DEFAULTS = {
 DEFAULT_TASK_SANDBOX = "danger-full-access"
 DEFAULT_TASK_SUPERVISION_MAX_ROUNDS = 99
 DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT = 75
+TASK_HARDWARE_DEBUG_MODES = ("off", "serial", "network", "both")
+TASK_HARDWARE_DEBUG_ACCESS_MODES = ("read_only", "read_write")
+# Compatibility-only input vocabulary. New task state uses mode/serial/network/credentials.
 TASK_HARDWARE_DEBUG_CHANNEL_TYPES = ("uart", "nfs", "telnet")
 TASK_HARDWARE_DEBUG_PERMISSION_KEYS = ("read", "write")
 
@@ -403,17 +406,23 @@ def normalize_task_observe_proxy(value: object | None = None) -> dict:
     return observe_proxy
 
 
-def default_task_hardware_debug_permissions() -> dict:
-    return {
-        "read": True,
-        "write": False,
-    }
-
-
 def default_task_hardware_debug() -> dict:
     return {
-        "enabled": False,
-        "channels": [],
+        "mode": "off",
+        "serial": {
+            "device": "",
+            "baudrate": 115200,
+        },
+        "network": {
+            "device_ip": "",
+        },
+        "credentials": {
+            "username": "",
+            "password": "",
+        },
+        "permissions": {
+            "access": "read_only",
+        },
     }
 
 
@@ -445,7 +454,7 @@ def _normalize_string_list(value: object) -> list[str]:
 
 def normalize_task_hardware_debug_permissions(value: object | None = None) -> dict:
     raw = value if isinstance(value, dict) else {}
-    permissions = default_task_hardware_debug_permissions()
+    permissions = {"read": True, "write": False}
     legacy_map = {
         "serial_read": "read",
         "serial_write": "write",
@@ -459,6 +468,27 @@ def normalize_task_hardware_debug_permissions(value: object | None = None) -> di
     return permissions
 
 
+def normalize_task_hardware_debug_access(value: object | None, *, default: str = "read_only") -> dict:
+    access = ""
+    if isinstance(value, str):
+        access = value.strip().lower().replace("-", "_")
+    elif isinstance(value, dict):
+        access = str(value.get("access") or value.get("mode") or "").strip().lower().replace("-", "_")
+        if not access:
+            for key in ("write", "serial_write", "terminal_write"):
+                if key in value:
+                    access = "read_write" if normalize_bool(value.get(key)) else "read_only"
+                    break
+    if access not in TASK_HARDWARE_DEBUG_ACCESS_MODES:
+        access = default if default in TASK_HARDWARE_DEBUG_ACCESS_MODES else "read_only"
+    return {"access": access}
+
+
+def task_hardware_debug_can_write(task: dict) -> bool:
+    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
+    return hardware.get("permissions", {}).get("access") == "read_write"
+
+
 def normalize_task_hardware_debug_uart_settings(value: object) -> dict:
     raw = value if isinstance(value, dict) else {}
     port = str(raw.get("port") or raw.get("path") or "").strip()
@@ -470,6 +500,35 @@ def normalize_task_hardware_debug_uart_settings(value: object) -> dict:
     return {
         "port": port,
         "baudrate": max(1, baudrate),
+        "username": str(raw.get("username") or raw.get("user") or "").strip(),
+        "password": str(raw.get("password") or ""),
+    }
+
+
+def normalize_task_hardware_debug_serial(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    port = str(raw.get("device") or raw.get("port") or raw.get("path") or "").strip()
+    baudrate_raw = raw.get("baudrate", raw.get("baud"))
+    try:
+        baudrate = int(baudrate_raw) if baudrate_raw not in (None, "") else 115200
+    except (TypeError, ValueError):
+        baudrate = 115200
+    return {
+        "device": port,
+        "baudrate": max(1, baudrate),
+    }
+
+
+def normalize_task_hardware_debug_network(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "device_ip": str(raw.get("device_ip") or raw.get("host") or raw.get("server") or raw.get("ip") or "").strip(),
+    }
+
+
+def normalize_task_hardware_debug_credentials(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    return {
         "username": str(raw.get("username") or raw.get("user") or "").strip(),
         "password": str(raw.get("password") or ""),
     }
@@ -523,7 +582,29 @@ def normalize_task_hardware_debug_channel(value: object) -> dict | None:
 
 def normalize_task_hardware_debug(value: object | None = None) -> dict:
     raw = value if isinstance(value, dict) else {}
-    hardware_debug = default_task_hardware_debug()
+    # Canonical v2 state: connection facts only. Terminal protocol details and tools
+    # (Telnet port, NFS exports, board-specific workflows) live in runtime/skills.
+    legacy_shape = any(key in raw for key in ("enabled", "hardware_debug_enabled", "devices", "channels"))
+    canonical_shape = any(key in raw for key in ("mode", "serial", "network", "credentials")) or (
+        "permissions" in raw and not legacy_shape
+    )
+    if canonical_shape:
+        mode = str(raw.get("mode") or "off").strip().lower()
+        if mode not in TASK_HARDWARE_DEBUG_MODES:
+            mode = "off"
+        hardware_debug = default_task_hardware_debug()
+        hardware_debug["mode"] = mode
+        hardware_debug["serial"] = normalize_task_hardware_debug_serial(raw.get("serial"))
+        hardware_debug["network"] = normalize_task_hardware_debug_network(raw.get("network"))
+        hardware_debug["credentials"] = normalize_task_hardware_debug_credentials(raw.get("credentials"))
+        compatibility_default = "read_write" if mode != "off" and "permissions" not in raw else "read_only"
+        hardware_debug["permissions"] = normalize_task_hardware_debug_access(
+            raw.get("permissions"),
+            default=compatibility_default,
+        )
+        return hardware_debug
+
+    # Compatibility upgrade for the previous UART/NFS/Telnet channel schema.
     channels_raw = raw.get("channels")
     channels: list[dict] = []
     if isinstance(channels_raw, list):
@@ -557,13 +638,40 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
                 )
                 if channel:
                     channels.append(channel)
-    hardware_debug["channels"] = channels
-    if "enabled" in raw:
-        hardware_debug["enabled"] = normalize_bool(raw.get("enabled"), default=bool(channels))
+    enabled = normalize_bool(raw.get("enabled", raw.get("hardware_debug_enabled")), default=bool(channels))
+    uart = next((item for item in channels if item.get("type") == "uart"), None)
+    telnet = next((item for item in channels if item.get("type") == "telnet"), None)
+    nfs = next((item for item in channels if item.get("type") == "nfs"), None)
+    uart_settings = uart.get("settings") if isinstance(uart, dict) and isinstance(uart.get("settings"), dict) else {}
+    telnet_settings = telnet.get("settings") if isinstance(telnet, dict) and isinstance(telnet.get("settings"), dict) else {}
+    nfs_settings = nfs.get("settings") if isinstance(nfs, dict) and isinstance(nfs.get("settings"), dict) else {}
+
+    serial = normalize_task_hardware_debug_serial(uart_settings)
+    network = normalize_task_hardware_debug_network(
+        {"device_ip": telnet_settings.get("host") or nfs_settings.get("server") or ""}
+    )
+    credential_source = telnet_settings if telnet_settings.get("username") or telnet_settings.get("password") else uart_settings
+    credentials = normalize_task_hardware_debug_credentials(credential_source)
+    access = "read_write" if any(
+        bool(item.get("permissions", {}).get("write")) for item in channels
+    ) else "read_only"
+    has_serial = bool(uart is not None)
+    has_network = bool(telnet is not None or nfs is not None)
+    if not enabled:
+        mode = "off"
+    elif has_serial and has_network:
+        mode = "both"
+    elif has_network:
+        mode = "network"
     else:
-        # Legacy configs have no master switch: treat any configured channel as enabled.
-        hardware_debug["enabled"] = bool(channels)
-    return hardware_debug
+        mode = "serial"
+    return {
+        "mode": mode,
+        "serial": serial,
+        "network": network,
+        "credentials": credentials,
+        "permissions": {"access": access},
+    }
 
 
 def normalize_task_skills(value: object | None = None) -> dict:

@@ -34,11 +34,13 @@
     const setConversationAutoFollow = deps.setConversationAutoFollow || (() => {});
     const agentTarget = deps.agentTarget || (() => "main");
     const activeTab = deps.activeTab || (() => "conversation");
+    const hardwareTransport = deps.hardwareTransport || (() => "");
 
     function hardwareChannelType(task) {
-      const channels = task?.hardware_debug?.channels;
-      const first = Array.isArray(channels) && channels.length ? channels[0] : null;
-      return String(first?.type || "uart").toLowerCase();
+      const selected = String(hardwareTransport() || "").toLowerCase();
+      if (selected === "serial" || selected === "network") return selected;
+      const mode = String(task?.hardware_debug?.mode || "off");
+      return mode === "network" ? "network" : "serial";
     }
 
     async function sendHardwareCommand(task, message) {
@@ -48,7 +50,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           // Append CR so the board executes the line, mirroring how a serial console submits.
-          body: JSON.stringify(runScopedPayload({ channel, data: `${message}\r` }))
+          body: JSON.stringify(runScopedPayload({ transport: channel, data: `${message}\r` }))
         }, "Failed to send hardware command");
       } catch (err) {
         showSendNotice(err?.message || String(err), task, "main", "error");
@@ -312,8 +314,8 @@
     }
 
     async function handleComposerSubmit({ task, message }) {
-      // On the Hardware tab the composer is a serial console: send the line to the
-      // attached session instead of routing it to the backend agent.
+      // On the Terminal tab the composer writes to the selected terminal session
+      // instead of routing input to the backend agent.
       if (activeTab() === "hardware") {
         return await sendHardwareCommand(task, message);
       }

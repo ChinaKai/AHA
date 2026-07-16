@@ -284,35 +284,11 @@ class WebTaskApiTests(unittest.TestCase):
                                 "enabled_paths": ["/repo/.aha/skills/board-debug/SKILL.md"],
                             },
                             "hardware_debug": {
-                                "channels": [
-                                    {
-                                        "type": "uart",
-                                        "settings": {
-                                            "port": "/dev/ttyUSB0",
-                                            "baudrate": "115200",
-                                            "username": "board",
-                                            "password": "secret",
-                                        },
-                                        "permissions": {
-                                            "read": True,
-                                            "write": True,
-                                            "reset": True,
-                                        },
-                                    },
-                                    {
-                                        "type": "telnet",
-                                        "settings": {
-                                            "host": "192.168.1.20",
-                                            "port": "23",
-                                            "username": "admin",
-                                            "password": "telnetpw",
-                                        },
-                                        "permissions": {
-                                            "read": True,
-                                            "write": False,
-                                        },
-                                    },
-                                ],
+                                "mode": "both",
+                                "serial": {"device": "/dev/ttyUSB0", "baudrate": "115200"},
+                                "network": {"device_ip": "192.168.1.20"},
+                                "credentials": {"username": "admin", "password": "telnetpw"},
+                                "permissions": {"access": "read_only"},
                             },
                         },
                     )
@@ -338,21 +314,11 @@ class WebTaskApiTests(unittest.TestCase):
                         f"/api/task/{task_id}/hardware-debug",
                         method="POST",
                         payload={
-                            "channels": [
-                                {
-                                    "type": "nfs",
-                                    "settings": {
-                                        "server": "192.168.1.10",
-                                        "remote_path": "/srv/nfs/rootfs",
-                                        "mount_path": "/mnt/rootfs",
-                                    },
-                                    "permissions": {
-                                        "read": True,
-                                        "write": False,
-                                        "reset": False,
-                                    },
-                                },
-                            ],
+                            "mode": "network",
+                            "serial": {"device": "/dev/ttyUSB0", "baudrate": 115200},
+                            "network": {"device_ip": "192.168.1.21"},
+                            "credentials": {"username": "root", "password": ""},
+                            "permissions": {"access": "read_write"},
                         },
                     )
                 )
@@ -360,37 +326,38 @@ class WebTaskApiTests(unittest.TestCase):
                 events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
                 hardware_events = [event for event in events if event["type"] == "task_hardware_debug_config_updated"]
                 skills_events = [event for event in events if event["type"] == "task_skills_config_updated"]
+                stored_password = task_snapshot(root, run_id, task_id)["task"]["hardware_debug"]["credentials"]["password"]
+                status_response = asyncio.run(fetch_ui_response(root, run_id, "/api/status"))
+                status_body = json_response_body(status_response)
+                status_task = next(item for item in status_body["tasks"] if item["id"] == task_id)
+                tasks_response = asyncio.run(fetch_ui_response(root, run_id, "/api/tasks"))
+                tasks_body = json_response_body(tasks_response)
+                listed_task = next(item for item in tasks_body["tasks"] if item["id"] == task_id)
 
         self.assertTrue(body["ok"])
         self.assertEqual(body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
         hardware = body["task"]["hardware_debug"]
-        self.assertEqual([channel["type"] for channel in hardware["channels"]], ["uart", "telnet"])
-        self.assertEqual(
-            hardware["channels"][0]["settings"],
-            {"port": "/dev/ttyUSB0", "baudrate": 115200, "username": "board", "password": "secret"},
-        )
-        self.assertNotIn("operation_skill_path", hardware["channels"][0])
-        self.assertTrue(hardware["channels"][0]["permissions"]["read"])
-        self.assertTrue(hardware["channels"][0]["permissions"]["write"])
-        self.assertNotIn("reset", hardware["channels"][0]["permissions"])
-        self.assertEqual(
-            hardware["channels"][1]["settings"],
-            {"host": "192.168.1.20", "port": 23, "username": "admin", "password": "telnetpw"},
-        )
-        self.assertTrue(hardware["enabled"])
-        self.assertNotIn("devices", hardware)
+        self.assertEqual(hardware["mode"], "both")
+        self.assertEqual(hardware["serial"], {"device": "/dev/ttyUSB0", "baudrate": 115200})
+        self.assertEqual(hardware["network"], {"device_ip": "192.168.1.20"})
+        self.assertEqual(hardware["credentials"], {"username": "admin", "password": "", "password_configured": True})
+        self.assertEqual(hardware["permissions"], {"access": "read_only"})
+        self.assertNotIn("channels", hardware)
         self.assertTrue(update_body["ok"])
-        self.assertTrue(update_body["task"]["hardware_debug"]["enabled"])
+        self.assertEqual(update_body["task"]["hardware_debug"]["mode"], "network")
         self.assertTrue(skills_body["ok"])
         self.assertEqual(skills_body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md", "/repo/.aha/skills/log/SKILL.md"])
-        self.assertEqual(update_body["task"]["hardware_debug"]["channels"][0]["type"], "nfs")
-        self.assertNotIn("operation_skill_path", update_body["task"]["hardware_debug"]["channels"][0])
-        self.assertTrue(update_body["task"]["hardware_debug"]["channels"][0]["permissions"]["read"])
-        self.assertFalse(update_body["task"]["hardware_debug"]["channels"][0]["permissions"]["write"])
-        self.assertNotIn("reset", update_body["task"]["hardware_debug"]["channels"][0]["permissions"])
+        self.assertEqual(update_body["task"]["hardware_debug"]["network"]["device_ip"], "192.168.1.21")
+        self.assertEqual(update_body["task"]["hardware_debug"]["permissions"], {"access": "read_write"})
+        self.assertEqual(stored_password, "telnetpw")
+        self.assertEqual(status_task["hardware_debug"]["credentials"]["password"], "")
+        self.assertTrue(status_task["hardware_debug"]["credentials"]["password_configured"])
+        self.assertEqual(listed_task["hardware_debug"]["credentials"]["password"], "")
+        self.assertTrue(listed_task["hardware_debug"]["credentials"]["password_configured"])
         self.assertEqual(hardware_events[-1]["data"]["task_id"], task_id)
-        self.assertEqual(hardware_events[-1]["data"]["channel_count"], 1)
-        self.assertEqual(hardware_events[-1]["data"]["channel_types"], ["nfs"])
+        self.assertEqual(hardware_events[-1]["data"]["mode"], "network")
+        self.assertEqual(hardware_events[-1]["data"]["transports"], ["network"])
+        self.assertEqual(hardware_events[-1]["data"]["access"], "read_write")
         self.assertEqual(skills_events[-1]["data"]["task_id"], task_id)
         self.assertEqual(skills_events[-1]["data"]["skill_count"], 2)
 
@@ -454,7 +421,11 @@ class WebTaskApiTests(unittest.TestCase):
                     run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                     update_task_hardware_debug_config(
                         root, run_id, "task-001",
-                        channels=[{"type": "uart", "settings": {"port": device, "baudrate": 115200}}],
+                        channels=[{
+                            "type": "uart",
+                            "settings": {"port": device, "baudrate": 115200},
+                            "permissions": {"write": True},
+                        }],
                     )
                     # Pretend a live bridge already owns the device (so the route reuses it,
                     # never spawning a real serial daemon during the test).
@@ -473,6 +444,13 @@ class WebTaskApiTests(unittest.TestCase):
                     resume = json_response_body(asyncio.run(fetch_ui_response(
                         root, run_id, "/api/task/task-001/hardware-resume", method="POST", payload={},
                     )))
+                    with mock.patch(
+                        "aha_cli.web.task_routes.takeover_serial_device",
+                        return_value={"released": True, "owner": {"pid": 123, "process": "minicom"}},
+                    ) as takeover_device:
+                        takeover = json_response_body(asyncio.run(fetch_ui_response(
+                            root, run_id, "/api/task/task-001/hardware-takeover", method="POST", payload={},
+                        )))
                     control_rows, _ = iter_jsonl_from(device_control_path(root, device), 0)
 
                     # Terminal task -> read-only console, sends rejected.
@@ -493,12 +471,122 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(pause["command"], "pause")
         self.assertTrue(resume["ok"])
         self.assertEqual(resume["command"], "resume")
+        self.assertTrue(takeover["ok"])
+        takeover_device.assert_called_once_with(device)
         cmds = [row["cmd"] for row in control_rows]
         self.assertEqual(cmds, ["send", "pause", "resume"])
         send_row = control_rows[0]
         self.assertEqual(send_row["data"], "ps\\r")
         self.assertTrue(session["read_only"])
         self.assertIn(b"409", blocked.split(b"\r\n", 1)[0])
+
+    def test_hardware_console_selects_network_terminal_transport(self) -> None:
+        from aha_cli.store.filesystem import update_task_hardware_debug_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Network terminal", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_hardware_debug_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="both",
+                    serial={"device": "/dev/ttyUSB0", "baudrate": 115200},
+                    network={"device_ip": "192.168.1.20"},
+                    credentials={"username": "root", "password": "secret"},
+                    permissions={"access": "read_write"},
+                )
+                with (
+                    mock.patch("aha_cli.web.task_routes.ensure_network_terminal", return_value={"alive": True, "status": "running", "paused": False}) as ensure,
+                    mock.patch("aha_cli.web.task_routes.network_status", return_value={"alive": True, "status": "running", "paused": False}),
+                    mock.patch(
+                        "aha_cli.web.task_routes.network_stream_page",
+                        return_value={"events": [{"direction": "rx", "data": "# "}], "after_offset": 10, "has_more": False},
+                    ),
+                    mock.patch("aha_cli.web.task_routes.append_network_control", return_value={"cmd": "send", "data": "ps\\r"}) as control,
+                ):
+                    stream = json_response_body(
+                        asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/hardware-io?transport=network"))
+                    )
+                    sent = json_response_body(
+                        asyncio.run(
+                            fetch_ui_response(
+                                root,
+                                run_id,
+                                "/api/task/task-001/hardware-send",
+                                method="POST",
+                                payload={"transport": "network", "data": "ps\\r"},
+                            )
+                        )
+                    )
+
+        self.assertEqual(stream["transport"], "network")
+        self.assertEqual(stream["transports"], ["serial", "network"])
+        self.assertEqual(stream["endpoint"], "192.168.1.20:23")
+        self.assertEqual(stream["events"][0]["data"], "# ")
+        self.assertTrue(sent["ok"])
+        self.assertEqual(sent["transport"], "network")
+        ensure.assert_called_with(root, "192.168.1.20", 23, username="root", password="secret")
+        control.assert_called_with(root, "192.168.1.20", 23, {"cmd": "send", "data": "ps\\r", "source": "web"})
+
+    def test_hardware_console_read_only_streams_but_rejects_send(self) -> None:
+        from aha_cli.store.filesystem import update_task_hardware_debug_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Read-only hardware", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_hardware_debug_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    mode="serial",
+                    serial={"device": "/dev/ttyUSB0", "baudrate": 115200},
+                    permissions={"access": "read_only"},
+                )
+                with (
+                    mock.patch(
+                        "aha_cli.web.task_routes.ensure_bridge",
+                        return_value={"alive": True, "status": "running"},
+                    ) as ensure,
+                    mock.patch(
+                        "aha_cli.web.task_routes.device_stream_page",
+                        return_value={"events": [{"direction": "rx", "data": "board> "}], "after_offset": 7, "has_more": False},
+                    ),
+                    mock.patch(
+                        "aha_cli.web.task_routes.bridge_status",
+                        return_value={"alive": True, "status": "running"},
+                    ),
+                    mock.patch("aha_cli.web.task_routes.append_bridge_control") as control,
+                ):
+                    stream_response = asyncio.run(
+                        fetch_ui_response(root, run_id, "/api/task/task-001/hardware-io")
+                    )
+                    send_response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/task/task-001/hardware-send",
+                            method="POST",
+                            payload={"data": "version\\r"},
+                        )
+                    )
+
+        stream = json_response_body(stream_response)
+        blocked = json_response_body(send_response)
+        self.assertTrue(stream["read_only"])
+        self.assertEqual(stream["events"][0]["data"], "board> ")
+        self.assertIn(b"403 Forbidden", send_response)
+        self.assertFalse(blocked["ok"])
+        ensure.assert_called_once_with(root, "/dev/ttyUSB0", 115200)
+        control.assert_not_called()
 
     def test_task_memo_api_crud_and_task_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

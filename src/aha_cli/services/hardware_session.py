@@ -31,6 +31,7 @@ from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.hardware_io import append_hardware_io_record, require_hardware_io_task
+from aha_cli.services.serial_lock import acquire_serial_lock
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from
 from aha_cli.store.paths import run_dir
 
@@ -262,9 +263,10 @@ class ArmedRuleEngine:
 class FdTransport:
     """Minimal byte transport over a file descriptor (UART device or PTY)."""
 
-    def __init__(self, fd: int, *, close_fd: bool = True) -> None:
+    def __init__(self, fd: int, *, close_fd: bool = True, serial_lock=None) -> None:
         self._fd = fd
         self._close_fd = close_fd
+        self._serial_lock = serial_lock
 
     def fileno(self) -> int:
         return self._fd
@@ -284,11 +286,16 @@ class FdTransport:
             return 0
 
     def close(self) -> None:
-        if self._close_fd:
+        try:
+            if not self._close_fd:
+                return
             try:
                 os.close(self._fd)
             except OSError:
                 pass
+        finally:
+            if self._serial_lock is not None:
+                self._serial_lock.release()
 
 
 def _configure_tty(fd: int, baudrate: int) -> None:
@@ -302,20 +309,32 @@ def _configure_tty(fd: int, baudrate: int) -> None:
             return
         tty.setraw(fd)
         baud_const = getattr(termios, f"B{int(baudrate)}", None)
+        attrs = termios.tcgetattr(fd)
+        # A tty's termios state can survive between programs.  A previous tool may
+        # have left XON/XOFF or RTS/CTS enabled, which makes an otherwise successful
+        # non-blocking write appear to randomly lose or stall console input.
+        attrs[0] &= ~(termios.IXON | termios.IXOFF | getattr(termios, "IXANY", 0))
+        attrs[2] |= termios.CLOCAL | termios.CREAD
+        attrs[2] &= ~getattr(termios, "CRTSCTS", 0)
         if baud_const is not None:
-            attrs = termios.tcgetattr(fd)
             attrs[4] = baud_const  # input speed
             attrs[5] = baud_const  # output speed
-            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
     except Exception:
         # Best effort: a non-serial fd or unsupported baud should not abort the session.
         pass
 
 
 def open_uart_transport(device: str, baudrate: int = 115200) -> FdTransport:
-    fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    serial_lock = acquire_serial_lock(device)
+    try:
+        fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    except Exception:
+        if serial_lock is not None:
+            serial_lock.release()
+        raise
     _configure_tty(fd, baudrate)
-    return FdTransport(fd)
+    return FdTransport(fd, serial_lock=serial_lock)
 
 
 class HardwareSessionDaemon:

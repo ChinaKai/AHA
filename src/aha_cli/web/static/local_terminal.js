@@ -19,19 +19,20 @@
     return t("local_terminal.disconnected", "Disconnected");
   }
 
-    function terminalBottomGapForElement(el) {
-      const styles = el && typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
-      const value = Number.parseFloat(styles?.getPropertyValue("--local-terminal-bottom-gap") || "0");
-      return Number.isFinite(value) ? Math.max(0, value) : 0;
-    }
+  function terminalUi() {
+    return window.AHATerminalUi;
+  }
 
-    function terminalSizeForElement(el) {
-      const rect = el?.getBoundingClientRect?.() || { width: 900, height: 420 };
-      const bottomGap = terminalBottomGapForElement(el);
-      const cols = Math.max(40, Math.min(240, Math.floor(Math.max(320, rect.width - 18) / 8.4)));
-      const rows = Math.max(12, Math.min(80, Math.floor(Math.max(180, rect.height - 18 - bottomGap) / 17.2)));
-      return { cols, rows };
-    }
+  function terminalSizeForElement(el) {
+    return terminalUi().terminalSizeForElement(el);
+  }
+
+  function renderTerminalKeybar(escapeHtml) {
+    const keys = terminalUi().terminalKeys()
+      .map(item => `<button type="button" class="hardware-key-btn" data-local-terminal-key="${escapeHtml(item.name)}" title="Send ${escapeHtml(item.name)}">${escapeHtml(item.label)}</button>`)
+      .join("");
+    return `<div class="hardware-keybar local-terminal-keybar"><span class="hardware-keybar-keys">${keys}</span></div>`;
+  }
 
   function renderLocalTerminal(state = {}, options = {}) {
     const escapeHtml = options.escapeHtml || escapeFallback;
@@ -46,14 +47,18 @@
             <h3>${escapeHtml(t("local_terminal.title", "Local terminal"))}</h3>
             <p>${escapeHtml(t("local_terminal.hint", "Interactive shell on this machine. Loopback access only."))}</p>
           </div>
-          <span class="local-terminal-status ${escapeHtml(statusClass)}">${escapeHtml(terminalStatusText(state))}</span>
+          <span class="local-terminal-head-actions">
+            <span class="local-terminal-status ${escapeHtml(statusClass)}">${escapeHtml(terminalStatusText(state))}</span>
+            <button type="button" class="local-terminal-close" data-local-terminal-action="close">${escapeHtml(t("common.close", "Close"))}</button>
+          </span>
         </div>
         <div class="local-terminal-actions">
           <button type="button" data-local-terminal-action="connect" ${connected || state.connecting || !canConnect ? "disabled" : ""}>${escapeHtml(connectLabel)}</button>
           <button type="button" data-local-terminal-action="disconnect" ${!connected && !state.connecting ? "disabled" : ""}>${escapeHtml(t("local_terminal.disconnect", "Disconnect"))}</button>
           <button type="button" data-local-terminal-action="clear">${escapeHtml(t("local_terminal.clear", "Clear"))}</button>
         </div>
-        <div class="local-terminal-xterm" data-local-terminal-xterm aria-label="${escapeHtml(t("local_terminal.screen", "Terminal output"))}"></div>
+        <div class="local-terminal-xterm aha-terminal-xterm" data-local-terminal-xterm aria-label="${escapeHtml(t("local_terminal.screen", "Terminal output"))}"></div>
+        ${renderTerminalKeybar(escapeHtml)}
       </div>
     `;
   }
@@ -65,6 +70,8 @@
     let resizeObserver = null;
     let resizeTimer = 0;
     let viewportResizeCleanup = null;
+    let keyboardActive = false;
+    let expandedTerminalHeight = 0;
     const disposables = [];
     const state = {
       canConnect: true,
@@ -144,6 +151,14 @@
       }, 80);
     }
 
+    function fitTerminalContent() {
+      const changed = terminalUi().fitTerminalToContent(term, xtermEl(), {
+        active: keyboardActive,
+        maxHeight: expandedTerminalHeight
+      });
+      if (changed) scheduleResize();
+    }
+
     function resizeSoon(options = {}) {
       setTimeout(() => resizeToContainer(options), 0);
       setTimeout(() => resizeToContainer(options), 120);
@@ -166,8 +181,15 @@
     function setLocalKeyboardInset(value) {
       const documentRef = deps.documentRef || (deps.windowRef || window).document || document;
       const inset = Math.max(0, Math.round(Number(value) || 0));
+      const nextKeyboardActive = inset > 0;
+      if (nextKeyboardActive && !keyboardActive) {
+        expandedTerminalHeight = Math.max(180, Number(xtermEl()?.getBoundingClientRect?.()?.height || 0));
+      }
+      keyboardActive = nextKeyboardActive;
       documentRef.documentElement?.style?.setProperty("--local-terminal-keyboard-inset", `${inset}px`);
-      elements.localTerminalPopoverEl?.classList?.toggle("local-terminal-keyboard-active", inset > 0);
+      elements.localTerminalPopoverEl?.classList?.toggle("local-terminal-keyboard-active", keyboardActive);
+      fitTerminalContent();
+      if (!keyboardActive) expandedTerminalHeight = 0;
     }
 
     function localTerminalMobileHeight(windowRef) {
@@ -256,22 +278,7 @@
       const initialSize = terminalSizeForElement(container);
       state.cols = initialSize.cols;
       state.rows = initialSize.rows;
-      term = new Terminal({
-        allowProposedApi: false,
-        convertEol: false,
-        cursorBlink: true,
-        cols: state.cols,
-        rows: state.rows,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-        fontSize: 13,
-        scrollback: 5000,
-        theme: {
-          background: "#101828",
-          foreground: "#f8fafc",
-          cursor: "#f8fafc",
-          selectionBackground: "#344054"
-        }
-      });
+      term = new Terminal(terminalUi().terminalOptions({ cols: state.cols, rows: state.rows }));
       term.open(container);
       disposables.push(term.onData(data => sendInput(data)));
       disposables.push(term.onResize(size => {
@@ -291,13 +298,37 @@
       ensureTerminal()?.focus?.();
     }
 
-    function renderPopover() {
-      if (!elements.localTerminalPopoverEl) return;
-      disposeTerminal();
+    function syncPopover() {
+      const popover = elements.localTerminalPopoverEl;
+      if (!popover) return;
       state.canConnect = Boolean(currentRunId());
-      elements.localTerminalPopoverEl.innerHTML = renderLocalTerminal(state, { escapeHtml: deps.escapeHtml });
-      bindPopoverControls();
+      const connected = Boolean(state.connected);
+      const statusClass = state.error ? "error" : connected ? "connected" : state.connecting ? "connecting" : "";
+      const statusEl = popover.querySelector(".local-terminal-status");
+      if (statusEl) {
+        statusEl.className = `local-terminal-status ${statusClass}`.trim();
+        statusEl.textContent = terminalStatusText(state);
+      }
+      const connectEl = popover.querySelector('[data-local-terminal-action="connect"]');
+      if (connectEl) {
+        connectEl.disabled = connected || state.connecting || !state.canConnect;
+        connectEl.textContent = state.connecting
+          ? t("local_terminal.connecting_short", "Connecting")
+          : t("local_terminal.connect", "Connect");
+      }
+      const disconnectEl = popover.querySelector('[data-local-terminal-action="disconnect"]');
+      if (disconnectEl) disconnectEl.disabled = !connected && !state.connecting;
+    }
+
+    function renderPopover() {
+      const popover = elements.localTerminalPopoverEl;
+      if (!popover) return;
+      if (!popover.querySelector(".local-terminal-panel")) {
+        popover.innerHTML = renderLocalTerminal(state, { escapeHtml: deps.escapeHtml });
+        bindPopoverControls();
+      }
       ensureTerminal();
+      syncPopover();
     }
 
     function closeSocket() {
@@ -312,19 +343,19 @@
 
     function disconnect() {
       closeSocket();
-      renderPopover();
+      syncPopover();
     }
 
     function connect() {
       if (socket || state.connecting || !currentRunId()) return;
       state.error = "";
       state.connecting = true;
-      renderPopover();
+      syncPopover();
       socket = new WebSocket(terminalWsUrl());
       socket.addEventListener("open", () => {
         state.connecting = false;
         state.connected = true;
-        renderPopover();
+        syncPopover();
         resizeSoon({ force: true });
         focusTerminal();
       });
@@ -337,25 +368,26 @@
         }
         const activeTerm = ensureTerminal();
         if (payload.type === "ready") {
-          activeTerm?.writeln?.(`AHA local terminal: ${payload.shell || "shell"} @ ${payload.cwd || ""}`);
+          activeTerm?.writeln?.(`AHA local terminal: ${payload.shell || "shell"} @ ${payload.cwd || ""}`, fitTerminalContent);
           resizeToContainer({ force: true });
           resizeSoon({ force: true });
         } else if (payload.type === "output") {
-          activeTerm?.write?.(String(payload.data || ""));
+          activeTerm?.write?.(String(payload.data || ""), fitTerminalContent);
         } else if (payload.type === "error") {
           state.error = String(payload.message || t("local_terminal.error", "Terminal error"));
-          activeTerm?.writeln?.(`\r\n[AHA terminal error: ${state.error}]`);
-          renderPopover();
+          activeTerm?.writeln?.(`\r\n[AHA terminal error: ${state.error}]`, fitTerminalContent);
+          syncPopover();
         } else if (payload.type === "exit") {
           state.connected = false;
-          activeTerm?.writeln?.(`\r\n[process exited: ${payload.returncode ?? ""}]`);
+          activeTerm?.writeln?.(`\r\n[process exited: ${payload.returncode ?? ""}]`, fitTerminalContent);
+          syncPopover();
         }
       });
       socket.addEventListener("close", () => {
         socket = null;
         state.connected = false;
         state.connecting = false;
-        if (open) renderPopover();
+        if (open) syncPopover();
       });
       socket.addEventListener("error", () => {
         state.error = t("local_terminal.connect_failed", "Failed to connect local terminal");
@@ -363,7 +395,7 @@
         state.connecting = false;
         if (socket) socket.close();
         socket = null;
-        renderPopover();
+        syncPopover();
       });
     }
 
@@ -375,10 +407,17 @@
           const action = button.dataset.localTerminalAction || "";
           if (action === "connect") connect();
           if (action === "disconnect") disconnect();
+          if (action === "close") setOpen(false);
           if (action === "clear") {
             ensureTerminal()?.clear?.();
             focusTerminal();
           }
+        });
+      });
+      popover.querySelectorAll("[data-local-terminal-key]").forEach(button => {
+        button.addEventListener("click", () => {
+          sendInput(terminalUi().terminalKeyBytes(button.dataset.localTerminalKey || ""));
+          focusTerminal();
         });
       });
     }

@@ -6,7 +6,7 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=local-terminal-v9">
+  <link rel="stylesheet" href="/static/styles.css?v=terminal-ui-v10">
 </head>
 <body>
   <header>
@@ -125,7 +125,6 @@
               <div class="run-actions-section run-actions-section-secondary run-integrations-section">
                 <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
                 <div class="web-service-actions">
-                  <button id="skills-console" class="button-ghost" type="button" aria-controls="skills-console-popover" aria-expanded="false" data-i18n="skills.title">Skills</button>
                   <button id="observe-proxy" class="button-ghost" type="button" aria-controls="observe-proxy-popover" aria-expanded="false" data-i18n="observe_proxy.title">Observe Proxy</button>
                   <button id="local-terminal" class="button-ghost" type="button" aria-controls="local-terminal-popover" aria-expanded="false" data-i18n="local_terminal.title">Local terminal</button>
                   <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
@@ -281,99 +280,48 @@
           <section id="task-hardware-editor" class="task-detail-section task-hardware-editor">
             <h3 data-i18n="task.hardware_debug">Hardware debug</h3>
             <form id="task-hardware-form" class="hardware-form">
-              <label class="checkbox-line hardware-master-toggle">
-                <input id="selected-task-hardware-enabled" type="checkbox" data-hardware-master-toggle>
-                <span data-i18n="task.hardware_enable">Enable hardware debug</span>
+              <label class="field-label">
+                <span data-i18n="task.hardware_mode">Hardware debug mode</span>
+                <select id="selected-task-hardware-mode" data-hardware-mode>
+                  <option value="off" data-i18n="task.hardware_mode_off">Off</option>
+                  <option value="serial" data-i18n="task.hardware_mode_serial">Serial</option>
+                  <option value="network" data-i18n="task.hardware_mode_network">Network</option>
+                  <option value="both" data-i18n="task.hardware_mode_both">Serial + Network</option>
+                </select>
               </label>
-              <div class="hardware-channel-list" data-selected-hardware-channels>
-                <section class="hardware-channel-card" data-hardware-channel="uart">
-                  <label class="checkbox-line">
-                    <input id="selected-task-hardware-uart-enabled" type="checkbox" data-hardware-channel-toggle>
-                    <span>UART</span>
+              <div class="hardware-terminal-settings" data-hardware-settings hidden>
+                <label class="field-label">
+                  <span data-i18n="task.hardware_access">Hardware access</span>
+                  <select id="selected-task-hardware-access" data-hardware-permission="access">
+                    <option value="read_only" data-i18n="task.hardware_access_read_only">Read only</option>
+                    <option value="read_write" data-i18n="task.hardware_access_read_write">Read and write</option>
+                  </select>
+                  <span class="field-help" data-i18n="task.hardware_access_help">Read and write also enables terminal input and state-changing skill tools.</span>
+                </label>
+                <div class="field-row" data-hardware-serial-settings hidden>
+                  <label class="field-label">
+                    <span data-i18n="task.hardware_serial_device">Serial device</span>
+                    <input id="selected-task-hardware-serial-device" data-hardware-field="serial.device" placeholder="/dev/ttyUSB0">
                   </label>
-                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
-                    <div class="field-row">
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_port">UART port</span>
-                        <input id="selected-task-hardware-uart-port" data-hardware-setting="port" placeholder="/dev/ttyUSB0">
-                      </label>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_baudrate">Baudrate</span>
-                        <input id="selected-task-hardware-uart-baudrate" data-hardware-setting="baudrate" type="number" min="1" value="115200">
-                      </label>
-                    </div>
-                    <div class="field-row">
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_uart_username">UART username</span>
-                        <input id="selected-task-hardware-uart-username" data-hardware-setting="username" autocomplete="off">
-                      </label>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_uart_password">UART password</span>
-                        <input id="selected-task-hardware-uart-password" data-hardware-setting="password" type="password" autocomplete="off">
-                      </label>
-                    </div>
-                    <div class="hardware-permission-list" aria-label="Permissions">
-                      <label class="checkbox-line"><input id="selected-task-hardware-uart-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
-                      <label class="checkbox-line"><input id="selected-task-hardware-uart-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
-                    </div>
-                  </div>
-                </section>
-                <section class="hardware-channel-card" data-hardware-channel="nfs">
-                  <label class="checkbox-line">
-                    <input id="selected-task-hardware-nfs-enabled" type="checkbox" data-hardware-channel-toggle>
-                    <span>NFS</span>
+                  <label class="field-label">
+                    <span data-i18n="task.hardware_baudrate">Baudrate</span>
+                    <input id="selected-task-hardware-serial-baudrate" data-hardware-field="serial.baudrate" type="number" min="1" value="115200">
                   </label>
-                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
-                    <div class="field-row">
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_nfs_server">NFS server</span>
-                        <input id="selected-task-hardware-nfs-server" data-hardware-setting="server" placeholder="192.168.1.10">
-                      </label>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_nfs_remote_path">Remote path</span>
-                        <input id="selected-task-hardware-nfs-remote-path" data-hardware-setting="remote_path" placeholder="/srv/nfs/rootfs">
-                      </label>
-                    </div>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_nfs_mount_path">Mount path</span>
-                      <input id="selected-task-hardware-nfs-mount-path" data-hardware-setting="mount_path" placeholder="/mnt/rootfs">
-                    </label>
-                    <div class="hardware-permission-list" aria-label="Permissions">
-                      <label class="checkbox-line"><input id="selected-task-hardware-nfs-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
-                      <label class="checkbox-line"><input id="selected-task-hardware-nfs-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
-                    </div>
-                  </div>
-                </section>
-                <section class="hardware-channel-card" data-hardware-channel="telnet">
-                  <label class="checkbox-line">
-                    <input id="selected-task-hardware-telnet-enabled" type="checkbox" data-hardware-channel-toggle>
-                    <span>TELNET</span>
+                </div>
+                <label class="field-label" data-hardware-network-settings hidden>
+                  <span data-i18n="task.hardware_device_ip">Device IP</span>
+                  <input id="selected-task-hardware-device-ip" data-hardware-field="network.device_ip" placeholder="192.168.1.20">
+                </label>
+                <div class="field-row" data-hardware-login-settings>
+                  <label class="field-label">
+                    <span data-i18n="task.hardware_login_username">Login username</span>
+                    <input id="selected-task-hardware-username" data-hardware-field="credentials.username" autocomplete="off">
                   </label>
-                  <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
-                    <div class="field-row">
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_telnet_host">Host</span>
-                        <input id="selected-task-hardware-telnet-host" data-hardware-setting="host" placeholder="192.168.1.20">
-                      </label>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_telnet_port">Port</span>
-                        <input id="selected-task-hardware-telnet-port" data-hardware-setting="port" type="number" min="1" value="23">
-                      </label>
-                    </div>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_telnet_username">Username</span>
-                      <input id="selected-task-hardware-telnet-username" data-hardware-setting="username">
-                    </label>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_telnet_password">TELNET password</span>
-                      <input id="selected-task-hardware-telnet-password" data-hardware-setting="password" type="password" autocomplete="off">
-                    </label>
-                    <div class="hardware-permission-list" aria-label="Permissions">
-                      <label class="checkbox-line"><input id="selected-task-hardware-telnet-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
-                      <label class="checkbox-line"><input id="selected-task-hardware-telnet-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
-                    </div>
-                  </div>
-                </section>
+                  <label class="field-label">
+                    <span data-i18n="task.hardware_login_password">Login password</span>
+                    <input id="selected-task-hardware-password" data-hardware-field="credentials.password" type="password" autocomplete="new-password">
+                  </label>
+                </div>
               </div>
               <button type="submit" data-i18n="task.hardware_save">Save Hardware</button>
               <div id="task-hardware-state" class="meta"></div>
@@ -522,7 +470,7 @@
       <div id="mobile-action-panel" class="mobile-action-panel" hidden>
         <button type="button" data-mobile-action="conversation" data-i18n="conversation.chat">Chat</button>
         <button type="button" data-mobile-action="logs" data-i18n="conversation.logs">Logs</button>
-        <button type="button" data-mobile-action="hardware" data-i18n="conversation.hardware">Hardware</button>
+        <button type="button" data-mobile-action="hardware" data-i18n="conversation.hardware">Terminal</button>
         <button type="button" data-mobile-action="context" data-i18n="conversation.context">Context</button>
         <button type="button" data-mobile-action="context-evidence" data-i18n="conversation.context_evidence">Evidence</button>
         <button type="button" data-mobile-action="tasks" data-i18n="task.open">Tasks</button>
@@ -673,101 +621,50 @@
               </div>
               <div class="field-label">
                 <span data-i18n="task.hardware_debug">Hardware debug</span>
-                <label class="checkbox-line hardware-master-toggle">
-                  <input id="task-hardware-enabled" type="checkbox" data-hardware-master-toggle>
-                  <span data-i18n="task.hardware_enable">Enable hardware debug</span>
+                <label class="field-label">
+                  <span data-i18n="task.hardware_mode">Hardware debug mode</span>
+                  <select id="task-hardware-mode" data-hardware-mode>
+                    <option value="off" data-i18n="task.hardware_mode_off">Off</option>
+                    <option value="serial" data-i18n="task.hardware_mode_serial">Serial</option>
+                    <option value="network" data-i18n="task.hardware_mode_network">Network</option>
+                    <option value="both" data-i18n="task.hardware_mode_both">Serial + Network</option>
+                  </select>
                 </label>
-                <div class="hardware-channel-list compact" data-create-hardware-channels hidden>
-                  <section class="hardware-channel-card" data-hardware-channel="uart">
-                    <label class="checkbox-line">
-                      <input id="task-hardware-uart-enabled" type="checkbox" data-hardware-channel-toggle>
-                      <span>UART</span>
+                <div class="hardware-terminal-settings compact" data-hardware-settings hidden>
+                  <label class="field-label">
+                    <span data-i18n="task.hardware_access">Hardware access</span>
+                    <select id="task-hardware-access" data-hardware-permission="access">
+                      <option value="read_only" data-i18n="task.hardware_access_read_only">Read only</option>
+                      <option value="read_write" data-i18n="task.hardware_access_read_write">Read and write</option>
+                    </select>
+                    <span class="field-help" data-i18n="task.hardware_access_help">Read and write also enables terminal input and state-changing skill tools.</span>
+                  </label>
+                  <div class="field-row task-defaults-grid" data-hardware-serial-settings hidden>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_serial_device">Serial device</span>
+                      <input id="task-hardware-serial-device" data-hardware-field="serial.device" placeholder="/dev/ttyUSB0">
                     </label>
-                    <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
-                      <div class="field-row task-defaults-grid">
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_port">UART port</span>
-                          <input id="task-hardware-uart-port" data-hardware-setting="port" placeholder="/dev/ttyUSB0">
-                        </label>
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_baudrate">Baudrate</span>
-                          <input id="task-hardware-uart-baudrate" data-hardware-setting="baudrate" type="number" min="1" value="115200">
-                        </label>
-                      </div>
-                      <div class="field-row">
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_uart_username">UART username</span>
-                          <input id="task-hardware-uart-username" data-hardware-setting="username" autocomplete="off">
-                        </label>
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_uart_password">UART password</span>
-                          <input id="task-hardware-uart-password" data-hardware-setting="password" type="password" autocomplete="off">
-                        </label>
-                      </div>
-                      <div class="hardware-permission-list">
-                        <label class="checkbox-line"><input id="task-hardware-uart-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
-                        <label class="checkbox-line"><input id="task-hardware-uart-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
-                      </div>
-                    </div>
-                  </section>
-                  <section class="hardware-channel-card" data-hardware-channel="nfs">
-                    <label class="checkbox-line">
-                      <input id="task-hardware-nfs-enabled" type="checkbox" data-hardware-channel-toggle>
-                      <span>NFS</span>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_baudrate">Baudrate</span>
+                      <input id="task-hardware-serial-baudrate" data-hardware-field="serial.baudrate" type="number" min="1" value="115200">
                     </label>
-                    <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
-                      <div class="field-row task-defaults-grid">
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_nfs_server">NFS server</span>
-                          <input id="task-hardware-nfs-server" data-hardware-setting="server" placeholder="192.168.1.10">
-                        </label>
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_nfs_remote_path">Remote path</span>
-                          <input id="task-hardware-nfs-remote-path" data-hardware-setting="remote_path" placeholder="/srv/nfs/rootfs">
-                        </label>
-                      </div>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_nfs_mount_path">Mount path</span>
-                        <input id="task-hardware-nfs-mount-path" data-hardware-setting="mount_path" placeholder="/mnt/rootfs">
-                      </label>
-                      <div class="hardware-permission-list">
-                        <label class="checkbox-line"><input id="task-hardware-nfs-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
-                        <label class="checkbox-line"><input id="task-hardware-nfs-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
-                      </div>
-                    </div>
-                  </section>
-                  <section class="hardware-channel-card" data-hardware-channel="telnet">
-                    <label class="checkbox-line">
-                      <input id="task-hardware-telnet-enabled" type="checkbox" data-hardware-channel-toggle>
-                      <span>TELNET</span>
+                  </div>
+                  <label class="field-label" data-hardware-network-settings hidden>
+                    <span data-i18n="task.hardware_device_ip">Device IP</span>
+                    <input id="task-hardware-device-ip" data-hardware-field="network.device_ip" placeholder="192.168.1.20">
+                  </label>
+                  <div class="field-row" data-hardware-login-settings>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_login_username">Login username</span>
+                      <input id="task-hardware-username" data-hardware-field="credentials.username" autocomplete="off">
                     </label>
-                    <div class="hardware-channel-detail" data-hardware-channel-detail hidden>
-                      <div class="field-row task-defaults-grid">
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_telnet_host">Host</span>
-                          <input id="task-hardware-telnet-host" data-hardware-setting="host" placeholder="192.168.1.20">
-                        </label>
-                        <label class="field-label">
-                          <span data-i18n="task.hardware_telnet_port">Port</span>
-                          <input id="task-hardware-telnet-port" data-hardware-setting="port" type="number" min="1" value="23">
-                        </label>
-                      </div>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_telnet_username">Username</span>
-                        <input id="task-hardware-telnet-username" data-hardware-setting="username">
-                      </label>
-                      <label class="field-label">
-                        <span data-i18n="task.hardware_telnet_password">TELNET password</span>
-                        <input id="task-hardware-telnet-password" data-hardware-setting="password" type="password" autocomplete="off">
-                      </label>
-                      <div class="hardware-permission-list">
-                        <label class="checkbox-line"><input id="task-hardware-telnet-permission-read" data-hardware-permission="read" type="checkbox" checked><span data-i18n="task.hardware_perm_read">Read</span></label>
-                        <label class="checkbox-line"><input id="task-hardware-telnet-permission-write" data-hardware-permission="write" type="checkbox"><span data-i18n="task.hardware_perm_write">Write</span></label>
-                      </div>
-                    </div>
-                  </section>
+                    <label class="field-label">
+                      <span data-i18n="task.hardware_login_password">Login password</span>
+                      <input id="task-hardware-password" data-hardware-field="credentials.password" type="password" autocomplete="new-password">
+                    </label>
+                  </div>
                 </div>
-                <div class="field-help" data-i18n="task.hardware_help">Choose board-side access channels exposed to the agent.</div>
+                <div class="field-help" data-i18n="task.hardware_help">Choose serial and/or network terminal access for the board.</div>
               </div>
             </div>
           </section>
@@ -931,24 +828,24 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=token-saving-v8"></script>
+  <script src="/static/i18n.js?v=hardware-terminal-v1"></script>
   <script src="/static/app_helpers.js"></script>
-  <script src="/static/task_metadata.js?v=token-saving-v8"></script>
+  <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
   <script src="/static/bootstrap_config.js?v=model-default-v1"></script>
   <script src="/static/bootstrap_controller.js"></script>
-  <script src="/static/task_form.js?v=reasoning-effort-v1"></script>
-  <script src="/static/task_config_controller.js?v=token-saving-v8"></script>
+  <script src="/static/task_form.js?v=hardware-terminal-v1"></script>
+  <script src="/static/task_config_controller.js?v=hardware-terminal-v1"></script>
   <script src="/static/run_metadata.js"></script>
   <script src="/static/run_lifecycle_view.js"></script>
   <script src="/static/run_maintenance.js"></script>
   <script src="/static/agent_metadata.js"></script>
-  <script src="/static/task_list.js"></script>
+  <script src="/static/task_list.js?v=hardware-terminal-v1"></script>
   <script src="/static/task_controller.js?v=token-saving-v8"></script>
   <script src="/static/agent_controller.js"></script>
     <script src="/static/conversation_metadata.js?v=token-saving-v8"></script>
     <script src="/static/conversation_state.js"></script>
-    <script src="/static/conversation_panel.js?v=token-ledger-v11"></script>
-    <script src="/static/conversation_controller.js?v=token-ledger-v11"></script>
+    <script src="/static/conversation_panel.js?v=terminal-ui-v7"></script>
+    <script src="/static/conversation_controller.js?v=hardware-terminal-v1"></script>
     <script src="/static/compact_reset.js"></script>
     <script src="/static/timeline_view.js?v=token-saving-v8"></script>
     <script src="/static/optimistic_events.js"></script>
@@ -962,7 +859,9 @@
   <script src="/static/token_usage.js?v=usage-v8"></script>
   <script src="/static/observe_proxy_panel.js?v=observe-proxy-v1"></script>
   <script src="/static/xterm.js?v=6.0.0"></script>
-  <script src="/static/local_terminal.js?v=local-terminal-v9"></script>
+  <script src="/static/terminal_ui.js?v=terminal-ui-v9"></script>
+  <script src="/static/local_terminal.js?v=terminal-ui-v9"></script>
+  <script src="/static/hardware_terminal.js?v=terminal-ui-v9"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>
@@ -977,27 +876,27 @@
   <script src="/static/auth_controller.js"></script>
   <script src="/static/backend_status.js"></script>
   <script src="/static/message_composer.js"></script>
-  <script src="/static/event_bindings.js"></script>
-  <script src="/static/panel_controller.js"></script>
+  <script src="/static/event_bindings.js?v=terminal-ui-v6"></script>
+  <script src="/static/panel_controller.js?v=hardware-xterm-v1"></script>
   <script src="/static/render_orchestrator.js"></script>
   <script src="/static/status_store.js"></script>
   <script src="/static/status_controller.js"></script>
   <script src="/static/run_actions.js"></script>
   <script src="/static/app_actions.js"></script>
-  <script src="/static/task_create_controller.js?v=token-saving-v8"></script>
+  <script src="/static/task_create_controller.js?v=hardware-terminal-v1"></script>
   <script src="/static/textarea_image_paste.js"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/task_memo_controller.js"></script>
   <script src="/static/settings_controller.js?v=token-saving-v8"></script>
   <script src="/static/run_controller.js?v=token-saving-v8"></script>
-  <script src="/static/message_flow.js"></script>
+  <script src="/static/message_flow.js?v=hardware-terminal-v1"></script>
   <script src="/static/render_scheduler.js"></script>
   <script src="/static/confirm_dialog.js"></script>
-  <script src="/static/controller_registry.js?v=token-saving-v8"></script>
+  <script src="/static/controller_registry.js?v=terminal-ui-v6"></script>
   <script src="/static/app_bridge.js?v=token-saving-v8"></script>
-  <script src="/static/app_controller_factory.js?v=token-saving-v8"></script>
+  <script src="/static/app_controller_factory.js?v=hardware-xterm-v1"></script>
   <script src="/static/app_runtime_setup.js?v=token-saving-v8"></script>
-  <script src="/static/app_runtime_wiring.js?v=token-saving-v8"></script>
+  <script src="/static/app_runtime_wiring.js?v=terminal-ui-v6"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

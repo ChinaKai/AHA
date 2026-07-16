@@ -19,6 +19,7 @@ from aha_cli.store.filesystem import (
     update_agent_runtime,
 )
 from aha_cli.store.runs import require_plan
+from aha_cli.web.public_payload import redact_hardware_credentials
 
 BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
 TASK_OUTCOME_SCAN_LIMIT = 10000
@@ -376,7 +377,7 @@ def web_tasks_snapshot(
     for task in snapshot.get("tasks", []):
         raw_task_id = str(task.get("id") or "")
         decorate_task_status(task, outcomes)
-    return snapshot
+    return redact_hardware_credentials(snapshot)
 
 
 def _task_option_title(task: dict) -> str:
@@ -602,9 +603,9 @@ def web_status_snapshot(
         task_offset=task_offset,
         task_filter=task_filter,
     )
-    if lite:
-        return snapshot
-    return attach_backend_runtime(root, run_id, snapshot, recover_stale=False)
+    if not lite:
+        snapshot = attach_backend_runtime(root, run_id, snapshot, recover_stale=False)
+    return redact_hardware_credentials(snapshot)
 
 __all__ = [
     "task_outcome_snapshots",

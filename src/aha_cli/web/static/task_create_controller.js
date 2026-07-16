@@ -184,48 +184,25 @@
       };
     }
 
-    function readHardwareChannelPermissions(card) {
-      return {
-        read: Boolean(card.querySelector('[data-hardware-permission="read"]')?.checked),
-        write: Boolean(card.querySelector('[data-hardware-permission="write"]')?.checked)
-      };
-    }
-
-    function readHardwareChannelSettings(card, type) {
-      const settings = {};
-      card.querySelectorAll("[data-hardware-setting]").forEach(input => {
-        const key = input.dataset.hardwareSetting || "";
-        if (!key) return;
-        const raw = String(input.value || "").trim();
-        if (input.type === "number") {
-          settings[key] = Number(raw || input.defaultValue || "0") || Number(input.defaultValue || "0") || 0;
-        } else {
-          settings[key] = raw;
-        }
-      });
-      if (type === "uart" && !settings.baudrate) settings.baudrate = 115200;
-      if (type === "telnet" && !settings.port) settings.port = 23;
-      return settings;
-    }
-
-    function readHardwareChannel(card) {
-      const type = String(card.dataset.hardwareChannel || "").trim().toLowerCase();
-      if (!type || !card.querySelector("[data-hardware-channel-toggle]")?.checked) return null;
-      return {
-        type,
-        settings: readHardwareChannelSettings(card, type),
-        permissions: readHardwareChannelPermissions(card)
-      };
-    }
-
     function createHardwareDebugPayload() {
-      const channels = Array.from(elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [])
-        .map(readHardwareChannel)
-        .filter(Boolean);
-      const enabled = Boolean(elements.taskFormEl?.querySelector("[data-hardware-master-toggle]")?.checked);
+      const form = elements.taskFormEl;
+      const value = key => String(form?.querySelector(`[data-hardware-field="${key}"]`)?.value || "").trim();
       return {
-        enabled,
-        channels
+        mode: String(form?.querySelector("[data-hardware-mode]")?.value || "off"),
+        serial: {
+          device: value("serial.device"),
+          baudrate: Number(value("serial.baudrate") || "115200") || 115200
+        },
+        network: {
+          device_ip: value("network.device_ip")
+        },
+        credentials: {
+          username: value("credentials.username"),
+          password: String(form?.querySelector('[data-hardware-field="credentials.password"]')?.value || "")
+        },
+        permissions: {
+          access: String(form?.querySelector('[data-hardware-permission="access"]')?.value || "read_only")
+        }
       };
     }
 
@@ -240,53 +217,37 @@
     }
 
     function syncCreateHardwareDebugFields() {
-      const masterToggle = elements.taskFormEl?.querySelector("[data-hardware-master-toggle]");
-      const master = Boolean(masterToggle?.checked);
-      const channelList = elements.taskFormEl?.querySelector("[data-create-hardware-channels]");
-      if (channelList) {
-        channelList.hidden = !master;
-        channelList.classList.toggle("hidden", !master);
-      }
-      const cards = elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [];
-      cards.forEach(card => {
-        const enabled = Boolean(card.querySelector("[data-hardware-channel-toggle]")?.checked);
-        const toggle = card.querySelector("[data-hardware-channel-toggle]");
-        if (toggle) toggle.disabled = !master;
-        card.querySelectorAll("[data-hardware-channel-detail]").forEach(item => {
-          item.hidden = !enabled;
-          item.classList.toggle("hidden", !enabled);
-          item.querySelectorAll("input, select").forEach(control => {
-            control.disabled = !master || !enabled;
-          });
-        });
-      });
+      const form = elements.taskFormEl;
+      const mode = String(form?.querySelector("[data-hardware-mode]")?.value || "off");
+      const enabled = mode !== "off";
+      const serial = mode === "serial" || mode === "both";
+      const network = mode === "network" || mode === "both";
+      const settings = form?.querySelector("[data-hardware-settings]");
+      if (settings) settings.hidden = !enabled;
+      form?.querySelectorAll("[data-hardware-serial-settings]").forEach(item => { item.hidden = !serial; });
+      form?.querySelectorAll("[data-hardware-network-settings]").forEach(item => { item.hidden = !network; });
+      form?.querySelectorAll('[data-hardware-field^="serial."]').forEach(input => { input.disabled = !serial; });
+      form?.querySelectorAll('[data-hardware-field^="network."]').forEach(input => { input.disabled = !network; });
+      form?.querySelectorAll('[data-hardware-field^="credentials."]').forEach(input => { input.disabled = !enabled; });
+      form?.querySelectorAll("[data-hardware-permission]").forEach(input => { input.disabled = !enabled; });
     }
 
-    function setHardwareChannelValues(channels = [], options = {}) {
-      const masterToggle = elements.taskFormEl?.querySelector("[data-hardware-master-toggle]");
-      if (masterToggle) {
-        masterToggle.checked = typeof options.enabled === "boolean"
-          ? options.enabled
-          : (Array.isArray(channels) && channels.length > 0);
-      }
-      const byType = new Map((Array.isArray(channels) ? channels : []).map(channel => [String(channel?.type || "").toLowerCase(), channel]));
-      const cards = elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel]") || [];
-      cards.forEach(card => {
-        const type = String(card.dataset.hardwareChannel || "").toLowerCase();
-        const channel = byType.get(type) || null;
-        const enabledEl = card.querySelector("[data-hardware-channel-toggle]");
-        if (enabledEl) enabledEl.checked = Boolean(channel);
-        const settings = channel?.settings && typeof channel.settings === "object" ? channel.settings : {};
-        card.querySelectorAll("[data-hardware-setting]").forEach(input => {
-          const key = input.dataset.hardwareSetting || "";
-          input.value = settings[key] ?? input.defaultValue ?? "";
-        });
-        const permissions = channel?.permissions || {};
-        const readEl = card.querySelector('[data-hardware-permission="read"]');
-        const writeEl = card.querySelector('[data-hardware-permission="write"]');
-        if (readEl) readEl.checked = channel ? permissions.read !== false : true;
-        if (writeEl) writeEl.checked = Boolean(permissions.write);
-      });
+    function setHardwareDebugValues(value = {}) {
+      const policy = deps.taskHardwareDebugPolicy?.({ hardware_debug: value }) || value || {};
+      const form = elements.taskFormEl;
+      const mode = form?.querySelector("[data-hardware-mode]");
+      if (mode) mode.value = policy.mode || "off";
+      const set = (key, fieldValue) => {
+        const input = form?.querySelector(`[data-hardware-field="${key}"]`);
+        if (input) input.value = fieldValue ?? input.defaultValue ?? "";
+      };
+      set("serial.device", policy.serial?.device || "");
+      set("serial.baudrate", policy.serial?.baudrate || 115200);
+      set("network.device_ip", policy.network?.device_ip || "");
+      set("credentials.username", policy.credentials?.username || "");
+      set("credentials.password", policy.credentials?.password || "");
+      const access = form?.querySelector('[data-hardware-permission="access"]');
+      if (access) access.value = policy.permissions?.access || "read_only";
       syncCreateHardwareDebugFields();
     }
 
@@ -315,8 +276,7 @@
           token_saving_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
           observe_proxy_enabled: Boolean(elements.taskObserveProxyEnabledEl?.checked),
           task_skill_paths: selectedTaskSkillPaths(),
-          hardware_enabled: createHardwareDebugPayload().enabled,
-          hardware_channels: createHardwareDebugPayload().channels
+          hardware_debug: createHardwareDebugPayload()
         }
       };
     }
@@ -530,8 +490,9 @@
       setCheckboxValue(elements.taskObserveProxyEnabledEl, values.observe_proxy_enabled);
       syncCreateTaskContextFields();
       renderTaskSkillOptions(values.task_skill_paths || []);
-      setHardwareChannelValues(values.hardware_channels || [], {
-        enabled: typeof values.hardware_enabled === "boolean" ? values.hardware_enabled : undefined
+      setHardwareDebugValues(values.hardware_debug || {
+        enabled: values.hardware_enabled,
+        channels: values.hardware_channels || []
       });
       setTaskProxyEnabledValue(values.proxy_enabled);
     }
@@ -554,7 +515,7 @@
         token_saving_enabled: false,
         observe_proxy_enabled: false,
         task_skill_paths: [],
-        hardware_channels: [],
+        hardware_debug: { mode: "off" },
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
       };
     }
@@ -806,10 +767,7 @@
         restoreDraft(option.dataset.taskMemoOption || "", { showStatus: true });
       });
       elements.taskContextAutoCompactEnabledEl?.addEventListener("change", syncCreateTaskContextFields);
-      elements.taskFormEl?.querySelectorAll("[data-create-hardware-channels] [data-hardware-channel-toggle]").forEach(toggle => {
-        toggle.addEventListener("change", syncCreateHardwareDebugFields);
-      });
-      elements.taskFormEl?.querySelector("[data-hardware-master-toggle]")?.addEventListener("change", syncCreateHardwareDebugFields);
+      elements.taskFormEl?.querySelector("[data-hardware-mode]")?.addEventListener("change", syncCreateHardwareDebugFields);
       elements.taskSkillSelectEl?.addEventListener("focus", () => renderTaskSkillOptions());
       if (elements.taskCreateDialogEl && windowRef.MutationObserver) {
         const observer = new windowRef.MutationObserver(() => {

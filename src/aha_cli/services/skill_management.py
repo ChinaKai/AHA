@@ -16,6 +16,17 @@ SKILL_MD = "SKILL.md"
 OPENAI_YAML = "openai.yaml"
 KNOWLEDGE_SKILL_SOURCE = "knowledge"
 LEGACY_SKILL_SOURCE = "aha_home"
+_BUNDLED_FILE_LIMIT = 256
+_SOURCE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".go",
+    ".h",
+    ".hpp",
+    ".java",
+    ".rs",
+}
 
 
 class SkillManagementError(ValueError):
@@ -134,6 +145,48 @@ def _interface_metadata(openai_yaml: str) -> dict[str, str]:
     return fields
 
 
+def _bundled_file_kind(relative_path: Path, *, executable: bool) -> str:
+    parts = relative_path.parts
+    first = parts[0].lower() if parts else ""
+    suffix = relative_path.suffix.lower()
+    if first == "scripts":
+        return "script"
+    if first == "references":
+        return "reference"
+    if first == "assets":
+        return "asset"
+    if suffix in _SOURCE_SUFFIXES:
+        return "source"
+    if executable:
+        return "tool"
+    return "file"
+
+
+def _bundled_files(path: Path) -> list[dict[str, object]]:
+    files: list[dict[str, object]] = []
+    for item in sorted(path.rglob("*"), key=lambda candidate: candidate.as_posix().lower()):
+        if len(files) >= _BUNDLED_FILE_LIMIT:
+            break
+        if item.is_symlink() or not item.is_file():
+            continue
+        relative = item.relative_to(path)
+        if any(part.startswith(".") or part == "__pycache__" for part in relative.parts):
+            continue
+        if relative == Path(SKILL_MD) or relative == Path("agents") / OPENAI_YAML:
+            continue
+        stat = item.stat()
+        executable = bool(stat.st_mode & 0o111)
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "kind": _bundled_file_kind(relative, executable=executable),
+                "size": stat.st_size,
+                "executable": executable,
+            }
+        )
+    return files
+
+
 def _skill_summary(path: Path, *, source: str) -> dict[str, object]:
     skill_md_path = path / SKILL_MD
     skill_md = _read_text(skill_md_path)
@@ -141,6 +194,7 @@ def _skill_summary(path: Path, *, source: str) -> dict[str, object]:
     openai_yaml = _read_text(openai_yaml_path)
     frontmatter = skill_frontmatter(skill_md)
     interface = _interface_metadata(openai_yaml)
+    bundled_files = _bundled_files(path)
     stat = skill_md_path.stat()
     label = interface.get("display_name") or skill_title(skill_md, path.name)
     return {
@@ -156,6 +210,8 @@ def _skill_summary(path: Path, *, source: str) -> dict[str, object]:
         "source": source,
         "updated_at": stat.st_mtime,
         "size": stat.st_size,
+        "bundled_file_count": len(bundled_files),
+        "tool_count": sum(item["kind"] in {"script", "tool"} for item in bundled_files),
     }
 
 
@@ -253,6 +309,7 @@ def get_managed_skill(
     skill_md_path = path / SKILL_MD
     summary["skill_md"] = _read_text(skill_md_path)
     summary["openai_yaml"] = _read_text(path / "agents" / OPENAI_YAML)
+    summary["bundled_files"] = _bundled_files(path)
     return summary
 
 
@@ -263,14 +320,14 @@ def default_skill_markdown(skill_id: str) -> str:
         [
             "---",
             f"name: {safe_id}",
-            "description: Describe what this skill does and when Codex should use it.",
+            "description: 说明这个技能提供的能力，以及应在什么场景下使用。",
             "---",
             "",
             f"# {title}",
             "",
-            "## Workflow",
+            "## 工作流程",
             "",
-            "- Add the concrete steps this skill should guide.",
+            "- 在这里补充这个技能需要指导的具体步骤。",
             "",
         ]
     )

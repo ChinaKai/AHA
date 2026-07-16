@@ -423,67 +423,57 @@
 
     function syncTaskHardwareDebugFields(options = {}) {
       const disabled = Boolean(options.disabled);
-      const masterToggle = els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]");
-      if (masterToggle) masterToggle.disabled = disabled;
-      const master = Boolean(masterToggle?.checked);
-      const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
-      const channelList = els.taskHardwareFormEl?.querySelector("[data-selected-hardware-channels]");
-      if (channelList) {
-        channelList.hidden = !master;
-        channelList.classList.toggle("hidden", !master);
-      }
-      cards.forEach(card => {
-        const enabled = Boolean(card.querySelector("[data-hardware-channel-toggle]")?.checked);
-        card.querySelectorAll("[data-hardware-channel-detail]").forEach(item => {
-          item.hidden = !enabled;
-          item.classList.toggle("hidden", !enabled);
-          item.querySelectorAll("input, select").forEach(control => {
-            control.disabled = disabled || !master || !enabled;
-          });
-        });
-        const toggle = card.querySelector("[data-hardware-channel-toggle]");
-        if (toggle) toggle.disabled = disabled || !master;
-      });
+      const form = els.taskHardwareFormEl;
+      const modeEl = form?.querySelector("[data-hardware-mode]");
+      if (modeEl) modeEl.disabled = disabled;
+      const mode = String(modeEl?.value || "off");
+      const enabled = mode !== "off";
+      const serial = mode === "serial" || mode === "both";
+      const network = mode === "network" || mode === "both";
+      const settings = form?.querySelector("[data-hardware-settings]");
+      if (settings) settings.hidden = !enabled;
+      form?.querySelectorAll("[data-hardware-serial-settings]").forEach(item => { item.hidden = !serial; });
+      form?.querySelectorAll("[data-hardware-network-settings]").forEach(item => { item.hidden = !network; });
+      form?.querySelectorAll('[data-hardware-field^="serial."]').forEach(input => { input.disabled = disabled || !serial; });
+      form?.querySelectorAll('[data-hardware-field^="network."]').forEach(input => { input.disabled = disabled || !network; });
+      form?.querySelectorAll('[data-hardware-field^="credentials."]').forEach(input => { input.disabled = disabled || !enabled; });
+      form?.querySelectorAll("[data-hardware-permission]").forEach(input => { input.disabled = disabled || !enabled; });
       const submit = els.taskHardwareFormEl?.querySelector('button[type="submit"]');
       if (submit) submit.disabled = disabled;
     }
 
     function resetTaskHardwareForm() {
-      const masterToggle = els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]");
-      if (masterToggle) masterToggle.checked = false;
-      const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
-      cards.forEach(card => {
-        const toggle = card.querySelector("[data-hardware-channel-toggle]");
-        if (toggle) toggle.checked = false;
-        card.querySelectorAll("[data-hardware-setting]").forEach(input => {
-          input.value = input.defaultValue || "";
-        });
-        const readEl = card.querySelector('[data-hardware-permission="read"]');
-        const writeEl = card.querySelector('[data-hardware-permission="write"]');
-        if (readEl) readEl.checked = true;
-        if (writeEl) writeEl.checked = false;
+      const form = els.taskHardwareFormEl;
+      const mode = form?.querySelector("[data-hardware-mode]");
+      if (mode) mode.value = "off";
+      const access = form?.querySelector('[data-hardware-permission="access"]');
+      if (access) access.value = "read_only";
+      form?.querySelectorAll("[data-hardware-field]").forEach(input => {
+        input.value = input.defaultValue || "";
       });
     }
 
-    function setTaskHardwareChannels(channels = []) {
-      const byType = new Map((Array.isArray(channels) ? channels : []).map(channel => [String(channel?.type || "").toLowerCase(), channel]));
-      const cards = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [];
-      cards.forEach(card => {
-        const type = String(card.dataset.hardwareChannel || "").toLowerCase();
-        const channel = byType.get(type) || null;
-        const toggle = card.querySelector("[data-hardware-channel-toggle]");
-        if (toggle) toggle.checked = Boolean(channel);
-        const settings = channel?.settings && typeof channel.settings === "object" ? channel.settings : {};
-        card.querySelectorAll("[data-hardware-setting]").forEach(input => {
-          const key = input.dataset.hardwareSetting || "";
-          input.value = settings[key] ?? input.defaultValue ?? "";
-        });
-        const permissions = channel?.permissions || {};
-        const readEl = card.querySelector('[data-hardware-permission="read"]');
-        const writeEl = card.querySelector('[data-hardware-permission="write"]');
-        if (readEl) readEl.checked = channel ? permissions.read !== false : true;
-        if (writeEl) writeEl.checked = Boolean(permissions.write);
-      });
+    function setTaskHardwarePolicy(policy = {}) {
+      const form = els.taskHardwareFormEl;
+      const mode = form?.querySelector("[data-hardware-mode]");
+      if (mode) mode.value = policy.mode || "off";
+      const set = (key, value) => {
+        const input = form?.querySelector(`[data-hardware-field="${key}"]`);
+        if (input) input.value = value ?? input.defaultValue ?? "";
+      };
+      set("serial.device", policy.serial?.device || "");
+      set("serial.baudrate", policy.serial?.baudrate || 115200);
+      set("network.device_ip", policy.network?.device_ip || "");
+      set("credentials.username", policy.credentials?.username || "");
+      set("credentials.password", "");
+      const password = form?.querySelector('[data-hardware-field="credentials.password"]');
+      if (password) {
+        password.placeholder = policy.credentials?.password_configured
+          ? t("task.hardware_password_configured", "Configured — leave blank to keep")
+          : "";
+      }
+      const access = form?.querySelector('[data-hardware-permission="access"]');
+      if (access) access.value = policy.permissions?.access || "read_only";
     }
 
     function renderTaskHardwareEditor(taskArg) {
@@ -498,9 +488,7 @@
         return;
       }
       const policy = helpers.taskHardwareDebugPolicy?.(task) || {};
-      const masterToggle = els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]");
-      if (masterToggle) masterToggle.checked = Boolean(policy.enabled);
-      setTaskHardwareChannels(policy.channels || []);
+      setTaskHardwarePolicy(policy);
       syncTaskHardwareDebugFields({ disabled });
       if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = helpers.taskHardwareDebugSummary?.(task) || "off";
     }
@@ -661,50 +649,27 @@
       await api.loadStatus({ forceTaskHardware: true });
     }
 
-    function readTaskHardwareChannelSettings(card, type) {
-      const settings = {};
-      card.querySelectorAll("[data-hardware-setting]").forEach(input => {
-        const key = input.dataset.hardwareSetting || "";
-        if (!key) return;
-        const raw = String(input.value || "").trim();
-        if (input.type === "number") {
-          settings[key] = Number(raw || input.defaultValue || "0") || Number(input.defaultValue || "0") || 0;
-        } else {
-          settings[key] = raw;
-        }
-      });
-      if (type === "uart" && !settings.baudrate) settings.baudrate = 115200;
-      if (type === "telnet" && !settings.port) settings.port = 23;
-      return settings;
-    }
-
-    function readTaskHardwareChannel(card) {
-      const type = String(card.dataset.hardwareChannel || "").trim().toLowerCase();
-      if (!type || !card.querySelector("[data-hardware-channel-toggle]")?.checked) return null;
-      return {
-        type,
-        settings: readTaskHardwareChannelSettings(card, type),
-        permissions: {
-          read: Boolean(card.querySelector('[data-hardware-permission="read"]')?.checked),
-          write: Boolean(card.querySelector('[data-hardware-permission="write"]')?.checked)
-        }
-      };
-    }
-
     async function saveTaskHardwareConfig() {
       const task = getTaskSettingsTask();
       if (!task) return;
-      const channels = Array.from(els.taskHardwareFormEl?.querySelectorAll("[data-hardware-channel]") || [])
-        .map(readTaskHardwareChannel)
-        .filter(Boolean);
-      const enabled = Boolean(els.taskHardwareFormEl?.querySelector("[data-hardware-master-toggle]")?.checked);
+      const form = els.taskHardwareFormEl;
+      const value = key => String(form?.querySelector(`[data-hardware-field="${key}"]`)?.value || "").trim();
+      const password = String(form?.querySelector('[data-hardware-field="credentials.password"]')?.value || "");
+      const credentials = { username: value("credentials.username") };
+      if (password) credentials.password = password;
+      const hardwareDebug = {
+        mode: String(form?.querySelector("[data-hardware-mode]")?.value || "off"),
+        serial: { device: value("serial.device"), baudrate: Number(value("serial.baudrate") || "115200") || 115200 },
+        network: { device_ip: value("network.device_ip") },
+        credentials,
+        permissions: {
+          access: String(form?.querySelector('[data-hardware-permission="access"]')?.value || "read_only")
+        }
+      };
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-debug`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(api.runScopedPayload({
-          enabled,
-          channels
-        }))
+        body: JSON.stringify(api.runScopedPayload(hardwareDebug))
       }, "Failed to update task hardware debug");
       hardwareEditingUntil = 0;
       await api.loadStatus({ forceTaskHardware: true });
@@ -794,7 +759,7 @@
       els.taskHardwareFormEl?.addEventListener("input", () => markTaskHardwareEditing());
       els.taskHardwareFormEl?.addEventListener("change", event => {
         markTaskHardwareEditing();
-        if (event.target instanceof Element && event.target.matches("[data-hardware-channel-toggle], [data-hardware-master-toggle]")) {
+        if (event.target instanceof Element && event.target.matches("[data-hardware-mode]")) {
           syncTaskHardwareDebugFields();
         }
       });

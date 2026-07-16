@@ -120,8 +120,8 @@ class WebRunApiTests(unittest.TestCase):
                 {
                     "id": "board-debug",
                     "label": "Board Debug",
-                    "path": str(skill_dir / "SKILL.md"),
-                    "source": "aha_home",
+                    "path": str(root / "knowledge" / "skills" / "board-debug" / "SKILL.md"),
+                    "source": "knowledge",
                 }
             ],
         )
