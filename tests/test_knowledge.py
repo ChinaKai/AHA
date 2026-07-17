@@ -78,7 +78,8 @@ def test_slugify_ascii_and_non_ascii():
 def test_normalize_git_remote_equivalence():
     ssh = normalize_git_remote("git@github.com:user/repo.git")
     https = normalize_git_remote("https://github.com/user/repo")
-    assert ssh == https == "github.com/user/repo"
+    ssh_443 = normalize_git_remote("ssh://git@ssh.github.com:443/user/repo.git")
+    assert ssh == https == ssh_443 == "github.com/user/repo"
 
 
 def _make_git_workspace(path: Path, remote: str) -> Path:
@@ -94,9 +95,11 @@ def _make_git_workspace(path: Path, remote: str) -> Path:
 def test_project_key_stable_across_paths_for_same_remote(tmp_path: Path):
     ws_a = _make_git_workspace(tmp_path / "a", "git@github.com:user/repo.git")
     ws_b = _make_git_workspace(tmp_path / "b", "https://github.com/user/repo")
+    ws_c = _make_git_workspace(tmp_path / "c", "ssh://git@ssh.github.com:443/user/repo.git")
     key_a = project_key(ws_a)
     key_b = project_key(ws_b)
-    assert key_a == key_b
+    key_c = project_key(ws_c)
+    assert key_a == key_b == key_c
     assert key_a.startswith("repo-git-")
     aliases = project_key_aliases(ws_a)
     assert aliases[0] == key_a

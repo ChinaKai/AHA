@@ -152,6 +152,8 @@ def normalize_git_remote(remote: str) -> str:
         stripped = re.sub(r"^[^@/]+@", "", stripped)  # drop userinfo
         host, _, path = stripped.partition("/")
     host = host.lower().strip("/")
+    if host in {"github.com:443", "ssh.github.com", "ssh.github.com:443"}:
+        host = "github.com"
     path = path.strip("/").lower()
     return f"{host}/{path}" if path else host
 
