@@ -12,7 +12,11 @@ from aha_cli.cli import append_message, main
 from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.services import headroom_integration
 from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
-from aha_cli.services.context_planner import _task_worklog_reference
+from aha_cli.services.context_planner import (
+    _project_kind_reference,
+    _related_project_references,
+    _task_worklog_reference,
+)
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -21,6 +25,7 @@ from aha_cli.store.filesystem import (
     read_json,
     run_dir,
     status_snapshot,
+    task_snapshot,
     update_task_hardware_debug_config,
     update_task_proxy_config,
     update_task_skills_config,
@@ -28,7 +33,7 @@ from aha_cli.store.filesystem import (
     update_task_token_saving_config,
     write_json,
 )
-from aha_cli.store.knowledge import entry_dir, write_entry
+from aha_cli.store.knowledge import entry_dir, knowledge_root, write_entry
 from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.store.paths import config_path
 
@@ -419,6 +424,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Nav prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                task_created_date = str(task_snapshot(aha_root, run_id, "task-001")["task"]["created_at"])[:10].replace("-", "")
                 cfg = read_json(config_path(aha_root))
                 cfg["knowledge"]["enabled"] = True
                 write_json(config_path(aha_root), cfg)
@@ -430,7 +436,22 @@ class ChatPromptTests(unittest.TestCase):
                     {"sender": "browser", "message": "where is foo_probe", "task_id": "task-001", "role": "main"},
                     "",
                 )
-                update_task_token_saving_config(aha_root, run_id, "task-001", enabled=True, provider="nav")
+                kb_root = knowledge_root(aha_root, cfg)
+                related_nav = entry_dir(kb_root, "project", "navigation", "related-project")
+                related_solutions = entry_dir(kb_root, "project", "solutions", "related-project")
+                related_worklogs = entry_dir(kb_root, "project", "worklog", "related-project")
+                related_nav.mkdir(parents=True)
+                related_solutions.mkdir(parents=True)
+                related_worklogs.mkdir(parents=True)
+                (related_nav / "index.md").write_text("related private body", encoding="utf-8")
+                update_task_token_saving_config(
+                    aha_root,
+                    run_id,
+                    "task-001",
+                    enabled=True,
+                    provider="nav",
+                    related_project_keys=["related-project"],
+                )
                 enabled_prompt = chat_prompt(
                     aha_root,
                     run_id,
@@ -443,9 +464,17 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("AHA Knowledge/Nav Pull Contract:", enabled_prompt)
         self.assertIn("Knowledge base entrypoints:", enabled_prompt)
         self.assertIn("agent-pull", enabled_prompt)
+        self.assertRegex(enabled_prompt, r"project_solutions: projects/[^\n]+/solutions \(not found yet\)")
+        self.assertRegex(enabled_prompt, r"project_worklogs: projects/[^\n]+/worklog \(not found yet\)")
+        self.assertIn("Related knowledge projects (task-selected, direct only):", enabled_prompt)
+        self.assertIn("- project_key: related-project", enabled_prompt)
+        self.assertIn("navigation_index: projects/related-project/navigation/index.md (exists)", enabled_prompt)
+        self.assertIn("project_solutions: projects/related-project/solutions (exists)", enabled_prompt)
+        self.assertIn("project_worklogs: projects/related-project/worklog (exists)", enabled_prompt)
+        self.assertNotIn("related private body", enabled_prompt)
         self.assertIn("task_worklog:", enabled_prompt)
-        expected_month_path = f"{run_id[:4]}/{run_id[4:6]}"
-        expected_date_prefix = run_id[:8]
+        expected_month_path = f"{task_created_date[:4]}/{task_created_date[4:6]}"
+        expected_date_prefix = task_created_date
         expected_title_slug = "Map-the-relevant-files-concepts-and-terminology-for-the-goal"
         expected_worklog = f"worklog/tasks/{expected_month_path}/{expected_date_prefix}-{expected_title_slug}.md"
         self.assertIn(expected_worklog, enabled_prompt)
@@ -471,8 +500,53 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("directly edit the approved KB Markdown files", enabled_prompt)
         self.assertIn("then update or create the project navigation entry with the verified files", enabled_prompt)
         self.assertIn("Manual `/aha kb` feedback is only for candidate-review flows", enabled_prompt)
+        self.assertIn("inspect filenames and JSON frontmatter first", enabled_prompt)
+        self.assertIn("Do not traverse or read every historical entry", enabled_prompt)
         self.assertNotIn("Project map", enabled_prompt)
         self.assertNotIn("drivers/net/foo.c", enabled_prompt)
+
+    def test_project_history_references_prefer_existing_project_key_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            kb_root = Path(tmp) / "knowledge"
+            canonical_key = "repo-git-new"
+            legacy_key = "git-old"
+            solutions_dir = entry_dir(kb_root, "project", "solutions", legacy_key)
+            worklogs_dir = entry_dir(kb_root, "project", "worklog", legacy_key)
+            solutions_dir.mkdir(parents=True)
+            worklogs_dir.mkdir(parents=True)
+
+            solutions_rel, solutions_exist = _project_kind_reference(
+                kb_root, [canonical_key, legacy_key], "solutions"
+            )
+            worklogs_rel, worklogs_exist = _project_kind_reference(
+                kb_root, [canonical_key, legacy_key], "worklog"
+            )
+
+        self.assertTrue(solutions_exist)
+        self.assertTrue(worklogs_exist)
+        self.assertEqual(solutions_rel, f"projects/{legacy_key}/solutions")
+        self.assertEqual(worklogs_rel, f"projects/{legacy_key}/worklog")
+
+    def test_related_project_reference_exposes_selected_paths_without_reading_bodies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            kb_root = Path(tmp) / "knowledge"
+            related_key = "project-b"
+            nav_dir = entry_dir(kb_root, "project", "navigation", related_key)
+            nav_dir.mkdir(parents=True)
+            (nav_dir / "index.md").write_text("private related body", encoding="utf-8")
+            references = _related_project_references(
+                kb_root,
+                current_project_key="project-a",
+                related_project_keys=[related_key],
+            )
+
+        self.assertNotIn("relation", references[0])
+        self.assertNotIn("note", references[0])
+        self.assertEqual(
+            references[0]["navigation_index"],
+            f"projects/{related_key}/navigation/index.md",
+        )
+        self.assertNotIn("body", str(references))
 
     def test_task_worklog_reference_uses_month_directory_and_title_filename(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -836,6 +910,8 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("AHA Knowledge/Nav Pull Contract:", prompt)
         self.assertIn("Knowledge base entrypoints:", prompt)
         self.assertIn("navigation_index:", prompt)
+        self.assertIn("project_solutions:", prompt)
+        self.assertIn("project_worklogs:", prompt)
         self.assertIn("task_worklog:", prompt)
         self.assertIn("task_worklog_frontmatter_json:", prompt)
         self.assertIn('"type":"task_worklog"', prompt)
@@ -954,6 +1030,8 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("bin/bash", prompt)
         pack_evidence = metrics["context_pack_evidence"]
         self.assertNotIn("task_evidence", pack_evidence)
+        self.assertIn("project_solutions", pack_evidence["knowledge"])
+        self.assertIn("project_worklogs", pack_evidence["knowledge"])
         self.assertIn("task_worklog", pack_evidence["knowledge"])
 
     def test_chat_prompt_redacts_proxy_values_from_status_context(self) -> None:

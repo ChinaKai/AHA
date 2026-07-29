@@ -8,7 +8,14 @@ from pathlib import Path
 from aha_cli.domain.models import normalize_task_token_saving
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import load_config
-from aha_cli.store.knowledge import NAVIGATION_SLUG, entry_dir, knowledge_config, knowledge_root, project_key_aliases
+from aha_cli.store.knowledge import (
+    NAVIGATION_SLUG,
+    entry_dir,
+    knowledge_config,
+    knowledge_root,
+    resolved_project_identity,
+)
+from aha_cli.store.project_identity import read_project_manifest
 from aha_cli.store.runs import require_plan
 
 
@@ -42,9 +49,9 @@ def context_pack_payload_for_turn(
     """Build a stable KB/navigation pull contract for token-saving tasks.
 
     The pack is deliberately best-effort and read-only. It provides navigation
-    entrypoints and maintenance rules, but does not retrieve keyword-matched KB
-    entries, inject task history/evidence recap, summarize the user request, or
-    scan the workspace during prompt assembly.
+    and project-history entrypoints plus maintenance rules, but does not retrieve
+    keyword-matched KB entries, inject task history/evidence recap, summarize
+    the user request, or scan the workspace during prompt assembly.
     """
     del user_message
     try:
@@ -93,11 +100,29 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
     if not cfg.get("enabled"):
         return {}
     try:
-        project_keys = project_key_aliases(workspace, goal=_plan_goal(root, run_id))
+        identity = resolved_project_identity(
+            root, config, workspace, goal=_plan_goal(root, run_id)
+        )
+        project_keys = list(identity.get("aliases") or [identity["project_key"]])
         kb_root = knowledge_root(root, config)
         nav_rel, nav_exists = _navigation_index_reference(kb_root, project_keys)
+        solutions_rel, solutions_exist = _project_kind_reference(kb_root, project_keys, "solutions")
+        project_worklogs_rel, project_worklogs_exist = _project_kind_reference(kb_root, project_keys, "worklog")
         worklog_rel, worklog_exists = _task_worklog_reference(kb_root, project_keys, run_id, task)
         worklog_frontmatter = _task_worklog_frontmatter(project_keys[0], run_id, task)
+        token_saving = normalize_task_token_saving(
+            task.get("token_saving"),
+            task.get("context_management"),
+        )
+        related_projects = _related_project_references(
+            kb_root,
+            current_project_key=project_keys[0],
+            related_project_keys=[
+                key
+                for key in (token_saving.get("related_project_keys") or [])
+                if key not in project_keys
+            ],
+        )
         text = "\n".join(
             [
                 "Knowledge base entrypoints:",
@@ -105,14 +130,19 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
                 f"- project_key: {project_keys[0]}",
                 *([f"- project_key_aliases: {', '.join(project_keys[1:])}"] if len(project_keys) > 1 else []),
                 f"- navigation_index: {nav_rel or '-'} ({'exists' if nav_exists else 'not found yet'})",
+                f"- project_solutions: {solutions_rel or '-'} ({'exists' if solutions_exist else 'not found yet'})",
+                f"- project_worklogs: {project_worklogs_rel or '-'} ({'exists' if project_worklogs_exist else 'not found yet'})",
                 *([f"- task_worklog: {worklog_rel} ({'exists' if worklog_exists else 'not found yet'})"] if worklog_rel else []),
                 *([f"- task_worklog_frontmatter_json: {worklog_frontmatter}"] if worklog_frontmatter else []),
+                *_related_project_reference_lines(related_projects),
                 "- New approved KB Markdown must use one JSON object frontmatter between `---` fences; do not use YAML frontmatter.",
                 "- Every approved project navigation Markdown frontmatter must explicitly include `\"type\":\"navigation\"`, the correct `\"project_key\"`, a normalized `\"slug\"`, and the matching `\"navigation_role\"`; do not infer metadata from the path. `navigation/index.md` must contain `\"slug\":\"index\"` and `\"navigation_role\":\"index\"`.",
                 "- Navigation hierarchy: keep index as the top-level router, group detailed docs under parent module/flow docs, and ensure every non-index nav doc is reachable through direct parent links.",
                 "- Start with navigation/index for broad orientation, then choose modules/* or flows/* yourself.",
                 "- If navigation_index is not found yet, create a minimal evidence-based navigation/index.md during the task after verifying source entrypoints.",
-                "- Read solutions/wiki only when the current task is semantically similar; skip irrelevant entries.",
+                "- project_solutions contains historical project conclusions and reusable fixes; project_worklogs contains historical task records. Use them as optional reference when the current task needs prior decisions, background, or verification context.",
+                "- For project_solutions and project_worklogs, inspect filenames and JSON frontmatter first, then read only the smallest relevant files. Do not traverse or read every historical entry.",
+                "- Related knowledge projects are task-selected direct references only. Do not recursively expand to other projects. Current source and the current project's KB take precedence over related-project knowledge.",
                 "- Required first action: if task_worklog is shown as not found yet, create it at the supplied path with task_worklog_frontmatter_json before repository inspection, analysis, implementation, or delegation; after the file exists, continue the task.",
                 "- Update task_worklog in real time as plans, progress, decisions, requirement changes, verification, or KB/nav updates happen. Do not wait until task end.",
                 "- Keep project navigation/solutions current during the task when current evidence proves a durable route, reusable diagnostic, fix, stale entry, or missing entry.",
@@ -126,6 +156,11 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
             "kb_root": str(kb_root),
             "navigation_index": nav_rel,
             "navigation_index_exists": nav_exists,
+            "project_solutions": solutions_rel,
+            "project_solutions_exist": solutions_exist,
+            "project_worklogs": project_worklogs_rel,
+            "project_worklogs_exist": project_worklogs_exist,
+            "related_projects": related_projects,
             "task_worklog": worklog_rel,
             "task_worklog_exists": worklog_exists,
             "mode": "agent_pull",
@@ -145,6 +180,66 @@ def _navigation_index_reference(kb_root: Path, project_keys: list[str]) -> tuple
         if (kb_root / rel).exists():
             return rel_text, True
     return fallback, False
+
+
+def _project_kind_reference(kb_root: Path, project_keys: list[str], kind: str) -> tuple[str, bool]:
+    fallback = ""
+    for key in project_keys:
+        path = entry_dir(kb_root, "project", kind, key)
+        rel_text = path.relative_to(kb_root).as_posix()
+        if not fallback:
+            fallback = rel_text
+        if path.is_dir():
+            return rel_text, True
+    return fallback, False
+
+
+def _related_project_references(
+    kb_root: Path,
+    *,
+    current_project_key: str,
+    related_project_keys: list[str],
+) -> list[dict]:
+    references: list[dict] = []
+    for key in related_project_keys:
+        if key == current_project_key:
+            continue
+        try:
+            manifest = read_project_manifest(kb_root, key)
+        except (OSError, ValueError):
+            manifest = None
+        aliases = [key, *list((manifest or {}).get("legacy_keys") or [])]
+        nav_rel, nav_exists = _navigation_index_reference(kb_root, aliases)
+        solutions_rel, solutions_exist = _project_kind_reference(kb_root, aliases, "solutions")
+        worklogs_rel, worklogs_exist = _project_kind_reference(kb_root, aliases, "worklog")
+        references.append({
+            "project_key": key,
+            "display_name": str((manifest or {}).get("display_name") or key),
+            "available": (kb_root / "projects" / key).is_dir(),
+            "navigation_index": nav_rel,
+            "navigation_index_exists": nav_exists,
+            "project_solutions": solutions_rel,
+            "project_solutions_exist": solutions_exist,
+            "project_worklogs": worklogs_rel,
+            "project_worklogs_exist": worklogs_exist,
+        })
+    return references
+
+
+def _related_project_reference_lines(projects: list[dict]) -> list[str]:
+    if not projects:
+        return []
+    lines = ["Related knowledge projects (task-selected, direct only):"]
+    for project in projects:
+        lines.extend([
+            f"- project_key: {project['project_key']}",
+            f"  display_name: {project['display_name']}",
+            f"  available: {'yes' if project.get('available') else 'no'}",
+            f"  navigation_index: {project['navigation_index'] or '-'} ({'exists' if project.get('navigation_index_exists') else 'not found'})",
+            f"  project_solutions: {project['project_solutions'] or '-'} ({'exists' if project.get('project_solutions_exist') else 'not found'})",
+            f"  project_worklogs: {project['project_worklogs'] or '-'} ({'exists' if project.get('project_worklogs_exist') else 'not found'})",
+        ])
+    return lines
 
 
 def _safe_worklog_component(value: str, fallback: str, max_length: int = 80) -> str:

@@ -128,6 +128,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "token_saving": {
                                 "enabled": True,
                                 "provider": "nav",
+                                "related_project_keys": ["project-b", "project-c"],
                             },
                         },
                     )
@@ -138,6 +139,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
         self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
+        self.assertEqual(body["task"]["token_saving"]["related_project_keys"], ["project-b", "project-c"])
         self.assertEqual(status["tasks"][-1]["token_saving"], body["task"]["token_saving"])
 
     def test_api_task_create_persists_codex_default_model_for_empty_ui_model(self) -> None:
@@ -1958,6 +1960,7 @@ class WebTaskApiTests(unittest.TestCase):
                         payload={
                             "enabled": True,
                             "provider": "nav",
+                            "related_project_keys": ["project-b", "project-c", "project-b"],
                         },
                     )
                 )
@@ -1968,6 +1971,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
         self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
+        self.assertEqual(body["task"]["token_saving"]["related_project_keys"], ["project-b", "project-c"])
         self.assertEqual(snapshot["tasks"][0]["token_saving"], body["task"]["token_saving"])
 
     def test_task_token_saving_api_accepts_enable_without_headroom(self) -> None:

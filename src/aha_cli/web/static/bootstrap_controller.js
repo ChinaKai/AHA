@@ -65,13 +65,27 @@
       `;
     }
 
+    function renderBootstrapLoadingState() {
+      if (elements.panelEl?.querySelector("[data-bootstrap-loading]")) return;
+      elements.panelEl.innerHTML = `
+        <div class="empty" data-bootstrap-loading>
+          <span>Loading AHA...</span>
+        </div>
+      `;
+    }
+
     function renderFirstRunState(force = false) {
       const error = deps.bootstrapError?.() || "";
       if (error) {
         renderBootstrapError(error);
         return;
       }
-      if (!deps.bootstrapData?.()?.initialized) {
+      const data = deps.bootstrapData?.();
+      if (!data) {
+        renderBootstrapLoadingState();
+        return;
+      }
+      if (!data.initialized) {
         renderBootstrapConfigState(force);
         return;
       }
@@ -187,6 +201,7 @@
       removeConfigRow,
       renderBootstrapConfigState,
       renderBootstrapError,
+      renderBootstrapLoadingState,
       renderFirstRunState,
       saveConfigForm,
       syncModelOptions

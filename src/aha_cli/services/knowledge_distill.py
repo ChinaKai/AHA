@@ -34,8 +34,9 @@ from aha_cli.store.knowledge import (
     init_knowledge_base,
     knowledge_config,
     normalize_entry_slug,
-    project_key,
     read_entry,
+    resolved_project_identity,
+    resolved_project_key_aliases,
     slugify,
     type_for_kind,
     write_entry_preserving_navigation,
@@ -243,9 +244,9 @@ def _prior_entries_for_distill(
         return []
     try:
         from aha_cli.services.knowledge_retrieval import _terms, retrieve_for_task
-        from aha_cli.store.knowledge import project_key_aliases
-
-        keys = project_key_aliases(Path(workspace_path), goal=goal)
+        keys = resolved_project_key_aliases(
+            root, config, Path(workspace_path), goal=goal
+        )
         return retrieve_for_task(
             root,
             config,
@@ -1126,7 +1127,11 @@ def distill_after_finalize(
         config = config_for(root)
         if not knowledge_config(config).get("enabled"):
             return {"ok": True, "skipped": "knowledge disabled"}
-        key = project_key(Path(workspace_path), goal=goal) if workspace_path else None
+        key = (
+            resolved_project_identity(root, config, Path(workspace_path), goal=goal)["project_key"]
+            if workspace_path
+            else None
+        )
         if not key:
             return {"ok": True, "skipped": "no workspace for project key"}
         context = build_distill_context(
@@ -1170,7 +1175,11 @@ def distill_after_kb_command(
         config = config_for(root)
         if not knowledge_config(config).get("enabled"):
             return {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
-        key = project_key(Path(workspace_path), goal=goal) if workspace_path else None
+        key = (
+            resolved_project_identity(root, config, Path(workspace_path), goal=goal)["project_key"]
+            if workspace_path
+            else None
+        )
         context = build_distill_context(
             final_body=visible_reply,
             final_context=None,
@@ -1206,7 +1215,11 @@ def distill_after_nav_command(
         config = config_for(root)
         if not knowledge_config(config).get("enabled"):
             return {"ok": True, "skipped": "knowledge disabled", "candidates": 0}
-        key = project_key(Path(workspace_path), goal=goal) if workspace_path else None
+        key = (
+            resolved_project_identity(root, config, Path(workspace_path), goal=goal)["project_key"]
+            if workspace_path
+            else None
+        )
         if not key:
             return {"ok": True, "skipped": "no workspace for project key", "candidates": 0}
         context = build_distill_context(
@@ -1246,7 +1259,11 @@ def distill_after_memo_report(
         config = config_for(root)
         if not knowledge_config(config).get("enabled"):
             return {"ok": True, "skipped": "knowledge disabled"}
-        key = project_key(Path(workspace_path), goal=goal) if workspace_path else None
+        key = (
+            resolved_project_identity(root, config, Path(workspace_path), goal=goal)["project_key"]
+            if workspace_path
+            else None
+        )
         if not key:
             return {"ok": True, "skipped": "no workspace for project key"}
         context = build_distill_context(

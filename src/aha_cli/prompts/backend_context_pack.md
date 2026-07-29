@@ -1,6 +1,6 @@
 AHA Knowledge/Nav Pull Contract:
 - purpose: token-saving KB/navigation usage and maintenance rules
-- mode: agent-pull; AHA provides entrypoints and rules, not keyword-selected KB content, task history, or evidence recap
+- mode: agent-pull; AHA provides entrypoints and rules, not keyword-selected KB content, task-history bodies, or evidence recap
 
 Use this contract before broad repository search. Decide semantic relevance yourself from the user's request. Read exact source files before analysis or edits.
 
@@ -10,6 +10,8 @@ Current-task evidence protocol:
 - Self-growth/self-repair is current-task incremental CRUD only.
 - If navigation_index is not found yet, create a minimal project navigation/index.md after the first verified source pass; keep it small and evidence-based, then grow it incrementally.
 - If nav fails to locate the relevant code, or points to stale/wrong paths, first find and verify the real source path, then update or create the project navigation entry with the verified files, entrypoints, flow, and validation command.
+- `project_solutions` and `project_worklogs` are optional historical reference directories. Inspect filenames and JSON frontmatter first, then read only the smallest relevant files when prior conclusions, decisions, background, or verification details would help; do not traverse or read all history.
+- Related knowledge projects are explicit task selections. Use only their direct entrypoints when relevant, do not recursively expand to other projects, and prefer the current source and current-project KB when knowledge conflicts.
 - For project-scoped navigation/solutions/worklog, directly edit the approved KB Markdown files when current task evidence proves a fix, durable project route, reusable diagnostic, or durable task progress; agent owns knowledge maintenance and should keep KB current during the task.
 - Write project-scoped KB Markdown (navigation/solutions/worklog) in Chinese by default; keep code identifiers, paths, commands, and schema fields literal.
 - Required first action: if `task_worklog` is shown as `not found yet`, create it at the exact supplied path with the supplied JSON frontmatter before repository inspection, analysis, implementation, or delegation; after the file exists, continue the task.
@@ -28,5 +30,5 @@ $knowledge_reference
 
 Agent workflow:
 - For broad project orientation, read navigation/index first when it exists, then choose the smallest relevant modules/* or flows/* docs yourself.
-- Skip irrelevant KB/wiki/solutions entries. Do not use knowledge just because it exists.
-- Trust order: current user request > current source and command output > current task evidence > project navigation > project solutions > general wiki.
+- Skip irrelevant KB/wiki/solutions/worklog entries. Do not use knowledge just because it exists.
+- Trust order: current user request > current source and command output > current task evidence > current project navigation > current project solutions > selected related-project navigation/solutions > relevant historical worklogs > general wiki.

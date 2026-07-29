@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from aha_cli.domain.models import task_metadata_projection
+from aha_cli.domain.models import normalize_task_token_saving, task_metadata_projection
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import create_plan, status_snapshot
 from aha_cli.store.io import write_json
@@ -12,6 +12,26 @@ from aha_cli.store.runs import require_plan
 
 
 class TaskSchemaTests(unittest.TestCase):
+    def test_task_token_saving_normalizes_related_project_keys(self) -> None:
+        policy = normalize_task_token_saving({
+            "enabled": True,
+            "related_project_keys": [
+                "project-b",
+                "project-b",
+                "bad/key",
+                "project-c",
+                "project-d",
+                "project-e",
+                "project-f",
+                "project-g",
+            ],
+        })
+
+        self.assertEqual(
+            policy["related_project_keys"],
+            ["project-b", "project-c", "project-d", "project-e", "project-f"],
+        )
+
     def test_task_metadata_projection_normalizes_legacy_fields(self) -> None:
         projection = task_metadata_projection(
             {
@@ -46,6 +66,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(projection["context_management"]["auto_compact_threshold_percent"], 88)
         self.assertTrue(projection["token_saving"]["enabled"])
         self.assertEqual(projection["token_saving"]["provider"], "nav")
+        self.assertEqual(projection["token_saving"]["related_project_keys"], [])
         self.assertFalse(projection["observe_proxy"]["enabled"])
         self.assertEqual(projection["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md"])
         self.assertEqual(projection["hardware_debug"]["mode"], "serial")
@@ -145,6 +166,7 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertFalse(enriched_task["context_management"]["auto_compact_enabled"])
         self.assertFalse(enriched_task["token_saving"]["enabled"])
         self.assertEqual(enriched_task["token_saving"]["provider"], "nav")
+        self.assertEqual(enriched_task["token_saving"]["related_project_keys"], [])
         self.assertFalse(enriched_task["observe_proxy"]["enabled"])
         self.assertEqual(enriched_task["hardware_debug"]["mode"], "off")
         self.assertEqual(enriched_task["hardware_debug"]["permissions"], {"access": "read_only"})

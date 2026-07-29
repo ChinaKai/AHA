@@ -50,7 +50,7 @@
 │       └── <slug>.md
 └── projects/
     └── <project-key>/            # 项目分区
-        ├── project.json          # 项目元信息（名称、workspace 指纹、别名）
+        ├── project.json          # 同步项目身份（稳定 key、Git identities、旧 key）
         ├── navigation/
         │   ├── index.md          # 小入口：项目介绍 + 模块/流程文档链接
         │   ├── modules/
@@ -74,12 +74,20 @@
 需要一个**稳定**且**可迁移**的项目标识，不能用绝对路径（换机器就失效）。
 
 策略（按优先级）：
-1. 若 workspace 是 git 仓库 → 用 repo 名 + `remote origin` URL 规范化后的 hash，例如 `aha-git-<hash>`（跨机器一致，同时可读）。
-2. 否则 → 用 run goal + workspace 目录名生成 slug。
-3. `project.json` 记录所有曾见过的 workspace 路径作为「别名」，便于人工核对与合并。
+1. 将当前 `remote origin` 规范化后，优先匹配同步知识库 `projects/*/project.json` 的 `git_identities`；命中时使用 manifest 中稳定的 `project_key`。
+2. 未命中 manifest 且 workspace 是 git 仓库 → 用 repo 名 + normalized origin hash 推导，例如 `aha-git-<hash>`。
+3. 非 git workspace → 用 run goal + workspace 目录名生成 slug。
+4. Web 的 Project Identity 面板允许把当前 normalized origin 绑定到已有 Knowledge Project；绑定只修改同步知识库，不向 workspace 仓库写 AHA 文件。
 
 > 边界：同一项目在不同机器/路径下应映射到同一 project-key。git remote 优先正是为此。
 > 兼容：旧版本写入的 `git-<hash>` 目录作为 legacy alias 继续参与检索，不强制迁移。
+> 改名：仓库或 remote 改名后需要在任一客户端手动绑定一次；`project.json` 同步后，其他客户端会自动命中新增 identity。
+
+关联知识库采用任务级手选，不写入 `project.json`：
+
+- New Task 在 AHA KB 子选项中选择最多 5 个项目，并保存到 task `token_saving.related_project_keys`。
+- Task Settings 修改当前任务的选择快照；Project Identity 只负责稳定识别当前项目，不维护默认关联。
+- AHA KB 只向 agent 暴露所选项目的 navigation/solutions/worklog 入口，不递归、不枚举或注入历史正文。
 
 ---
 
@@ -342,6 +350,8 @@ task 收尾 / round finalize 或 memo completion report 完成
 | 2026-06-19 | Phase 1 | 配置块 + `store/knowledge.py` + `aha kb init/status` + 12 单测；frontmatter 改用 JSON（零依赖） | 改动：constants.py, domain/models.py, store/config.py, store/paths.py, store/knowledge.py(新), cli_parser.py, cli.py, tests/test_knowledge.py(新)。全测试绿。 |
 | 2026-06-19 | Phase 1 | 收口修复：project_key 无 git fallback 去除绝对路径 hash（改为对 goal+目录名 basis 取 hash，可迁移）；第 10 节改为「已确认决策 + 后续待定」消除与顶部/第 8 节冲突；新增可迁移性单测 | 13 单测全绿，已提交 Phase 1 checkpoint `5d0866b` |
 | 2026-06-19 | Follow-up | project_key git 格式改为 `<repo-name>-git-<hash>`，检索兼容旧 `git-<hash>`；知识库 entries 改为原卡片内 View/Close 展开，避免重复标题 | 用户体验/可读性修复 |
+| 2026-07-28 | Follow-up | 新增同步 `projects/<project-key>/project.json` identity manifest；task/nav/distill 统一 manifest 优先解析；Knowledge Web 支持把当前 Git origin 绑定到已有 project | 原仓库零 AHA 文件；remote 改名只需绑定一次并随 KB 多端同步 |
+| 2026-07-29 | Follow-up | New Task/Task Settings 支持任务级手选关联 KB；Context Pack 仅输出所选项目入口 | Project Identity 不保存默认关联，task 保存实际选择快照，不做自动正文检索 |
 | 2026-06-19 | Follow-up | memo completion report 成功生成后接入知识沉淀；distill 时附带本项目命中的既有知识摘要，候选中提示审核时更新/废弃冲突旧条目 | 完善生产入口与消费后的更新复核线 |
 | 2026-06-20 | Follow-up | Web entries 支持 project-key 模糊过滤与标题/标签/正文搜索；heuristic 改为保留 Markdown 结构、抽取高价值章节，不再硬截断存储正文 | 修复知识库可查性与候选内容质量 |
 | 2026-06-20 | Follow-up | final/report 提示词支持 knowledge sidecar；AHA 写入 final/report 前剥离 sidecar 并以 sidecar 优先生成候选；pending 按 source_group + normalized title 幂等合并 | 明确 final/report/KB 三层心智模型，解决执行顺序与重复执行问题 |

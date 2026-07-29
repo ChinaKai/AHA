@@ -406,6 +406,11 @@
     .kb-project-nav-controls #nav-model { min-width: 180px; }
     .kb-project-nav-controls #nav-effort { min-width: 120px; }
     .kb-project-nav-controls button { flex: 0 0 auto; }
+    .kb-project-identity-panel { display: grid; gap: 8px; }
+    .kb-project-identity-panel .kb-row { margin: 0; }
+    .kb-project-identity-panel select { min-width: min(360px, 100%); }
+    .kb-project-identity-summary { display: grid; gap: 4px; }
+    .kb-project-identity-summary code { overflow-wrap: anywhere; white-space: normal; }
     .kb-toast {
       position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
       width: max-content; max-width: calc(100vw - 24px);
@@ -534,6 +539,20 @@
   </section>
 
   <section id="tab-navigation" hidden>
+    <div id="project-identity-panel" class="kb-card kb-project-identity-panel">
+      <h3 data-i18n="knowledge.project_identity">Project identity</h3>
+      <div class="kb-muted" data-i18n="knowledge.project_identity_hint">Bind this workspace's Git origin to a stable project stored in the synchronized knowledge base.</div>
+      <div class="kb-row">
+        <select id="identity-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
+        <input id="identity-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
+      </div>
+      <div id="project-identity-summary" class="kb-project-identity-summary kb-muted"></div>
+      <div class="kb-row">
+        <select id="project-identity-target" aria-label="Knowledge project" data-i18n-aria-label="knowledge.project_identity_target"></select>
+        <button class="button-ghost" id="project-identity-bind" type="button" data-i18n="knowledge.project_identity_bind">Bind current repository</button>
+      </div>
+      <div id="project-identity-result" class="kb-muted"></div>
+    </div>
     <div id="project-nav-panel" class="kb-card kb-project-nav-panel" hidden>
       <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
       <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Project navigation is maintained by agents during token-saving tasks.</div>
@@ -818,7 +837,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", projectIdentity: null, projectIdentityProjects: [], projectIdentityError: "", projectIdentityRequestSeq: 0, skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -833,6 +852,7 @@
       for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
       if (tab === "navigation") {
         loadNavigation();
+        loadProjectIdentity();
       }
       if (tab === "pending") loadPending();
       if (tab === "capture") loadCapture();
@@ -1067,8 +1087,144 @@
         state.defaultWorkspacePath = payload.default_workspace_path || "";
         state.workspaces = Array.isArray(payload.workspaces) ? payload.workspaces : [];
         renderProjectNavWorkspaceSelect();
+        renderProjectIdentityWorkspaceSelect();
+        await loadProjectIdentity();
       } catch (e) {
         $("#nav-result").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message);
+      }
+    }
+
+    function syncProjectIdentityCustomWorkspace() {
+      const select = $("#identity-workspace-select");
+      const custom = $("#identity-workspace-custom");
+      if (!select || !custom) return;
+      custom.classList.toggle("hidden", select.value !== "__custom__");
+    }
+
+    function renderProjectIdentityWorkspaceSelect() {
+      const select = $("#identity-workspace-select");
+      const customInput = $("#identity-workspace-custom");
+      if (!select || !customInput) return;
+      const previous = select.value;
+      select.innerHTML = "";
+      for (const workspace of state.workspaces) {
+        if (!workspace?.path) continue;
+        const option = document.createElement("option");
+        option.value = workspace.path;
+        option.textContent = workspace.label || workspace.name || workspace.path;
+        select.appendChild(option);
+      }
+      const custom = document.createElement("option");
+      custom.value = "__custom__";
+      custom.textContent = t("task.workspace_custom", "Custom path...");
+      select.appendChild(custom);
+      const preferred = state.workspaces.find(item => item.path === previous) || state.workspaces[0];
+      if (preferred?.path) {
+        select.value = preferred.path;
+      } else {
+        select.value = "__custom__";
+        if (!customInput.value && state.defaultWorkspacePath) customInput.value = state.defaultWorkspacePath;
+      }
+      syncProjectIdentityCustomWorkspace();
+    }
+
+    function selectedProjectIdentityWorkspacePath() {
+      const select = $("#identity-workspace-select");
+      if (!select) return "";
+      if (select.value === "__custom__") return $("#identity-workspace-custom").value.trim();
+      return select.value.trim();
+    }
+
+    function projectEntryCount(project) {
+      return Object.values(project?.counts || {}).reduce((total, value) => total + Number(value || 0), 0);
+    }
+
+    function renderProjectIdentity() {
+      const summary = $("#project-identity-summary");
+      const target = $("#project-identity-target");
+      const bind = $("#project-identity-bind");
+      if (!summary || !target || !bind) return;
+      const identity = state.projectIdentity;
+      if (!identity) {
+        summary.textContent = state.projectIdentityError || t("knowledge.project_identity_loading", "Loading project identity...");
+      } else {
+        const sourceLabels = {
+          manifest: t("knowledge.project_identity_source_manifest", "Synchronized manifest"),
+          derived_git: t("knowledge.project_identity_source_derived", "Derived from Git origin"),
+          workspace_fallback: t("knowledge.project_identity_source_workspace", "Derived from workspace"),
+          ambiguous: t("knowledge.project_identity_source_ambiguous", "Ambiguous binding")
+        };
+        summary.innerHTML = `
+          <span>${esc(t("knowledge.project_identity_resolved", "Resolved key"))}: <code>${esc(identity.project_key || "-")}</code></span>
+          <span>${esc(t("knowledge.project_identity_source", "Source"))}: ${esc(sourceLabels[identity.source] || identity.source || "-")}</span>
+          <span>${esc(t("knowledge.project_identity_git", "Git identity"))}: <code>${esc(identity.git_identity || "-")}</code></span>`;
+      }
+      const previous = target.value;
+      target.innerHTML = state.projectIdentityProjects.map(project => {
+        const label = `${project.display_name || project.project_key} · ${project.project_key} · ${projectEntryCount(project)} entries`;
+        return `<option value="${esc(project.project_key)}">${esc(label)}</option>`;
+      }).join("");
+      const values = [...target.options].map(option => option.value);
+      const preferred = values.includes(previous)
+        ? previous
+        : (values.includes(identity?.project_key) ? identity.project_key : values[0]);
+      if (preferred) target.value = preferred;
+      bind.disabled = !identity?.git_identity || !values.length || identity?.source === "ambiguous";
+    }
+
+    async function loadProjectIdentity() {
+      const workspacePath = selectedProjectIdentityWorkspacePath();
+      const requestSeq = ++state.projectIdentityRequestSeq;
+      state.projectIdentityError = "";
+      if (!workspacePath) {
+        state.projectIdentity = null;
+        state.projectIdentityProjects = [];
+        renderProjectIdentity();
+        return;
+      }
+      try {
+        const data = await api("/api/kb/project-identity?workspace_path=" + encodeURIComponent(workspacePath));
+        if (requestSeq !== state.projectIdentityRequestSeq) return;
+        state.projectIdentity = data.identity || null;
+        state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
+      } catch (error) {
+        if (requestSeq !== state.projectIdentityRequestSeq) return;
+        state.projectIdentity = null;
+        state.projectIdentityProjects = [];
+        state.projectIdentityError = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
+      }
+      renderProjectIdentity();
+    }
+
+    async function bindProjectIdentity() {
+      const workspacePath = selectedProjectIdentityWorkspacePath();
+      const targetProjectKey = $("#project-identity-target")?.value || "";
+      if (!workspacePath || !targetProjectKey) return;
+      const message = formatText(
+        "knowledge.project_identity_confirm_bind",
+        { identity: state.projectIdentity?.git_identity || "-", project: targetProjectKey },
+        `Bind ${state.projectIdentity?.git_identity || "this repository"} to ${targetProjectKey}?`
+      );
+      if (!window.confirm(message)) return;
+      const button = $("#project-identity-bind");
+      if (button) button.disabled = true;
+      try {
+        const data = await api("/api/kb/project-identity/bind", {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_path: workspacePath,
+            target_project_key: targetProjectKey
+          })
+        });
+        state.projectIdentity = data.identity || null;
+        state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
+        state.projectIdentityError = "";
+        $("#project-identity-result").textContent = t("knowledge.project_identity_bound", "Project identity bound and ready to sync.");
+        renderProjectIdentity();
+      } catch (error) {
+        $("#project-identity-result").textContent = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
+      } finally {
+        if (button) button.disabled = false;
       }
     }
 
@@ -3376,6 +3532,14 @@
     $("#nav-workspace-custom").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { loadProjectNavDrafts(); loadNavigation(); }
     });
+    $("#identity-workspace-select").addEventListener("change", () => {
+      syncProjectIdentityCustomWorkspace();
+      loadProjectIdentity();
+    });
+    $("#identity-workspace-custom").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadProjectIdentity();
+    });
+    $("#project-identity-bind").addEventListener("click", bindProjectIdentity);
     $("#nav-backend").addEventListener("change", () => { state.navLastBackend = $("#nav-backend").value; renderNavigationModels(); syncNavigationProxyMode(false); });
     $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; renderNavigationReasoningEfforts(); });
     $("#nav-effort").addEventListener("change", () => { state.navLastReasoningEffort = $("#nav-effort").value; });
@@ -3500,6 +3664,8 @@
       renderProjectNavDraftModal();
       renderProjectNavAgentModal();
       renderProjectNavWorkspaceSelect();
+      renderProjectIdentityWorkspaceSelect();
+      renderProjectIdentity();
       renderNavigationAgents();
       renderSkills();
       if (state.activeTab === "settings") loadSettings();

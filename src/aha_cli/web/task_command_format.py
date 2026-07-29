@@ -5,7 +5,11 @@ import shlex
 
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import load_config, require_plan, task_snapshot
-from aha_cli.store.knowledge import knowledge_config, knowledge_root, project_key_aliases
+from aha_cli.store.knowledge import (
+    knowledge_config,
+    knowledge_root,
+    resolved_project_key_aliases,
+)
 
 
 SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
@@ -63,7 +67,9 @@ def _knowledge_command_context(root: Path | None, run_id: str | None, task_id: s
         cfg = {}
     kb_cfg = knowledge_config(cfg)
     workspace = Path(task.get("workspace_path") or root)
-    aliases = project_key_aliases(workspace, goal=str(plan.get("goal") or ""))
+    aliases = resolved_project_key_aliases(
+        root, cfg, workspace, goal=str(plan.get("goal") or "")
+    )
     project_key = aliases[0] if aliases else ""
     alias_text = ", ".join(aliases) if aliases else "-"
     project_command = (

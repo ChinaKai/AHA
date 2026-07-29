@@ -31,6 +31,12 @@ from urllib.parse import unquote
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import default_knowledge_dir
+from aha_cli.store.project_identity import (
+    derived_project_key_aliases,
+    normalize_git_remote,
+    resolve_project_identity,
+    slugify,
+)
 
 KNOWLEDGE_SCHEMA_VERSION = 1
 KNOWLEDGE_INDEX_FILE = "aha-knowledge.json"
@@ -113,15 +119,6 @@ def _index_path(kb_root: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # Identity helpers
 # --------------------------------------------------------------------------- #
-def slugify(text: str, *, max_length: int = 60) -> str:
-    """Turn a title into a filesystem-safe, stable slug."""
-    normalized = re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")
-    if not normalized:
-        # Non-ASCII titles (e.g. Chinese) collapse to empty; fall back to a hash.
-        normalized = "kb-" + hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:10]
-    return normalized[:max_length].strip("-")
-
-
 def normalize_entry_slug(slug: str) -> str:
     """Normalize a possibly nested entry slug without allowing path traversal."""
     raw = str(slug or "").strip().replace("\\", "/")
@@ -132,51 +129,6 @@ def normalize_entry_slug(slug: str) -> str:
             continue
         parts.append(slugify(clean))
     return "/".join(parts) if parts else slugify(raw)
-
-
-def normalize_git_remote(remote: str) -> str:
-    """Normalize a git remote URL so the same repo maps to one key across hosts.
-
-    ``git@github.com:user/repo.git`` and ``https://github.com/user/repo``
-    both normalize to ``github.com/user/repo``.
-    """
-    value = (remote or "").strip()
-    if not value:
-        return ""
-    value = re.sub(r"\.git$", "", value)
-    scp = re.match(r"^[\w.+-]+@([^:]+):(.+)$", value)
-    if scp:
-        host, path = scp.group(1), scp.group(2)
-    else:
-        stripped = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", value)
-        stripped = re.sub(r"^[^@/]+@", "", stripped)  # drop userinfo
-        host, _, path = stripped.partition("/")
-    host = host.lower().strip("/")
-    if host in {"github.com:443", "ssh.github.com", "ssh.github.com:443"}:
-        host = "github.com"
-    path = path.strip("/").lower()
-    return f"{host}/{path}" if path else host
-
-
-def _git_remote_for(workspace: Path) -> str:
-    """Best-effort read of the workspace's origin remote without importing git."""
-    config_file = workspace / ".git" / "config"
-    if not config_file.is_file():
-        return ""
-    try:
-        text = config_file.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    in_origin = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("["):
-            in_origin = line.replace(" ", "").lower() == '[remote"origin"]'
-            continue
-        if in_origin and line.lower().startswith("url"):
-            _, _, value = line.partition("=")
-            return value.strip()
-    return ""
 
 
 def project_key(workspace: Path, goal: str | None = None) -> str:
@@ -198,20 +150,26 @@ def project_key_aliases(workspace: Path, goal: str | None = None) -> list[str]:
     existing project knowledge remains readable after the more descriptive key
     format starts writing ``<repo-name>-git-<hash>``.
     """
-    workspace = Path(workspace).expanduser()
-    remote = normalize_git_remote(_git_remote_for(workspace))
-    if remote:
-        digest = hashlib.sha1(remote.encode("utf-8")).hexdigest()[:12]
-        repo_name = remote.rsplit("/", 1)[-1] or "repo"
-        preferred = f"{slugify(repo_name, max_length=40)}-git-{digest}"
-        legacy = f"git-{digest}"
-        return [preferred, legacy] if preferred != legacy else [preferred]
-    basis = "-".join(part for part in [(goal or "").strip(), workspace.name] if part)
-    if not basis:
-        basis = "workspace"
-    # Digest over the migratable basis (goal + dir name), never the absolute path.
-    digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:8]
-    return [f"ws-{slugify(basis)}-{digest}"]
+    return derived_project_key_aliases(workspace, goal=goal)
+
+
+def resolved_project_identity(
+    root: Path,
+    config: dict | None,
+    workspace: Path,
+    goal: str | None = None,
+) -> dict:
+    """Resolve a workspace against synchronized project manifests."""
+    return resolve_project_identity(knowledge_root(root, config), workspace, goal=goal)
+
+
+def resolved_project_key_aliases(
+    root: Path,
+    config: dict | None,
+    workspace: Path,
+    goal: str | None = None,
+) -> list[str]:
+    return list(resolved_project_identity(root, config, workspace, goal=goal)["aliases"])
 
 
 # --------------------------------------------------------------------------- #

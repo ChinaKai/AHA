@@ -21,6 +21,7 @@ from aha_cli.store.knowledge import (
     write_entry,
 )
 from aha_cli.store.paths import config_path
+from aha_cli.store.project_identity import project_manifest_path
 from aha_cli.web.knowledge_routes import knowledge_route_response
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -65,6 +66,17 @@ def _sync_project_nav_jobs(monkeypatch) -> None:
     monkeypatch.setattr(kr, "dispatch_project_nav_job", sync_dispatch)
 
 
+def _git_workspace(path: Path, remote: str) -> Path:
+    path.mkdir(parents=True)
+    git_dir = path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text(
+        f'[core]\n[remote "origin"]\n\turl = {remote}\n',
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_unknown_path_returns_none(tmp_path: Path):
     assert knowledge_route_response(tmp_path / ".aha", "GET", "/api/other", {}, b"", {}) is None
 
@@ -90,6 +102,79 @@ def test_status_and_entries(tmp_path: Path):
     by_kind = _get(home, "/api/kb/entries", {"kind": ["solutions"]})
     assert by_kind["count"] == 1 and by_kind["entries"][0]["id"].startswith("kb_")
     assert by_kind["entries"][0]["size_bytes"] > 0
+
+
+def test_project_identity_api_binds_workspace_to_existing_synced_project(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="stable-project",
+        title="Existing project knowledge",
+        body="details",
+    )
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="stable-project",
+        title="Stable project navigation",
+        body="## Project",
+        slug="index",
+        meta={"type": "navigation", "navigation_role": "index"},
+    )
+    workspace = _git_workspace(
+        tmp_path / "workspace", "git@github.com:user/renamed-repo.git"
+    )
+
+    before = _get(
+        home,
+        "/api/kb/project-identity",
+        {"workspace_path": [str(workspace)]},
+    )
+    assert before["identity"]["source"] == "derived_git"
+    assert before["identity"]["project_key"] != "stable-project"
+    assert any(
+        project["project_key"] == "stable-project"
+        for project in before["projects"]
+    )
+
+    bound = json_response_body(_post(
+        home,
+        "/api/kb/project-identity/bind",
+        {
+            "workspace_path": str(workspace),
+            "target_project_key": "stable-project",
+        },
+    ))
+    assert bound["identity"]["source"] == "manifest"
+    assert bound["identity"]["project_key"] == "stable-project"
+    assert project_manifest_path(
+        knowledge_root(home, cfg), "stable-project"
+    ).is_file()
+    assert not (workspace / "project.json").exists()
+
+    after = _get(
+        home,
+        "/api/kb/project-identity",
+        {"workspace_path": [str(workspace)]},
+    )
+    assert after["identity"]["project_key"] == "stable-project"
+    assert after["projects"][0]["has_manifest"] is True
+    assert "relation_types" not in after
+    assert "related_projects" not in after["identity"]["manifest"]
+
+    nav = _get(
+        home,
+        "/api/kb/project-nav",
+        {"workspace_path": [str(workspace)]},
+    )
+    assert nav["project_key"] == "stable-project"
+    assert nav["entries"][0]["title"] == "Stable project navigation"
 
 
 def test_entries_mark_dirty_knowledge_files(tmp_path: Path, monkeypatch):

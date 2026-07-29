@@ -48,12 +48,18 @@ from aha_cli.store.knowledge import (
     knowledge_status,
     knowledge_root,
     list_pending,
-    project_key as derive_project_key,
     remove_pending,
+    resolved_project_identity,
     slugify,
     type_for_kind,
     update_entry,
     write_entry,
+)
+from aha_cli.store.project_identity import (
+    ProjectIdentityConflict,
+    ProjectIdentityError,
+    bind_project_identity,
+    list_project_manifests,
 )
 from aha_cli.store.knowledge_assets import EntryImageRejected, add_entry_image, read_entry_image
 from aha_cli.store import knowledge_capture as capture
@@ -897,6 +903,35 @@ def _project_nav_bootstrap_context(root: Path, payload: dict, query: dict[str, l
     }
 
 
+def _resolved_project_identity(root: Path, cfg: dict, context: dict) -> dict:
+    return resolved_project_identity(
+        root,
+        cfg,
+        Path(context["workspace_path"]),
+        goal=context.get("goal"),
+    )
+
+
+def _project_identity_candidates(root: Path, cfg: dict) -> list[dict]:
+    manifests = {
+        manifest["project_key"]: manifest
+        for manifest in list_project_manifests(knowledge_root(root, cfg))
+    }
+    candidates: list[dict] = []
+    for project in knowledge_status(root, cfg).get("projects", []):
+        key = str(project.get("project_key") or "")
+        manifest = manifests.get(key)
+        candidates.append({
+            "project_key": key,
+            "display_name": str((manifest or {}).get("display_name") or key),
+            "git_identities": list((manifest or {}).get("git_identities") or []),
+            "legacy_keys": list((manifest or {}).get("legacy_keys") or []),
+            "counts": project.get("counts") or {},
+            "has_manifest": manifest is not None,
+        })
+    return candidates
+
+
 def knowledge_route_response(
     root: Path,
     method: str,
@@ -914,6 +949,52 @@ def knowledge_route_response(
 
     if method in {"GET", "HEAD"} and path == "/api/kb/sync-status":
         return _ok(method, knowledge_sync_status(root, cfg, check_remote=_query_bool_param(query, "remote")))
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/project-identity":
+        try:
+            context = _project_nav_bootstrap_context(root, {}, query)
+            identity = _resolved_project_identity(root, cfg, context)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except (OSError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        return _ok(method, {
+            "identity": identity,
+            "projects": _project_identity_candidates(root, cfg),
+            "workspace_path": context["workspace_path"],
+        })
+
+    if method == "POST" and path == "/api/kb/project-identity/bind":
+        payload = parse_json_body(body) if body.strip() else {}
+        target_project_key = str(
+            payload.get("target_project_key") or payload.get("project_key") or ""
+        ).strip()
+        if not target_project_key:
+            return json_response({"error": "target_project_key required"}, "400 Bad Request")
+        try:
+            context = _project_nav_bootstrap_context(root, payload, query)
+            identity = bind_project_identity(
+                knowledge_root(root, cfg),
+                Path(context["workspace_path"]),
+                target_project_key,
+                display_name=str(payload.get("display_name") or "").strip() or None,
+            )
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except ProjectIdentityConflict as exc:
+            return json_response({"error": str(exc)}, "409 Conflict")
+        except (OSError, ProjectIdentityError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        git_result = auto_commit_after_change(
+            root, f"chore(knowledge): bind project identity '{target_project_key}'", cfg
+        )
+        return json_response({
+            "ok": True,
+            "identity": identity,
+            "projects": _project_identity_candidates(root, cfg),
+            "workspace_path": context["workspace_path"],
+            "git": git_result,
+        })
 
     if method in {"GET", "HEAD"} and path == "/api/kb/entries":
         scope = str(query.get("scope", [""])[0] or "").strip() or None
@@ -1111,7 +1192,7 @@ def knowledge_route_response(
             except ValueError as exc:
                 return json_response({"error": str(exc)}, "400 Bad Request")
             project_key_value = str(
-                context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+                context.get("project_key") or _resolved_project_identity(root, cfg, context)["project_key"]
             )
         entries = _navigation_summaries(root, cfg, project_key_value)
         return _ok(method, {
@@ -1135,7 +1216,7 @@ def knowledge_route_response(
             except ValueError as exc:
                 return json_response({"error": str(exc)}, "400 Bad Request")
             project_key_value = str(
-                context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+                context.get("project_key") or _resolved_project_identity(root, cfg, context)["project_key"]
             )
         drafts = [
             _public_nav_draft(draft)
@@ -1180,7 +1261,10 @@ def knowledge_route_response(
             )
         except ValueError as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
-        project_key_value = context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+        project_key_value = (
+            context.get("project_key")
+            or _resolved_project_identity(root, cfg, context)["project_key"]
+        )
         if entry_exists(root, cfg, "project", "navigation", project_key_value, NAVIGATION_SLUG):
             return json_response({
                 "ok": False,
@@ -1383,7 +1467,7 @@ def knowledge_route_response(
             except ValueError as exc:
                 return json_response({"error": str(exc)}, "400 Bad Request")
             project_key_value = str(
-                context.get("project_key") or derive_project_key(Path(context["workspace_path"]), goal=context.get("goal"))
+                context.get("project_key") or _resolved_project_identity(root, cfg, context)["project_key"]
             )
         try:
             deleted_paths = delete_project_navigation(root, cfg, project_key_value)

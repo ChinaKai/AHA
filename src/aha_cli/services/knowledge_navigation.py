@@ -29,7 +29,7 @@ from aha_cli.store.knowledge import (
     entry_path_for,
     knowledge_config,
     normalize_entry_slug,
-    project_key,
+    resolved_project_identity,
     slugify,
 )
 
@@ -696,7 +696,9 @@ def prepare_project_navigation(
     progress_callback: Callable[[str, dict], None] | None = None,
 ) -> dict:
     """Generate and validate the first project navigation batch without writing it."""
-    key = project_key_value or project_key(Path(workspace_path), goal=goal)
+    key = project_key_value or resolved_project_identity(
+        root, config, Path(workspace_path), goal=goal
+    )["project_key"]
     existing_index = entry_path_for(root, config, "project", "navigation", key, NAVIGATION_SLUG)
     if existing_index:
         result = {

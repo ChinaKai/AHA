@@ -26,6 +26,13 @@ from aha_cli.store.knowledge import (
     write_entry,
 )
 from aha_cli.store.paths import config_path
+from aha_cli.store.project_identity import (
+    ProjectIdentityConflict,
+    bind_project_identity,
+    project_manifest_path,
+    read_project_manifest,
+    resolve_project_identity,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +133,50 @@ def test_project_key_fallback_is_migratable(tmp_path: Path):
     # Different dir name yields a different key.
     (tmp_path / "other").mkdir()
     assert project_key(tmp_path / "other", goal="g") != key_a
+
+
+def test_synced_project_manifest_overrides_changed_remote(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    target_key = "stable-project"
+    (kb_root / "projects" / target_key).mkdir(parents=True)
+    old_workspace = _make_git_workspace(
+        tmp_path / "old-workspace", "git@github.com:user/old-name.git"
+    )
+    new_workspace = _make_git_workspace(
+        tmp_path / "new-workspace", "git@github.com:user/new-name.git"
+    )
+
+    bind_project_identity(kb_root, old_workspace, target_key)
+    bind_project_identity(kb_root, new_workspace, target_key)
+
+    resolved = resolve_project_identity(kb_root, new_workspace)
+    assert resolved["source"] == "manifest"
+    assert resolved["project_key"] == target_key
+    assert resolved["git_identity"] == "github.com/user/new-name"
+    assert project_manifest_path(kb_root, target_key).is_file()
+    # The original repositories contain only the test-created Git metadata;
+    # project identity is written exclusively under the synchronized KB.
+    assert not (old_workspace / "project.json").exists()
+    assert not (new_workspace / "project.json").exists()
+
+
+def test_git_identity_cannot_bind_two_knowledge_projects(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    for key in ("project-a", "project-b"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+    workspace = _make_git_workspace(
+        tmp_path / "workspace", "https://github.com/user/repo"
+    )
+
+    bind_project_identity(kb_root, workspace, "project-a")
+    with pytest.raises(ProjectIdentityConflict):
+        bind_project_identity(kb_root, workspace, "project-b")
 
 
 # --------------------------------------------------------------------------- #

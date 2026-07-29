@@ -266,6 +266,27 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("window.AHASkillsConsole.createSkillsConsoleController", factory)
         self.assertIn("skillsConsoleController = featureControllers.skillsConsoleController", wiring)
 
+    def test_knowledge_project_identity_can_bind_existing_project(self) -> None:
+        root = static_root()
+        knowledge = (root / "knowledge.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="project-identity-panel"', knowledge)
+        self.assertIn('id="identity-workspace-select"', knowledge)
+        self.assertIn('id="project-identity-target"', knowledge)
+        self.assertIn('id="project-identity-bind"', knowledge)
+        self.assertIn('api("/api/kb/project-identity?workspace_path="', knowledge)
+        self.assertIn('api("/api/kb/project-identity/bind"', knowledge)
+        self.assertIn("function renderProjectIdentity()", knowledge)
+        self.assertIn("function bindProjectIdentity()", knowledge)
+        self.assertNotIn('id="project-relations-editor"', knowledge)
+        self.assertNotIn('api("/api/kb/project-relations"', knowledge)
+        self.assertNotIn("function renderProjectRelations()", knowledge)
+        self.assertNotIn("function saveProjectRelations()", knowledge)
+        self.assertIn('"knowledge.project_identity": "Project identity"', i18n)
+        self.assertIn('"knowledge.project_identity": "项目身份"', i18n)
+        self.assertNotIn('"knowledge.project_relations"', i18n)
+
     def test_integrations_include_local_terminal(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
@@ -3041,6 +3062,78 @@ controller.unmount();
         self.assertIn("bootstrap-proxy", styles)
         self.assertIn("collaboration-help", styles)
 
+    def test_bootstrap_loading_does_not_render_initialize_form(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        controller = static_root() / "bootstrap_controller.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+let bootstrapData = null;
+let resetCount = 0;
+let emptyWorkspaceCount = 0;
+const panel = {
+  innerHTML: "",
+  querySelector(selector) {
+    if (selector === "[data-bootstrap-loading]" && this.innerHTML.includes("data-bootstrap-loading")) {
+      return {};
+    }
+    return null;
+  }
+};
+const controller = window.AHABootstrapController.createBootstrapController(
+  { panelEl: panel },
+  {
+    bootstrapConfigHelpers: {
+      bootstrapConfigFormHtml() {
+        return '<form data-bootstrap-config-form></form>';
+      }
+    },
+    bootstrapData: () => bootstrapData,
+    bootstrapError: () => "",
+    clearBootstrapHomeViews() {},
+    closeEventWebSocket() {},
+    escapeHtml: value => String(value || ""),
+    renderEmptyWorkspace() {
+      emptyWorkspaceCount += 1;
+    },
+    resetEmptyRunState() {
+      resetCount += 1;
+    }
+  }
+);
+
+controller.renderFirstRunState();
+if (!panel.innerHTML.includes("data-bootstrap-loading")) {
+  throw new Error("pending bootstrap did not render its loading state");
+}
+if (panel.innerHTML.includes("Initialize AHA") || panel.innerHTML.includes("data-bootstrap-config-form")) {
+  throw new Error("pending bootstrap rendered the initialization form");
+}
+if (resetCount || emptyWorkspaceCount) {
+  throw new Error("pending bootstrap reset the current run workspace");
+}
+
+bootstrapData = { initialized: false, aha_home: "/tmp/aha" };
+controller.renderFirstRunState(true);
+if (!panel.innerHTML.includes("Initialize AHA") || !panel.innerHTML.includes("data-bootstrap-config-form")) {
+  throw new Error("confirmed uninitialized bootstrap did not render the initialization form");
+}
+if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
+  throw new Error("confirmed uninitialized bootstrap did not enter the empty workspace");
+}
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(controller)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_web_restart_and_upgrade_polling_start_quickly(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = app_entry_script(root / "src" / "aha_cli" / "web" / "static")
@@ -4325,6 +4418,11 @@ controller.unmount();
         self.assertIn("taskTokenSavingPolicy", frontend_scripts)
         self.assertIn("const defaultTaskContextThresholdPercent = 75;", metadata_script)
         self.assertIn("task.token_saving_map", i18n_script)
+        self.assertIn('"task.token_saving": "AHA KB"', i18n_script)
+        self.assertIn('"task.token_saving": "AHA 知识库"', i18n_script)
+        self.assertIn('"task.token_saving_map": "Use AHA KB for this task"', i18n_script)
+        self.assertIn('"task.token_saving_map": "为此任务启用 AHA 知识库"', i18n_script)
+        self.assertIn('["AHA KB", taskTokenSavingConfirmLabel(payload)]', task_form_script)
         self.assertIn("task.context_evidence", i18n_script)
         self.assertIn("conversation.context_evidence_short", i18n_script)
         self.assertIn("上下文证据", i18n_script)
@@ -4344,6 +4442,10 @@ controller.unmount();
         self.assertIn(".advanced-task-group {\n  display: grid;", styles)
         self.assertIn('id="task-token-saving-enabled" type="checkbox"', html)
         self.assertIn('id="selected-task-token-saving-enabled" type="checkbox"', html)
+        self.assertIn('id="task-related-kb-field"', html)
+        self.assertIn('id="task-related-kb-select"', html)
+        self.assertIn('id="selected-task-related-kb-field"', html)
+        self.assertIn('id="selected-task-related-kb-select"', html)
         self.assertNotIn('id="task-context-evidence"', html)
         self.assertNotIn('id="task-context-evidence-refresh"', html)
         self.assertNotIn('id="task-context-evidence-body"', html)
@@ -4357,6 +4459,8 @@ controller.unmount();
         self.assertNotIn('id="task-context-threshold"', html)
         self.assertIn("taskContextAutoCompactEnabledEl", controller_registry_script)
         self.assertIn('taskContextAutoCompactEnabledEl: "task-token-saving-enabled"', controller_registry_script)
+        self.assertIn('taskRelatedKbSelectEl: "task-related-kb-select"', controller_registry_script)
+        self.assertIn('selectedTaskRelatedKbSelectEl: "selected-task-related-kb-select"', controller_registry_script)
         self.assertNotIn("taskContextEvidenceEl", controller_registry_script)
         self.assertNotIn("taskContextEvidenceBodyEl", app_controller_factory_script)
         self.assertNotIn("taskContextEvidenceRefreshEl", app_controller_factory_script)
@@ -4412,6 +4516,26 @@ controller.unmount();
         self.assertIn("token_saving:", task_form_script)
         self.assertIn("enabled: tokenSavingEnabled", task_form_script)
         self.assertIn('provider: "nav"', task_form_script)
+        self.assertIn("related_project_keys: relatedProjectKeys", task_form_script)
+        self.assertIn("loadRelatedKbOptions", task_create_controller_script)
+        self.assertIn("loadTaskRelatedKbOptions", task_config_script)
+        self.assertIn("related_project_keys: selectedTaskRelatedKbKeys()", task_config_script)
+        self.assertNotIn("manifest?.related_projects", task_create_controller_script)
+        feature_controller_elements = app_controller_factory_script.split(
+            "function createFeatureControllers", 1
+        )[1].split("} = elements;", 1)[0]
+        self.assertIn(
+            'taskRelatedKbFieldEl, taskRelatedKbSelectEl, taskRelatedKbStateEl,',
+            feature_controller_elements,
+        )
+        self.assertIn(
+            'deps.apiUrl("/api/kb/project-identity", { workspace_path: workspacePath })',
+            task_create_controller_script,
+        )
+        self.assertIn(
+            'api.apiUrl("/api/kb/project-identity", { workspace_path: workspacePath })',
+            task_config_script,
+        )
         self.assertNotIn("auto at", task_form_script)
         self.assertNotIn("auto off", task_form_script)
         self.assertIn("taskSupervisionPayloadFromMode", frontend_scripts)

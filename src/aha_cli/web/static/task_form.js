@@ -13,7 +13,10 @@
       ? payload.token_saving
       : {};
     const provider = String(policy.provider || "nav");
-    return policy.enabled === true ? `${provider} on` : "off";
+    const related = Array.isArray(policy.related_project_keys) ? policy.related_project_keys.length : 0;
+    return policy.enabled === true
+      ? `${provider} on${related ? ` · ${related} related` : ""}`
+      : "off";
   }
 
   function hardwareDebugConfirmLabel(payload) {
@@ -44,6 +47,9 @@
     const proxyEnabled = Boolean(input.proxyEnabled);
     const backend = input.backend || "";
     const tokenSavingEnabled = Boolean(input.tokenSavingEnabled);
+    const relatedProjectKeys = Array.isArray(input.relatedProjectKeys)
+      ? [...new Set(input.relatedProjectKeys.map(value => String(value || "").trim()).filter(Boolean))].slice(0, 5)
+      : [];
     return {
       title: String(input.title || "").trim(),
       description: String(input.description || "").trim(),
@@ -62,7 +68,8 @@
       supervision: input.supervision || {},
       token_saving: {
         enabled: tokenSavingEnabled,
-        provider: "nav"
+        provider: "nav",
+        related_project_keys: relatedProjectKeys
       },
       observe_proxy: {
         enabled: Boolean(input.observeProxyEnabled)
@@ -96,7 +103,7 @@
       ["Supervision", context.supervisionSummary || "manual"],
       ["Host model", supervision.real_agent_enabled ? `${supervision.host_backend || "stub"} / ${hostModel}` : "-"],
       ["Host proxy", supervision.real_agent_enabled ? hostProxy : "-"],
-      ["Token saving", taskTokenSavingConfirmLabel(payload)],
+      ["AHA KB", taskTokenSavingConfirmLabel(payload)],
       ["Observe proxy", observeProxyConfirmLabel(payload)],
       ["Skills", taskSkillsConfirmLabel(payload)],
       ["Hardware", hardwareDebugConfirmLabel(payload)],

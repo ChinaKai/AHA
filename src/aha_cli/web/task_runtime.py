@@ -18,7 +18,12 @@ from aha_cli.store.filesystem import (
     task_snapshot,
 )
 from aha_cli.store.config import load_config
-from aha_cli.store.knowledge import NAVIGATION_SLUG, entry_path_for, knowledge_config, project_key
+from aha_cli.store.knowledge import (
+    NAVIGATION_SLUG,
+    entry_path_for,
+    knowledge_config,
+    resolved_project_identity,
+)
 from aha_cli.store.runs import require_plan
 from aha_cli.web.status import TERMINAL_TASK_STATUSES, invalidate_backend_status_cache
 from aha_cli.web.task_command_format import (
@@ -175,7 +180,11 @@ def knowledge_feedback_context_for_task(root: Path, run_id: str, task: dict) -> 
         goal = str(require_plan(root, run_id).get("goal") or "")
     except SystemExit:
         goal = ""
-    project_key_value = project_key(Path(workspace_path), goal=goal) if workspace_path else ""
+    project_key_value = (
+        resolved_project_identity(root, cfg, Path(workspace_path), goal=goal)["project_key"]
+        if workspace_path
+        else ""
+    )
     return format_knowledge_feedback_context_for_prompt(
         {
             "knowledge_enabled": bool(kb_cfg.get("enabled")),

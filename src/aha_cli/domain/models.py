@@ -14,6 +14,7 @@ from aha_cli.services.prompt_templates import render_prompt_template
 DEFAULT_RETENTION_POLICY_REPORT_INTERVAL_SECONDS = 6 * 60 * 60
 HEADROOM_INTEGRATION_MODES = {"token", "cache"}
 TOKEN_SAVING_PROVIDERS = {"nav"}
+MAX_TASK_RELATED_PROJECTS = 5
 
 
 def utc_now() -> str:
@@ -353,6 +354,7 @@ def default_task_token_saving() -> dict:
     return {
         "enabled": False,
         "provider": "nav",
+        "related_project_keys": [],
     }
 
 
@@ -393,6 +395,25 @@ def normalize_task_token_saving(value: object | None = None, legacy_context: obj
     if provider == "map":
         provider = "nav"
     token_saving["provider"] = provider if provider in TOKEN_SAVING_PROVIDERS else "nav"
+    related_keys: list[str] = []
+    seen: set[str] = set()
+    raw_related = raw.get("related_project_keys")
+    if isinstance(raw_related, (list, tuple, set)):
+        for item in raw_related:
+            key = str(item or "").strip()
+            if (
+                not key
+                or key in seen
+                or len(key) > 128
+                or not key[0].isalnum()
+                or any(not (char.isalnum() or char in "._-") for char in key)
+            ):
+                continue
+            related_keys.append(key)
+            seen.add(key)
+            if len(related_keys) >= MAX_TASK_RELATED_PROJECTS:
+                break
+    token_saving["related_project_keys"] = related_keys
     return token_saving
 
 

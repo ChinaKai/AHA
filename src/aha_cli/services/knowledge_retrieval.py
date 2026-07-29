@@ -21,7 +21,7 @@ from aha_cli.store.knowledge import (
     iter_all_entries,
     knowledge_config,
     knowledge_root,
-    project_key_aliases,
+    resolved_project_key_aliases,
 )
 
 _STOP = {
@@ -342,7 +342,9 @@ def knowledge_context_for_task(root: Path, run_id: str, task: dict) -> str:
         except (Exception, SystemExit):
             pass
         goal = _plan_goal(root, run_id)
-        project_keys = project_key_aliases(Path(workspace_path), goal=goal)
+        project_keys = resolved_project_key_aliases(
+            root, config, Path(workspace_path), goal=goal
+        )
         key = project_keys[0]
         retrieval = cfg.get("retrieval", {}) if isinstance(cfg.get("retrieval"), dict) else {}
         max_entries = int(retrieval.get("max_entries", 5) or 5)

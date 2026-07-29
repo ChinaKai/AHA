@@ -940,6 +940,7 @@ def update_task_token_saving_config(
     *,
     enabled: object = UNSET,
     provider: object = UNSET,
+    related_project_keys: object = UNSET,
 ) -> dict:
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -951,6 +952,8 @@ def update_task_token_saving_config(
             token_saving["enabled"] = bool(enabled)
         if provider is not UNSET:
             token_saving["provider"] = provider
+        if related_project_keys is not UNSET:
+            token_saving["related_project_keys"] = related_project_keys
         task["token_saving"] = normalize_task_token_saving(token_saving)
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
@@ -963,6 +966,7 @@ def update_task_token_saving_config(
             "task_id": task_id,
             "enabled": task["token_saving"].get("enabled"),
             "provider": task["token_saving"].get("provider"),
+            "related_project_keys": task["token_saving"].get("related_project_keys", []),
         },
     )
     return task

@@ -666,7 +666,7 @@ Observe Proxy 是这个设计的度量层。
 - sticky delta prompt 在 token saving 开启且有 KB/Map 入口时会携带 pack，即使该消息原本是 `plain_sticky`，也不会只透传裸用户消息。
 - Context Pack 当前绑定已有 task token saving `provider=map` 开关，未启用时不改变 prompt。
 - map cache 存在时只输出 map 入口和 `/aha map query <terms>` 用法，不输出 query 结果。
-- KB 启用时只输出 KB root/project key/navigation index 入口，不输出 `retrieve_for_task()` 命中条目。
+- KB 启用时输出 KB root、project key、navigation index、项目 `solutions/`、项目历史 `worklog/` 与当前 task worklog 入口；task 的 `token_saving.related_project_keys` 还会追加最多 5 个手选项目的 navigation/solutions/worklog 入口。不会递归、不枚举历史条目，也不输出 `retrieve_for_task()` 命中或历史正文；agent 先检查文件名与 JSON frontmatter，再按需读取最少的相关文件。
 
 ### Phase 3：知识反馈循环
 
@@ -884,6 +884,8 @@ node --check src/aha_cli/web/static/i18n.js
 - 2026-07-05：补齐当前 AHA 知识库实现基线：长期 KB 存储模型、task final/`/aha kb`/`/aha nav`/capture/project-nav bootstrap/project-map refresh 等生产者，task prompt、sticky delta、Project Map capability、`/aha map`/Web UI 等消费者，以及 pending/approve/manual gate 的审核写入路径。
 - 2026-07-05：确认 Context Planner MVP 设计：token saving provider=map 的普通用户消息经过 planner；Pull Contract 预算目标 1200-2500 chars、硬上限 4000 chars；普通任务 evidence 不自动生成 pending；map 只作为代码定位器，不写长期 KB。
 - 2026-07-05：完成 Context Planner MVP 第一刀：接入 full prompt 和 sticky delta prompt；只注入 KB/Map Pull Contract，不自动注入关键词 KB 命中或 map query 结果；只读取已有 map cache，不自动 refresh。
+- 2026-07-29：扩展 agent-pull 入口：固定暴露项目 `solutions/` 和历史 `worklog/` 目录，仍不做 AHA 侧检索、条目枚举或正文注入，由 agent 按需读取。
+- 2026-07-29：支持 task 选择直接关联 KB：项目默认关系保存在同步 `project.json`，New Task 保存实际选择快照，Context Pack 只暴露所选项目入口和关系说明。
 - 2026-07-05：纠正知识生产主链路：`task final` 不再作为新设计主生产者，只能视为历史兼容/补充入口。自动观测驱动的自增长、自修复是 token saving 方案核心；手动 `/aha nav`、`/aha kb`、capture 只作为辅助。
 - 2026-07-05：明确自增长/自修复的实现边界：只对当前任务证据做增量 CRUD，由 agent 直接维护 project navigation/project solutions 原文；不扫描或重建完整知识库，也不自动删除长期 KB 文件。
 - 2026-07-05：根据 task-151 首轮 prompt 问题修正设计：AHA 关键词检索不再作为自然语言到 KB 的主链路；Context Pack 改为 KB/Map Pull Contract，只注入入口说明、使用方法、信任优先级和当前任务级 evidence 协议，语义相关性由 agent 主动判断。

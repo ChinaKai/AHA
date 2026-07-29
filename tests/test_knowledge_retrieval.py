@@ -15,8 +15,15 @@ from aha_cli.services.knowledge_retrieval import (
 from aha_cli.services.orchestrator import dispatch_task_to_main, task_assignment_prompt
 from aha_cli.store.config import load_config
 from aha_cli.store.io import write_json
-from aha_cli.store.knowledge import init_knowledge_base, project_key as derive_project_key, project_key_aliases, write_entry
+from aha_cli.store.knowledge import (
+    init_knowledge_base,
+    knowledge_root,
+    project_key as derive_project_key,
+    project_key_aliases,
+    write_entry,
+)
 from aha_cli.store.paths import config_path, inbox_path
+from aha_cli.store.project_identity import bind_project_identity
 from aha_cli.store.runs import require_plan
 
 
@@ -390,6 +397,39 @@ def test_context_reads_legacy_git_project_key(tmp_path: Path):
         "workspace_path": str(workspace), "title": "legacy", "description": "git hash key",
     })
     assert "Legacy project key" in ctx
+
+
+def test_context_uses_synced_manifest_after_remote_rename(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg(enabled=True)
+    write_json(config_path(root), cfg)
+    init_knowledge_base(root, cfg)
+    workspace = _make_git_workspace(
+        tmp_path / "renamed-project",
+        "git@github.com:user/new-repository-name.git",
+    )
+    write_entry(
+        root,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="stable-project",
+        title="Stable renamed repository knowledge",
+        body="reuse the synchronized project identity manifest",
+        meta={"tags": ["identity"]},
+    )
+    bind_project_identity(
+        knowledge_root(root, cfg), workspace, "stable-project"
+    )
+
+    ctx = knowledge_context_for_task(root, "norun", {
+        "workspace_path": str(workspace),
+        "title": "identity regression",
+        "description": "renamed repository",
+    })
+
+    assert "Stable renamed repository knowledge" in ctx
+    assert "projects/stable-project/" in ctx
 
 
 def test_context_runs_auto_pull_and_tolerates_failure(tmp_path: Path, monkeypatch):

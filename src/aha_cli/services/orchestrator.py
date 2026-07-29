@@ -54,7 +54,7 @@ from aha_cli.store.filesystem import (
     run_dir,
     write_json,
 )
-from aha_cli.store.knowledge import project_key_aliases
+from aha_cli.store.knowledge import resolved_project_key_aliases
 from aha_cli.store.sessions import backend_session_usage_archive_fields
 
 REUSABLE_SUB_AGENT_STATUSES = ("interrupted", "failed", "completed", "stopped", "blocked")
@@ -80,14 +80,16 @@ def _feedback_updated_items(feedback: object) -> list[str]:
     return []
 
 
-def _project_keys_for_task_feedback(root: Path, run_id: str, task: dict) -> list[str]:
+def _project_keys_for_task_feedback(
+    root: Path, run_id: str, task: dict, config: dict
+) -> list[str]:
     workspace = Path(str(task.get("workspace_path") or root)).expanduser()
     goal = ""
     try:
         goal = str(require_plan(root, run_id).get("goal") or "")
     except KeyError:
         goal = str(task.get("title") or "")
-    return project_key_aliases(workspace, goal=goal)
+    return resolved_project_key_aliases(root, config, workspace, goal=goal)
 
 
 def _auto_commit_kb_feedback_update(
@@ -102,7 +104,7 @@ def _auto_commit_kb_feedback_update(
     updated = _feedback_updated_items(feedback)
     if not updated:
         return None
-    project_keys = _project_keys_for_task_feedback(root, run_id, task)
+    project_keys = _project_keys_for_task_feedback(root, run_id, task, config)
     result = auto_commit_project_approved_entries_after_feedback(
         root,
         f"chore(knowledge): update {task_id} project knowledge",
