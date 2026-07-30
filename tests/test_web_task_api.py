@@ -29,6 +29,7 @@ from aha_cli.store.filesystem import (
     update_agent_config,
     update_task_proxy_config,
     update_task_supervision_config,
+    update_task_token_saving_config,
     write_task_result,
 )
 from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY, ensure_session, save_session
@@ -109,7 +110,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertIsNone(task_created["data"]["preferred_sub_model"])
         self.assertIn("Use the attached notes and preserve existing behavior.", context["prompt"])
 
-    def test_api_task_create_accepts_token_saving_config(self) -> None:
+    def test_api_task_create_snapshots_project_relations_server_side(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -117,23 +118,35 @@ class WebTaskApiTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Task token saving create config", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                response = asyncio.run(
-                    fetch_ui_response(
-                        root,
-                        run_id,
-                        "/api/tasks",
-                        method="POST",
-                        payload={
-                            "title": "Token saving configured task",
-                            "dispatch": False,
-                            "token_saving": {
-                                "enabled": True,
-                                "provider": "nav",
-                                "related_project_keys": ["project-b", "project-c"],
-                            },
+                with mock.patch(
+                    "aha_cli.web.task_routes.resolved_project_identity",
+                    return_value={
+                        "source": "manifest",
+                        "manifest": {
+                            "related_projects": [
+                                {"project_key": "project-b", "relation": "upstream"},
+                                {"project_key": "project-c", "relation": "sdk"},
+                            ]
                         },
+                    },
+                ):
+                    response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            "/api/tasks",
+                            method="POST",
+                            payload={
+                                "title": "Token saving configured task",
+                                "dispatch": False,
+                                "token_saving": {
+                                    "enabled": True,
+                                    "provider": "nav",
+                                    "related_project_keys": ["client-selected-project"],
+                                },
+                            },
+                        )
                     )
-                )
                 body = json_response_body(response)
                 status = status_snapshot(root, run_id)
 
@@ -2157,7 +2170,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["task"]["preferred_proxy_enabled"])
         self.assertEqual(body["proxy"]["http_proxy"], "http://proxy.local:8080")
 
-    def test_task_token_saving_api_updates_existing_task(self) -> None:
+    def test_task_token_saving_api_preserves_read_only_related_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -2165,6 +2178,12 @@ class WebTaskApiTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Token saving API", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_token_saving_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    related_project_keys=["project-b", "project-c"],
+                )
 
                 response = asyncio.run(
                     fetch_ui_response(
@@ -2175,7 +2194,7 @@ class WebTaskApiTests(unittest.TestCase):
                         payload={
                             "enabled": True,
                             "provider": "nav",
-                            "related_project_keys": ["project-b", "project-c", "project-b"],
+                            "related_project_keys": ["client-selected-project"],
                         },
                     )
                 )

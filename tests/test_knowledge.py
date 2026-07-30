@@ -27,11 +27,14 @@ from aha_cli.store.knowledge import (
 )
 from aha_cli.store.paths import config_path
 from aha_cli.store.project_identity import (
+    PROJECT_IDENTITY_SCHEMA_VERSION,
     ProjectIdentityConflict,
+    ProjectIdentityError,
     bind_project_identity,
     project_manifest_path,
     read_project_manifest,
     resolve_project_identity,
+    update_project_relations,
 )
 
 
@@ -177,6 +180,54 @@ def test_git_identity_cannot_bind_two_knowledge_projects(tmp_path: Path):
     bind_project_identity(kb_root, workspace, "project-a")
     with pytest.raises(ProjectIdentityConflict):
         bind_project_identity(kb_root, workspace, "project-b")
+
+
+def test_project_manifest_stores_validated_related_projects_and_preserves_them_on_rebind(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    for key in ("project-a", "project-b", "project-c"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+    workspace = _make_git_workspace(
+        tmp_path / "workspace", "https://github.com/user/project-a"
+    )
+    mirror = _make_git_workspace(
+        tmp_path / "mirror", "https://gitlab.com/user/project-a"
+    )
+    bind_project_identity(kb_root, workspace, "project-a")
+
+    updated = update_project_relations(
+        kb_root,
+        "project-a",
+        [
+            {"project_key": "project-b", "relation": "upstream", "note": "Base implementation"},
+            {"project_key": "project-c", "relation": "sdk", "note": "  Vendor   SDK  "},
+        ],
+    )
+    bind_project_identity(kb_root, mirror, "project-a")
+    manifest = read_project_manifest(kb_root, "project-a")
+
+    assert updated["schema_version"] == PROJECT_IDENTITY_SCHEMA_VERSION
+    assert manifest is not None
+    assert manifest["related_projects"] == [
+        {"project_key": "project-b", "relation": "upstream", "note": "Base implementation"},
+        {"project_key": "project-c", "relation": "sdk", "note": "Vendor SDK"},
+    ]
+    assert len(manifest["git_identities"]) == 2
+
+    with pytest.raises(ProjectIdentityError, match="cannot reference itself"):
+        update_project_relations(
+            kb_root,
+            "project-a",
+            [{"project_key": "project-a", "relation": "reference"}],
+        )
+    with pytest.raises(ProjectIdentityError, match="unknown project relation"):
+        update_project_relations(
+            kb_root,
+            "project-a",
+            [{"project_key": "project-b", "relation": "generated"}],
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -506,7 +506,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("agent-pull", enabled_prompt)
         self.assertRegex(enabled_prompt, r"project_solutions: projects/[^\n]+/solutions \(not found yet\)")
         self.assertRegex(enabled_prompt, r"project_worklogs: projects/[^\n]+/worklog \(not found yet\)")
-        self.assertIn("Related knowledge projects (task-selected, direct only):", enabled_prompt)
+        self.assertIn("Related knowledge projects (task snapshot, direct only):", enabled_prompt)
         self.assertIn("- project_key: related-project", enabled_prompt)
         self.assertIn("navigation_index: projects/related-project/navigation/index.md (exists)", enabled_prompt)
         self.assertIn("project_solutions: projects/related-project/solutions (exists)", enabled_prompt)
@@ -567,7 +567,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(solutions_rel, f"projects/{legacy_key}/solutions")
         self.assertEqual(worklogs_rel, f"projects/{legacy_key}/worklog")
 
-    def test_related_project_reference_exposes_selected_paths_without_reading_bodies(self) -> None:
+    def test_related_project_reference_uses_manifest_metadata_without_reading_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             kb_root = Path(tmp) / "knowledge"
             related_key = "project-b"
@@ -578,10 +578,17 @@ class ChatPromptTests(unittest.TestCase):
                 kb_root,
                 current_project_key="project-a",
                 related_project_keys=[related_key],
+                current_manifest={
+                    "related_projects": [{
+                        "project_key": related_key,
+                        "relation": "upstream",
+                        "note": "Base implementation",
+                    }]
+                },
             )
 
-        self.assertNotIn("relation", references[0])
-        self.assertNotIn("note", references[0])
+        self.assertEqual(references[0]["relation"], "upstream")
+        self.assertEqual(references[0]["note"], "Base implementation")
         self.assertEqual(
             references[0]["navigation_index"],
             f"projects/{related_key}/navigation/index.md",

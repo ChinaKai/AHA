@@ -101,11 +101,6 @@
     let taskMemoPickerOpen = false;
     let taskMemoPickerSearch = "";
     let taskMemoPickerFilter = "active_unlinked";
-    let relatedKbProjects = [];
-    let relatedKbCurrentProjectKey = "";
-    let relatedKbSelectedKeys = new Set();
-    let relatedKbLoadedWorkspace = "";
-    let relatedKbRequestSeq = 0;
     const memoStatuses = ["todo", "doing", "done", "closed"];
     const memoStatusAliases = Object.freeze({
       open: "todo",
@@ -195,93 +190,6 @@
       return {
         enabled_paths: selectedTaskSkillPaths()
       };
-    }
-
-    function selectedRelatedKbKeys() {
-      const inputs = [...(elements.taskRelatedKbSelectEl?.querySelectorAll?.("input[data-related-project-key]") || [])];
-      const checked = inputs
-        .filter(input => input.checked)
-        .map(input => String(input.value || "").trim())
-        .filter(Boolean);
-      return inputs.length ? checked.slice(0, 5) : [...relatedKbSelectedKeys].slice(0, 5);
-    }
-
-    function renderRelatedKbOptions() {
-      const field = elements.taskRelatedKbFieldEl;
-      const list = elements.taskRelatedKbSelectEl;
-      const stateEl = elements.taskRelatedKbStateEl;
-      const enabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
-      if (field) {
-        field.hidden = !enabled;
-        field.classList.toggle("hidden", !enabled);
-      }
-      if (!list || !stateEl) return;
-      const options = relatedKbProjects.filter(project => project.project_key !== relatedKbCurrentProjectKey);
-      for (const key of relatedKbSelectedKeys) {
-        if (!options.some(project => project.project_key === key)) {
-          options.push({ project_key: key, display_name: key, missing: true });
-        }
-      }
-      if (!options.length) {
-        list.innerHTML = `<div class="skill-option-empty">${escapeHtml(t("task.related_kb_empty", "No other knowledge projects are available."))}</div>`;
-      } else {
-        list.innerHTML = options.map(project => {
-          const key = String(project.project_key || "");
-          const label = String(project.display_name || key);
-          const suffix = project.missing ? ` · ${t("task.related_kb_missing", "missing")}` : "";
-          return `<label class="skill-option-chip">
-            <input type="checkbox" data-related-project-key value="${escapeHtml(key)}" ${relatedKbSelectedKeys.has(key) ? "checked" : ""} ${enabled ? "" : "disabled"}>
-            <span>${escapeHtml(label)} · ${escapeHtml(key)}${escapeHtml(suffix)}</span>
-          </label>`;
-        }).join("");
-      }
-      if (!enabled) {
-        stateEl.textContent = "";
-      } else {
-        stateEl.textContent = formatText(
-          "task.related_kb_selected",
-          { count: relatedKbSelectedKeys.size },
-          `${relatedKbSelectedKeys.size} related projects selected`
-        );
-      }
-    }
-
-    async function loadRelatedKbOptions(options = {}) {
-      const workspacePath = selectedWorkspacePath();
-      const enabled = Boolean(elements.taskContextAutoCompactEnabledEl?.checked);
-      if (!enabled || !workspacePath) {
-        renderRelatedKbOptions();
-        return;
-      }
-      if (typeof deps.fetchJson !== "function" || typeof deps.apiUrl !== "function") {
-        renderRelatedKbOptions();
-        return;
-      }
-      if (!options.force && relatedKbLoadedWorkspace === workspacePath) {
-        renderRelatedKbOptions();
-        return;
-      }
-      const requestSeq = ++relatedKbRequestSeq;
-      if (elements.taskRelatedKbStateEl) {
-        elements.taskRelatedKbStateEl.textContent = t("task.related_kb_loading", "Loading related knowledge projects...");
-      }
-      try {
-        const data = await deps.fetchJson(
-          deps.apiUrl("/api/kb/project-identity", { workspace_path: workspacePath }),
-          {},
-          "Failed to load related knowledge projects"
-        );
-        if (requestSeq !== relatedKbRequestSeq) return;
-        relatedKbLoadedWorkspace = workspacePath;
-        relatedKbProjects = Array.isArray(data.projects) ? data.projects : [];
-        relatedKbCurrentProjectKey = String(data.identity?.project_key || "");
-      } catch (error) {
-        if (requestSeq !== relatedKbRequestSeq) return;
-        relatedKbProjects = [];
-        relatedKbCurrentProjectKey = "";
-        if (elements.taskRelatedKbStateEl) elements.taskRelatedKbStateEl.textContent = error?.message || String(error);
-      }
-      renderRelatedKbOptions();
     }
 
     function createHardwareDebugPayload() {
@@ -398,10 +306,6 @@
       if (elements.taskContextThresholdEl) {
         elements.taskContextThresholdEl.disabled = true;
       }
-      renderRelatedKbOptions();
-      if (elements.taskContextAutoCompactEnabledEl?.checked) {
-        void loadRelatedKbOptions();
-      }
     }
 
     function syncCreateHardwareDebugFields() {
@@ -463,7 +367,6 @@
           supervision_max_rounds: elements.taskSupervisionMaxRoundsEl?.value || "",
           supervision_ask_user_gates: readAskUserGates(),
           token_saving_enabled: Boolean(elements.taskContextAutoCompactEnabledEl?.checked),
-          related_project_keys: selectedRelatedKbKeys(),
           observe_proxy_enabled: Boolean(elements.taskObserveProxyEnabledEl?.checked),
           task_skill_paths: selectedTaskSkillPaths(),
           hardware_debug: createHardwareDebugPayload(),
@@ -678,8 +581,6 @@
       setInputValue(elements.taskSupervisionMaxRoundsEl, values.supervision_max_rounds);
       restoreAskUserGates(values);
       setCheckboxValue(elements.taskContextAutoCompactEnabledEl, values.token_saving_enabled ?? values.context_auto_compact_enabled);
-      relatedKbSelectedKeys = new Set(Array.isArray(values.related_project_keys) ? values.related_project_keys : []);
-      relatedKbLoadedWorkspace = "";
       setCheckboxValue(elements.taskObserveProxyEnabledEl, values.observe_proxy_enabled);
       syncCreateTaskContextFields();
       renderTaskSkillOptions(values.task_skill_paths || []);
@@ -857,7 +758,6 @@
         preferredSubBackend: elements.taskBackendEl.value,
         supervision,
         tokenSavingEnabled,
-        relatedProjectKeys: selectedRelatedKbKeys(),
         observeProxyEnabled,
         taskSkills: createTaskSkillsPayload(),
         hardwareDebug: createHardwareDebugPayload(),
@@ -964,27 +864,6 @@
         restoreDraft(option.dataset.taskMemoOption || "", { showStatus: true });
       });
       elements.taskContextAutoCompactEnabledEl?.addEventListener("change", syncCreateTaskContextFields);
-      elements.taskRelatedKbSelectEl?.addEventListener("change", event => {
-        const checked = elements.taskRelatedKbSelectEl.querySelectorAll("input[data-related-project-key]:checked");
-        if (checked.length > 5) {
-          if (event.target?.matches?.("input[data-related-project-key]")) event.target.checked = false;
-          alertUser(t("task.related_kb_limit", "Select at most 5 related projects."));
-        }
-        relatedKbSelectedKeys = new Set(selectedRelatedKbKeys());
-        renderRelatedKbOptions();
-      });
-      elements.workspaceSelectEl?.addEventListener("change", () => {
-        relatedKbLoadedWorkspace = "";
-        relatedKbCurrentProjectKey = "";
-        relatedKbSelectedKeys = new Set();
-        void loadRelatedKbOptions();
-      });
-      elements.workspaceCustomEl?.addEventListener("change", () => {
-        relatedKbLoadedWorkspace = "";
-        relatedKbCurrentProjectKey = "";
-        relatedKbSelectedKeys = new Set();
-        void loadRelatedKbOptions();
-      });
       elements.taskFormEl?.querySelector("[data-hardware-mode]")?.addEventListener("change", syncCreateHardwareDebugFields);
       elements.taskFormEl?.querySelector("[data-browser-mode]")?.addEventListener("change", syncCreateBrowserControlFields);
       elements.taskFormEl?.querySelector('[data-browser-field="profile"]')?.addEventListener("change", syncCreateBrowserControlFields);

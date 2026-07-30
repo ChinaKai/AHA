@@ -13,9 +13,8 @@
       ? payload.token_saving
       : {};
     const provider = String(policy.provider || "nav");
-    const related = Array.isArray(policy.related_project_keys) ? policy.related_project_keys.length : 0;
     return policy.enabled === true
-      ? `${provider} on${related ? ` · ${related} related` : ""}`
+      ? `${provider} on`
       : "off";
   }
 
@@ -55,9 +54,6 @@
     const proxyEnabled = Boolean(input.proxyEnabled);
     const backend = input.backend || "";
     const tokenSavingEnabled = Boolean(input.tokenSavingEnabled);
-    const relatedProjectKeys = Array.isArray(input.relatedProjectKeys)
-      ? [...new Set(input.relatedProjectKeys.map(value => String(value || "").trim()).filter(Boolean))].slice(0, 5)
-      : [];
     return {
       title: String(input.title || "").trim(),
       description: String(input.description || "").trim(),
@@ -76,8 +72,7 @@
       supervision: input.supervision || {},
       token_saving: {
         enabled: tokenSavingEnabled,
-        provider: "nav",
-        related_project_keys: relatedProjectKeys
+        provider: "nav"
       },
       observe_proxy: {
         enabled: Boolean(input.observeProxyEnabled)

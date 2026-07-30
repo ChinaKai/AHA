@@ -43,6 +43,10 @@ def _post(home: Path, path: str, payload: dict):
     return knowledge_route_response(home, "POST", path, {}, json.dumps(payload).encode(), {})
 
 
+def _put(home: Path, path: str, payload: dict):
+    return knowledge_route_response(home, "PUT", path, {}, json.dumps(payload).encode(), {})
+
+
 def _patch(home: Path, path: str, payload: dict):
     return knowledge_route_response(home, "PATCH", path, {}, json.dumps(payload).encode(), {})
 
@@ -165,8 +169,6 @@ def test_project_identity_api_binds_workspace_to_existing_synced_project(tmp_pat
     )
     assert after["identity"]["project_key"] == "stable-project"
     assert after["projects"][0]["has_manifest"] is True
-    assert "relation_types" not in after
-    assert "related_projects" not in after["identity"]["manifest"]
 
     nav = _get(
         home,
@@ -175,6 +177,58 @@ def test_project_identity_api_binds_workspace_to_existing_synced_project(tmp_pat
     )
     assert nav["project_key"] == "stable-project"
     assert nav["entries"][0]["title"] == "Stable project navigation"
+
+
+def test_project_relations_api_updates_bound_project_manifest(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    for key in ("project-a", "project-b", "project-c"):
+        write_entry(
+            home,
+            config=cfg,
+            scope="project",
+            kind="solutions",
+            project_key_value=key,
+            title=f"{key} knowledge",
+            body="details",
+        )
+    workspace = _git_workspace(
+        tmp_path / "workspace", "git@github.com:user/project-a.git"
+    )
+    json_response_body(_post(
+        home,
+        "/api/kb/project-identity/bind",
+        {
+            "workspace_path": str(workspace),
+            "target_project_key": "project-a",
+        },
+    ))
+
+    response = json_response_body(_put(
+        home,
+        "/api/kb/project-relations",
+        {
+            "workspace_path": str(workspace),
+            "related_projects": [
+                {"project_key": "project-b", "relation": "upstream", "note": "Base"},
+                {"project_key": "project-c", "relation": "sdk", "note": "Vendor SDK"},
+            ],
+        },
+    ))
+    loaded = _get(
+        home,
+        "/api/kb/project-identity",
+        {"workspace_path": [str(workspace)]},
+    )
+
+    assert response["ok"] is True
+    assert response["identity"]["manifest"]["related_projects"][0] == {
+        "project_key": "project-b",
+        "relation": "upstream",
+        "note": "Base",
+    }
+    assert loaded["identity"]["manifest"]["related_projects"] == response["identity"]["manifest"]["related_projects"]
+    assert loaded["relation_types"] == ["upstream", "sdk", "fork", "reference", "other"]
 
 
 def test_entries_mark_dirty_knowledge_files(tmp_path: Path, monkeypatch):

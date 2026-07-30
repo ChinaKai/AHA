@@ -666,7 +666,7 @@ Observe Proxy 是这个设计的度量层。
 - sticky delta prompt 在 token saving 开启且有 KB/Map 入口时会携带 pack，即使该消息原本是 `plain_sticky`，也不会只透传裸用户消息。
 - Context Pack 当前绑定已有 task token saving `provider=map` 开关，未启用时不改变 prompt。
 - map cache 存在时只输出 map 入口和 `/aha map query <terms>` 用法，不输出 query 结果。
-- KB 启用时输出 KB root、project key、navigation index、项目 `solutions/`、项目历史 `worklog/` 与当前 task worklog 入口；task 的 `token_saving.related_project_keys` 还会追加最多 5 个手选项目的 navigation/solutions/worklog 入口。不会递归、不枚举历史条目，也不输出 `retrieve_for_task()` 命中或历史正文；agent 先检查文件名与 JSON frontmatter，再按需读取最少的相关文件。
+- KB 启用时输出 KB root、project key、navigation index、项目 `solutions/`、项目历史 `worklog/` 与当前 task worklog 入口；创建任务时由服务端从 Project Identity manifest 自动快照到 `token_saving.related_project_keys` 的项目，还会追加 relation/note 与 navigation/solutions/worklog 入口。不会递归、不枚举历史条目，也不输出 `retrieve_for_task()` 命中或历史正文；agent 先检查文件名与 JSON frontmatter，再按需读取最少的相关文件。
 
 ### Phase 3：知识反馈循环
 

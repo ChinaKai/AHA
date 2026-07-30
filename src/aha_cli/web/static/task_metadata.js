@@ -167,10 +167,7 @@
     const provider = String(policy.provider || "nav").trim().toLowerCase() || "nav";
     return {
       enabled: typeof policy.enabled === "boolean" ? policy.enabled : (!hasTokenPolicy && legacyPolicy.auto_compact_enabled === true),
-      provider,
-      related_project_keys: Array.isArray(policy.related_project_keys)
-        ? [...new Set(policy.related_project_keys.map(value => String(value || "").trim()).filter(Boolean))].slice(0, 5)
-        : []
+      provider
     };
   }
 
@@ -181,8 +178,7 @@
   function taskTokenSavingSummary(task) {
     const policy = taskTokenSavingPolicy(task);
     if (!policy.enabled) return "off";
-    const related = policy.related_project_keys.length;
-    return related ? `${policy.provider} on · ${related} related` : `${policy.provider} on`;
+    return `${policy.provider} on`;
   }
 
   function taskObserveProxyPolicy(task) {

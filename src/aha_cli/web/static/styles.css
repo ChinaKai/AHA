@@ -2675,11 +2675,6 @@ body.auth-required .login-view:not(.hidden) {
   gap: 6px 8px;
   align-items: center;
 }
-.related-kb-field { min-width: 0; }
-.related-kb-option-list {
-  max-height: 180px;
-  overflow-y: auto;
-}
 .skill-option-chip,
 .hardware-permission-list .checkbox-line,
 .hardware-permissions .supervision-gate-list label {

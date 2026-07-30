@@ -50,7 +50,7 @@
 │       └── <slug>.md
 └── projects/
     └── <project-key>/            # 项目分区
-        ├── project.json          # 同步项目身份（稳定 key、Git identities、旧 key）
+        ├── project.json          # 同步项目身份与关联拓扑（稳定 key、Git identities、旧 key、related_projects）
         ├── navigation/
         │   ├── index.md          # 小入口：项目介绍 + 模块/流程文档链接
         │   ├── modules/
@@ -83,11 +83,12 @@
 > 兼容：旧版本写入的 `git-<hash>` 目录作为 legacy alias 继续参与检索，不强制迁移。
 > 改名：仓库或 remote 改名后需要在任一客户端手动绑定一次；`project.json` 同步后，其他客户端会自动命中新增 identity。
 
-关联知识库采用任务级手选，不写入 `project.json`：
+关联知识库采用“项目级配置 + 任务内部快照”：
 
-- New Task 在 AHA KB 子选项中选择最多 5 个项目，并保存到 task `token_saving.related_project_keys`。
-- Task Settings 修改当前任务的选择快照；Project Identity 只负责稳定识别当前项目，不维护默认关联。
-- AHA KB 只向 agent 暴露所选项目的 navigation/solutions/worklog 入口，不递归、不枚举或注入历史正文。
+- Knowledge → Project Identity 独立维护最多 5 个 `related_projects`，关系类型固定为 `upstream/sdk/fork/reference/other`，并允许可选说明。
+- New Task / Task Settings 不展示关联项目选择器。创建任务时，服务端自动把当前 manifest 的 project keys 快照到 task `token_saving.related_project_keys`；后续只允许任务 UI 修改 AHA KB 开关。
+- 旧任务已有快照继续使用；没有快照的旧任务保持为空，不因项目关系变化突然改变上下文。
+- AHA KB 只向 agent 暴露快照项目的 relation/note 与 navigation/solutions/worklog 入口，不递归、不枚举或注入历史正文。
 
 ---
 
@@ -351,7 +352,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 | 2026-06-19 | Phase 1 | 收口修复：project_key 无 git fallback 去除绝对路径 hash（改为对 goal+目录名 basis 取 hash，可迁移）；第 10 节改为「已确认决策 + 后续待定」消除与顶部/第 8 节冲突；新增可迁移性单测 | 13 单测全绿，已提交 Phase 1 checkpoint `5d0866b` |
 | 2026-06-19 | Follow-up | project_key git 格式改为 `<repo-name>-git-<hash>`，检索兼容旧 `git-<hash>`；知识库 entries 改为原卡片内 View/Close 展开，避免重复标题 | 用户体验/可读性修复 |
 | 2026-07-28 | Follow-up | 新增同步 `projects/<project-key>/project.json` identity manifest；task/nav/distill 统一 manifest 优先解析；Knowledge Web 支持把当前 Git origin 绑定到已有 project | 原仓库零 AHA 文件；remote 改名只需绑定一次并随 KB 多端同步 |
-| 2026-07-29 | Follow-up | New Task/Task Settings 支持任务级手选关联 KB；Context Pack 仅输出所选项目入口 | Project Identity 不保存默认关联，task 保存实际选择快照，不做自动正文检索 |
+| 2026-07-30 | Follow-up | Related projects 改为 Project Identity 项目级唯一配置源；创建任务时服务端保存只读快照，任务 UI 只保留 AHA KB 开关 | 关系随 KB 多端同步，任务上下文可复现，不做自动正文检索 |
 | 2026-06-19 | Follow-up | memo completion report 成功生成后接入知识沉淀；distill 时附带本项目命中的既有知识摘要，候选中提示审核时更新/废弃冲突旧条目 | 完善生产入口与消费后的更新复核线 |
 | 2026-06-20 | Follow-up | Web entries 支持 project-key 模糊过滤与标题/标签/正文搜索；heuristic 改为保留 Markdown 结构、抽取高价值章节，不再硬截断存储正文 | 修复知识库可查性与候选内容质量 |
 | 2026-06-20 | Follow-up | final/report 提示词支持 knowledge sidecar；AHA 写入 final/report 前剥离 sidecar 并以 sidecar 优先生成候选；pending 按 source_group + normalized title 幂等合并 | 明确 final/report/KB 三层心智模型，解决执行顺序与重复执行问题 |

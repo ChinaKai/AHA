@@ -457,13 +457,14 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn('api("/api/kb/project-identity/bind"', knowledge)
         self.assertIn("function renderProjectIdentity()", knowledge)
         self.assertIn("function bindProjectIdentity()", knowledge)
-        self.assertNotIn('id="project-relations-editor"', knowledge)
-        self.assertNotIn('api("/api/kb/project-relations"', knowledge)
-        self.assertNotIn("function renderProjectRelations()", knowledge)
-        self.assertNotIn("function saveProjectRelations()", knowledge)
+        self.assertIn('id="project-relations-editor"', knowledge)
+        self.assertIn('api("/api/kb/project-relations"', knowledge)
+        self.assertIn("function renderProjectRelations()", knowledge)
+        self.assertIn("function saveProjectRelations()", knowledge)
         self.assertIn('"knowledge.project_identity": "Project identity"', i18n)
         self.assertIn('"knowledge.project_identity": "项目身份"', i18n)
-        self.assertNotIn('"knowledge.project_relations"', i18n)
+        self.assertIn('"knowledge.project_relations": "Related knowledge projects"', i18n)
+        self.assertIn('"knowledge.project_relations": "关联知识库"', i18n)
 
     def test_integrations_include_local_terminal(self) -> None:
         root = static_root()
@@ -5752,10 +5753,10 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn(".advanced-task-group {\n  display: grid;", styles)
         self.assertIn('id="task-token-saving-enabled" type="checkbox"', html)
         self.assertIn('id="selected-task-token-saving-enabled" type="checkbox"', html)
-        self.assertIn('id="task-related-kb-field"', html)
-        self.assertIn('id="task-related-kb-select"', html)
-        self.assertIn('id="selected-task-related-kb-field"', html)
-        self.assertIn('id="selected-task-related-kb-select"', html)
+        self.assertNotIn('id="task-related-kb-field"', html)
+        self.assertNotIn('id="task-related-kb-select"', html)
+        self.assertNotIn('id="selected-task-related-kb-field"', html)
+        self.assertNotIn('id="selected-task-related-kb-select"', html)
         self.assertNotIn('id="task-context-evidence"', html)
         self.assertNotIn('id="task-context-evidence-refresh"', html)
         self.assertNotIn('id="task-context-evidence-body"', html)
@@ -5769,8 +5770,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertNotIn('id="task-context-threshold"', html)
         self.assertIn("taskContextAutoCompactEnabledEl", controller_registry_script)
         self.assertIn('taskContextAutoCompactEnabledEl: "task-token-saving-enabled"', controller_registry_script)
-        self.assertIn('taskRelatedKbSelectEl: "task-related-kb-select"', controller_registry_script)
-        self.assertIn('selectedTaskRelatedKbSelectEl: "selected-task-related-kb-select"', controller_registry_script)
+        self.assertNotIn("taskRelatedKbSelectEl", controller_registry_script)
+        self.assertNotIn("selectedTaskRelatedKbSelectEl", controller_registry_script)
         self.assertNotIn("taskContextEvidenceEl", controller_registry_script)
         self.assertNotIn("taskContextEvidenceBodyEl", app_controller_factory_script)
         self.assertNotIn("taskContextEvidenceRefreshEl", app_controller_factory_script)
@@ -5826,26 +5827,14 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("token_saving:", task_form_script)
         self.assertIn("enabled: tokenSavingEnabled", task_form_script)
         self.assertIn('provider: "nav"', task_form_script)
-        self.assertIn("related_project_keys: relatedProjectKeys", task_form_script)
-        self.assertIn("loadRelatedKbOptions", task_create_controller_script)
-        self.assertIn("loadTaskRelatedKbOptions", task_config_script)
-        self.assertIn("related_project_keys: selectedTaskRelatedKbKeys()", task_config_script)
-        self.assertNotIn("manifest?.related_projects", task_create_controller_script)
+        self.assertNotIn("related_project_keys", task_form_script)
+        self.assertNotIn("loadRelatedKbOptions", task_create_controller_script)
+        self.assertNotIn("loadTaskRelatedKbOptions", task_config_script)
+        self.assertNotIn("selectedTaskRelatedKbKeys", task_config_script)
         feature_controller_elements = app_controller_factory_script.split(
             "function createFeatureControllers", 1
         )[1].split("} = elements;", 1)[0]
-        self.assertIn(
-            'taskRelatedKbFieldEl, taskRelatedKbSelectEl, taskRelatedKbStateEl,',
-            feature_controller_elements,
-        )
-        self.assertIn(
-            'deps.apiUrl("/api/kb/project-identity", { workspace_path: workspacePath })',
-            task_create_controller_script,
-        )
-        self.assertIn(
-            'api.apiUrl("/api/kb/project-identity", { workspace_path: workspacePath })',
-            task_config_script,
-        )
+        self.assertNotIn("taskRelatedKb", feature_controller_elements)
         self.assertNotIn("auto at", task_form_script)
         self.assertNotIn("auto off", task_form_script)
         self.assertIn("taskSupervisionPayloadFromMode", frontend_scripts)

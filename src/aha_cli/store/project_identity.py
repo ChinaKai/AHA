@@ -9,9 +9,12 @@ from pathlib import Path
 from aha_cli.domain.models import utc_now
 from aha_cli.store.io import read_json, write_json
 
-PROJECT_IDENTITY_SCHEMA_VERSION = 1
+PROJECT_IDENTITY_SCHEMA_VERSION = 2
 PROJECT_MANIFEST_FILE = "project.json"
 PROJECTS_DIR = "projects"
+PROJECT_RELATION_TYPES = ("upstream", "sdk", "fork", "reference", "other")
+MAX_PROJECT_RELATIONS = 5
+MAX_PROJECT_RELATION_NOTE_LENGTH = 240
 _PROJECT_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
 
 
@@ -114,6 +117,65 @@ def _string_list(value: object) -> list[str]:
     return result
 
 
+def normalize_project_relations(
+    value: object,
+    *,
+    current_project_key: str,
+    strict: bool = False,
+) -> list[dict]:
+    current_key = validate_project_key(current_project_key)
+    if not isinstance(value, list):
+        if strict and value is not None:
+            raise ProjectIdentityError("related_projects must be an array")
+        return []
+    if strict and len(value) > MAX_PROJECT_RELATIONS:
+        raise ProjectIdentityError(
+            f"related_projects supports at most {MAX_PROJECT_RELATIONS} projects"
+        )
+    relations: list[dict] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            if strict:
+                raise ProjectIdentityError("each related project must be an object")
+            continue
+        try:
+            target_key = validate_project_key(str(item.get("project_key") or ""))
+        except ProjectIdentityError:
+            if strict:
+                raise
+            continue
+        if target_key == current_key:
+            if strict:
+                raise ProjectIdentityError("a project cannot reference itself")
+            continue
+        if target_key in seen:
+            if strict:
+                raise ProjectIdentityError(f"duplicate related project: {target_key}")
+            continue
+        relation = str(item.get("relation") or "reference").strip().lower()
+        if relation not in PROJECT_RELATION_TYPES:
+            if strict:
+                raise ProjectIdentityError(f"unknown project relation: {relation}")
+            relation = "reference"
+        note = " ".join(str(item.get("note") or "").split())
+        if len(note) > MAX_PROJECT_RELATION_NOTE_LENGTH:
+            if strict:
+                raise ProjectIdentityError(
+                    f"project relation note must be at most {MAX_PROJECT_RELATION_NOTE_LENGTH} characters"
+                )
+            note = note[:MAX_PROJECT_RELATION_NOTE_LENGTH].rstrip()
+        relations.append({
+            "project_key": target_key,
+            "relation": relation,
+            "note": note,
+        })
+        seen.add(target_key)
+        if len(relations) >= MAX_PROJECT_RELATIONS:
+            break
+    return relations
+
+
 def _normalized_manifest(data: dict, *, directory_key: str) -> dict:
     key = validate_project_key(str(data.get("project_key") or directory_key))
     if key != directory_key:
@@ -139,6 +201,10 @@ def _normalized_manifest(data: dict, *, directory_key: str) -> dict:
         "display_name": str(data.get("display_name") or key).strip() or key,
         "git_identities": identities,
         "legacy_keys": legacy_keys,
+        "related_projects": normalize_project_relations(
+            data.get("related_projects"),
+            current_project_key=key,
+        ),
         "created_at": str(data.get("created_at") or ""),
         "updated_at": str(data.get("updated_at") or ""),
     }
@@ -260,11 +326,49 @@ def bind_project_identity(
         "legacy_keys": _string_list(
             [*((existing or {}).get("legacy_keys", [])), *known_directory_aliases]
         ),
+        "related_projects": list((existing or {}).get("related_projects") or []),
         "created_at": str((existing or {}).get("created_at") or now),
         "updated_at": now,
     }
     path = project_manifest_path(kb_root, target_key)
     write_json(path, manifest)
     result = resolve_project_identity(kb_root, workspace)
+    result["path"] = str(path)
+    return result
+
+
+def update_project_relations(
+    kb_root: Path,
+    project_key: str,
+    related_projects: object,
+) -> dict:
+    key = validate_project_key(project_key)
+    existing = read_project_manifest(kb_root, key)
+    if existing is None:
+        raise ProjectIdentityError("bind the current repository before editing related projects")
+    relations = normalize_project_relations(
+        related_projects,
+        current_project_key=key,
+        strict=True,
+    )
+    for relation in relations:
+        target_key = relation["project_key"]
+        if target_key in {key, *list(existing.get("legacy_keys") or [])}:
+            raise ProjectIdentityError("a project cannot reference itself or one of its legacy keys")
+        if not (Path(kb_root) / PROJECTS_DIR / target_key).is_dir():
+            raise FileNotFoundError(f"knowledge project not found: {target_key}")
+    manifest = {
+        "schema_version": PROJECT_IDENTITY_SCHEMA_VERSION,
+        "project_key": key,
+        "display_name": existing["display_name"],
+        "git_identities": list(existing.get("git_identities") or []),
+        "legacy_keys": list(existing.get("legacy_keys") or []),
+        "related_projects": relations,
+        "created_at": existing.get("created_at") or utc_now(),
+        "updated_at": utc_now(),
+    }
+    path = project_manifest_path(kb_root, key)
+    write_json(path, manifest)
+    result = read_project_manifest(kb_root, key) or manifest
     result["path"] = str(path)
     return result

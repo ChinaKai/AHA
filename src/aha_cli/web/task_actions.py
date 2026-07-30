@@ -17,7 +17,6 @@ from aha_cli.domain.models import (
     TASK_BROWSER_RUNTIME_MODES,
     TASK_BROWSER_TRANSFER_MODES,
     TASK_SUPERVISION_ASK_USER_GATES,
-    MAX_TASK_RELATED_PROJECTS,
     normalize_browser_profile_name,
 )
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
@@ -123,15 +122,6 @@ def parse_task_token_saving_fields(payload: dict) -> dict[str, object]:
         update["enabled"] = parse_optional_bool(payload.get("token_saving_enabled"), "token_saving_enabled")
     if "provider" in payload:
         update["provider"] = str(payload.get("provider") or "nav")
-    if "related_project_keys" in payload:
-        related = payload.get("related_project_keys")
-        if not isinstance(related, list):
-            raise ValueError("related_project_keys must be an array")
-        if len(related) > MAX_TASK_RELATED_PROJECTS:
-            raise ValueError(
-                f"related_project_keys supports at most {MAX_TASK_RELATED_PROJECTS} projects"
-            )
-        update["related_project_keys"] = related
     return update
 
 

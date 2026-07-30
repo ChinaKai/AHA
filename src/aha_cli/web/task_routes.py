@@ -62,6 +62,7 @@ from aha_cli.store.filesystem import (
     update_task_supervision_config,
     update_task_token_saving_config,
 )
+from aha_cli.store.knowledge import resolved_project_identity
 from aha_cli.store.task_memos import (
     create_task_memo,
     delete_task_memo,
@@ -826,6 +827,36 @@ def validate_runtime_options(sandbox: str | None, approval: str | None, reasonin
     return None
 
 
+def _token_saving_with_related_project_snapshot(
+    root: Path,
+    run_id: str,
+    workspace_path: str,
+    token_saving: dict | None,
+) -> dict | None:
+    if token_saving is None:
+        return None
+    policy = dict(token_saving)
+    policy["related_project_keys"] = []
+    try:
+        config = load_config(root)
+        goal = str(require_plan(root, run_id).get("goal") or "")
+        identity = resolved_project_identity(
+            root,
+            config,
+            Path(workspace_path),
+            goal=goal,
+        )
+        manifest = identity.get("manifest") if identity.get("source") == "manifest" else None
+        policy["related_project_keys"] = [
+            str(item.get("project_key") or "")
+            for item in ((manifest or {}).get("related_projects") or [])
+            if isinstance(item, dict) and item.get("project_key")
+        ]
+    except (OSError, ValueError, SystemExit):
+        pass
+    return policy
+
+
 def handle_create_task_route(root: Path, run_id: str, payload: dict, *, background_backend_start: bool = False) -> dict:
     title = str(payload.get("title", "")).strip()
     description = str(payload.get("description", "") or "").strip()
@@ -874,6 +905,12 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             if not isinstance(payload.get("token_saving"), dict):
                 return route_result({"error": "token_saving must be an object"}, "400 Bad Request")
             token_saving = parse_task_token_saving_fields(payload["token_saving"])
+            token_saving = _token_saving_with_related_project_snapshot(
+                root,
+                run_id,
+                workspace_path,
+                token_saving,
+            )
         observe_proxy = None
         if "observe_proxy" in payload:
             if not isinstance(payload.get("observe_proxy"), dict):

@@ -56,10 +56,12 @@ from aha_cli.store.knowledge import (
     write_entry,
 )
 from aha_cli.store.project_identity import (
+    PROJECT_RELATION_TYPES,
     ProjectIdentityConflict,
     ProjectIdentityError,
     bind_project_identity,
     list_project_manifests,
+    update_project_relations,
 )
 from aha_cli.store.knowledge_assets import EntryImageRejected, add_entry_image, read_entry_image
 from aha_cli.store import knowledge_capture as capture
@@ -961,6 +963,7 @@ def knowledge_route_response(
         return _ok(method, {
             "identity": identity,
             "projects": _project_identity_candidates(root, cfg),
+            "relation_types": list(PROJECT_RELATION_TYPES),
             "workspace_path": context["workspace_path"],
         })
 
@@ -992,6 +995,41 @@ def knowledge_route_response(
             "ok": True,
             "identity": identity,
             "projects": _project_identity_candidates(root, cfg),
+            "relation_types": list(PROJECT_RELATION_TYPES),
+            "workspace_path": context["workspace_path"],
+            "git": git_result,
+        })
+
+    if method == "PUT" and path == "/api/kb/project-relations":
+        payload = parse_json_body(body) if body.strip() else {}
+        try:
+            context = _project_nav_bootstrap_context(root, payload, query)
+            identity = _resolved_project_identity(root, cfg, context)
+            if identity.get("source") != "manifest":
+                return json_response(
+                    {"error": "bind the current repository before editing related projects"},
+                    "409 Conflict",
+                )
+            update_project_relations(
+                knowledge_root(root, cfg),
+                str(identity.get("project_key") or ""),
+                payload.get("related_projects"),
+            )
+            identity = _resolved_project_identity(root, cfg, context)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except (OSError, ProjectIdentityError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        git_result = auto_commit_after_change(
+            root,
+            f"chore(knowledge): update project relations '{identity['project_key']}'",
+            cfg,
+        )
+        return json_response({
+            "ok": True,
+            "identity": identity,
+            "projects": _project_identity_candidates(root, cfg),
+            "relation_types": list(PROJECT_RELATION_TYPES),
             "workspace_path": context["workspace_path"],
             "git": git_result,
         })

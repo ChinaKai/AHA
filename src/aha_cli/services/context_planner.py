@@ -122,6 +122,7 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
                 for key in (token_saving.get("related_project_keys") or [])
                 if key not in project_keys
             ],
+            current_manifest=identity.get("manifest"),
         )
         text = "\n".join(
             [
@@ -142,7 +143,7 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
                 "- If navigation_index is not found yet, create a minimal evidence-based navigation/index.md during the task after verifying source entrypoints.",
                 "- project_solutions contains historical project conclusions and reusable fixes; project_worklogs contains historical task records. Use them as optional reference when the current task needs prior decisions, background, or verification context.",
                 "- For project_solutions and project_worklogs, inspect filenames and JSON frontmatter first, then read only the smallest relevant files. Do not traverse or read every historical entry.",
-                "- Related knowledge projects are task-selected direct references only. Do not recursively expand to other projects. Current source and the current project's KB take precedence over related-project knowledge.",
+                "- Related knowledge projects are read-only task snapshots created from Project Identity relations. Do not recursively expand to other projects. Current source and the current project's KB take precedence over related-project knowledge.",
                 "- Required first action: if task_worklog is shown as not found yet, create it at the supplied path with task_worklog_frontmatter_json before repository inspection, analysis, implementation, or delegation; after the file exists, continue the task.",
                 "- Update task_worklog in real time as plans, progress, decisions, requirement changes, verification, or KB/nav updates happen. Do not wait until task end.",
                 "- Keep project navigation/solutions current during the task when current evidence proves a durable route, reusable diagnostic, fix, stale entry, or missing entry.",
@@ -199,7 +200,13 @@ def _related_project_references(
     *,
     current_project_key: str,
     related_project_keys: list[str],
+    current_manifest: dict | None,
 ) -> list[dict]:
+    relation_meta = {
+        str(item.get("project_key") or ""): item
+        for item in ((current_manifest or {}).get("related_projects") or [])
+        if isinstance(item, dict)
+    }
     references: list[dict] = []
     for key in related_project_keys:
         if key == current_project_key:
@@ -212,9 +219,12 @@ def _related_project_references(
         nav_rel, nav_exists = _navigation_index_reference(kb_root, aliases)
         solutions_rel, solutions_exist = _project_kind_reference(kb_root, aliases, "solutions")
         worklogs_rel, worklogs_exist = _project_kind_reference(kb_root, aliases, "worklog")
+        relation = relation_meta.get(key) or {}
         references.append({
             "project_key": key,
             "display_name": str((manifest or {}).get("display_name") or key),
+            "relation": str(relation.get("relation") or "reference"),
+            "note": str(relation.get("note") or ""),
             "available": (kb_root / "projects" / key).is_dir(),
             "navigation_index": nav_rel,
             "navigation_index_exists": nav_exists,
@@ -229,11 +239,13 @@ def _related_project_references(
 def _related_project_reference_lines(projects: list[dict]) -> list[str]:
     if not projects:
         return []
-    lines = ["Related knowledge projects (task-selected, direct only):"]
+    lines = ["Related knowledge projects (task snapshot, direct only):"]
     for project in projects:
         lines.extend([
             f"- project_key: {project['project_key']}",
             f"  display_name: {project['display_name']}",
+            f"  relation: {project['relation']}",
+            *([f"  note: {project['note']}"] if project.get("note") else []),
             f"  available: {'yes' if project.get('available') else 'no'}",
             f"  navigation_index: {project['navigation_index'] or '-'} ({'exists' if project.get('navigation_index_exists') else 'not found'})",
             f"  project_solutions: {project['project_solutions'] or '-'} ({'exists' if project.get('project_solutions_exist') else 'not found'})",
