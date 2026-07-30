@@ -38,21 +38,6 @@
     }
     .kb-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
     .kb-row > * { min-width: 0; }
-    .kb-entry-toolbar {
-      display: block; max-width: 720px;
-    }
-    .kb-entry-search {
-      display: grid; grid-template-columns: minmax(0, 1fr) var(--control-height-md);
-      gap: 6px; min-width: 0;
-    }
-    .kb-entry-search-button {
-      width: var(--control-height-md); min-width: var(--control-height-md);
-      padding: 0; display: inline-flex; align-items: center; justify-content: center;
-    }
-    .kb-entry-search-button svg {
-      width: 17px; height: 17px; stroke: currentColor; stroke-width: 2;
-      fill: none; stroke-linecap: round; stroke-linejoin: round;
-    }
     .kb-card {
       display: grid; gap: 6px; min-width: 0; padding: 12px; margin: 10px 0;
       border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
@@ -303,6 +288,10 @@
     .kb-detail-fullscreen #cap-view-log.kb-detail-scroll-body {
       max-height: none; margin: 0; border: 0; border-radius: 0;
     }
+    .search-deep-link-hit {
+      padding: 0 2px; border-radius: 3px; background: #fde68a; color: #78350f;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, .22);
+    }
     .kb-log-modal { width: min(92vw, 860px); max-height: 90vh; overflow: auto; }
     .kb-log-label { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
     .kb-log-body { max-height: min(360px, 35vh); overflow: auto; }
@@ -527,14 +516,6 @@
   </nav>
 
   <section id="tab-entries">
-    <div class="kb-row kb-entry-toolbar">
-      <div class="kb-entry-search">
-        <input id="f-search" type="search" placeholder="Search title, tags, or body" data-i18n-placeholder="knowledge.search_filter" />
-        <button class="button-ghost kb-entry-search-button" id="f-search-submit" type="button" aria-label="Search" title="Search" data-i18n-aria-label="knowledge.search" data-i18n-title="knowledge.search">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
-        </button>
-      </div>
-    </div>
     <div id="entries-list"></div>
   </section>
 
@@ -727,6 +708,7 @@
 
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js"></script>
+  <script src="/static/search_highlight.js?v=global-search-v4"></script>
   <script src="/static/i18n.js"></script>
   <script>
     const $ = (s) => document.querySelector(s);
@@ -734,6 +716,11 @@
     const formatText = (key, values, fallback) => window.AHAI18n?.format?.(key, values, fallback) || fallback || key;
     const pageParams = new URLSearchParams(window.location.search || "");
     const pageRunId = String(pageParams.get("run_id") || pageParams.get("run") || "").trim();
+    const pageEntryId = String(pageParams.get("kb_entry_id") || "").trim();
+    const pageNoteId = String(pageParams.get("kb_note_id") || "").trim();
+    const pageSearchQuery = String(pageParams.get("search_query") || "").trim();
+    const pageSearchField = String(pageParams.get("search_field") || "").trim();
+    let pageSearchHighlightPending = Boolean(pageSearchQuery);
     const toast = (msg) => { const el = $("#toast"); el.textContent = msg; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 1800); };
     const api = async (path, opts) => {
       const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
@@ -851,14 +838,14 @@
       for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === tab);
       for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
       if (tab === "navigation") {
-        loadNavigation();
-        loadProjectIdentity();
+        return Promise.all([loadNavigation(), loadProjectIdentity()]);
       }
-      if (tab === "pending") loadPending();
-      if (tab === "capture") loadCapture();
-      if (tab === "skills") loadSkills();
-      if (tab === "settings") loadSettings();
-      if (tab === "entries") loadEntries();
+      if (tab === "pending") return loadPending();
+      if (tab === "capture") return loadCapture();
+      if (tab === "skills") return loadSkills();
+      if (tab === "settings") return loadSettings();
+      if (tab === "entries") return loadEntries();
+      return Promise.resolve();
     }
 
     function defaultSkillMarkdown(id) {
@@ -1657,6 +1644,17 @@
       renderEntryEditMarkdown();
     }
 
+    function focusPageSearchMatch(titleEl, bodyEl) {
+      if (!pageSearchHighlightPending || !window.AHASearchHighlight) return false;
+      const primary = pageSearchField === "title" ? titleEl : bodyEl;
+      const secondary = pageSearchField === "title" ? bodyEl : titleEl;
+      const hit = window.AHASearchHighlight.highlightFirst(primary, pageSearchQuery, { documentRef: document })
+        || window.AHASearchHighlight.highlightFirst(secondary, pageSearchQuery, { documentRef: document });
+      if (!hit) return false;
+      pageSearchHighlightPending = false;
+      return true;
+    }
+
     function renderEntryReferenceModal() {
       const modal = $("#entry-ref-modal");
       const ref = state.referenceEntry;
@@ -1694,6 +1692,7 @@
       }
       modal.hidden = false;
       renderEntryEditMarkdown();
+      setTimeout(() => focusPageSearchMatch($("#entry-ref-title"), body), 0);
     }
 
     function renderEntryModalActions(entry) {
@@ -2214,9 +2213,7 @@
     async function loadEntries(options = {}) {
       const append = Boolean(options.append);
       const q = new URLSearchParams();
-      const searchText = $("#f-search").value.trim();
-      if (searchText) q.set("q", searchText);
-      else q.set("fast", "1");
+      q.set("fast", "1");
       q.set("limit", String(ENTRIES_PAGE_LIMIT));
       if (append) q.set("offset", String(state.entries.length));
       const data = await api("/api/kb/entries?" + q.toString());
@@ -2529,8 +2526,7 @@
     window.openCandidate = async (encodedId) => {
       const id = decodeURIComponent(String(encodedId || ""));
       if (!id) return;
-      showTab("pending");
-      await loadPending();
+      await showTab("pending");
       state.pendingExpanded.add(id);
       renderPending();
       setTimeout(() => scrollToDataValue("data-pending-id", id), 0);
@@ -2665,6 +2661,7 @@
       syncCaptureDistillPanelControls();
       applyCaptureViewMode();
       modal.hidden = false;
+      setTimeout(() => focusPageSearchMatch($("#cap-view-title"), body), 0);
     }
 
     function closeCaptureNoteModal() {
@@ -3039,8 +3036,7 @@
     window.openCaptureNote = async (encodedId) => {
       const id = decodeURIComponent(String(encodedId || ""));
       if (!id) return;
-      showTab("capture");
-      await loadCapture();
+      await showTab("capture");
       state.editingNote = null;
       openCaptureNoteView(id);
       setTimeout(() => scrollToDataValue("data-note-id", id), 0);
@@ -3650,10 +3646,6 @@
         editor.value = defaultSkillMarkdown(input.value || "new-skill");
       }
     });
-    $("#f-search-submit").addEventListener("click", loadEntries);
-    $("#f-search").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") loadEntries();
-    });
     window.addEventListener("aha:languagechange", () => {
       syncChromeText();
       renderEntries();
@@ -3678,7 +3670,15 @@
     syncChromeText();
     loadStatus();
     loadSyncStatus();
-    loadProjectNavWorkspaces().finally(() => showTab(state.activeTab));
+    loadProjectNavWorkspaces().finally(() => {
+      if (pageEntryId) {
+        void showTab("entries").then(() => openEntryReference(encodeURIComponent(pageEntryId)));
+      } else if (pageNoteId) {
+        void window.openCaptureNote(encodeURIComponent(pageNoteId));
+      } else {
+        showTab(state.activeTab);
+      }
+    });
   </script>
 </body>
 </html>

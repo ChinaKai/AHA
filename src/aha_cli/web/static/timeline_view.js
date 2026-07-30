@@ -119,12 +119,18 @@
 
     function renderTimelineCard(title, body, ts, cls, key = "", options = {}) {
       const copyKey = String(key || "");
+      const eventCursor = options.eventCursor === undefined || options.eventCursor === null
+        ? ""
+        : String(options.eventCursor);
+      const eventCursorAttr = eventCursor
+        ? ` data-chat-event-cursor="${deps.escapeHtml?.(eventCursor)}"`
+        : "";
       if (copyKey) state.copyTextByKey?.set(copyKey, String(body || ""));
       const copyButton = copyKey
         ? `<button class="message-copy" type="button" data-copy-message-key="${deps.escapeHtml?.(copyKey)}" data-copy-state="idle" title="Copy message" aria-label="Copy message"><span class="message-copy-icon" aria-hidden="true"></span><span class="message-copy-label sr-only">Copy message</span></button>`
         : "";
       return `
-        <div class="message ${cls}">
+        <div class="message ${cls}"${eventCursorAttr}>
           <div class="message-head">
             <span class="message-title">${deps.escapeHtml?.(title)}</span>
             <span class="message-actions">
@@ -207,7 +213,14 @@
       const data = deps.eventData?.(event) || {};
       if (event.type === "message") {
         const { displaySender, displayTarget, className } = deps.messageTimelineDisplay?.(data) || {};
-        return renderTimelineCard(`${displaySender} -> ${displayTarget}`, data.message || "", eventTimeLabel(event), className, timelineMessageKey(event));
+        return renderTimelineCard(
+          `${displaySender} -> ${displayTarget}`,
+          data.message || "",
+          eventTimeLabel(event),
+          className,
+          timelineMessageKey(event),
+          { eventCursor: event?._cursor ?? event?.cursor }
+        );
       }
       if (event.type === "agent_message") return renderTimelineCard(deps.agentUpdateTitle?.(data), deps.agentUpdateBody?.(data), eventTimeLabel(event), "agent-update", timelineMessageKey(event));
       if (event.type === "agent_command_started") return renderTimelineCard(`running command (${data.target || "main"})`, data.command || "", eventTimeLabel(event), "agent-command", timelineMessageKey(event), { markdown: false });

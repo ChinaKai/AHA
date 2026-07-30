@@ -80,6 +80,9 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   copyTextByKey,
   createAccessControlController,
   currentRunId: () => currentRunId,
+  initialChatEventId,
+  initialSearchField,
+  initialSearchQuery,
   defaultAskUserGates,
   defaultHttpProxy,
   defaultHttpsProxy,
@@ -231,6 +234,7 @@ conversationController = window.AHAConversationController.createConversationCont
   backendTarget,
   eventTailInitialized: () => eventTailInitialized,
   hardwareIoStates,
+  initialChatEventId,
   lastEventId: () => lastEventId,
   logPageLimit,
   logStates,
@@ -702,6 +706,9 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   escapeHtml,
   fetchJson,
   fetchWithTimeout,
+  initialSelectedMemoId,
+  initialSearchField,
+  initialSearchQuery,
   fillBootstrapProxyDefaultFor: bootstrapConfigHelpers.fillBootstrapProxyDefaultFor,
   formatDuration,
   formatLocalTimestamp,
@@ -764,6 +771,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
 });
 const {
   agentConfigController,
+  globalSearchController,
   messageComposer,
   settingsController,
   taskCreateController,
@@ -1245,6 +1253,7 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   syncWorkflowTemplateHelp: taskOptionsController.syncWorkflowTemplateHelp,
   taskConfigController,
   taskCreateController,
+  globalSearchController,
   taskMemoController,
   taskController,
   windowRef: window

@@ -12,7 +12,10 @@ from unittest import mock
 from urllib.parse import parse_qs
 
 from aha_cli.cli import append_message, main
-from aha_cli.store.filesystem import append_event, event_path, iter_jsonl_from
+from aha_cli.store.filesystem import append_event, create_plan, event_path, iter_jsonl_from, save_plan
+from aha_cli.store.knowledge import write_entry
+from aha_cli.store.knowledge_capture import create_note
+from aha_cli.store.task_memos import create_task_memo
 from aha_cli.web import system_routes
 from aha_cli.web.run_api import ApiRunNotFound
 from aha_cli.web.system_routes import consume_web_restart_requested, system_route_response
@@ -30,6 +33,242 @@ class WebSystemRoutesTests(unittest.TestCase):
         if not shutil.which("git"):
             self.skipTest("git is not available")
         return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+    def test_global_search_finds_tasks_and_memos_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                historical = create_plan(
+                    root,
+                    "Historical product run",
+                    1,
+                    "auto",
+                    ["Repair Aurora index"],
+                    [],
+                    backend="stub",
+                )
+                historical["tasks"][0]["description"] = "Investigate orbital search behavior"
+                historical["tasks"][0]["hidden"] = True
+                save_plan(root, historical)
+                memo = create_task_memo(
+                    root,
+                    historical["id"],
+                    {
+                        "title": "Aurora launch notes",
+                        "description": "Follow up with the search team",
+                        "scheduled_date": "2026-07-30",
+                    },
+                )
+                current = create_plan(
+                    root,
+                    "Current run",
+                    1,
+                    "auto",
+                    ["Unrelated current task"],
+                    [],
+                    backend="stub",
+                )
+                append_event(
+                    root,
+                    historical["id"],
+                    "message",
+                    {
+                        "task_id": historical["tasks"][0]["id"],
+                        "sender": "browser",
+                        "target": "main",
+                        "message": "Exact comet transcript marker",
+                    },
+                )
+                knowledge_path = write_entry(
+                    root,
+                    config=None,
+                    scope="general",
+                    kind="wiki",
+                    title="Nebula operations handbook",
+                    body="Cross-project recovery guide",
+                )
+                knowledge_id = json.loads(knowledge_path.read_text(encoding="utf-8").split("---", 2)[1])["id"]
+                note = create_note(
+                    root,
+                    None,
+                    title="Nebula field note",
+                    text="Capture search replacement",
+                )
+
+                response = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Aurora"),
+                )
+                memo_only = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=search&type=memo&limit=1"),
+                )
+                head = system_route_response(
+                    root,
+                    current["id"],
+                    "HEAD",
+                    "/api/global-search",
+                    parse_qs("q=Aurora"),
+                )
+                invalid_type = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Aurora&type=run"),
+                )
+                knowledge_only = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Nebula&type=kb"),
+                )
+                chat_summary = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=transcript+marker&type=task"),
+                )
+                chat_only = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs(
+                        f"q=transcript+marker&type=task&chat_only=1"
+                        f"&scope_run_id={historical['id']}"
+                        f"&scope_task_id={historical['tasks'][0]['id']}"
+                    ),
+                )
+                missing_chat_scope = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=transcript&type=task&chat_only=1"),
+                )
+                boolean_and = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Aurora+%26+orbital&type=task"),
+                )
+                boolean_or = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Aurora+%7C+Nebula"),
+                )
+                boolean_precedence = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Aurora+%7C+Nebula+%26+missing"),
+                )
+                legacy_boolean_aliases = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Aurora+%7C%7C+Nebula+%26%26+missing"),
+                )
+                wildcard = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=Auro*index&type=task"),
+                )
+                regex_chat = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs(
+                        f"q=%2Fexact%5Cs%2Bcomet%2Fi&type=task&chat_only=1"
+                        f"&scope_run_id={historical['id']}"
+                        f"&scope_task_id={historical['tasks'][0]['id']}"
+                    ),
+                )
+                invalid_regex = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=%2F%5B%2F"),
+                )
+                empty_regex = system_route_response(
+                    root,
+                    current["id"],
+                    "GET",
+                    "/api/global-search",
+                    parse_qs("q=%2F.%2A%2F"),
+                )
+
+        body = json_response_body(response)
+        self.assertEqual(body["total"], 2)
+        self.assertEqual({item["type"] for item in body["results"]}, {"task", "memo"})
+        self.assertTrue(all(item["run_id"] == historical["id"] for item in body["results"]))
+        task = next(item for item in body["results"] if item["type"] == "task")
+        memo_result = next(item for item in body["results"] if item["type"] == "memo")
+        self.assertTrue(task["hidden"])
+        self.assertEqual(memo_result["id"], memo["id"])
+        memo_body = json_response_body(memo_only)
+        self.assertEqual(memo_body["returned"], 1)
+        self.assertEqual(memo_body["results"][0]["type"], "memo")
+        self.assertEqual(memo_body["results"][0]["match_field"], "description")
+        self.assertEqual(memo_body["results"][0]["match_query"], "search")
+        self.assertTrue(head and head.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(head.split(b"\r\n\r\n", 1)[1], b"")
+        self.assertTrue(invalid_type and invalid_type.startswith(b"HTTP/1.1 400 Bad Request"))
+        knowledge_body = json_response_body(knowledge_only)
+        self.assertEqual(knowledge_body["total"], 2)
+        self.assertEqual({item["type"] for item in knowledge_body["results"]}, {"kb"})
+        self.assertEqual({item["kb_kind"] for item in knowledge_body["results"]}, {"entry", "note"})
+        self.assertIn(knowledge_id, {item["id"] for item in knowledge_body["results"]})
+        self.assertIn(note["id"], {item["id"] for item in knowledge_body["results"]})
+        chat_summary_body = json_response_body(chat_summary)
+        self.assertEqual(chat_summary_body["total"], 1)
+        chat_summary_result = chat_summary_body["results"][0]
+        self.assertEqual(chat_summary_result["result_kind"], "task")
+        self.assertEqual(chat_summary_result["chat_match_count"], 1)
+        chat_body = json_response_body(chat_only)
+        self.assertEqual(chat_body["total"], 1)
+        chat = chat_body["results"][0]
+        self.assertEqual(chat["type"], "task")
+        self.assertEqual(chat["result_kind"], "chat")
+        self.assertEqual(chat["id"], historical["tasks"][0]["id"])
+        self.assertEqual(chat["message_sender"], "browser")
+        self.assertTrue(chat["message_cursor"])
+        self.assertEqual(chat_body["scope"]["run_id"], historical["id"])
+        self.assertEqual(chat_body["scope"]["task_id"], historical["tasks"][0]["id"])
+        self.assertTrue(missing_chat_scope and missing_chat_scope.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertEqual(json_response_body(boolean_and)["total"], 1)
+        self.assertEqual(json_response_body(boolean_or)["total"], 4)
+        precedence_body = json_response_body(boolean_precedence)
+        self.assertEqual(precedence_body["total"], 2)
+        self.assertEqual({item["type"] for item in precedence_body["results"]}, {"task", "memo"})
+        self.assertEqual(json_response_body(legacy_boolean_aliases)["total"], 2)
+        wildcard_body = json_response_body(wildcard)
+        self.assertEqual(wildcard_body["total"], 1)
+        self.assertEqual(wildcard_body["results"][0]["id"], historical["tasks"][0]["id"])
+        regex_body = json_response_body(regex_chat)
+        self.assertEqual(regex_body["total"], 1)
+        self.assertEqual(regex_body["results"][0]["match_query"], "Exact comet")
+        self.assertTrue(invalid_regex and invalid_regex.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertTrue(empty_regex and empty_regex.startswith(b"HTTP/1.1 400 Bad Request"))
 
     def test_health_route_does_not_require_a_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

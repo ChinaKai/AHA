@@ -24,6 +24,7 @@ from aha_cli.store.filesystem import append_event
 from aha_cli.store.runs import run_exists
 from aha_cli.store.ui_state import read_global_ui_state, read_ui_state, update_global_ui_state, update_ui_state
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page, prompt_artifact_view
+from aha_cli.web.global_search import global_search_snapshot
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
 from aha_cli.web.run_api import default_api_run_id, require_api_run_id
 from aha_cli.web.session_debug import realtime_debug_log
@@ -484,6 +485,24 @@ def system_route_response(
     bind_host: str | None = None,
     bind_port: int | str | None = None,
 ) -> bytes | None:
+    if method in {"GET", "HEAD"} and path == "/api/global-search":
+        try:
+            limit = max(1, min(query_int(query, "limit", 50), 100))
+        except ValueError:
+            return json_response({"error": "limit must be a valid integer"}, "400 Bad Request")
+        try:
+            payload = global_search_snapshot(
+                root,
+                query.get("q", [""])[0],
+                result_type=query.get("type", ["all"])[0],
+                limit=limit,
+                scope_run_id=query.get("scope_run_id", [""])[0],
+                scope_task_id=query.get("scope_task_id", [""])[0],
+                chat_only=query_bool(query, "chat_only"),
+            )
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/health":
         return head_or_json(
             method,

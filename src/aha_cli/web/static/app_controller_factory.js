@@ -354,7 +354,8 @@
       syncMobileActionPanel: () => uiShell.syncMobileActionPanel(deps.activeTab?.()),
       ensureActiveTabData: deps.ensureActiveTabData,
       conversationAutoFollow: deps.conversationAutoFollow,
-      setConversationAutoFollow: deps.setConversationAutoFollow
+      setConversationAutoFollow: deps.setConversationAutoFollow,
+      initialChatEventId: deps.initialChatEventId
     });
 
     return Object.freeze({
@@ -399,7 +400,11 @@
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
       messageImageFileEl, messageImageUploadEl,
       observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
-      closeTaskMemosEl, mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
+      closeTaskMemosEl, globalSearchCloseEl, globalSearchDialogEl, globalSearchFormEl,
+      globalSearchHelpCloseEl, globalSearchHelpDialogEl, globalSearchHelpOpenEl,
+      globalSearchInputEl, globalSearchResultsEl, globalSearchStateEl, globalSearchTypeEl,
+      mobileActionsToggleEl, newTaskDescriptionEl, newTaskTitleEl, openGlobalSearchEl,
+      openKnowledgeBaseEl, openTaskMemosEl, openTaskViewEl, playConsoleEl,
       playConsolePopoverEl, selectedAgentInfoEl, sendFormEl, sessionMenuEl, settingsContentEl,
       skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
       settingsDialogEl, taskApprovalEl, taskBackendEl, taskCreateConfirmDetailsEl,
@@ -733,6 +738,9 @@
       fetchJson: deps.fetchJson,
       fetchWithTimeout: deps.fetchWithTimeout,
       initialHomeActive: deps.initialTaskMemoHomeActive,
+      initialSelectedMemoId: deps.initialSelectedMemoId,
+      initialSearchField: deps.initialSearchField,
+      initialSearchQuery: deps.initialSearchQuery,
       isAuthRequiredError: deps.isAuthRequiredError,
       closeMobileSheets: deps.closeMobileSheets,
       consoleRef: deps.consoleRef,
@@ -743,6 +751,26 @@
       taskDisplayStatus: deps.taskDisplayStatus,
       windowRef: deps.windowRef,
       writeStoredSelectedTaskId: deps.writeStoredSelectedTaskId
+    });
+
+    const globalSearchController = window.AHAGlobalSearchController.createGlobalSearchController({
+      closeEl: globalSearchCloseEl,
+      dialogEl: globalSearchDialogEl,
+      formEl: globalSearchFormEl,
+      helpCloseEl: globalSearchHelpCloseEl,
+      helpDialogEl: globalSearchHelpDialogEl,
+      helpOpenEl: globalSearchHelpOpenEl,
+      inputEl: globalSearchInputEl,
+      openEl: openGlobalSearchEl,
+      resultsEl: globalSearchResultsEl,
+      stateEl: globalSearchStateEl,
+      typeEl: globalSearchTypeEl
+    }, {
+      apiUrl: deps.apiUrl,
+      documentRef: deps.documentRef,
+      escapeHtml: deps.escapeHtml,
+      fetchJson: deps.fetchJson,
+      windowRef: deps.windowRef
     });
 
     const messageComposer = window.AHAMessageComposer.createMessageComposer({
@@ -794,6 +822,7 @@
 
     return Object.freeze({
       agentConfigController,
+      globalSearchController,
       localTerminalController,
       observeProxyController,
       messageComposer,

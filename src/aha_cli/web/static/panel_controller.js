@@ -39,7 +39,26 @@
     const ensureActiveTabData = deps.ensureActiveTabData || (async () => {});
     const conversationAutoFollow = deps.conversationAutoFollow || (() => true);
     const setConversationAutoFollow = deps.setConversationAutoFollow || (() => {});
+    const initialChatEventId = String(deps.initialChatEventId || "");
     const composerDisabledState = new WeakMap();
+    let initialChatFocusPending = Boolean(initialChatEventId);
+
+    function focusInitialChatMessage() {
+      if (!initialChatFocusPending || !panelEl) return false;
+      const matches = panelEl.querySelectorAll?.("[data-chat-event-cursor]") || [];
+      const message = Array.from(matches).find(item => (
+        String(item?.dataset?.chatEventCursor || "") === initialChatEventId
+      ));
+      if (!message) return false;
+      const collapsedBody = message.querySelector?.("details.collapsed-message");
+      if (collapsedBody) collapsedBody.open = true;
+      message.classList?.add("global-search-chat-hit");
+      message.setAttribute?.("tabindex", "-1");
+      message.scrollIntoView?.({ block: "center", behavior: "auto" });
+      message.focus?.({ preventScroll: true });
+      initialChatFocusPending = false;
+      return true;
+    }
 
     function syncComposerAvailability(tab) {
       const enabled = tab === "conversation";
@@ -121,6 +140,7 @@
         }
         restorePromptMetricsPopoverState(metricsPopoverState);
         positionPromptMetricsPopover();
+        focusInitialChatMessage();
         return;
       }
       if (tab === "final") {

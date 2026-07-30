@@ -34,6 +34,17 @@
     let pageModeSyncTimer = 0;
     let lunarFormatter = null;
     let lunarFormatterReady = false;
+    const initialSelectedMemoId = String(deps.initialSelectedMemoId || "").trim();
+    const initialSearchQuery = String(deps.initialSearchQuery || "").trim();
+    const initialSearchField = String(deps.initialSearchField || "").trim();
+    let initialSelectedMemoApplied = false;
+    let initialSearchHighlightPending = Boolean(initialSelectedMemoId && initialSearchQuery);
+    if (initialSelectedMemoId) {
+      selectedMemoId = initialSelectedMemoId;
+      selectedMemoRunId = String(deps.currentRunId?.() || "").trim();
+      editorMode = "edit";
+      memoFilter = "all";
+    }
     const terminalTaskStatuses = new Set(["completed", "failed", "blocked"]);
     const memoStatuses = ["todo", "doing", "done", "closed"];
     const memoFilters = ["day", ...memoStatuses, "all"];
@@ -776,7 +787,16 @@
         if (editorMode === "edit") editorMode = "empty";
         memoMarkdownTools?.setMode?.("preview", { focus: false });
       }
+      if (!initialSelectedMemoApplied && selectedMemoId === initialSelectedMemoId) {
+        const targetMemo = memos.find(memo => memo.id === selectedMemoId);
+        if (targetMemo) {
+          selectedDate = memoCalendarInfo(targetMemo, isoDate(new Date())).date || selectedDate;
+          memoFilter = "all";
+          initialSelectedMemoApplied = true;
+        }
+      }
       render();
+      focusInitialMemoSearchMatch();
       return memos;
     }
 
@@ -1265,6 +1285,27 @@
     function focusEditorOnCompactViewport() {
       if (!isCompactMemoViewport()) return;
       elements.taskMemoEditorColumnEl?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    }
+
+    function focusInitialMemoSearchMatch() {
+      if (!initialSearchHighlightPending || selectedMemoId !== initialSelectedMemoId) return false;
+      const highlighter = windowRef.AHASearchHighlight;
+      let hit = null;
+      if (initialSearchField === "title") {
+        hit = highlighter?.highlightInput?.(elements.taskMemoEditTitleEl, initialSearchQuery);
+      } else {
+        hit = highlighter?.highlightFirst?.(
+          elements.taskMemoDescriptionEditorEl,
+          initialSearchQuery,
+          { documentRef }
+        );
+      }
+      if (!hit && initialSearchField !== "title") {
+        hit = highlighter?.highlightInput?.(elements.taskMemoEditTitleEl, initialSearchQuery);
+      }
+      if (!hit) return false;
+      initialSearchHighlightPending = false;
+      return true;
     }
 
     function renderTaskLinkPicker(memo, isEdit) {

@@ -25,6 +25,184 @@ def app_entry_script(root: Path | None = None) -> str:
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_global_search_is_wired_and_targets_exact_task_or_memo(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
+        setup = (root / "app_runtime_setup.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        memo_controller = (root / "task_memo_controller.js").read_text(encoding="utf-8")
+        search_controller = (root / "global_search_controller.js").read_text(encoding="utf-8")
+        conversation_controller = (root / "conversation_controller.js").read_text(encoding="utf-8")
+        panel_controller = (root / "panel_controller.js").read_text(encoding="utf-8")
+        timeline_view = (root / "timeline_view.js").read_text(encoding="utf-8")
+        search_highlight = (root / "search_highlight.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="open-global-search"', html)
+        self.assertIn('id="global-search-dialog"', html)
+        self.assertIn('id="global-search-help-open"', html)
+        self.assertIn('id="global-search-help-dialog"', html)
+        self.assertIn('id="global-search-help-close"', html)
+        self.assertLess(html.index('id="open-global-search"'), html.index('id="session-toggle"'))
+        self.assertNotIn('data-i18n="global_search.description"', html)
+        self.assertIn('placeholder="Supports &amp;, |, *, and /regex/i."', html)
+        self.assertIn('/static/global_search_controller.js?v=global-search-v6', html)
+        self.assertIn('/static/search_highlight.js?v=global-search-v4', html)
+        self.assertIn('<option value="kb" data-i18n="global_search.kb">', html)
+        self.assertIn('openGlobalSearchEl: "open-global-search"', registry)
+        self.assertIn('globalSearchHelpOpenEl: "global-search-help-open"', registry)
+        self.assertIn('globalSearchHelpDialogEl: "global-search-help-dialog"', registry)
+        self.assertIn('globalSearchHelpCloseEl: "global-search-help-close"', registry)
+        self.assertIn("deps.globalSearchController?.bind?.()", registry)
+        self.assertIn("const globalSearchController = window.AHAGlobalSearchController", factory)
+        self.assertIn("globalSearchController,", factory)
+        self.assertIn("globalSearchController,", wiring)
+        self.assertIn('queryParams.get("memo_id")', setup)
+        self.assertIn('queryParams.get("chat_event_id")', setup)
+        self.assertIn('queryParams.get("search_query")', setup)
+        self.assertIn('queryParams.get("search_field")', setup)
+        self.assertIn('queryParams.get("kb_entry_id")', setup)
+        self.assertIn('queryParams.get("kb_note_id")', setup)
+        self.assertIn('let taskVisibilityFilter = initialSelectedTaskId ? "all" : "active";', setup)
+        self.assertIn("initialSelectedMemoId: deps.initialSelectedMemoId", factory)
+        self.assertIn("deps.initialSelectedMemoId", memo_controller)
+        self.assertIn('memoFilter = "all";', memo_controller)
+        feature_wiring = wiring[wiring.index("createFeatureControllers") : wiring.index("const {", wiring.index("createFeatureControllers"))]
+        self.assertIn("initialSelectedMemoId,", feature_wiring)
+        self.assertIn('{ runScoped: false }', search_controller)
+        self.assertIn('url.searchParams.set("selected_task_id", itemId)', search_controller)
+        self.assertIn('url.searchParams.set("memo_id", itemId)', search_controller)
+        self.assertIn('url.searchParams.set("chat_event_id", String(options.messageCursor))', search_controller)
+        self.assertIn('data-global-search-message-cursor=', search_controller)
+        self.assertIn('chat_only: "1"', search_controller)
+        self.assertIn("scope_task_id: taskScope.taskId", search_controller)
+        self.assertIn('const SEARCH_QUERY_STORAGE_KEY = "aha.globalSearchQuery.v1"', search_controller)
+        self.assertIn("helpOpenEl: globalSearchHelpOpenEl", factory)
+        self.assertIn("helpDialogEl: globalSearchHelpDialogEl", factory)
+        self.assertIn("helpCloseEl: globalSearchHelpCloseEl", factory)
+        self.assertIn("global-search-group", search_controller)
+        self.assertIn("global-search-scope", search_controller)
+        self.assertIn('url.searchParams.set("search_query", options.matchQuery)', search_controller)
+        self.assertIn("AHASearchHighlight", memo_controller)
+        self.assertIn("function highlightFirst", search_highlight)
+        self.assertIn("conversationContainsInitialChat", conversation_controller)
+        self.assertIn("{ limit: 200 }", conversation_controller)
+        self.assertIn("while (stateValue?.hasMore", conversation_controller)
+        self.assertIn('querySelectorAll?.("[data-chat-event-cursor]")', panel_controller)
+        self.assertIn('message.classList?.add("global-search-chat-hit")', panel_controller)
+        self.assertIn("message.scrollIntoView?.", panel_controller)
+        self.assertIn("data-chat-event-cursor=", timeline_view)
+        self.assertIn(".message.global-search-chat-hit", styles)
+        self.assertIn(".global-search-help-dialog", styles)
+        self.assertIn(".global-search-help-rules", styles)
+        self.assertIn(".global-search-help-flags", styles)
+        self.assertIn('data-i18n="global_search.help_flags_allowed"', html)
+        self.assertIn('data-i18n="global_search.help_flags_usage"', html)
+        node = shutil.which("node")
+        if node:
+            assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+const controller = window.AHAGlobalSearchController.createGlobalSearchController({}, {
+  windowRef: { location: { href: "http://127.0.0.1:8788/?run_id=old&poll=500" } },
+  documentRef: { addEventListener() {} }
+});
+const task = new URL(controller.resultUrl("task", "run-new", "task-009"));
+if (task.searchParams.get("run_id") !== "run-new") process.exit(1);
+if (task.searchParams.get("selected_task_id") !== "task-009") process.exit(1);
+if (task.searchParams.get("view") !== "task") process.exit(1);
+const chat = new URL(controller.resultUrl("task", "run-new", "task-009", { messageCursor: "1234" }));
+if (chat.searchParams.get("chat_event_id") !== "1234") process.exit(1);
+const memo = new URL(controller.resultUrl("memo", "run-old", "memo-004"));
+if (memo.searchParams.get("memo_id") !== "memo-004") process.exit(1);
+if (memo.searchParams.get("view") !== "memo") process.exit(1);
+if (memo.searchParams.has("selected_task_id")) process.exit(1);
+const memoMatch = new URL(controller.resultUrl("memo", "run-old", "memo-004", {
+  matchQuery: "needle",
+  matchField: "description"
+}));
+if (memoMatch.searchParams.get("search_query") !== "needle") process.exit(1);
+if (memoMatch.searchParams.get("search_field") !== "description") process.exit(1);
+const entry = new URL(controller.resultUrl("kb", "", "kb-entry-7", { kbKind: "entry" }));
+if (entry.searchParams.get("view") !== "kb") process.exit(1);
+if (entry.searchParams.get("kb_entry_id") !== "kb-entry-7") process.exit(1);
+const note = new URL(controller.resultUrl("kb", "", "cap-9", { kbKind: "note" }));
+if (note.searchParams.get("kb_note_id") !== "cap-9") process.exit(1);
+
+const storedValues = new Map([["aha.globalSearchQuery.v1", "cached query"]]);
+const storage = {
+  getItem(key) { return storedValues.get(key) || null; },
+  setItem(key, value) { storedValues.set(key, String(value)); },
+  removeItem(key) { storedValues.delete(key); }
+};
+const inputListeners = {};
+const input = {
+  value: "",
+  addEventListener(name, callback) { inputListeners[name] = callback; }
+};
+const helpOpenState = {};
+const helpOpen = {
+  addEventListener() {},
+  setAttribute(name, value) { helpOpenState[name] = value; }
+};
+const helpClose = {
+  addEventListener() {},
+  focus() {}
+};
+const helpDialog = {
+  open: false,
+  addEventListener() {},
+  showModal() { this.open = true; },
+  close() { this.open = false; },
+  setAttribute() { this.open = true; },
+  removeAttribute() { this.open = false; }
+};
+let fetchCalls = 0;
+const cachedController = window.AHAGlobalSearchController.createGlobalSearchController({
+  inputEl: input,
+  helpCloseEl: helpClose,
+  helpDialogEl: helpDialog,
+  helpOpenEl: helpOpen
+}, {
+  windowRef: {
+    location: { href: "http://127.0.0.1:8788/" },
+    localStorage: storage,
+    setTimeout() { return 1; },
+    clearTimeout() {}
+  },
+  documentRef: { addEventListener() {} },
+  apiUrl() { return "/api/global-search"; },
+  fetchJson() {
+    fetchCalls += 1;
+    return Promise.resolve({ results: [] });
+  }
+});
+cachedController.bind();
+if (input.value !== "cached query") process.exit(1);
+cachedController.open();
+if (fetchCalls !== 1) process.exit(1);
+cachedController.openHelp();
+if (!helpDialog.open || helpOpenState["aria-expanded"] !== "true") process.exit(1);
+cachedController.closeHelp();
+if (helpDialog.open || helpOpenState["aria-expanded"] !== "false") process.exit(1);
+input.value = "next query";
+inputListeners.input();
+if (storage.getItem("aha.globalSearchQuery.v1") !== "next query") process.exit(1);
+input.value = "";
+inputListeners.input();
+if (storage.getItem("aha.globalSearchQuery.v1") !== null) process.exit(1);
+'''
+            result = subprocess.run(
+                [node, "-e", assertion, str(root / "global_search_controller.js")],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_markdown_ordered_lists_keep_numbering_across_blank_lines(self) -> None:
         node = shutil.which("node")
         if not node:
@@ -527,8 +705,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=browser-bookmarks-safe-v45">', html)
-        self.assertIn('<script src="/static/i18n.js?v=browser-profile-select-v47"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=global-search-v6">', html)
+        self.assertIn('<script src="/static/i18n.js?v=global-search-v9"></script>', html)
         self.assertIn('<script src="/static/token_usage.js?v=usage-v8"></script>', html)
         self.assertIn('"run.token_usage": "Daily usage"', i18n)
         self.assertIn('"run.token_usage": "每日用量"', i18n)
@@ -975,7 +1153,8 @@ controller.unmount();
         self.assertNotIn('id="nav-reset"', html)
         self.assertNotIn('<option value="navigation"', html)
         self.assertIn('api("/api/workspaces")', html)
-        self.assertIn("loadProjectNavWorkspaces().finally(() => showTab(state.activeTab));", html)
+        self.assertIn("loadProjectNavWorkspaces().finally(() => {", html)
+        self.assertIn("showTab(state.activeTab);", html)
         self.assertNotIn('if (state.activeTab === "map") { loadProjectContextIndexStatus(); }', html)
         self.assertIn("opt.value = workspace.path", html)
         self.assertIn("opt.dataset.workspaceId = workspace.id || \"\"", html)
@@ -986,7 +1165,7 @@ controller.unmount();
         self.assertNotIn("selectedProjectMapWorkspacePath", html)
         self.assertNotIn('state.activeTab !== "map"', html)
         self.assertIn("const ENTRIES_PAGE_LIMIT = 120", html)
-        self.assertIn('else q.set("fast", "1");', html)
+        self.assertIn('q.set("fast", "1");', html)
         self.assertIn('q.set("limit", String(ENTRIES_PAGE_LIMIT));', html)
         self.assertIn('q.set("offset", String(state.entries.length));', html)
         self.assertIn("window.loadMoreEntries", html)
@@ -1071,16 +1250,17 @@ controller.unmount();
         self.assertIn('api("/api/kb/project-nav", { method: "POST"', html)
         self.assertIn('api("/api/kb/project-nav", { method: "DELETE"', html)
         self.assertIn('const pageRunId = String(pageParams.get("run_id")', html)
-        self.assertIn('id="f-search"', html)
-        self.assertIn('id="f-search-submit"', html)
-        self.assertIn('data-i18n-placeholder="knowledge.search_filter"', html)
-        self.assertIn('data-i18n-aria-label="knowledge.search"', html)
-        self.assertIn('if (searchText) q.set("q", searchText);', html)
-        self.assertIn('$("#f-search-submit").addEventListener("click", loadEntries);', html)
-        self.assertIn("kb-entry-toolbar", html)
-        self.assertIn("kb-entry-search", html)
-        self.assertIn("kb-entry-search-button", html)
-        self.assertIn("grid-template-columns: minmax(0, 1fr) var(--control-height-md)", html)
+        self.assertIn('const pageEntryId = String(pageParams.get("kb_entry_id")', html)
+        self.assertIn('const pageNoteId = String(pageParams.get("kb_note_id")', html)
+        self.assertIn('void showTab("entries").then(() => openEntryReference(encodeURIComponent(pageEntryId)));', html)
+        self.assertIn('void window.openCaptureNote(encodeURIComponent(pageNoteId));', html)
+        self.assertIn('const pageSearchQuery = String(pageParams.get("search_query")', html)
+        self.assertIn("focusPageSearchMatch", html)
+        self.assertIn("search-deep-link-hit", html)
+        self.assertNotIn('id="f-search"', html)
+        self.assertNotIn('id="f-search-submit"', html)
+        self.assertNotIn("kb-entry-search", html)
+        self.assertIn('q.set("fast", "1");', html)
         self.assertIn("kb-entry-index", html)
         self.assertIn("kb-entry-index-head", html)
         self.assertIn("kb-entry-index-title", html)
@@ -4789,7 +4969,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=browser-profile-select-v47"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=global-search-v9"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)
@@ -4807,9 +4987,9 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/conversation_metadata.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/conversation_state.js"></script>', html)
         self.assertIn('<script src="/static/conversation_panel.js?v=browser-bookmarks-safe-v45"></script>', html)
-        self.assertIn('<script src="/static/conversation_controller.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/conversation_controller.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/compact_reset.js"></script>', html)
-        self.assertIn('<script src="/static/timeline_view.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/timeline_view.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/optimistic_events.js"></script>', html)
         self.assertIn('<script src="/static/task_timing.js"></script>', html)
         self.assertIn('<script src="/static/selection_state.js"></script>', html)
@@ -4831,7 +5011,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/backend_status.js"></script>', html)
         self.assertIn('<script src="/static/message_composer.js?v=chat-only-input-v38"></script>', html)
         self.assertIn('<script src="/static/event_bindings.js?v=terminal-ui-v6"></script>', html)
-        self.assertIn('<script src="/static/panel_controller.js?v=browser-bookmarks-safe-v45"></script>', html)
+        self.assertIn('<script src="/static/panel_controller.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/render_orchestrator.js"></script>', html)
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
@@ -4843,11 +5023,11 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
-        self.assertIn('<script src="/static/controller_registry.js?v=terminal-ui-v6"></script>', html)
+        self.assertIn('<script src="/static/controller_registry.js?v=global-search-v5"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=chat-only-input-v38"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_setup.js?v=browser-session-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=chat-only-input-v38"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=global-search-v5"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_setup.js?v=global-search-v4"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))
@@ -5348,7 +5528,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('target?.closest("button, .conversation-filter-popover")', task_controller_script)
         self.assertIn('event.key !== "Escape"', task_controller_script)
         self.assertIn("taskListItemClass", task_list_script)
-        self.assertIn('let taskVisibilityFilter = "active";', script)
+        self.assertIn('let taskVisibilityFilter = initialSelectedTaskId ? "all" : "active";', script)
         self.assertIn("function renderTaskVisibilityFilter", task_controller_script)
         self.assertIn("function effectiveTaskVisibilityFilter", task_controller_script)
         self.assertIn('normalized === "active" && tasks.length && !visibleTasksForFilter(tasks, "active").length', task_controller_script)

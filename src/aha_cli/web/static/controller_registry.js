@@ -73,6 +73,17 @@
     openTaskViewEl: "open-task-view",
     openTaskMemosEl: "open-task-memos",
     openKnowledgeBaseEl: "open-knowledge-base",
+    openGlobalSearchEl: "open-global-search",
+    globalSearchDialogEl: "global-search-dialog",
+    globalSearchCloseEl: "global-search-close",
+    globalSearchHelpOpenEl: "global-search-help-open",
+    globalSearchHelpDialogEl: "global-search-help-dialog",
+    globalSearchHelpCloseEl: "global-search-help-close",
+    globalSearchFormEl: "global-search-form",
+    globalSearchInputEl: "global-search-input",
+    globalSearchTypeEl: "global-search-type",
+    globalSearchStateEl: "global-search-state",
+    globalSearchResultsEl: "global-search-results",
     knowledgeHomeEl: "knowledge-home",
     knowledgeHomeFrameEl: "knowledge-home-frame",
     taskCreateDialogEl: "task-create-dialog",
@@ -273,6 +284,7 @@
 
     deps.taskCreateController?.bind?.();
     deps.taskMemoController?.bind?.();
+    deps.globalSearchController?.bind?.();
     deps.messageComposer?.bind?.();
 
     elements.pendingMessagesEl?.addEventListener("click", event => {

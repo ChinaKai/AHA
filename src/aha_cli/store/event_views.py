@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 import json
 from pathlib import Path
 
@@ -310,11 +311,35 @@ def conversation_events_page(
     }
 
 
+def searchable_conversation_messages(root: Path, run_id: str) -> Iterator[dict]:
+    """Yield main-visible chat messages with their stable JSONL cursors."""
+    path = event_path(root, run_id)
+    candidates: list[tuple[int, dict]] = []
+    main_host_mirror_keys: set[tuple[str, str, str]] = set()
+    for offset, event in iter_jsonl_reverse(path) or ():
+        if event.get("type") != "message" or not event_task_id(event):
+            continue
+        if "main" not in _conversation_event_refs(event):
+            continue
+        host_key = _main_host_mirror_key(event)
+        if host_key:
+            main_host_mirror_keys.add(host_key)
+        candidates.append((offset, event))
+
+    for offset, event in candidates:
+        if _main_browser_mirror_key(event) in main_host_mirror_keys:
+            continue
+        item = dict(event)
+        item["_cursor"] = offset
+        yield item
+
+
 __all__ = [
     "conversation_event_category",
     "conversation_events_page",
     "event_agent_refs",
     "event_task_id",
     "format_event_log_line",
+    "searchable_conversation_messages",
     "task_event_log_page",
 ]

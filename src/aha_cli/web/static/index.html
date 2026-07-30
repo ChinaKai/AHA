@@ -6,14 +6,19 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=browser-bookmarks-safe-v45">
+  <link rel="stylesheet" href="/static/styles.css?v=global-search-v6">
 </head>
 <body>
   <header>
     <div>
       <div class="brand-main-row">
         <h1 class="brand-title sr-only">AHA</h1>
-        <div class="home-view-switch" role="navigation" aria-label="Views" data-i18n-aria-label="nav.views"><button id="open-task-memos" class="home-view-button" type="button" aria-label="Task Memo" title="Task Memo" aria-pressed="true" data-i18n-aria-label="memo.open" data-i18n-title="memo.open"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"></path><path d="M14 4v5h5M8 13h8M8 17h5"></path></svg><span class="sr-only" data-i18n="memo.open">Task Memo</span></button><button id="open-task-view" class="home-view-button" type="button" aria-label="Tasks" title="Tasks" aria-pressed="false" data-i18n-aria-label="task.view_tasks" data-i18n-title="task.view_tasks"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"></path></svg><span class="sr-only" data-i18n="task.view_tasks">Tasks</span></button><button id="open-knowledge-base" class="home-view-button" type="button" aria-label="Knowledge base" title="Knowledge base" aria-pressed="false" data-i18n-aria-label="run.tools_knowledge" data-i18n-title="run.tools_knowledge"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v18H6.5A2.5 2.5 0 0 0 4 23z"></path><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v18h4.5A2.5 2.5 0 0 1 20 23z"></path></svg><span class="sr-only" data-i18n="run.tools_knowledge">Knowledge base</span></button><div id="session-control" class="session-control home-settings-control"><button id="session-toggle" class="session-toggle home-view-button" type="button" aria-label="AHA console" title="AHA console" aria-controls="session-menu" aria-expanded="false" data-i18n-aria-label="aha.console" data-i18n-title="aha.console"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.08 1.65V21.3a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.08-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.08H2.9a2.1 2.1 0 0 1 0-4.2h.05A1.8 1.8 0 0 0 4.6 8.64a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36 1.8 1.8 0 0 0 1.08-1.65V2.1a2.1 2.1 0 0 1 4.2 0v.05a1.8 1.8 0 0 0 1.08 1.65 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.08h.05a2.1 2.1 0 0 1 0 4.2h-.05A1.8 1.8 0 0 0 19.4 15z"></path></svg><strong id="session-title" class="sr-only" data-i18n="run.select_loading">Loading...</strong></button>
+        <div class="home-view-switch" role="navigation" aria-label="Views" data-i18n-aria-label="nav.views">
+          <button id="open-task-memos" class="home-view-button" type="button" aria-label="Task Memo" title="Task Memo" aria-pressed="true" data-i18n-aria-label="memo.open" data-i18n-title="memo.open"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"></path><path d="M14 4v5h5M8 13h8M8 17h5"></path></svg><span class="sr-only" data-i18n="memo.open">Task Memo</span></button>
+          <button id="open-task-view" class="home-view-button" type="button" aria-label="Tasks" title="Tasks" aria-pressed="false" data-i18n-aria-label="task.view_tasks" data-i18n-title="task.view_tasks"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"></path></svg><span class="sr-only" data-i18n="task.view_tasks">Tasks</span></button>
+          <button id="open-knowledge-base" class="home-view-button" type="button" aria-label="Knowledge base" title="Knowledge base" aria-pressed="false" data-i18n-aria-label="run.tools_knowledge" data-i18n-title="run.tools_knowledge"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v18H6.5A2.5 2.5 0 0 0 4 23z"></path><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v18h4.5A2.5 2.5 0 0 1 20 23z"></path></svg><span class="sr-only" data-i18n="run.tools_knowledge">Knowledge base</span></button>
+          <button id="open-global-search" class="home-view-button" type="button" aria-label="Global search" title="Global search" aria-haspopup="dialog" aria-controls="global-search-dialog" aria-expanded="false" data-i18n-aria-label="global_search.open" data-i18n-title="global_search.open"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg><span class="sr-only" data-i18n="global_search.open">Global search</span></button>
+          <div id="session-control" class="session-control home-settings-control"><button id="session-toggle" class="session-toggle home-view-button" type="button" aria-label="AHA console" title="AHA console" aria-controls="session-menu" aria-expanded="false" data-i18n-aria-label="aha.console" data-i18n-title="aha.console"><svg class="home-view-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.08 1.65V21.3a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.08-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.08H2.9a2.1 2.1 0 0 1 0-4.2h.05A1.8 1.8 0 0 0 4.6 8.64a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36 1.8 1.8 0 0 0 1.08-1.65V2.1a2.1 2.1 0 0 1 4.2 0v.05a1.8 1.8 0 0 0 1.08 1.65 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.08h.05a2.1 2.1 0 0 1 0 4.2h-.05A1.8 1.8 0 0 0 19.4 15z"></path></svg><strong id="session-title" class="sr-only" data-i18n="run.select_loading">Loading...</strong></button>
           <div id="session-menu" class="session-menu hidden" data-settings-tab="system">
             <nav class="settings-home-tabs" role="tablist" aria-label="Settings sections" data-i18n-aria-label="settings.sections">
               <button class="button-ghost settings-home-tab active" type="button" role="tab" aria-selected="true" data-settings-tab="system" data-i18n="run.section_system">System</button>
@@ -173,6 +178,107 @@
   <section id="knowledge-home" class="knowledge-home-page" aria-label="Knowledge base" data-i18n-aria-label="run.tools_knowledge" hidden>
     <iframe id="knowledge-home-frame" class="knowledge-home-frame" title="Knowledge base" data-i18n-title="run.tools_knowledge"></iframe>
   </section>
+  <dialog id="global-search-dialog" class="global-search-dialog" aria-labelledby="global-search-title">
+    <section class="global-search-panel">
+      <header class="global-search-head">
+        <div>
+          <h2 id="global-search-title" data-i18n="global_search.title">Global search</h2>
+        </div>
+        <button id="global-search-close" class="task-dialog-close" type="button" aria-label="Close" data-i18n-aria-label="common.close">×</button>
+      </header>
+      <form id="global-search-form" class="global-search-form" role="search">
+        <div class="global-search-query">
+          <input id="global-search-input" type="search" autocomplete="off" placeholder="Supports &amp;, |, *, and /regex/i." data-i18n-placeholder="global_search.placeholder">
+          <button id="global-search-help-open" class="global-search-help-trigger" type="button" aria-label="Search syntax help" title="Search syntax help" aria-haspopup="dialog" aria-controls="global-search-help-dialog" aria-expanded="false" data-i18n-aria-label="global_search.help_open" data-i18n-title="global_search.help_open">?</button>
+        </div>
+        <select id="global-search-type" aria-label="Result type" data-i18n-aria-label="global_search.type">
+          <option value="all" data-i18n="global_search.all">All</option>
+          <option value="task" data-i18n="global_search.tasks">Tasks</option>
+          <option value="memo" data-i18n="global_search.memos">Memos</option>
+          <option value="kb" data-i18n="global_search.kb">Knowledge</option>
+        </select>
+      </form>
+      <div id="global-search-state" class="global-search-state meta" aria-live="polite"></div>
+      <div id="global-search-results" class="global-search-results">
+        <div class="global-search-empty" data-i18n="global_search.hint">Search tasks, memos, and knowledge.</div>
+      </div>
+    </section>
+  </dialog>
+  <dialog id="global-search-help-dialog" class="global-search-help-dialog" aria-labelledby="global-search-help-title">
+    <article class="global-search-help-panel">
+      <header class="global-search-help-head">
+        <h2 id="global-search-help-title" data-i18n="global_search.help_title">Search syntax</h2>
+        <button id="global-search-help-close" class="task-dialog-close" type="button" aria-label="Close" data-i18n-aria-label="common.close">×</button>
+      </header>
+      <div class="global-search-help-body">
+        <p data-i18n="global_search.help_intro">Expressions search tasks, chat messages, memos, and knowledge.</p>
+
+        <section>
+          <h3 data-i18n="global_search.help_boolean_title">Boolean operators</h3>
+          <dl class="global-search-help-rules">
+            <dt><code>term1 term2</code><br><code>term1 &amp; term2</code></dt>
+            <dd data-i18n="global_search.help_and">Both terms must match. Spaces also mean AND.</dd>
+            <dt><code>term1 | term2</code></dt>
+            <dd data-i18n="global_search.help_or">Either side may match.</dd>
+            <dt><code>red | blue &amp; large</code></dt>
+            <dd data-i18n="global_search.help_precedence">AND is evaluated before OR.</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h3 data-i18n="global_search.help_wildcard_title">Wildcard</h3>
+          <dl class="global-search-help-rules">
+            <dt><code>task*search</code></dt>
+            <dd data-i18n="global_search.help_wildcard">* matches any number of characters within one line. Use a regex with the s flag to match across lines.</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h3 data-i18n="global_search.help_regex_title">Regular expressions</h3>
+          <dl class="global-search-help-rules">
+            <dt><code>/pattern/flags</code></dt>
+            <dd data-i18n="global_search.help_regex_format">Wrap a Python-style regular expression in slashes. Put flags after the final slash.</dd>
+          </dl>
+          <aside class="global-search-help-flags" role="note">
+            <strong data-i18n="global_search.help_flags_allowed">flags can only be:</strong>
+            <span class="global-search-help-flag-values" aria-label="i, m, s">
+              <code>i</code>
+              <code>m</code>
+              <code>s</code>
+            </span>
+            <span data-i18n="global_search.help_flags_usage">flags are optional and can be combined, for example /pattern/im or /pattern/ims.</span>
+          </aside>
+          <dl class="global-search-help-rules">
+            <dt><code>/error\s+\d+/i</code></dt>
+            <dd data-i18n="global_search.help_regex_example">Matches text such as Error 404, ignoring case.</dd>
+            <dt><code>i</code></dt>
+            <dd data-i18n="global_search.help_flag_i">Ignore letter case.</dd>
+            <dt><code>m</code></dt>
+            <dd data-i18n="global_search.help_flag_m">Make ^ and $ match the start and end of each line.</dd>
+            <dt><code>s</code></dt>
+            <dd data-i18n="global_search.help_flag_s">Allow . to match newline characters.</dd>
+            <dt><code>/error|failed/i</code></dt>
+            <dd data-i18n="global_search.help_regex_or">Inside /.../, | is regex alternation. Outside the slashes, | is search OR; regex has no &amp; AND operator.</dd>
+            <dt><code>\d  \s  \b  \/</code></dt>
+            <dd data-i18n="global_search.help_escape">Common escapes: digit, whitespace, word boundary, and a literal slash.</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h3 data-i18n="global_search.help_combine_title">Combining syntax</h3>
+          <dl class="global-search-help-rules">
+            <dt><code>/timeout|failed/i &amp; backend*</code></dt>
+            <dd data-i18n="global_search.help_combine">Regex, wildcard, and plain terms can be combined with &amp; and |.</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h3 data-i18n="global_search.help_limits_title">Limits</h3>
+          <p data-i18n="global_search.help_limits">Queries are limited to 200 characters. Invalid regex and regex that can match empty text are rejected. Supported flags are i, m, and s.</p>
+        </section>
+      </div>
+    </article>
+  </dialog>
   <main>
     <aside id="overview-sidebar" class="sidebar">
       <button id="overview-rail-toggle" class="side-rail-toggle" type="button" aria-controls="overview-sidebar" aria-expanded="false">Overview</button>
@@ -932,7 +1038,7 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=browser-profile-select-v47"></script>
+  <script src="/static/i18n.js?v=global-search-v9"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
   <script src="/static/bootstrap_config.js?v=model-default-v1"></script>
@@ -949,9 +1055,9 @@
     <script src="/static/conversation_metadata.js?v=token-saving-v8"></script>
     <script src="/static/conversation_state.js"></script>
     <script src="/static/conversation_panel.js?v=browser-bookmarks-safe-v45"></script>
-    <script src="/static/conversation_controller.js?v=hardware-terminal-v1"></script>
+    <script src="/static/conversation_controller.js?v=global-search-v4"></script>
     <script src="/static/compact_reset.js"></script>
-    <script src="/static/timeline_view.js?v=token-saving-v8"></script>
+    <script src="/static/timeline_view.js?v=global-search-v4"></script>
     <script src="/static/optimistic_events.js"></script>
   <script src="/static/task_timing.js"></script>
   <script src="/static/selection_state.js"></script>
@@ -982,7 +1088,7 @@
   <script src="/static/backend_status.js"></script>
   <script src="/static/message_composer.js?v=chat-only-input-v38"></script>
   <script src="/static/event_bindings.js?v=terminal-ui-v6"></script>
-  <script src="/static/panel_controller.js?v=browser-bookmarks-safe-v45"></script>
+  <script src="/static/panel_controller.js?v=global-search-v4"></script>
   <script src="/static/render_orchestrator.js"></script>
   <script src="/static/status_store.js"></script>
   <script src="/static/status_controller.js"></script>
@@ -991,17 +1097,19 @@
   <script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js"></script>
-  <script src="/static/task_memo_controller.js"></script>
+  <script src="/static/search_highlight.js?v=global-search-v4"></script>
+  <script src="/static/task_memo_controller.js?v=global-search-v4"></script>
+  <script src="/static/global_search_controller.js?v=global-search-v6"></script>
   <script src="/static/settings_controller.js?v=token-saving-v8"></script>
   <script src="/static/run_controller.js?v=token-saving-v8"></script>
   <script src="/static/message_flow.js?v=hardware-terminal-v1"></script>
   <script src="/static/render_scheduler.js"></script>
   <script src="/static/confirm_dialog.js"></script>
-  <script src="/static/controller_registry.js?v=terminal-ui-v6"></script>
+  <script src="/static/controller_registry.js?v=global-search-v5"></script>
   <script src="/static/app_bridge.js?v=token-saving-v8"></script>
-  <script src="/static/app_controller_factory.js?v=chat-only-input-v38"></script>
-  <script src="/static/app_runtime_setup.js?v=browser-session-v1"></script>
-  <script src="/static/app_runtime_wiring.js?v=chat-only-input-v38"></script>
+  <script src="/static/app_controller_factory.js?v=global-search-v5"></script>
+  <script src="/static/app_runtime_setup.js?v=global-search-v4"></script>
+  <script src="/static/app_runtime_wiring.js?v=global-search-v4"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

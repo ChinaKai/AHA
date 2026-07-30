@@ -37,6 +37,12 @@ let lastEventId = "";
 let statusData = null;
 const initialRunId = currentRunId;
 const initialSelectedTaskId = String(queryParams.get("selected_task_id") || queryParams.get("task_id") || "").trim();
+const initialChatEventId = String(queryParams.get("chat_event_id") || "").trim();
+const initialSelectedMemoId = String(queryParams.get("memo_id") || "").trim();
+const initialKnowledgeEntryId = String(queryParams.get("kb_entry_id") || "").trim();
+const initialKnowledgeNoteId = String(queryParams.get("kb_note_id") || "").trim();
+const initialSearchQuery = String(queryParams.get("search_query") || "").trim();
+const initialSearchField = String(queryParams.get("search_field") || "").trim();
 const initialTaskMemoQueryView = String(queryParams.get("view") || "").trim().toLowerCase();
 function readStoredTaskMemoView() {
   try {
@@ -64,7 +70,14 @@ function applyInitialTaskMemoHomeState() {
 applyInitialTaskMemoHomeState();
 
 function knowledgeHomeUrl() {
-  return currentRunId ? `/static/knowledge.html?run_id=${encodeURIComponent(currentRunId)}` : "/static/knowledge.html";
+  const params = new URLSearchParams();
+  if (currentRunId) params.set("run_id", currentRunId);
+  if (initialKnowledgeEntryId) params.set("kb_entry_id", initialKnowledgeEntryId);
+  if (initialKnowledgeNoteId) params.set("kb_note_id", initialKnowledgeNoteId);
+  if (initialSearchQuery) params.set("search_query", initialSearchQuery);
+  if (initialSearchField) params.set("search_field", initialSearchField);
+  const query = params.toString();
+  return `/static/knowledge.html${query ? `?${query}` : ""}`;
 }
 
 function webUpgradeAvailable() {
@@ -721,7 +734,7 @@ const conversationFilters = {
   commands: false,
   usage: false
 };
-let taskVisibilityFilter = "active";
+let taskVisibilityFilter = initialSelectedTaskId ? "all" : "active";
 const turnEventTypes = new Set([
   "backend_start_queued",
   "backend_started",

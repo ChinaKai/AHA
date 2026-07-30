@@ -18,6 +18,7 @@
     const conversationFiltersEl = state.conversationFiltersEl;
     const logPageLimit = Number(state.logPageLimit || 200);
     const conversationPageLimit = Number(state.conversationPageLimit || 30);
+    const initialChatEventId = String(state.initialChatEventId || "");
     const realtimeEventCacheLimit = Math.max(200, Number(state.realtimeEventCacheLimit || 2000));
     const realtimeSeenEventCacheLimit = Math.max(realtimeEventCacheLimit, Number(state.realtimeSeenEventCacheLimit || realtimeEventCacheLimit * 2));
     const sessionRefreshFallbackMs = Number(state.sessionRefreshFallbackMs || 5000);
@@ -34,6 +35,13 @@
     const getOpenPromptMetricsKey = state.openPromptMetricsKey || (() => "");
     const documentRef = state.documentRef || deps.documentRef || document;
     let conversationFiltersOpen = false;
+    let initialChatLoadPending = Boolean(initialChatEventId);
+
+    function conversationContainsInitialChat(stateValue) {
+      return Boolean(stateValue?.events?.some(event => (
+        String(event?._cursor ?? event?.cursor ?? "") === initialChatEventId
+      )));
+    }
 
     function promptMetricsKey(taskId, target = backendTarget()) {
       return `${taskId || ""}:${target || ""}`;
@@ -679,7 +687,7 @@
       }
     }
 
-    async function loadConversationPage(taskId = getSelectedTaskId(), target = backendTarget(), older = false, force = false) {
+    async function loadConversationPage(taskId = getSelectedTaskId(), target = backendTarget(), older = false, force = false, options = {}) {
       if (!taskId) return null;
       const stateValue = deps.conversationState(taskId, target);
       const categoryKey = deps.activeConversationCategoryKey();
@@ -690,7 +698,7 @@
         const params = new URLSearchParams({
           task_id: taskId,
           target,
-          limit: String(conversationPageLimit),
+          limit: String(options.limit || conversationPageLimit),
           categories: categoryKey
         });
         if (older && stateValue.beforeOffset !== null && stateValue.beforeOffset !== undefined) params.set("before_offset", String(stateValue.beforeOffset));
@@ -718,7 +726,23 @@
 
     async function ensureConversationLoaded() {
       if (getActiveTab() !== "conversation" || !getSelectedTaskId()) return;
-      await loadConversationPage(getSelectedTaskId(), backendTarget(), false);
+      const taskId = getSelectedTaskId();
+      const target = backendTarget();
+      let stateValue = await loadConversationPage(
+        taskId,
+        target,
+        false,
+        false,
+        initialChatLoadPending ? { limit: 200 } : {}
+      );
+      if (!initialChatLoadPending || target !== "main") return;
+      let previousBeforeOffset = stateValue?.beforeOffset;
+      while (stateValue?.hasMore && !conversationContainsInitialChat(stateValue)) {
+        stateValue = await loadConversationPage(taskId, target, true, false, { limit: 200 });
+        if (stateValue?.beforeOffset === previousBeforeOffset) break;
+        previousBeforeOffset = stateValue?.beforeOffset;
+      }
+      initialChatLoadPending = false;
     }
 
     function isCurrentConversationTarget(taskId, target) {
