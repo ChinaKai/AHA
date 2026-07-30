@@ -1,5 +1,6 @@
 (() => {
   const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";
+  const NEW_BROWSER_PROFILE_VALUE = "__new__";
 
   function createTaskOptionsController(elements = {}, deps = {}) {
     const escapeHtml = deps.escapeHtml || (value => String(value ?? ""));
@@ -313,8 +314,39 @@
         start_url: value("start_url"),
         agent_access: value("agent_access") || "read_only",
         profile: value("profile") || "ephemeral",
-        profile_name: value("profile_name")
+        profile_name: selectedBrowserProfileName(form)
       };
+    }
+
+    function browserProfileNames() {
+      return Array.from(new Set(
+        browserProfileOptions()
+          .map(item => String(item?.name || "").trim())
+          .filter(Boolean)
+      ));
+    }
+
+    function selectedBrowserProfileName(form) {
+      const selected = String(form?.querySelector("[data-browser-profile-select]")?.value || "").trim();
+      if (selected !== NEW_BROWSER_PROFILE_VALUE) return selected;
+      return String(form?.querySelector("[data-browser-profile-new-name]")?.value || "").trim();
+    }
+
+    function renderBrowserProfileOptions(form, selectedName = "") {
+      const select = form?.querySelector("[data-browser-profile-select]");
+      if (!select) return;
+      const names = browserProfileNames();
+      const normalizedSelected = String(selectedName || "").trim();
+      select.innerHTML = [
+        ...names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`),
+        `<option value="${NEW_BROWSER_PROFILE_VALUE}">${escapeHtml(t("task.browser_profile_create_new", "Create new profile…"))}</option>`
+      ].join("");
+      const existing = names.includes(normalizedSelected);
+      if (existing) select.value = normalizedSelected;
+      else if (normalizedSelected) select.value = NEW_BROWSER_PROFILE_VALUE;
+      else select.value = names[0] || NEW_BROWSER_PROFILE_VALUE;
+      const newName = form?.querySelector("[data-browser-profile-new-name]");
+      if (newName) newName.value = normalizedSelected && !existing ? normalizedSelected : "";
     }
 
     function syncCreateBrowserControlFields() {
@@ -331,6 +363,15 @@
         input.disabled = !namedEnabled;
         input.required = namedEnabled;
       });
+      const profileNew = form?.querySelector("[data-browser-profile-new]");
+      const newEnabled = namedEnabled
+        && form?.querySelector("[data-browser-profile-select]")?.value === NEW_BROWSER_PROFILE_VALUE;
+      if (profileNew) profileNew.hidden = !newEnabled;
+      const newName = form?.querySelector("[data-browser-profile-new-name]");
+      if (newName) {
+        newName.disabled = !newEnabled;
+        newName.required = newEnabled;
+      }
     }
 
     function setBrowserControlValues(value = {}) {
@@ -345,13 +386,7 @@
       set("start_url", policy.start_url || DEFAULT_BROWSER_START_URL);
       set("agent_access", policy.agent_access || "read_only");
       set("profile", policy.profile || "ephemeral");
-      set("profile_name", policy.profile_name || "");
-      const options = form?.querySelector("[data-browser-profile-options]");
-      if (options) {
-        options.innerHTML = browserProfileOptions()
-          .map(item => `<option value="${escapeHtml(item?.name || "")}"></option>`)
-          .join("");
-      }
+      renderBrowserProfileOptions(form, policy.profile_name || "");
       syncCreateBrowserControlFields();
     }
 
@@ -953,12 +988,14 @@
       elements.taskFormEl?.querySelector("[data-hardware-mode]")?.addEventListener("change", syncCreateHardwareDebugFields);
       elements.taskFormEl?.querySelector("[data-browser-mode]")?.addEventListener("change", syncCreateBrowserControlFields);
       elements.taskFormEl?.querySelector('[data-browser-field="profile"]')?.addEventListener("change", syncCreateBrowserControlFields);
+      elements.taskFormEl?.querySelector("[data-browser-profile-select]")?.addEventListener("change", syncCreateBrowserControlFields);
       elements.taskSkillSelectEl?.addEventListener("focus", () => renderTaskSkillOptions());
       if (elements.taskCreateDialogEl && windowRef.MutationObserver) {
         const observer = new windowRef.MutationObserver(() => {
           if (elements.taskCreateDialogEl.open) {
             renderTaskSkillOptions();
             syncCreateHardwareDebugFields();
+            renderBrowserProfileOptions(elements.taskFormEl, selectedBrowserProfileName(elements.taskFormEl));
             syncCreateBrowserControlFields();
             syncCreateTaskContextFields();
             void loadTaskMemoOptions().catch(err => {
@@ -973,6 +1010,7 @@
       syncCreateTaskContextFields();
       renderTaskSkillOptions();
       syncCreateHardwareDebugFields();
+      renderBrowserProfileOptions(elements.taskFormEl, selectedBrowserProfileName(elements.taskFormEl));
       syncCreateBrowserControlFields();
       void loadTaskMemoOptions().catch(err => {
         const message = err?.message || String(err);

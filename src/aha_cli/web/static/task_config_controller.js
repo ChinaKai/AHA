@@ -1,5 +1,6 @@
 (() => {
   const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";
+  const NEW_BROWSER_PROFILE_VALUE = "__new__";
 
   function createTaskConfigController(options = {}) {
     const escapeHtml = options.escapeHtml || (value => String(value ?? ""));
@@ -614,8 +615,48 @@
         input.disabled = disabled || !namedEnabled;
         input.required = namedEnabled;
       });
+      const profileNew = form?.querySelector("[data-browser-profile-new]");
+      const newEnabled = namedEnabled
+        && form?.querySelector("[data-browser-profile-select]")?.value === NEW_BROWSER_PROFILE_VALUE;
+      if (profileNew) profileNew.hidden = !newEnabled;
+      const newName = form?.querySelector("[data-browser-profile-new-name]");
+      if (newName) {
+        newName.disabled = disabled || !newEnabled;
+        newName.required = newEnabled;
+      }
       const submit = form?.querySelector('button[type="submit"]');
       if (submit) submit.disabled = disabled;
+    }
+
+    function browserProfileNames() {
+      return Array.from(new Set(
+        getBrowserProfileOptions()
+          .map(item => String(item?.name || "").trim())
+          .filter(Boolean)
+      ));
+    }
+
+    function selectedBrowserProfileName(form) {
+      const selected = String(form?.querySelector("[data-browser-profile-select]")?.value || "").trim();
+      if (selected !== NEW_BROWSER_PROFILE_VALUE) return selected;
+      return String(form?.querySelector("[data-browser-profile-new-name]")?.value || "").trim();
+    }
+
+    function renderBrowserProfileOptions(form, selectedName = "") {
+      const select = form?.querySelector("[data-browser-profile-select]");
+      if (!select) return;
+      const names = browserProfileNames();
+      const normalizedSelected = String(selectedName || "").trim();
+      select.innerHTML = [
+        ...names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`),
+        `<option value="${NEW_BROWSER_PROFILE_VALUE}">${escapeHtml(t("task.browser_profile_create_new", "Create new profile…"))}</option>`
+      ].join("");
+      const existing = names.includes(normalizedSelected);
+      if (existing) select.value = normalizedSelected;
+      else if (normalizedSelected) select.value = NEW_BROWSER_PROFILE_VALUE;
+      else select.value = names[0] || NEW_BROWSER_PROFILE_VALUE;
+      const newName = form?.querySelector("[data-browser-profile-new-name]");
+      if (newName) newName.value = normalizedSelected && !existing ? normalizedSelected : "";
     }
 
     function setTaskBrowserPolicy(policy = {}) {
@@ -629,13 +670,7 @@
       set("start_url", policy.start_url || DEFAULT_BROWSER_START_URL);
       set("agent_access", policy.agent_access || "read_only");
       set("profile", policy.profile || "ephemeral");
-      set("profile_name", policy.profile_name || "");
-      const options = form?.querySelector("[data-browser-profile-options]");
-      if (options) {
-        options.innerHTML = getBrowserProfileOptions()
-          .map(item => `<option value="${escapeHtml(item?.name || "")}"></option>`)
-          .join("");
-      }
+      renderBrowserProfileOptions(form, policy.profile_name || "");
     }
 
     function renderTaskBrowserEditor(task) {
@@ -848,7 +883,7 @@
         start_url: value("start_url"),
         agent_access: value("agent_access") || "read_only",
         profile: value("profile") || "ephemeral",
-        profile_name: value("profile_name")
+        profile_name: selectedBrowserProfileName(form)
       };
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/browser-control`), {
         method: "POST",
@@ -967,7 +1002,7 @@
       els.taskBrowserFormEl?.addEventListener("input", () => markTaskHardwareEditing());
       els.taskBrowserFormEl?.addEventListener("change", event => {
         markTaskHardwareEditing();
-        if (event.target instanceof Element && event.target.matches('[data-browser-mode], [data-browser-field="profile"]')) {
+        if (event.target instanceof Element && event.target.matches('[data-browser-mode], [data-browser-field="profile"], [data-browser-profile-select]')) {
           syncTaskBrowserControlFields();
         }
       });

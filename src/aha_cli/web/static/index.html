@@ -367,9 +367,12 @@
                 </div>
                 <label class="field-label" data-browser-profile-named hidden>
                   <span data-i18n="task.browser_profile_name">Profile name</span>
-                  <input data-browser-field="profile_name" list="selected-task-browser-profile-names" maxlength="80" autocomplete="off">
-                  <datalist id="selected-task-browser-profile-names" data-browser-profile-options></datalist>
-                  <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or type a new name. One task may use it at a time.</span>
+                  <select data-browser-field="profile_name" data-browser-profile-select></select>
+                  <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or create a new one. One task may use it at a time.</span>
+                </label>
+                <label class="field-label" data-browser-profile-new hidden>
+                  <span data-i18n="task.browser_profile_new_name">New profile name</span>
+                  <input data-browser-profile-new-name maxlength="80" autocomplete="off">
                 </label>
                 <div class="field-help" data-i18n="task.browser_profile_help">A task profile can retain signed-in browser data and is not included in run archives.</div>
               </div>
@@ -756,9 +759,12 @@
                   </div>
                   <label class="field-label" data-browser-profile-named hidden>
                     <span data-i18n="task.browser_profile_name">Profile name</span>
-                    <input data-browser-field="profile_name" list="new-task-browser-profile-names" maxlength="80" autocomplete="off">
-                    <datalist id="new-task-browser-profile-names" data-browser-profile-options></datalist>
-                    <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or type a new name. One task may use it at a time.</span>
+                    <select data-browser-field="profile_name" data-browser-profile-select></select>
+                    <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or create a new one. One task may use it at a time.</span>
+                  </label>
+                  <label class="field-label" data-browser-profile-new hidden>
+                    <span data-i18n="task.browser_profile_new_name">New profile name</span>
+                    <input data-browser-profile-new-name maxlength="80" autocomplete="off">
                   </label>
                   <span class="field-help" data-i18n="task.browser_profile_help">A task profile can retain signed-in browser data and is not included in run archives.</span>
                 </div>
@@ -926,13 +932,13 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=chat-only-input-v38"></script>
+  <script src="/static/i18n.js?v=browser-profile-select-v47"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
   <script src="/static/bootstrap_config.js?v=model-default-v1"></script>
   <script src="/static/bootstrap_controller.js"></script>
   <script src="/static/task_form.js?v=hardware-terminal-v1"></script>
-  <script src="/static/task_config_controller.js?v=browser-bing-proxy-v31"></script>
+  <script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>
   <script src="/static/run_metadata.js"></script>
   <script src="/static/run_lifecycle_view.js"></script>
   <script src="/static/run_maintenance.js"></script>
@@ -982,7 +988,7 @@
   <script src="/static/status_controller.js"></script>
   <script src="/static/run_actions.js"></script>
   <script src="/static/app_actions.js"></script>
-  <script src="/static/task_create_controller.js?v=browser-bing-proxy-v31"></script>
+  <script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>
   <script src="/static/textarea_image_paste.js"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/task_memo_controller.js"></script>
