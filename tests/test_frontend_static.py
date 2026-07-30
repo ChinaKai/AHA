@@ -722,7 +722,7 @@ controller.unmount();
 
         self.assertIn('<script src="/static/i18n.js"></script>', html)
         # Capture notes reuse the shared memo markdown renderer for in-body images.
-        self.assertIn('<script src="/static/textarea_image_paste.js"></script>', html)
+        self.assertIn('<script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>', html)
         self.assertIn('<script src="/static/task_memo_markdown.js"></script>', html)
         self.assertIn("AHATaskMemoMarkdown.renderMarkdownPreview", html)
         self.assertIn("function localTime(value)", html)
@@ -3772,6 +3772,46 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn('"memo.image_viewer": "备忘图片"', i18n)
         self.assertIn('"memo.image_uploading": "Saving attachment..."', i18n)
         self.assertIn('"memo.image_uploading": "正在保存附件..."', i18n)
+
+    def test_clipboard_image_files_do_not_merge_duplicate_data_transfer_views(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        helper = static_root() / "textarea_image_paste.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+const itemFile = { name: "clipboard.png", type: "image/png", size: 12 };
+const duplicateFileWrapper = { name: "clipboard.png", type: "image/png", size: 12 };
+const preferred = window.AHATextareaImagePaste.clipboardImageFiles({
+  clipboardData: {
+    items: [{ type: "image/png", getAsFile: () => itemFile }],
+    files: [duplicateFileWrapper]
+  }
+});
+if (preferred.length !== 1 || preferred[0] !== itemFile) {
+  throw new Error("clipboard items and files were merged into duplicate images");
+}
+
+const fallbackFile = { name: "fallback.png", type: "image/png", size: 8 };
+const fallback = window.AHATextareaImagePaste.clipboardImageFiles({
+  clipboardData: {
+    items: [{ type: "text/plain", getAsFile: () => null }],
+    files: [fallbackFile]
+  }
+});
+if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
+  throw new Error("clipboard files fallback was not preserved");
+}
+'''
+        subprocess.run(
+            [node, "-e", assertion, str(helper)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def test_conversation_composer_uses_memo_markdown_for_images(self) -> None:
         root = static_root()

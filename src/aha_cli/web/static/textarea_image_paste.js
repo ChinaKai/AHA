@@ -21,6 +21,11 @@
       if (!isImageType(item?.type) || typeof item.getAsFile !== "function") return;
       addFile(item.getAsFile());
     });
+    // DataTransfer.items and DataTransfer.files describe the same clipboard
+    // payload. Some browsers expose distinct File wrappers in both collections,
+    // so merging them can insert one pasted image twice. Prefer items and only
+    // use files as the compatibility fallback when no image item was readable.
+    if (files.length) return files;
     asArray(clipboard.files).forEach(addFile);
     return files;
   }
