@@ -817,10 +817,12 @@
       const selected = dateFromIsoDate(selectedDate) || new Date();
       const first = new Date(year, month - 1, 1);
       const daysInMonth = new Date(year, month, 0).getDate();
-      const fullWeekCount = Math.max(5, Math.ceil((first.getDay() + daysInMonth) / 7));
+      const firstMondayOffset = (first.getDay() + 6) % 7;
+      const fullWeekCount = Math.max(5, Math.ceil((firstMondayOffset + daysInMonth) / 7));
       const weekCount = memoCalendarCollapsed ? 1 : fullWeekCount;
       const start = memoCalendarCollapsed ? new Date(selected) : new Date(first);
-      start.setDate(start.getDate() - start.getDay());
+      const startMondayOffset = (start.getDay() + 6) % 7;
+      start.setDate(start.getDate() - startMondayOffset);
       const counts = new Map();
       for (const memo of memos) {
         for (const info of memoCalendarEntries(memo)) {

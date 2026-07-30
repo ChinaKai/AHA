@@ -6,7 +6,7 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=global-search-v6">
+  <link rel="stylesheet" href="/static/styles.css?v=memo-weekdays-v1">
 </head>
 <body>
   <header>
@@ -519,6 +519,15 @@
                   <button id="task-memo-next-year" type="button" aria-label="Next year" data-i18n-aria-label="memo.next_year">»</button>
                   <button id="task-memo-calendar-collapse" class="task-memo-calendar-collapse" type="button" aria-label="Expand calendar" title="Expand calendar" aria-expanded="false" data-i18n-aria-label="memo.calendar_expand" data-i18n-title="memo.calendar_expand">▾</button>
                 </div>
+                <div class="task-memo-weekdays" aria-hidden="true">
+                  <span data-i18n="memo.weekday_mon">Mon</span>
+                  <span data-i18n="memo.weekday_tue">Tue</span>
+                  <span data-i18n="memo.weekday_wed">Wed</span>
+                  <span data-i18n="memo.weekday_thu">Thu</span>
+                  <span data-i18n="memo.weekday_fri">Fri</span>
+                  <span data-i18n="memo.weekday_sat">Sat</span>
+                  <span data-i18n="memo.weekday_sun">Sun</span>
+                </div>
                 <div id="task-memo-calendar" class="task-memo-calendar"></div>
               </section>
               <section class="task-memo-list-panel" aria-labelledby="task-memo-title">
@@ -1026,7 +1035,7 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=global-search-v10"></script>
+  <script src="/static/i18n.js?v=memo-weekdays-v1"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
   <script src="/static/bootstrap_config.js?v=model-default-v1"></script>
@@ -1086,7 +1095,7 @@
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/search_highlight.js?v=global-search-v4"></script>
-  <script src="/static/task_memo_controller.js?v=global-search-v4"></script>
+  <script src="/static/task_memo_controller.js?v=memo-weekdays-v1"></script>
   <script src="/static/global_search_controller.js?v=global-search-v6"></script>
   <script src="/static/settings_controller.js?v=token-saving-v8"></script>
   <script src="/static/run_controller.js?v=token-saving-v8"></script>

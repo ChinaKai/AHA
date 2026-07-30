@@ -706,8 +706,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=global-search-v6">', html)
-        self.assertIn('<script src="/static/i18n.js?v=global-search-v10"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=memo-weekdays-v1">', html)
+        self.assertIn('<script src="/static/i18n.js?v=memo-weekdays-v1"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -3110,6 +3110,19 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn('id="task-memo-calendar-collapse"', html)
         self.assertIn('data-i18n-aria-label="memo.calendar_expand"', html)
         self.assertIn('aria-expanded="false"', html)
+        self.assertIn('class="task-memo-weekdays"', html)
+        weekday_keys = [
+            "memo.weekday_mon",
+            "memo.weekday_tue",
+            "memo.weekday_wed",
+            "memo.weekday_thu",
+            "memo.weekday_fri",
+            "memo.weekday_sat",
+            "memo.weekday_sun",
+        ]
+        weekday_positions = [html.index(f'data-i18n="{key}"') for key in weekday_keys]
+        self.assertEqual(weekday_positions, sorted(weekday_positions))
+        self.assertLess(weekday_positions[-1], html.index('id="task-memo-calendar"'))
         self.assertNotIn('id="task-memo-today"', html)
         self.assertNotIn('id="task-memo-month"', html)
         self.assertIn('id="task-memo-filter"', html)
@@ -3658,6 +3671,10 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn('"memo.calendar_expand": "Expand calendar"', i18n)
         self.assertIn('"memo.calendar_collapse": "折叠日历"', i18n)
         self.assertIn('"memo.calendar_expand": "展开日历"', i18n)
+        self.assertIn('"memo.weekday_mon": "Mon"', i18n)
+        self.assertIn('"memo.weekday_sun": "Sun"', i18n)
+        self.assertIn('"memo.weekday_mon": "周一"', i18n)
+        self.assertIn('"memo.weekday_sun": "周日"', i18n)
         self.assertNotIn('"memo.today"', i18n)
         self.assertIn('"settings.sections": "Settings sections"', i18n)
         self.assertIn('"settings.sections": "设置分区"', i18n)
@@ -3717,6 +3734,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn("align-content: start;", styles)
         self.assertIn("grid-template-columns: minmax(300px, 0.82fr) minmax(520px, 1.7fr);", styles)
         self.assertIn(".task-memo-calendar", styles)
+        self.assertIn(".task-memo-weekdays", styles)
         self.assertIn(".task-memo-calendar-head .task-memo-current-month", styles)
         self.assertIn(".task-memo-calendar-head .task-memo-calendar-collapse", styles)
         self.assertIn(".task-memo-calendar.weeks-5", styles)
@@ -3725,6 +3743,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn("aspect-ratio: 7 / 5;", styles)
         self.assertIn("aspect-ratio: 7 / 6;", styles)
         self.assertIn("aspect-ratio: 7 / 1;", styles)
+        self.assertIn("const firstMondayOffset = (first.getDay() + 6) % 7;", memo_controller)
+        self.assertIn("const startMondayOffset = (start.getDay() + 6) % 7;", memo_controller)
         self.assertIn(".task-memo-day-number", styles)
         self.assertIn(".task-memo-day-lunar", styles)
         self.assertNotIn(".task-memo-check", styles)
@@ -4973,7 +4993,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=global-search-v10"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=memo-weekdays-v1"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)
