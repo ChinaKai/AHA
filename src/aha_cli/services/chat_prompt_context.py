@@ -18,6 +18,7 @@ from aha_cli.services.chat_supervision import (
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.context_planner import context_pack_payload_for_turn
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
+from aha_cli.services.browser_control import browser_control_context_for_prompt
 from aha_cli.services.task_skills import task_skills_context_for_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.event_views import event_agent_refs
@@ -41,6 +42,10 @@ PROMPT_REDACTED_PROXY_FIELDS = {
     "preferred_http_proxy",
     "preferred_https_proxy",
     "preferred_no_proxy",
+    "proxy_server",
+    "proxy_bypass",
+    "proxy_username",
+    "proxy_password",
 }
 DELTA_PROMPT_SKIP_EVENT_TYPES = {
     "agent_command_finished",
@@ -424,9 +429,11 @@ def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, 
     if not task:
         return {}
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
+    browser_context = browser_control_context_for_prompt(task).rstrip()
     skills_context = task_skills_context_for_prompt(task).rstrip()
     fingerprints = {
         "hardware_debug": _context_fingerprint(hardware_context),
+        "browser_control": _context_fingerprint(browser_context),
         "task_skills": _context_fingerprint(skills_context),
         "knowledge_enabled": "enabled" if _knowledge_enabled_for_prompt(root) else "disabled",
     }
@@ -461,6 +468,9 @@ def _sticky_context_delta_for_prompt(
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
     if current_fingerprints.get("hardware_debug") and delivered.get("hardware_debug") != current_fingerprints.get("hardware_debug"):
         sections.append(hardware_context)
+    browser_context = browser_control_context_for_prompt(task).rstrip()
+    if current_fingerprints.get("browser_control") and delivered.get("browser_control") != current_fingerprints.get("browser_control"):
+        sections.append(browser_context)
     skills_context = task_skills_context_for_prompt(task).rstrip()
     if current_fingerprints.get("task_skills") and delivered.get("task_skills") != current_fingerprints.get("task_skills"):
         sections.append(skills_context)
@@ -1179,6 +1189,7 @@ def chat_prompt(
                     agent_context=agent_context,
                     task_skills_context=task_skills_context_for_prompt(detail["task"]).rstrip(),
                     hardware_debug_context=hardware_debug_context_for_prompt(detail["task"]).rstrip(),
+                    browser_control_context=browser_control_context_for_prompt(detail["task"]).rstrip(),
                     final_context=final_context.rstrip(),
                     task_journal=journal_context,
                     compact_summary=compact_context.rstrip(),

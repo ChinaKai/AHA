@@ -313,6 +313,124 @@ input. UART becomes `serial`; Telnet becomes `network`; an old NFS server is
 used only as a migration fallback for the board IP. Newly saved task state uses
 only `mode`/`serial`/`network`/`credentials`.
 
+## Shared Browser Protocol
+
+`browser_control.mode=managed` enables one Browser Bridge per run/task. The
+bridge is the only Playwright owner; Web UI and agent CLI share it through a
+task-scoped `0600` Unix socket. The browser panel connects through
+`/ws/browser-session?run_id=<run-id>&task_id=<task-id>`. WebSocket command
+frames contain `id`, `action`, and `args`; bridge responses use matching
+`result` frames, while `event=state|frame` pushes tab and viewport updates.
+`browser_control.device_mode=desktop|mobile` explicitly selects emulation and is
+independent of Browser panel width. Desktop mode keeps a 1280×720 logical
+viewport and uses a 1.5 device scale factor to encode a 1920×1080 JPEG stream.
+Mobile mode persists `device_mode=mobile` and cold-restarts only the current task
+Browser Bridge. The replacement process starts with a fixed 360×640 CSS-pixel
+viewport with a 3.0 device scale factor, producing a 1080×1920 portrait stream.
+Page responsive layout, frame metadata, and input coordinates therefore stay
+aligned without any runtime viewport mutation. In User Chrome mode, each page
+keeps one CDP emulation session for its lifetime. Mobile mode persistently
+applies Android UA/client hints, fixed CSS device metrics, and touch emulation.
+Fixed CSS metrics avoid the raw mobile-emulation 980px fallback on documents
+without a viewport meta tag. The Bridge reapplies the current emulation after
+main-frame navigations, and newly opened pages inherit the same state. Desktop
+mode restores the desktop UA, 1280×720 metrics, and non-touch input. Frame
+`width`/`height` describe the logical input coordinate space;
+`image_width`/`image_height` describe the encoded pixels. Active changes are
+sampled at roughly 150 ms; unchanged frames are suppressed and capture backs
+off to at most 750 ms. Capture runs outside the action lock, and subscriptions,
+navigation, tab changes, and mutations wake it immediately. Each Bridge process
+publishes an `instance_id`; the Browser panel clears the old image during a
+restart and ignores frames whose `instance_id` does not match the new ready
+state. Pointer, touch, and keyboard commands remain disabled until the matching
+replacement frame has decoded. Coordinate mapping uses the accepted frame's
+logical `width`/`height` together with its current encoded or natural image
+dimensions, so a Mobile-to-Desktop restart cannot reuse the old mobile scale.
+On narrow AHA clients, opening the Browser panel focuses the frame surface
+without opening the soft keyboard. The explicit keyboard toggle freezes the
+pre-keyboard AHA layout height until the capture field is blurred. While the
+keyboard is visible, the whole AHA body translates upward by the reported
+keyboard inset instead of shrinking the shared frame. Frame pointer/touch down
+prevents the host browser's default blur and refocuses the remote capture field
+within the same user gesture, so clicking the shared page keeps the keyboard
+open.
+
+`browser_control.display=native|embedded` selects the presentation. Native
+launches a headed Chromium window on the AHA host desktop; if no desktop
+display is available, status reports `fallback=true` and the Web UI uses the
+embedded stream. Native Web sessions do not subscribe to continuous page
+frames. The task Browser tab becomes a session/focus controller while Chromium
+provides its own address bar, bookmarks, history, and tab UI. On WSL2, an
+available `/mnt/wslg/.X11-unix/X0` socket supplies `DISPLAY=:0` to the Bridge
+child when the AHA service did not inherit a display variable.
+
+`browser_control.runtime=playwright|user_chrome` selects browser startup.
+Playwright mode directly launches a persistent context. User Chrome mode starts
+a visible, locally installed Chrome/Chromium (falling back to Playwright
+Chromium) without Playwright launch automation flags, reserves an explicit
+non-zero loopback debugging port, and attaches with `connect_over_cdp()`. The
+debugging endpoint never binds a non-loopback address. User Chrome requires a
+desktop display even when `display=embedded`; embedded controls only the Web
+presentation in this mode. AHA always supplies a separate task/named
+user-data-dir instead of attaching the user's default daily-browser profile.
+
+On startup, blank pages and Chromium internal new-tab pages
+(`chrome://newtab`, `chrome://new-tab-page`, and the local NTP URL) are treated
+as uninitialized pages and navigated to `browser_control.start_url`. Toolbar
+and CLI new-tab actions, plus the replacement created after closing the final
+tab, use the same URL. This prevents a desktop-only internal NTP from
+overflowing the fixed Mobile viewport.
+
+Browser profile mode is `ephemeral`, `task`, or `named`. Task profiles retain
+the compatibility run/task-scoped user-data-dir. Named profiles use
+`profile_name`, live under AHA home, and can be selected across runs and
+projects. A non-blocking process-held lock prevents two Browser Bridges from
+opening the same named Chromium user-data-dir; a conflicting start reports
+`browser_profile_in_use`.
+
+Agent mutation commands require `agent_access=read_write`. User mutations
+increment a control epoch before waiting for the action lock, so queued agent
+mutations fail with `control_preempted`. Snapshot element refs contain the page
+revision and fail with `stale_ref` after navigation or another mutation.
+Navigation accepts HTTP(S) only and enforces exact/wildcard `allowed_hosts` at
+both explicit actions and document-request routing.
+
+Browser proxy mode is `direct`, `inherit`, or `custom`. Inherited mode consumes
+the enabled task/run proxy; custom mode accepts one HTTP(S), SOCKS4, or SOCKS5
+server plus bypass and optional credentials. Playwright receives profile,
+display, download, and proxy settings when launching the BrowserContext, so any
+launch-signature change stops the bridge and lets the WebSocket reconnect
+create a replacement. Public payloads, prompt context, audit events, and run
+archives never contain the proxy password.
+
+User Chrome translates unauthenticated proxy server and bypass values to Chrome
+launch arguments. Proxy credentials are rejected with
+`user_browser_proxy_auth_unsupported` because they cannot be placed safely in a
+process command line.
+
+Configuration updates use `POST /api/task/<task-id>/browser-control`; status and
+audit reads use `GET /api/task/<task-id>/browser-session` and
+`GET /api/task/<task-id>/browser-io`. Audit records omit typed values and redact
+URL userinfo, paths, query strings, and fragments. See
+[`browser-control.md`](browser-control.md) for installation and CLI commands.
+
+The task-create and task-settings forms intentionally submit only the common
+`mode`, `start_url`, `agent_access`, `profile`, and `profile_name` fields.
+Runtime, display, transfer permissions, and proxy fields are edited from the
+Browser toolbar settings drawer. The host allowlist remains protocol-compatible
+but is no longer exposed in Web settings. Both clients use partial
+updates, so one surface cannot reset fields owned by the other. Saving toolbar
+settings sends the advanced fields atomically and requests a cold restart only
+when that task browser is currently running; a manually closed browser remains
+closed.
+
+Current-task lifecycle uses `POST /api/task/<task-id>/browser-session` with
+`action=start|restart|close`. Close writes a task-scoped manual-stop marker
+before sending `SIGTERM` to a PID whose process command line matches the exact
+run/task Browser Bridge. While the marker exists, lazy WebSocket and agent CLI
+access returns `browser_closed`; Start removes it. Restart and Close preserve
+task/named profile data, while ephemeral profile data follows Bridge lifetime.
+
 Terminal streams are stored at machine scope because a physical serial device
 or Telnet endpoint can outlive and be shared by task views. Serial streams live
 under `hardware/devices/`; network streams live under `hardware/network/`.

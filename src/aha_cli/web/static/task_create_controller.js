@@ -1,4 +1,6 @@
 (() => {
+  const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";
+
   function createTaskOptionsController(elements = {}, deps = {}) {
     const escapeHtml = deps.escapeHtml || (value => String(value ?? ""));
     const collaborationModeOptions = deps.collaborationModeOptions || ["auto"];
@@ -91,6 +93,7 @@
     const documentRef = deps.documentRef || windowRef.document || (typeof document !== "undefined" ? document : null);
     const escapeHtml = deps.escapeHtml || (value => String(value ?? ""));
     const realtimeDebug = deps.realtimeDebug || (() => {});
+    const browserProfileOptions = deps.browserProfileOptions || (() => []);
     let createInFlight = false;
     let activeTaskMemoId = "";
     let taskMemoOptions = [];
@@ -302,6 +305,56 @@
       };
     }
 
+    function createBrowserControlPayload() {
+      const form = elements.taskFormEl;
+      const value = key => String(form?.querySelector(`[data-browser-field="${key}"]`)?.value || "").trim();
+      return {
+        mode: String(form?.querySelector("[data-browser-mode]")?.value || "off"),
+        start_url: value("start_url"),
+        agent_access: value("agent_access") || "read_only",
+        profile: value("profile") || "ephemeral",
+        profile_name: value("profile_name")
+      };
+    }
+
+    function syncCreateBrowserControlFields() {
+      const form = elements.taskFormEl;
+      const enabled = String(form?.querySelector("[data-browser-mode]")?.value || "off") === "managed";
+      const settings = form?.querySelector("[data-browser-settings]");
+      if (settings) settings.hidden = !enabled;
+      form?.querySelectorAll("[data-browser-field]").forEach(input => { input.disabled = !enabled; });
+      const profileMode = String(form?.querySelector('[data-browser-field="profile"]')?.value || "ephemeral");
+      const profileNamed = form?.querySelector("[data-browser-profile-named]");
+      const namedEnabled = enabled && profileMode === "named";
+      if (profileNamed) profileNamed.hidden = !namedEnabled;
+      profileNamed?.querySelectorAll("[data-browser-field]").forEach(input => {
+        input.disabled = !namedEnabled;
+        input.required = namedEnabled;
+      });
+    }
+
+    function setBrowserControlValues(value = {}) {
+      const policy = value && typeof value === "object" ? value : {};
+      const form = elements.taskFormEl;
+      const mode = form?.querySelector("[data-browser-mode]");
+      if (mode) mode.value = policy.mode || "off";
+      const set = (key, fieldValue) => {
+        const input = form?.querySelector(`[data-browser-field="${key}"]`);
+        if (input) input.value = fieldValue ?? input.defaultValue ?? "";
+      };
+      set("start_url", policy.start_url || DEFAULT_BROWSER_START_URL);
+      set("agent_access", policy.agent_access || "read_only");
+      set("profile", policy.profile || "ephemeral");
+      set("profile_name", policy.profile_name || "");
+      const options = form?.querySelector("[data-browser-profile-options]");
+      if (options) {
+        options.innerHTML = browserProfileOptions()
+          .map(item => `<option value="${escapeHtml(item?.name || "")}"></option>`)
+          .join("");
+      }
+      syncCreateBrowserControlFields();
+    }
+
     function syncCreateTaskContextFields() {
       if (elements.taskContextThresholdFieldEl) {
         elements.taskContextThresholdFieldEl.hidden = true;
@@ -352,6 +405,7 @@
     }
 
     function readFormDraft() {
+      const browserControl = createBrowserControlPayload();
       return {
         values: {
           title: elements.newTaskTitleEl?.value || "",
@@ -377,7 +431,8 @@
           related_project_keys: selectedRelatedKbKeys(),
           observe_proxy_enabled: Boolean(elements.taskObserveProxyEnabledEl?.checked),
           task_skill_paths: selectedTaskSkillPaths(),
-          hardware_debug: createHardwareDebugPayload()
+          hardware_debug: createHardwareDebugPayload(),
+          browser_control: browserControl
         }
       };
     }
@@ -597,6 +652,7 @@
         enabled: values.hardware_enabled,
         channels: values.hardware_channels || []
       });
+      setBrowserControlValues(values.browser_control || { mode: "off" });
       setTaskProxyEnabledValue(values.proxy_enabled);
     }
 
@@ -619,6 +675,7 @@
         observe_proxy_enabled: false,
         task_skill_paths: [],
         hardware_debug: { mode: "off" },
+        browser_control: { mode: "off" },
         proxy_enabled: typeof memo.proxy_enabled === "boolean" ? memo.proxy_enabled : undefined
       };
     }
@@ -769,6 +826,7 @@
         observeProxyEnabled,
         taskSkills: createTaskSkillsPayload(),
         hardwareDebug: createHardwareDebugPayload(),
+        browserControl: createBrowserControlPayload(),
         dispatch: true
       });
       if (payload && activeTaskMemoId) payload.source_memo_id = activeTaskMemoId;
@@ -893,12 +951,15 @@
         void loadRelatedKbOptions();
       });
       elements.taskFormEl?.querySelector("[data-hardware-mode]")?.addEventListener("change", syncCreateHardwareDebugFields);
+      elements.taskFormEl?.querySelector("[data-browser-mode]")?.addEventListener("change", syncCreateBrowserControlFields);
+      elements.taskFormEl?.querySelector('[data-browser-field="profile"]')?.addEventListener("change", syncCreateBrowserControlFields);
       elements.taskSkillSelectEl?.addEventListener("focus", () => renderTaskSkillOptions());
       if (elements.taskCreateDialogEl && windowRef.MutationObserver) {
         const observer = new windowRef.MutationObserver(() => {
           if (elements.taskCreateDialogEl.open) {
             renderTaskSkillOptions();
             syncCreateHardwareDebugFields();
+            syncCreateBrowserControlFields();
             syncCreateTaskContextFields();
             void loadTaskMemoOptions().catch(err => {
               const message = err?.message || String(err);
@@ -912,6 +973,7 @@
       syncCreateTaskContextFields();
       renderTaskSkillOptions();
       syncCreateHardwareDebugFields();
+      syncCreateBrowserControlFields();
       void loadTaskMemoOptions().catch(err => {
         const message = err?.message || String(err);
         setDraftStatus(message);

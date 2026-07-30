@@ -28,6 +28,14 @@
     return mode === "off" ? mode : `${mode} · ${access.replace("_", "-")}`;
   }
 
+  function browserControlConfirmLabel(payload) {
+    const policy = payload.browser_control && typeof payload.browser_control === "object"
+      ? payload.browser_control
+      : {};
+    const mode = String(policy.mode || "off");
+    return mode === "off" ? mode : `${mode} · ${String(policy.agent_access || "read_only").replace("_", "-")}`;
+  }
+
   function observeProxyConfirmLabel(payload) {
     const policy = payload.observe_proxy && typeof payload.observe_proxy === "object"
       ? payload.observe_proxy
@@ -76,6 +84,7 @@
       },
       task_skills: input.taskSkills || {},
       hardware_debug: input.hardwareDebug || {},
+      browser_control: input.browserControl || {},
       dispatch: input.dispatch !== false,
       model: input.model || null
     };
@@ -107,6 +116,7 @@
       ["Observe proxy", observeProxyConfirmLabel(payload)],
       ["Skills", taskSkillsConfirmLabel(payload)],
       ["Hardware", hardwareDebugConfirmLabel(payload)],
+      ["Browser", browserControlConfirmLabel(payload)],
       ["Proxy", taskProxyConfirmLabel(payload)]
     ];
   }

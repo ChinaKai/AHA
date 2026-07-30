@@ -24,6 +24,11 @@
       return Boolean(window.AHATaskList?.taskHardwareDebugEnabled?.(task));
     }
 
+    function browserTabEnabledFor(taskId) {
+      const task = (allTasks() || []).find(item => item?.id === taskId);
+      return Boolean(window.AHATaskList?.taskBrowserControlEnabled?.(task));
+    }
+
     async function selectTask(taskId) {
       const changedTask = selectedTaskId() !== taskId;
       setSelectedTaskId(taskId);
@@ -34,6 +39,10 @@
       // The Terminal tab only exists for hardware-enabled tasks: if we land on a task
       // without it while that tab is active, fall back to the conversation view.
       if (activeTab() === "hardware" && !hardwareTabEnabledFor(taskId)) {
+        setActiveTab("conversation");
+        setConversationAutoFollow(true);
+      }
+      if (activeTab() === "browser" && !browserTabEnabledFor(taskId)) {
         setActiveTab("conversation");
         setConversationAutoFollow(true);
       }

@@ -6,7 +6,7 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=terminal-ui-v10">
+  <link rel="stylesheet" href="/static/styles.css?v=browser-bookmarks-safe-v45">
 </head>
 <body>
   <header>
@@ -333,6 +333,50 @@
               <div id="task-hardware-state" class="meta"></div>
             </form>
           </section>
+          <section id="task-browser-editor" class="task-detail-section task-browser-editor">
+            <h3 data-i18n="task.browser_control">Shared browser</h3>
+            <form id="task-browser-form" class="browser-control-form">
+              <label class="field-label">
+                <span data-i18n="task.browser_mode">Browser mode</span>
+                <select data-browser-mode>
+                  <option value="off" data-i18n="task.browser_mode_off">Off</option>
+                  <option value="managed" data-i18n="task.browser_mode_managed">Managed shared browser</option>
+                </select>
+              </label>
+              <div class="browser-control-settings" data-browser-settings hidden>
+                <label class="field-label">
+                  <span data-i18n="task.browser_start_url">Start URL</span>
+                  <input data-browser-field="start_url" type="url" value="https://www.bing.com/" placeholder="https://www.bing.com/">
+                </label>
+                <div class="field-row">
+                  <label class="field-label">
+                    <span data-i18n="task.browser_agent_access">Agent access</span>
+                    <select data-browser-field="agent_access">
+                      <option value="read_only" data-i18n="task.browser_read_only">Read only</option>
+                      <option value="read_write" data-i18n="task.browser_read_write">Read and write</option>
+                    </select>
+                  </label>
+                  <label class="field-label">
+                    <span data-i18n="task.browser_profile">Profile</span>
+                    <select data-browser-field="profile">
+                      <option value="ephemeral" data-i18n="task.browser_profile_ephemeral">Ephemeral</option>
+                      <option value="task" data-i18n="task.browser_profile_task">Keep for task</option>
+                      <option value="named" data-i18n="task.browser_profile_named">Named profile</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="field-label" data-browser-profile-named hidden>
+                  <span data-i18n="task.browser_profile_name">Profile name</span>
+                  <input data-browser-field="profile_name" list="selected-task-browser-profile-names" maxlength="80" autocomplete="off">
+                  <datalist id="selected-task-browser-profile-names" data-browser-profile-options></datalist>
+                  <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or type a new name. One task may use it at a time.</span>
+                </label>
+                <div class="field-help" data-i18n="task.browser_profile_help">A task profile can retain signed-in browser data and is not included in run archives.</div>
+              </div>
+              <button type="submit" data-i18n="task.browser_save">Save Browser</button>
+              <div id="task-browser-state" class="meta"></div>
+            </form>
+          </section>
         </div>
         <section class="task-detail-section task-settings-danger-zone">
           <h3 data-i18n="task.settings_actions">Task actions</h3>
@@ -477,6 +521,7 @@
         <button type="button" data-mobile-action="conversation" data-i18n="conversation.chat">Chat</button>
         <button type="button" data-mobile-action="logs" data-i18n="conversation.logs">Logs</button>
         <button type="button" data-mobile-action="hardware" data-i18n="conversation.hardware">Terminal</button>
+        <button type="button" data-mobile-action="browser" data-i18n="conversation.browser">Browser</button>
         <button type="button" data-mobile-action="context" data-i18n="conversation.context">Context</button>
         <button type="button" data-mobile-action="context-evidence" data-i18n="conversation.context_evidence">Evidence</button>
         <button type="button" data-mobile-action="tasks" data-i18n="task.open">Tasks</button>
@@ -678,6 +723,47 @@
                 </div>
                 <div class="field-help" data-i18n="task.hardware_help">Choose serial and/or network terminal access for the board.</div>
               </div>
+              <div class="field-label">
+                <span data-i18n="task.browser_control">Shared browser</span>
+                <label class="field-label">
+                  <span data-i18n="task.browser_mode">Browser mode</span>
+                  <select id="task-browser-mode" data-browser-mode>
+                    <option value="off" data-i18n="task.browser_mode_off">Off</option>
+                    <option value="managed" data-i18n="task.browser_mode_managed">Managed shared browser</option>
+                  </select>
+                </label>
+                <div class="browser-control-settings compact" data-browser-settings hidden>
+                  <label class="field-label">
+                    <span data-i18n="task.browser_start_url">Start URL</span>
+                    <input data-browser-field="start_url" type="url" value="https://www.bing.com/" placeholder="https://www.bing.com/">
+                  </label>
+                  <div class="field-row task-defaults-grid">
+                    <label class="field-label">
+                      <span data-i18n="task.browser_agent_access">Agent access</span>
+                      <select data-browser-field="agent_access">
+                        <option value="read_only" data-i18n="task.browser_read_only">Read only</option>
+                        <option value="read_write" data-i18n="task.browser_read_write">Read and write</option>
+                      </select>
+                    </label>
+                    <label class="field-label">
+                      <span data-i18n="task.browser_profile">Profile</span>
+                      <select data-browser-field="profile">
+                        <option value="ephemeral" data-i18n="task.browser_profile_ephemeral">Ephemeral</option>
+                        <option value="task" data-i18n="task.browser_profile_task">Keep for task</option>
+                        <option value="named" data-i18n="task.browser_profile_named">Named profile</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="field-label" data-browser-profile-named hidden>
+                    <span data-i18n="task.browser_profile_name">Profile name</span>
+                    <input data-browser-field="profile_name" list="new-task-browser-profile-names" maxlength="80" autocomplete="off">
+                    <datalist id="new-task-browser-profile-names" data-browser-profile-options></datalist>
+                    <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or type a new name. One task may use it at a time.</span>
+                  </label>
+                  <span class="field-help" data-i18n="task.browser_profile_help">A task profile can retain signed-in browser data and is not included in run archives.</span>
+                </div>
+                <div class="field-help" data-i18n="task.browser_help">User and agent share one task-scoped browser. Agent access defaults to read-only.</div>
+              </div>
             </div>
           </section>
           <section class="advanced-task-group advanced-task-runtime">
@@ -840,23 +926,23 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=hardware-terminal-v1"></script>
+  <script src="/static/i18n.js?v=chat-only-input-v38"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
   <script src="/static/bootstrap_config.js?v=model-default-v1"></script>
   <script src="/static/bootstrap_controller.js"></script>
   <script src="/static/task_form.js?v=hardware-terminal-v1"></script>
-  <script src="/static/task_config_controller.js?v=hardware-terminal-v1"></script>
+  <script src="/static/task_config_controller.js?v=browser-bing-proxy-v31"></script>
   <script src="/static/run_metadata.js"></script>
   <script src="/static/run_lifecycle_view.js"></script>
   <script src="/static/run_maintenance.js"></script>
   <script src="/static/agent_metadata.js"></script>
-  <script src="/static/task_list.js?v=hardware-terminal-v1"></script>
+  <script src="/static/task_list.js?v=browser-session-v1"></script>
   <script src="/static/task_controller.js?v=token-saving-v8"></script>
   <script src="/static/agent_controller.js"></script>
     <script src="/static/conversation_metadata.js?v=token-saving-v8"></script>
     <script src="/static/conversation_state.js"></script>
-    <script src="/static/conversation_panel.js?v=terminal-ui-v7"></script>
+    <script src="/static/conversation_panel.js?v=browser-bookmarks-safe-v45"></script>
     <script src="/static/conversation_controller.js?v=hardware-terminal-v1"></script>
     <script src="/static/compact_reset.js"></script>
     <script src="/static/timeline_view.js?v=token-saving-v8"></script>
@@ -874,6 +960,7 @@
   <script src="/static/terminal_ui.js?v=terminal-ui-v9"></script>
   <script src="/static/local_terminal.js?v=terminal-ui-v9"></script>
   <script src="/static/hardware_terminal.js?v=terminal-ui-v9"></script>
+  <script src="/static/browser_session.js?v=browser-bookmarks-safe-v45"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>
@@ -884,18 +971,18 @@
   <script src="/static/event_cursor_store.js"></script>
   <script src="/static/realtime_state.js"></script>
   <script src="/static/realtime_client.js"></script>
-  <script src="/static/ui_shell.js"></script>
+  <script src="/static/ui_shell.js?v=browser-keyboard-scope-v26"></script>
   <script src="/static/auth_controller.js"></script>
   <script src="/static/backend_status.js"></script>
-  <script src="/static/message_composer.js"></script>
+  <script src="/static/message_composer.js?v=chat-only-input-v38"></script>
   <script src="/static/event_bindings.js?v=terminal-ui-v6"></script>
-  <script src="/static/panel_controller.js?v=hardware-xterm-v1"></script>
+  <script src="/static/panel_controller.js?v=browser-bookmarks-safe-v45"></script>
   <script src="/static/render_orchestrator.js"></script>
   <script src="/static/status_store.js"></script>
   <script src="/static/status_controller.js"></script>
   <script src="/static/run_actions.js"></script>
   <script src="/static/app_actions.js"></script>
-  <script src="/static/task_create_controller.js?v=hardware-terminal-v1"></script>
+  <script src="/static/task_create_controller.js?v=browser-bing-proxy-v31"></script>
   <script src="/static/textarea_image_paste.js"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/task_memo_controller.js"></script>
@@ -906,9 +993,9 @@
   <script src="/static/confirm_dialog.js"></script>
   <script src="/static/controller_registry.js?v=terminal-ui-v6"></script>
   <script src="/static/app_bridge.js?v=token-saving-v8"></script>
-  <script src="/static/app_controller_factory.js?v=hardware-xterm-v1"></script>
-  <script src="/static/app_runtime_setup.js?v=token-saving-v8"></script>
-  <script src="/static/app_runtime_wiring.js?v=terminal-ui-v6"></script>
+  <script src="/static/app_controller_factory.js?v=chat-only-input-v38"></script>
+  <script src="/static/app_runtime_setup.js?v=browser-session-v1"></script>
+  <script src="/static/app_runtime_wiring.js?v=chat-only-input-v38"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

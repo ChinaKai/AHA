@@ -25,6 +25,10 @@ PROXY_SECRET_FIELDS = {
     "preferred_http_proxy",
     "preferred_https_proxy",
     "preferred_no_proxy",
+    "proxy_server",
+    "proxy_bypass",
+    "proxy_username",
+    "proxy_password",
 }
 
 

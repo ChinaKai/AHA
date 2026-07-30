@@ -11,6 +11,7 @@ from unittest import mock
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
 from aha_cli.services.chat import chat_offset_path
+from aha_cli.services.browser_runtime import list_named_browser_profiles
 from aha_cli.store.filesystem import (
     add_agent,
     append_event,
@@ -362,6 +363,220 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(hardware_events[-1]["data"]["access"], "read_write")
         self.assertEqual(skills_events[-1]["data"]["task_id"], task_id)
         self.assertEqual(skills_events[-1]["data"]["skill_count"], 2)
+
+    def test_api_task_create_and_update_accepts_browser_control_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Browser control config", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Browser task",
+                            "dispatch": False,
+                            "browser_control": {
+                                "mode": "managed",
+                                "start_url": "https://example.com/start",
+                                "agent_access": "read_only",
+                                "profile": "task",
+                                "display": "embedded",
+                                "device_mode": "mobile",
+                                "allowed_hosts": ["example.com", "*.example.org"],
+                                "downloads": "deny",
+                                "uploads": "deny",
+                                "proxy_mode": "custom",
+                                "proxy_server": "http://proxy.example:7890",
+                                "proxy_bypass": "localhost",
+                                "proxy_username": "alice",
+                                "proxy_password": "browser-secret",
+                            },
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                task_id = body["task"]["id"]
+                with mock.patch(
+                    "aha_cli.web.task_routes.browser_session_lifecycle",
+                    return_value={"action": "restart", "bridge": {"status": "running", "alive": True}},
+                ) as device_lifecycle:
+                    update_response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            f"/api/task/{task_id}/browser-control",
+                            method="POST",
+                            payload={
+                                "agent_access": "read_write",
+                                "runtime": "user_chrome",
+                                "profile": "named",
+                                "profile_name": "Work",
+                                "device_mode": "desktop",
+                                "restart_browser": True,
+                                "allowed_hosts": "example.com\napp.example.org",
+                            },
+                        )
+                    )
+                update_body = json_response_body(update_response)
+                basic_update_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/browser-control",
+                        method="POST",
+                        payload={
+                            "mode": "managed",
+                            "start_url": "https://example.com/home",
+                            "agent_access": "read_only",
+                            "profile": "named",
+                            "profile_name": "Work",
+                        },
+                    )
+                )
+                basic_update_body = json_response_body(basic_update_response)
+                stored_password = task_snapshot(root, run_id, task_id)["task"]["browser_control"]["proxy_password"]
+                session_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/browser-session",
+                    )
+                )
+                session_body = json_response_body(session_response)
+                with mock.patch(
+                    "aha_cli.web.task_routes.browser_session_lifecycle",
+                    return_value={"action": "restart", "bridge": {"status": "running", "alive": True}},
+                ) as lifecycle:
+                    lifecycle_response = asyncio.run(
+                        fetch_ui_response(
+                            root,
+                            run_id,
+                            f"/api/task/{task_id}/browser-session",
+                            method="POST",
+                            payload={"action": "restart"},
+                        )
+                    )
+                lifecycle_body = json_response_body(lifecycle_response)
+                clear_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/browser-control",
+                        method="POST",
+                        payload={"clear_proxy_password": True},
+                    )
+                )
+                clear_body = json_response_body(clear_response)
+                cleared_password = task_snapshot(root, run_id, task_id)["task"]["browser_control"]["proxy_password"]
+                named_profiles = list_named_browser_profiles(root)
+                events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
+
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["task"]["browser_control"]["mode"], "managed")
+        self.assertEqual(body["task"]["browser_control"]["profile"], "task")
+        self.assertEqual(body["task"]["browser_control"]["display"], "embedded")
+        self.assertEqual(body["task"]["browser_control"]["device_mode"], "mobile")
+        self.assertEqual(update_body["task"]["browser_control"]["profile"], "named")
+        self.assertEqual(update_body["task"]["browser_control"]["profile_name"], "Work")
+        self.assertEqual(update_body["task"]["browser_control"]["agent_access"], "read_write")
+        self.assertEqual(update_body["task"]["browser_control"]["runtime"], "user_chrome")
+        self.assertEqual(update_body["task"]["browser_control"]["device_mode"], "desktop")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["start_url"], "https://example.com/home")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["agent_access"], "read_only")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["runtime"], "user_chrome")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["display"], "embedded")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["device_mode"], "desktop")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["proxy_mode"], "custom")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["downloads"], "deny")
+        self.assertEqual(basic_update_body["task"]["browser_control"]["uploads"], "deny")
+        self.assertEqual(
+            basic_update_body["task"]["browser_control"]["allowed_hosts"],
+            ["example.com", "app.example.org"],
+        )
+        self.assertEqual(update_body["browser_session"]["action"], "restart")
+        device_lifecycle.assert_called_once_with(root, run_id, task_id, "restart")
+        self.assertEqual(update_body["task"]["browser_control"]["allowed_hosts"], ["example.com", "app.example.org"])
+        self.assertEqual(body["task"]["browser_control"]["proxy_password"], "")
+        self.assertTrue(body["task"]["browser_control"]["proxy_password_configured"])
+        self.assertEqual(update_body["task"]["browser_control"]["proxy_password"], "")
+        self.assertTrue(update_body["task"]["browser_control"]["proxy_password_configured"])
+        self.assertEqual(stored_password, "browser-secret")
+        self.assertEqual(session_body["browser_control"]["proxy_password"], "")
+        self.assertTrue(session_body["browser_control"]["proxy_password_configured"])
+        self.assertEqual(lifecycle_body["action"], "restart")
+        self.assertEqual(lifecycle_body["bridge"]["status"], "running")
+        lifecycle.assert_called_once_with(root, run_id, task_id, "restart")
+        self.assertEqual(clear_body["task"]["browser_control"]["proxy_password"], "")
+        self.assertFalse(clear_body["task"]["browser_control"]["proxy_password_configured"])
+        self.assertEqual(cleared_password, "")
+        self.assertEqual([item["name"] for item in named_profiles], ["Work"])
+        browser_events = [event for event in events if event["type"] == "task_browser_control_config_updated"]
+        self.assertEqual(browser_events[-1]["data"]["task_id"], task_id)
+        self.assertEqual(browser_events[-1]["data"]["allowed_host_count"], 2)
+        self.assertEqual(browser_events[-1]["data"]["proxy_mode"], "custom")
+        self.assertEqual(browser_events[-1]["data"]["display"], "embedded")
+        self.assertEqual(browser_events[-1]["data"]["runtime"], "user_chrome")
+        self.assertEqual(browser_events[-1]["data"]["device_mode"], "desktop")
+        self.assertEqual(browser_events[-1]["data"]["profile_name"], "Work")
+        self.assertTrue(browser_events[-1]["data"]["proxy_configured"])
+
+    def test_api_browser_bookmarks_toggle_and_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Browser bookmarks", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                added_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/browser-bookmarks",
+                        method="POST",
+                        payload={
+                            "action": "toggle",
+                            "url": "https://example.com/docs",
+                            "title": "Example docs",
+                        },
+                    )
+                )
+                listed_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/browser-bookmarks",
+                    )
+                )
+                removed_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/task/task-001/browser-bookmarks",
+                        method="POST",
+                        payload={
+                            "action": "remove",
+                            "id": json_response_body(added_response)["items"][0]["id"],
+                        },
+                    )
+                )
+
+        added = json_response_body(added_response)
+        listed = json_response_body(listed_response)
+        removed = json_response_body(removed_response)
+        self.assertTrue(added["ok"])
+        self.assertTrue(added["added"])
+        self.assertEqual(added["items"][0]["title"], "Example docs")
+        self.assertEqual(listed["items"], added["items"])
+        self.assertEqual(listed["scope"]["kind"], "task")
+        self.assertTrue(removed["removed"])
+        self.assertEqual(removed["items"], [])
 
     def test_api_task_hardware_io_records_are_persisted_and_streamed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

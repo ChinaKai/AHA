@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import unicodedata
 import uuid
 
 from aha_cli.domain.workflow_templates import (
@@ -172,6 +173,15 @@ TASK_HARDWARE_DEBUG_ACCESS_MODES = ("read_only", "read_write")
 # Compatibility-only input vocabulary. New task state uses mode/serial/network/credentials.
 TASK_HARDWARE_DEBUG_CHANNEL_TYPES = ("uart", "nfs", "telnet")
 TASK_HARDWARE_DEBUG_PERMISSION_KEYS = ("read", "write")
+TASK_BROWSER_CONTROL_MODES = ("off", "managed")
+TASK_BROWSER_ACCESS_MODES = ("read_only", "read_write")
+TASK_BROWSER_RUNTIME_MODES = ("playwright", "user_chrome")
+TASK_BROWSER_PROFILE_MODES = ("ephemeral", "task", "named")
+TASK_BROWSER_DISPLAY_MODES = ("native", "embedded")
+TASK_BROWSER_DEVICE_MODES = ("desktop", "mobile")
+TASK_BROWSER_TRANSFER_MODES = ("deny", "allow")
+TASK_BROWSER_PROXY_MODES = ("direct", "inherit", "custom")
+DEFAULT_TASK_BROWSER_START_URL = "https://www.bing.com/"
 
 
 def default_task_supervision_ask_user_gates() -> dict:
@@ -362,6 +372,101 @@ def default_task_observe_proxy() -> dict:
     return {
         "enabled": False,
     }
+
+
+def default_task_browser_control() -> dict:
+    return {
+        "mode": "off",
+        "start_url": DEFAULT_TASK_BROWSER_START_URL,
+        "agent_access": "read_only",
+        "runtime": "playwright",
+        "profile": "ephemeral",
+        "profile_name": "",
+        "display": "native",
+        "device_mode": "desktop",
+        "allowed_hosts": [],
+        "downloads": "deny",
+        "uploads": "deny",
+        "proxy_mode": "direct",
+        "proxy_server": "",
+        "proxy_bypass": "",
+        "proxy_username": "",
+        "proxy_password": "",
+    }
+
+
+def _normalize_browser_host(value: object) -> str:
+    host = str(value or "").strip().lower()
+    if not host or len(host) > 253:
+        return ""
+    if "://" in host or "/" in host or any(char.isspace() for char in host):
+        return ""
+    if host.startswith("*."):
+        suffix = host[2:]
+        return host if suffix and all(part for part in suffix.split(".")) else ""
+    return host if all(part for part in host.split(".")) else ""
+
+
+def normalize_browser_profile_name(value: object) -> str:
+    name = unicodedata.normalize("NFKC", str(value or "")).strip()
+    if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
+        return ""
+    return name
+
+
+def normalize_task_browser_control(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_task_browser_control()
+    mode = str(raw.get("mode") or ("managed" if normalize_bool(raw.get("enabled")) else "off")).strip().lower()
+    config["mode"] = mode if mode in TASK_BROWSER_CONTROL_MODES else "off"
+    config["start_url"] = str(
+        raw.get("start_url") or raw.get("url") or config["start_url"]
+    ).strip()
+    access = str(raw.get("agent_access") or raw.get("access") or "read_only").strip().lower().replace("-", "_")
+    config["agent_access"] = access if access in TASK_BROWSER_ACCESS_MODES else "read_only"
+    runtime = str(raw.get("runtime") or "playwright").strip().lower()
+    config["runtime"] = runtime if runtime in TASK_BROWSER_RUNTIME_MODES else "playwright"
+    profile = str(raw.get("profile") or "ephemeral").strip().lower()
+    config["profile"] = profile if profile in TASK_BROWSER_PROFILE_MODES else "ephemeral"
+    config["profile_name"] = normalize_browser_profile_name(raw.get("profile_name"))
+    if config["profile"] != "named":
+        config["profile_name"] = ""
+    elif not config["profile_name"]:
+        config["profile"] = "ephemeral"
+    display = str(raw.get("display") or "native").strip().lower()
+    config["display"] = display if display in TASK_BROWSER_DISPLAY_MODES else "native"
+    device_mode = str(raw.get("device_mode") or "desktop").strip().lower()
+    config["device_mode"] = device_mode if device_mode in TASK_BROWSER_DEVICE_MODES else "desktop"
+    hosts: list[str] = []
+    seen: set[str] = set()
+    raw_hosts = raw.get("allowed_hosts")
+    if isinstance(raw_hosts, str):
+        raw_hosts = raw_hosts.replace(",", "\n").splitlines()
+    if isinstance(raw_hosts, (list, tuple, set)):
+        for item in raw_hosts:
+            host = _normalize_browser_host(item)
+            if not host or host in seen:
+                continue
+            hosts.append(host)
+            seen.add(host)
+            if len(hosts) >= 100:
+                break
+    config["allowed_hosts"] = hosts
+    for key in ("downloads", "uploads"):
+        mode_value = str(raw.get(key) or "deny").strip().lower()
+        config[key] = mode_value if mode_value in TASK_BROWSER_TRANSFER_MODES else "deny"
+    proxy_mode = str(raw.get("proxy_mode") or "direct").strip().lower()
+    config["proxy_mode"] = proxy_mode if proxy_mode in TASK_BROWSER_PROXY_MODES else "direct"
+    config["proxy_server"] = str(raw.get("proxy_server") or "").strip()[:2048]
+    config["proxy_bypass"] = str(raw.get("proxy_bypass") or "").strip()[:4096]
+    config["proxy_username"] = str(raw.get("proxy_username") or "").strip()[:512]
+    config["proxy_password"] = str(raw.get("proxy_password") or "")[:4096]
+    return config
+
+
+def task_browser_agent_can_write(task: dict) -> bool:
+    config = normalize_task_browser_control(task.get("browser_control"))
+    return config.get("mode") == "managed" and config.get("agent_access") == "read_write"
 
 
 def normalize_task_context_management(value: object | None = None, *, default_enabled: bool = False) -> dict:
@@ -738,6 +843,7 @@ def task_metadata_projection(task: dict, default_backend: str = "codex") -> dict
         "context_management": normalize_task_context_management(task.get("context_management")),
         "token_saving": normalize_task_token_saving(task.get("token_saving"), task.get("context_management")),
         "observe_proxy": normalize_task_observe_proxy(task.get("observe_proxy")),
+        "browser_control": normalize_task_browser_control(task.get("browser_control")),
         "task_skills": normalize_task_skills(task.get("task_skills")),
         "hardware_debug": normalize_task_hardware_debug(task.get("hardware_debug")),
     }
@@ -829,6 +935,7 @@ def make_task(
     context_management: dict | None = None,
     token_saving: dict | None = None,
     observe_proxy: dict | None = None,
+    browser_control: dict | None = None,
     task_skills: dict | None = None,
     hardware_debug: dict | None = None,
 ) -> dict:
@@ -862,6 +969,7 @@ def make_task(
         "context_management": normalize_task_context_management(context_management),
         "token_saving": normalize_task_token_saving(token_saving, context_management),
         "observe_proxy": normalize_task_observe_proxy(observe_proxy),
+        "browser_control": normalize_task_browser_control(browser_control),
         "task_skills": normalize_task_skills(task_skills),
         "hardware_debug": normalize_task_hardware_debug(hardware_debug),
         "status": "pending",

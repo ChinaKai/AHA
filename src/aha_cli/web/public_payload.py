@@ -22,6 +22,18 @@ def redact_hardware_credentials(value: object) -> object:
                 credentials["password_configured"] = password_configured
             result[key] = hardware
             continue
+        if key == "browser_control" and isinstance(item, dict):
+            browser = {
+                nested_key: redact_hardware_credentials(nested_value)
+                for nested_key, nested_value in item.items()
+            }
+            password = str(browser.get("proxy_password") or "")
+            browser["proxy_password"] = ""
+            browser["proxy_password_configured"] = bool(password) or bool(
+                browser.get("proxy_password_configured")
+            )
+            result[key] = browser
+            continue
         result[key] = redact_hardware_credentials(item)
     return result
 

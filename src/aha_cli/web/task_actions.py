@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from aha_cli.domain.models import (
     DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT,
     DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
     TASK_HARDWARE_DEBUG_ACCESS_MODES,
     TASK_HARDWARE_DEBUG_PERMISSION_KEYS,
     TASK_HARDWARE_DEBUG_MODES,
+    TASK_BROWSER_ACCESS_MODES,
+    TASK_BROWSER_CONTROL_MODES,
+    TASK_BROWSER_DEVICE_MODES,
+    TASK_BROWSER_DISPLAY_MODES,
+    TASK_BROWSER_PROFILE_MODES,
+    TASK_BROWSER_PROXY_MODES,
+    TASK_BROWSER_RUNTIME_MODES,
+    TASK_BROWSER_TRANSFER_MODES,
     TASK_SUPERVISION_ASK_USER_GATES,
     MAX_TASK_RELATED_PROJECTS,
+    normalize_browser_profile_name,
 )
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import backend_status, stop_backend
@@ -191,6 +202,97 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
     return update
 
 
+def parse_task_browser_control_fields(payload: dict) -> dict[str, object]:
+    update: dict[str, object] = {}
+    if "mode" in payload:
+        mode = str(payload.get("mode") or "off").strip().lower()
+        if mode not in TASK_BROWSER_CONTROL_MODES:
+            raise ValueError(f"mode must be one of: {', '.join(TASK_BROWSER_CONTROL_MODES)}")
+        update["mode"] = mode
+    if "start_url" in payload:
+        start_url = str(payload.get("start_url") or "").strip()
+        if start_url:
+            parsed = urlparse(start_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("start_url must be an http or https URL")
+        update["start_url"] = start_url
+    if "agent_access" in payload:
+        access = str(payload.get("agent_access") or "").strip().lower().replace("-", "_")
+        if access not in TASK_BROWSER_ACCESS_MODES:
+            raise ValueError(f"agent_access must be one of: {', '.join(TASK_BROWSER_ACCESS_MODES)}")
+        update["agent_access"] = access
+    if "runtime" in payload:
+        runtime = str(payload.get("runtime") or "").strip().lower()
+        if runtime not in TASK_BROWSER_RUNTIME_MODES:
+            raise ValueError(f"runtime must be one of: {', '.join(TASK_BROWSER_RUNTIME_MODES)}")
+        update["runtime"] = runtime
+    if "profile" in payload:
+        profile = str(payload.get("profile") or "").strip().lower()
+        if profile not in TASK_BROWSER_PROFILE_MODES:
+            raise ValueError(f"profile must be one of: {', '.join(TASK_BROWSER_PROFILE_MODES)}")
+        update["profile"] = profile
+        if profile == "named" and not normalize_browser_profile_name(payload.get("profile_name")):
+            raise ValueError("profile_name is required when profile is named")
+    if "profile_name" in payload:
+        profile_name = normalize_browser_profile_name(payload.get("profile_name"))
+        if str(payload.get("profile_name") or "").strip() and not profile_name:
+            raise ValueError("profile_name must be 1-80 printable characters")
+        update["profile_name"] = profile_name
+    if "display" in payload:
+        display = str(payload.get("display") or "").strip().lower()
+        if display not in TASK_BROWSER_DISPLAY_MODES:
+            raise ValueError(f"display must be one of: {', '.join(TASK_BROWSER_DISPLAY_MODES)}")
+        update["display"] = display
+    if "device_mode" in payload:
+        device_mode = str(payload.get("device_mode") or "").strip().lower()
+        if device_mode not in TASK_BROWSER_DEVICE_MODES:
+            raise ValueError(f"device_mode must be one of: {', '.join(TASK_BROWSER_DEVICE_MODES)}")
+        update["device_mode"] = device_mode
+    if "allowed_hosts" in payload:
+        allowed_hosts = payload.get("allowed_hosts")
+        if not isinstance(allowed_hosts, (list, str)):
+            raise ValueError("allowed_hosts must be a list or newline/comma-separated string")
+        update["allowed_hosts"] = allowed_hosts
+    for key in ("downloads", "uploads"):
+        if key not in payload:
+            continue
+        mode = str(payload.get(key) or "deny").strip().lower()
+        if mode not in TASK_BROWSER_TRANSFER_MODES:
+            raise ValueError(f"{key} must be one of: {', '.join(TASK_BROWSER_TRANSFER_MODES)}")
+        update[key] = mode
+    if "proxy_mode" in payload:
+        proxy_mode = str(payload.get("proxy_mode") or "direct").strip().lower()
+        if proxy_mode not in TASK_BROWSER_PROXY_MODES:
+            raise ValueError(f"proxy_mode must be one of: {', '.join(TASK_BROWSER_PROXY_MODES)}")
+        update["proxy_mode"] = proxy_mode
+    if "proxy_server" in payload:
+        proxy_server = str(payload.get("proxy_server") or "").strip()
+        if proxy_server:
+            parsed = urlparse(proxy_server)
+            if (
+                parsed.scheme not in {"http", "https", "socks4", "socks5"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or parsed.path not in {"", "/"}
+            ):
+                raise ValueError("proxy_server must be an HTTP(S) or SOCKS proxy URL without credentials")
+        update["proxy_server"] = proxy_server
+    for key in ("proxy_bypass", "proxy_username"):
+        if key in payload:
+            update[key] = str(payload.get(key) or "").strip()
+    if "proxy_password" in payload:
+        update["proxy_password"] = str(payload.get("proxy_password") or "")
+    if "clear_proxy_password" in payload:
+        update["clear_proxy_password"] = parse_optional_bool(
+            payload.get("clear_proxy_password"),
+            "clear_proxy_password",
+        )
+    return update
+
+
 def parse_task_skills_fields(payload: dict) -> dict[str, object]:
     update: dict[str, object] = {}
     if "enabled_paths" in payload:
@@ -228,6 +330,7 @@ __all__ = [
     "parse_task_context_management_fields",
     "parse_task_token_saving_fields",
     "parse_task_observe_proxy_fields",
+    "parse_task_browser_control_fields",
     "parse_task_hardware_debug_fields",
     "parse_task_supervision_fields",
     "parse_task_skills_fields",

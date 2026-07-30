@@ -9,6 +9,7 @@ Task context:
 $agent_context
 $task_skills_context
 $hardware_debug_context
+$browser_control_context
 $final_context
 $task_journal
 $compact_summary

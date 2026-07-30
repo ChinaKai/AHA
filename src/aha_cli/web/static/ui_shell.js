@@ -4,6 +4,7 @@
     const documentRef = deps.documentRef || windowRef.document || document;
     const navigatorRef = deps.navigatorRef || windowRef.navigator || navigator;
     let mobileViewportRaf = 0;
+    let mobileViewportBaselineHeight = 0;
 
     function sidebarStorageKey(side) {
       return `aha.${side}.sidebarCollapsed`;
@@ -217,7 +218,7 @@
         openTaskCreateDialog();
         return;
       }
-      if (["conversation", "final", "logs", "hardware", "context", "context-evidence"].includes(action)) {
+      if (["conversation", "final", "logs", "hardware", "browser", "context", "context-evidence"].includes(action)) {
         await deps.activateTab?.(action);
       }
     }
@@ -226,10 +227,16 @@
       const hardwareEnabled = Boolean(
         windowRef.AHATaskList?.taskHardwareDebugEnabled?.(deps.selectedTask?.())
       );
+      const browserEnabled = Boolean(
+        windowRef.AHATaskList?.taskBrowserControlEnabled?.(deps.selectedTask?.())
+      );
       elements.mobileActionPanelEl?.querySelectorAll("[data-mobile-action]").forEach(button => {
         const action = button.dataset.mobileAction || "";
         if (action === "hardware") {
           button.hidden = !hardwareEnabled;
+        }
+        if (action === "browser") {
+          button.hidden = !browserEnabled;
         }
         button.classList.toggle("active", action === activeTab);
       });
@@ -273,12 +280,51 @@
       return isKeyboardTextControl(documentRef.activeElement) ? documentRef.activeElement : null;
     }
 
+    function currentMobileViewportExtent() {
+      const viewport = windowRef.visualViewport;
+      return Math.max(
+        1,
+        Number(windowRef.innerHeight || 0),
+        Number(viewport?.height || 0) + Number(viewport?.offsetTop || 0)
+      );
+    }
+
+    function browserStableViewportHeight() {
+      const rawValue = documentRef.documentElement?.style?.getPropertyValue?.(
+        "--browser-stable-viewport-height"
+      );
+      const value = Number.parseFloat(String(rawValue || ""));
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    }
+
+    function browserKeyboardCaptureActive() {
+      return Boolean(
+        documentRef.documentElement?.classList?.contains?.("browser-keyboard-capture-active")
+      );
+    }
+
     function mobileKeyboardInset() {
       const virtualKeyboardHeight = Number(navigatorRef.virtualKeyboard?.boundingRect?.height || 0);
-      if (virtualKeyboardHeight > 0) return virtualKeyboardHeight;
       const viewport = windowRef.visualViewport;
-      if (!viewport) return 0;
-      return Math.max(0, windowRef.innerHeight - viewport.height - viewport.offsetTop);
+      if (!viewport) return Math.max(0, virtualKeyboardHeight);
+      if (!browserKeyboardCaptureActive()) {
+        return Math.max(
+          0,
+          Number(windowRef.innerHeight || 0)
+            - Number(viewport.height || 0)
+            - Number(viewport.offsetTop || 0)
+        );
+      }
+      if (virtualKeyboardHeight > 0) return virtualKeyboardHeight;
+      const baselineHeight = Math.max(
+        mobileViewportBaselineHeight,
+        browserStableViewportHeight(),
+        currentMobileViewportExtent()
+      );
+      return Math.max(
+        0,
+        baselineHeight - Number(viewport.height || 0) - Number(viewport.offsetTop || 0)
+      );
     }
 
     function mobileDialogScrollerFor(element) {
@@ -315,15 +361,18 @@
     function applyMobileViewport() {
       mobileViewportRaf = 0;
       if (!mobileViewportMatches()) {
+        mobileViewportBaselineHeight = 0;
         documentRef.documentElement.style.setProperty("--mobile-keyboard-inset", "0px");
         documentRef.body.classList.remove("mobile-keyboard-active");
         return;
       }
-      const keyboardActive = Boolean(activeKeyboardTextControl());
+      const keyboardControl = activeKeyboardTextControl();
+      if (!keyboardControl) mobileViewportBaselineHeight = currentMobileViewportExtent();
+      const keyboardActive = Boolean(keyboardControl);
       const keyboardInset = keyboardActive ? mobileKeyboardInset() : 0;
       documentRef.body.classList.toggle("mobile-keyboard-active", keyboardActive);
       documentRef.documentElement.style.setProperty("--mobile-keyboard-inset", `${Math.round(keyboardInset)}px`);
-      if (keyboardActive) keepMobileControlVisible(activeKeyboardTextControl(), keyboardInset);
+      if (keyboardActive) keepMobileControlVisible(keyboardControl, keyboardInset);
     }
 
     function scheduleMobileViewportSync() {

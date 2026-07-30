@@ -390,6 +390,7 @@ const {
   renderConversationPanelHtml,
   renderFinalPanelHtml,
   renderHardwareIoPanelHtml,
+  renderBrowserPanelHtml,
   renderLogsPanelHtml,
   renderContextPanelHtml,
   renderContextEvidencePanelHtml

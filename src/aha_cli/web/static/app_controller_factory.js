@@ -34,6 +34,7 @@
       taskObserveProxyEditorEl, taskObserveProxyFormEl, selectedTaskObserveProxyEnabledEl, taskObserveProxyStateEl,
       taskSkillSelectEl,
       taskHardwareEditorEl, taskHardwareFormEl, taskHardwareStateEl,
+      taskBrowserEditorEl, taskBrowserFormEl, taskBrowserStateEl,
       taskProxyDefaultsPreviewEl, taskProxyEditorEl, taskProxyEnabledEl,
       taskProxyFormEl, taskProxyStateEl, taskSupervisionAskUserFieldEl,
       taskSupervisionAskUserGatesEl, taskSupervisionEditorEl, taskSupervisionFormEl,
@@ -146,6 +147,9 @@
         taskHardwareEditorEl,
         taskHardwareFormEl,
         taskHardwareStateEl,
+        taskBrowserEditorEl,
+        taskBrowserFormEl,
+        taskBrowserStateEl,
         taskSupervisionModeEl,
         taskSupervisionHostModelFieldEl,
         taskSupervisionHostModelEl,
@@ -158,6 +162,7 @@
       statusData: deps.statusData,
       configData: deps.bootstrapConfigData,
       skillOptions: () => deps.bootstrapData?.()?.skill_options || [],
+      browserProfileOptions: () => deps.bootstrapData?.()?.browser_profiles || [],
       defaults: {
         defaultHttpProxy: deps.defaultHttpProxy,
         defaultHttpsProxy: deps.defaultHttpsProxy,
@@ -312,9 +317,11 @@
     const panelController = window.AHAPanelController.createPanelController({
       panelEl,
       sendFormEl,
+      messageEl,
       documentRef: deps.documentRef
     }, {
       hardwareTerminalController: deps.hardwareTerminalController,
+      browserSessionController: deps.browserSessionController,
       activeTab: deps.activeTab,
       setActiveTab: deps.setActiveTab,
       currentRunId: deps.currentRunId,
@@ -327,6 +334,7 @@
       renderFinalPanelHtml: deps.renderFinalPanelHtml,
       renderLogsPanelHtml: deps.renderLogsPanelHtml,
       renderHardwareIoPanelHtml: deps.renderHardwareIoPanelHtml,
+      renderBrowserPanelHtml: deps.renderBrowserPanelHtml,
       renderContextPanelHtml: deps.renderContextPanelHtml,
       renderContextEvidencePanelHtml: deps.renderContextEvidencePanelHtml,
       logState: deps.logState,
@@ -626,6 +634,7 @@
       collaborationModeDelegationPolicy: deps.collaborationModeDelegationPolicy,
       collaborationModeMaxSubAgents: deps.taskOptionsController?.collaborationModeMaxSubAgents,
       bootstrapConfigData: deps.bootstrapConfigData,
+      browserProfileOptions: () => deps.bootstrapData?.()?.browser_profiles || [],
       createTaskConfirmRows: deps.createTaskConfirmRows,
       createTaskFallbackConfirmText: deps.createTaskFallbackConfirmText,
       createTaskPayload: deps.createTaskPayload,
@@ -747,7 +756,7 @@
       apiUrl: deps.apiUrl,
       escapeHtml: deps.escapeHtml,
       fetchJson: deps.fetchJson,
-      imageUploadsEnabled: () => deps.activeTab?.() !== "hardware",
+      imageUploadsEnabled: () => deps.activeTab?.() === "conversation",
       markdownForImage: async ({ dataUrl, file, index }) => {
         if (window.AHATaskMemoMarkdown?.uploadMemoImageMarkdown) {
           return await window.AHATaskMemoMarkdown.uploadMemoImageMarkdown({ dataUrl, file, index }, {
@@ -773,6 +782,7 @@
       },
       onSubmit: deps.handleComposerSubmit,
       handleRawKey: deps.handleHardwareRawKey,
+      activeTab: deps.activeTab,
       onInput: deps.onComposerInput,
       textareaImagePaste: window.AHATextareaImagePaste,
       windowRef: deps.windowRef,

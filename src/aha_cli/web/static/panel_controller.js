@@ -2,8 +2,10 @@
   function createPanelController(elements = {}, deps = {}) {
     const panelEl = elements.panelEl;
     const sendFormEl = elements.sendFormEl;
+    const messageEl = elements.messageEl;
     const documentRef = elements.documentRef || document;
     const hardwareTerminalController = deps.hardwareTerminalController || null;
+    const browserSessionController = deps.browserSessionController || null;
     const activeTab = deps.activeTab || (() => "conversation");
     const setActiveTab = deps.setActiveTab || (() => {});
     const currentRunId = deps.currentRunId || (() => "");
@@ -16,6 +18,7 @@
     const renderFinalPanelHtml = deps.renderFinalPanelHtml || (() => "");
     const renderLogsPanelHtml = deps.renderLogsPanelHtml || (() => "");
     const renderHardwareIoPanelHtml = deps.renderHardwareIoPanelHtml || (() => "");
+    const renderBrowserPanelHtml = deps.renderBrowserPanelHtml || (() => "");
     const renderContextPanelHtml = deps.renderContextPanelHtml || (() => "");
     const renderContextEvidencePanelHtml = deps.renderContextEvidencePanelHtml || (() => "");
     const logState = deps.logState || (() => ({}));
@@ -36,10 +39,38 @@
     const ensureActiveTabData = deps.ensureActiveTabData || (async () => {});
     const conversationAutoFollow = deps.conversationAutoFollow || (() => true);
     const setConversationAutoFollow = deps.setConversationAutoFollow || (() => {});
+    const composerDisabledState = new WeakMap();
+
+    function syncComposerAvailability(tab) {
+      const enabled = tab === "conversation";
+      if (!sendFormEl) return;
+      sendFormEl.hidden = false;
+      sendFormEl.dataset.composerEnabled = String(enabled);
+      sendFormEl.setAttribute?.("aria-disabled", String(!enabled));
+      const controls = sendFormEl.querySelectorAll?.(
+        "textarea, select, input, button:not(.mobile-actions-toggle)"
+      ) || [];
+      for (const control of controls) {
+        if (!enabled) {
+          if (!composerDisabledState.has(control)) {
+            composerDisabledState.set(control, Boolean(control.disabled));
+          }
+          control.disabled = true;
+        } else if (composerDisabledState.has(control)) {
+          control.disabled = composerDisabledState.get(control);
+          composerDisabledState.delete(control);
+        }
+      }
+      if (!enabled) {
+        messageEl?.blur?.();
+        documentRef.querySelector?.("#command-menu")?.classList?.add?.("hidden");
+      }
+    }
 
     function prepareForTab(tab) {
-      if (sendFormEl) sendFormEl.hidden = tab === "hardware";
+      syncComposerAvailability(tab);
       if (tab !== "hardware") hardwareTerminalController?.unmount?.();
+      if (tab !== "browser") browserSessionController?.unmount?.();
     }
 
     function isPanelNearBottom() {
@@ -115,6 +146,13 @@
           panelEl.innerHTML = renderHardwareIoPanelHtml(state);
         }
         hardwareTerminalController?.mount?.(task.id, state);
+      } else if (tab === "browser") {
+        const root = panelEl.querySelector("[data-browser-session-root]");
+        if (!root || root.dataset.browserTaskId !== task.id) {
+          panelEl.innerHTML = renderBrowserPanelHtml(task);
+        }
+        browserSessionController?.mount?.(task.id);
+        browserSessionController?.focus?.();
       } else if (tab === "context") {
         const detail = contextDetail(task.id);
         if (!detail) {
@@ -144,6 +182,8 @@
       if (activeTab() === "hardware" && selectedTaskId()) hardwareIoState(selectedTaskId()).autoFollow = true;
       documentRef.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item.dataset.tab === activeTab()));
       syncMobileActionPanel();
+      prepareForTab(activeTab());
+      if (activeTab() === "browser") renderPanel();
       await ensureActiveTabData();
       renderPanel();
     }

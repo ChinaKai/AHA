@@ -8,7 +8,12 @@
     const windowRef = options.windowRef || window;
     const imagePaste = options.textareaImagePaste || windowRef.AHATextareaImagePaste;
 
+    function chatInputActive() {
+      return !options.activeTab || options.activeTab() === "conversation";
+    }
+
     function hasMessage() {
+      if (!chatInputActive()) return false;
       return Boolean(elements.messageEl?.value.trim());
     }
 
@@ -25,6 +30,7 @@
     }
 
     function requestSubmitFromPointer(event) {
+      if (!chatInputActive()) return false;
       if (!hasMessage()) return false;
       event.preventDefault();
       pointerSubmitUntil = Date.now() + 500;
@@ -149,6 +155,7 @@
     }
 
     function handleImagePaste(event) {
+      if (!chatInputActive()) return;
       if (!imageUploadsEnabled()) return;
       const files = imagePaste?.clipboardImageFiles?.(event) || [];
       if (!files.length) return;
@@ -158,6 +165,7 @@
 
     async function submitForm(event) {
       event.preventDefault();
+      if (!chatInputActive()) return;
       if (submitInFlight) return;
       const task = options.selectedTask?.();
       const message = String(elements.messageEl?.value || "").trim();
@@ -193,14 +201,28 @@
         void insertImageFiles(event.target?.files);
       });
       elements.messageEl?.addEventListener("input", () => {
+        if (!chatInputActive()) {
+          elements.commandMenuEl?.classList.add("hidden");
+          return;
+        }
         commandSelection = 0;
         syncInputHeight();
         syncMobileAction();
         renderCommandMenu();
         options.onInput?.();
       });
-      elements.messageEl?.addEventListener("focus", renderCommandMenu);
+      elements.messageEl?.addEventListener("focus", () => {
+        if (!chatInputActive()) {
+          elements.commandMenuEl?.classList.add("hidden");
+          return;
+        }
+        renderCommandMenu();
+      });
       elements.messageEl?.addEventListener("keydown", event => {
+        if (!chatInputActive()) {
+          event.preventDefault();
+          return;
+        }
         // Raw hardware-keyboard mode consumes the keystroke (sends it live to the serial
         // port) before any line-composer behaviour runs.
         if (options.handleRawKey?.(event)) return;

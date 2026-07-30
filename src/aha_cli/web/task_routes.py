@@ -5,6 +5,14 @@ from urllib.parse import unquote
 
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names, normalize_reasoning_effort
 from aha_cli.domain.models import task_hardware_debug_can_write
+from aha_cli.services.browser_bridge import browser_bridge_status
+from aha_cli.services.browser_bookmarks import browser_bookmarks_snapshot, update_browser_bookmarks
+from aha_cli.services.browser_io import browser_io_page
+from aha_cli.services.browser_runtime import (
+    BrowserBridgeError,
+    browser_session_lifecycle,
+    ensure_named_browser_profile,
+)
 from aha_cli.services.agent_backend_switch import restart_agent_backend, switch_agent_backend
 from aha_cli.services.chat_supervision import apply_supervision_real_host
 from aha_cli.services.context_evidence import list_task_context_evidence
@@ -46,6 +54,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_config,
     update_task_context_management_config,
+    update_task_browser_control_config,
     update_task_hardware_debug_config,
     update_task_observe_proxy_config,
     update_task_proxy_config,
@@ -76,6 +85,7 @@ from aha_cli.web.task_actions import (
     complete_selected_task,
     handle_send_payload,
     parse_task_context_management_fields,
+    parse_task_browser_control_fields,
     parse_task_hardware_debug_fields,
     parse_task_observe_proxy_fields,
     parse_task_proxy_fields,
@@ -90,6 +100,12 @@ from aha_cli.web.task_actions import (
 SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+
+
+def _ensure_task_named_browser_profile(root: Path, task: dict) -> None:
+    browser = task.get("browser_control") if isinstance(task.get("browser_control"), dict) else {}
+    if browser.get("profile") == "named":
+        ensure_named_browser_profile(root, browser.get("profile_name"))
 
 
 def _resolve_task_device(task: dict) -> tuple[str | None, int]:
@@ -494,6 +510,33 @@ def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str,
                 and not status.get("error")
             ),
         }
+    if detail_name == "browser-session":
+        task = task_snapshot(root, run_id, task_id)["task"]
+        return {
+            "task_id": task_id,
+            "browser_control": task.get("browser_control") or {},
+            "bridge": browser_bridge_status(root, run_id, task_id),
+            "read_only": _task_is_terminal(task),
+        }
+    if detail_name == "browser-bookmarks":
+        task = task_snapshot(root, run_id, task_id)["task"]
+        return {
+            "task_id": task_id,
+            **browser_bookmarks_snapshot(
+                root,
+                run_id,
+                task_id,
+                task.get("browser_control") or {},
+            ),
+        }
+    if detail_name == "browser-io":
+        limit = int(query.get("limit", ["200"])[0] or "200")
+        after_values = query.get("after_offset", []) or query.get("after", [])
+        try:
+            after = int(after_values[0]) if after_values and after_values[0] else None
+        except ValueError:
+            after = None
+        return browser_io_page(root, run_id, task_id, limit=limit, after=after)
     if detail_name == "final":
         return task_final_view_snapshot(root, run_id, task_id)
     if detail_name == "context":
@@ -560,6 +603,74 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             task = update_task_skills_config(root, run_id, task_id, **parse_task_skills_fields(parse_json_body(body)))
         elif action == "hardware-debug":
             task = update_task_hardware_debug_config(root, run_id, task_id, **parse_task_hardware_debug_fields(parse_json_body(body)))
+        elif action == "browser-control":
+            payload = parse_json_body(body)
+            restart_browser = (
+                parse_optional_bool(payload.get("restart_browser"), "restart_browser")
+                if "restart_browser" in payload
+                else False
+            )
+            task = update_task_browser_control_config(
+                root,
+                run_id,
+                task_id,
+                **parse_task_browser_control_fields(payload),
+            )
+            _ensure_task_named_browser_profile(root, task)
+            if restart_browser:
+                try:
+                    lifecycle = browser_session_lifecycle(
+                        root,
+                        run_id,
+                        task_id,
+                        "restart",
+                    )
+                except BrowserBridgeError as exc:
+                    return route_result(
+                        {
+                            "ok": False,
+                            "error": str(exc),
+                            "code": exc.code,
+                            "task": task,
+                        },
+                        "409 Conflict",
+                    )
+                return route_result(
+                    {
+                        "ok": True,
+                        "task": task,
+                        "browser_session": lifecycle,
+                    }
+                )
+        elif action == "browser-session":
+            payload = parse_json_body(body)
+            try:
+                lifecycle = browser_session_lifecycle(
+                    root,
+                    run_id,
+                    task_id,
+                    payload.get("action"),
+                )
+            except BrowserBridgeError as exc:
+                return route_result(
+                    {"ok": False, "error": str(exc), "code": exc.code},
+                    "409 Conflict",
+                )
+            return route_result({"ok": True, **lifecycle})
+        elif action == "browser-bookmarks":
+            payload = parse_json_body(body)
+            task = task_snapshot(root, run_id, task_id)["task"]
+            bookmarks = update_browser_bookmarks(
+                root,
+                run_id,
+                task_id,
+                task.get("browser_control") or {},
+                action=payload.get("action"),
+                url=payload.get("url"),
+                title=payload.get("title"),
+                bookmark_id=payload.get("id"),
+            )
+            return route_result({"ok": True, "task_id": task_id, **bookmarks})
         elif action == "hardware-io":
             result = append_hardware_io_record(root, run_id, task_id, parse_json_body(body))
             return route_result({"ok": True, **result})
@@ -768,6 +879,11 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             if not isinstance(payload.get("observe_proxy"), dict):
                 return route_result({"error": "observe_proxy must be an object"}, "400 Bad Request")
             observe_proxy = parse_task_observe_proxy_fields(payload["observe_proxy"])
+        browser_control = None
+        if "browser_control" in payload:
+            if not isinstance(payload.get("browser_control"), dict):
+                return route_result({"error": "browser_control must be an object"}, "400 Bad Request")
+            browser_control = parse_task_browser_control_fields(payload["browser_control"])
         task_skills = None
         if "task_skills" in payload:
             if not isinstance(payload.get("task_skills"), dict):
@@ -805,10 +921,12 @@ def handle_create_task_route(root: Path, run_id: str, payload: dict, *, backgrou
             context_management=context_management,
             token_saving=token_saving,
             observe_proxy=observe_proxy,
+            browser_control=browser_control,
             task_skills=task_skills,
             hardware_debug=hardware_debug,
             dispatch=dispatch,
         )
+        _ensure_task_named_browser_profile(root, task)
     except ValueError as exc:
         return route_result({"error": str(exc)}, "400 Bad Request")
     backend_state = start_dispatched_task_backend(root, run_id, task, dispatch, background=background_backend_start)
@@ -1156,6 +1274,16 @@ def handle_task_config_route(root: Path, run_id: str, payload: dict) -> dict:
             task = update_task_observe_proxy_config(root, run_id, task_id, **parse_task_observe_proxy_fields(payload["observe_proxy"]))
         elif "observe_proxy" in payload:
             return route_result({"error": "observe_proxy must be an object"}, "400 Bad Request")
+        elif "browser_control" in payload and isinstance(payload.get("browser_control"), dict):
+            task = update_task_browser_control_config(
+                root,
+                run_id,
+                task_id,
+                **parse_task_browser_control_fields(payload["browser_control"]),
+            )
+            _ensure_task_named_browser_profile(root, task)
+        elif "browser_control" in payload:
+            return route_result({"error": "browser_control must be an object"}, "400 Bad Request")
         elif "context_management" in payload and isinstance(payload.get("context_management"), dict):
             task = update_task_context_management_config(root, run_id, task_id, **parse_task_context_management_fields(payload["context_management"]))
         elif "task_skills" in payload and isinstance(payload.get("task_skills"), dict):

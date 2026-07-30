@@ -12,6 +12,7 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main
 from aha_cli.services.run_retention import apply_run_retention
+from aha_cli.services.browser_runtime import ensure_named_browser_profile
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -85,6 +86,19 @@ class WebRunApiTests(unittest.TestCase):
         self.assertFalse(body["memo_summary"]["available"])
         self.assertEqual(body["memo_summary"]["counts"]["total"], 0)
         self.assertEqual(body["skill_options"], [])
+        self.assertEqual(body["browser_profiles"], [])
+
+    def test_api_bootstrap_lists_named_browser_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            ensure_named_browser_profile(root, "工作")
+
+            response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual([item["name"] for item in body["browser_profiles"]], ["工作"])
 
     def test_api_bootstrap_marks_source_web_upgrade_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -19,6 +19,13 @@ from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
 from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
+from aha_cli.services.browser_bridge import (
+    BrowserBridgeError,
+    browser_bridge_request,
+    browser_doctor,
+    run_browser_bridge_daemon,
+    save_browser_screenshot,
+)
 from aha_cli.services.hardware_io import append_hardware_io_record
 from aha_cli.services.hardware_bridge import (
     append_bridge_control,
@@ -1053,6 +1060,75 @@ def cmd_hardware_io(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_browser_bridge(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    try:
+        return asyncio.run(run_browser_bridge_daemon(root, args.run_id, args.task_id))
+    except KeyboardInterrupt:
+        return 130
+
+
+def cmd_browser(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    action = str(args.browser_action or "").replace("-", "_")
+    if action == "doctor":
+        result = asyncio.run(browser_doctor())
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    request_args: dict[str, object] = {}
+    if action == "navigate":
+        request_args["url"] = args.url
+    elif action == "click":
+        request_args["ref"] = args.ref
+    elif action == "fill":
+        request_args.update({"ref": args.ref, "text": args.text})
+    elif action == "press":
+        request_args["key"] = args.key
+    elif action == "screenshot":
+        request_args.update({"type": args.type, "full_page": bool(args.full_page)})
+    elif action == "new_tab" and args.url:
+        request_args["url"] = args.url
+    elif action == "select_tab":
+        request_args["page_id"] = args.page_id
+    elif action == "close_tab" and args.page_id:
+        request_args["page_id"] = args.page_id
+    try:
+        result = asyncio.run(
+            browser_bridge_request(
+                root,
+                run_id,
+                args.task_id,
+                action,
+                args=request_args,
+                source="agent",
+                agent_id=args.agent_id,
+            )
+        )
+        if action == "screenshot":
+            output = Path(args.output) if args.output else None
+            path = save_browser_screenshot(root, run_id, args.task_id, result, output)
+            result = {
+                key: value
+                for key, value in result.items()
+                if key != "data"
+            }
+            result["path"] = str(path)
+        print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
+        return 0
+    except BrowserBridgeError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": exc.code, "message": str(exc)}},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+
 def cmd_hardware_bridge(args: argparse.Namespace) -> int:
     from aha_cli.services.hardware_bridge import DeviceBridgeDaemon
 
@@ -1814,6 +1890,8 @@ def command_handlers() -> dict[str, object]:
         "watch": cmd_watch,
         "send": cmd_send,
         "hardware-io": cmd_hardware_io,
+        "browser": cmd_browser,
+        "browser-bridge": cmd_browser_bridge,
         "hardware-bridge": cmd_hardware_bridge,
         "hardware-network-bridge": cmd_hardware_network_bridge,
         "hardware-attach": cmd_hardware_attach,

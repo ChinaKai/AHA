@@ -1,4 +1,6 @@
 (() => {
+  const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";
+
   function createTaskConfigController(options = {}) {
     const escapeHtml = options.escapeHtml || (value => String(value ?? ""));
     const els = options.els || {};
@@ -9,6 +11,7 @@
     const getStatusData = options.statusData || (() => null);
     const getConfigData = options.configData || (() => ({}));
     const getSkillOptions = options.skillOptions || (() => []);
+    const getBrowserProfileOptions = options.browserProfileOptions || (() => []);
     const currentRunId = options.currentRunId || (() => "");
     const alertUser = options.alert || (message => window.alert(message));
     let createProxyOverride = false;
@@ -577,18 +580,77 @@
     function renderTaskHardwareEditor(taskArg) {
       const task = resolveTaskEditorTask(taskArg, arguments.length > 0);
       renderTaskSkillsEditor(task, true);
-      if (!els.taskHardwareEditorEl || !els.taskHardwareFormEl) return;
       const disabled = !task;
-      if (!task) {
-        resetTaskHardwareForm();
-        syncTaskHardwareDebugFields({ disabled });
-        if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = "Select a task to edit hardware debug.";
-        return;
+      if (els.taskHardwareEditorEl && els.taskHardwareFormEl) {
+        if (!task) {
+          resetTaskHardwareForm();
+          syncTaskHardwareDebugFields({ disabled });
+          if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = "Select a task to edit hardware debug.";
+        } else {
+          const policy = helpers.taskHardwareDebugPolicy?.(task) || {};
+          setTaskHardwarePolicy(policy);
+          syncTaskHardwareDebugFields({ disabled });
+          if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = helpers.taskHardwareDebugSummary?.(task) || "off";
+        }
       }
-      const policy = helpers.taskHardwareDebugPolicy?.(task) || {};
-      setTaskHardwarePolicy(policy);
-      syncTaskHardwareDebugFields({ disabled });
-      if (els.taskHardwareStateEl) els.taskHardwareStateEl.textContent = helpers.taskHardwareDebugSummary?.(task) || "off";
+      renderTaskBrowserEditor(task);
+    }
+
+    function syncTaskBrowserControlFields(options = {}) {
+      const form = els.taskBrowserFormEl;
+      const disabled = Boolean(options.disabled);
+      const mode = String(form?.querySelector("[data-browser-mode]")?.value || "off");
+      const enabled = mode === "managed";
+      const modeEl = form?.querySelector("[data-browser-mode]");
+      if (modeEl) modeEl.disabled = disabled;
+      const settings = form?.querySelector("[data-browser-settings]");
+      if (settings) settings.hidden = !enabled;
+      form?.querySelectorAll("[data-browser-field]").forEach(input => { input.disabled = disabled || !enabled; });
+      const profileMode = String(form?.querySelector('[data-browser-field="profile"]')?.value || "ephemeral");
+      const profileNamed = form?.querySelector("[data-browser-profile-named]");
+      const namedEnabled = enabled && profileMode === "named";
+      if (profileNamed) profileNamed.hidden = !namedEnabled;
+      profileNamed?.querySelectorAll("[data-browser-field]").forEach(input => {
+        input.disabled = disabled || !namedEnabled;
+        input.required = namedEnabled;
+      });
+      const submit = form?.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = disabled;
+    }
+
+    function setTaskBrowserPolicy(policy = {}) {
+      const form = els.taskBrowserFormEl;
+      const mode = form?.querySelector("[data-browser-mode]");
+      if (mode) mode.value = policy.mode || "off";
+      const set = (key, value) => {
+        const input = form?.querySelector(`[data-browser-field="${key}"]`);
+        if (input) input.value = value ?? input.defaultValue ?? "";
+      };
+      set("start_url", policy.start_url || DEFAULT_BROWSER_START_URL);
+      set("agent_access", policy.agent_access || "read_only");
+      set("profile", policy.profile || "ephemeral");
+      set("profile_name", policy.profile_name || "");
+      const options = form?.querySelector("[data-browser-profile-options]");
+      if (options) {
+        options.innerHTML = getBrowserProfileOptions()
+          .map(item => `<option value="${escapeHtml(item?.name || "")}"></option>`)
+          .join("");
+      }
+    }
+
+    function renderTaskBrowserEditor(task) {
+      if (!els.taskBrowserEditorEl || !els.taskBrowserFormEl) return;
+      const disabled = !task;
+      setTaskBrowserPolicy(task?.browser_control || { mode: "off" });
+      syncTaskBrowserControlFields({ disabled });
+      if (els.taskBrowserStateEl) {
+        const policy = task?.browser_control || {};
+        els.taskBrowserStateEl.textContent = disabled
+          ? "Select a task to edit shared browser."
+          : policy.mode === "managed"
+            ? `${policy.agent_access || "read_only"} · ${policy.runtime || "playwright"} · ${policy.profile === "named" ? `named:${policy.profile_name || "?"}` : policy.profile || "ephemeral"} · ${policy.display || "native"} · ${policy.proxy_mode || "direct"}`
+            : "off";
+      }
     }
 
     function markTaskProxyEditing(durationMs = 10000) {
@@ -630,7 +692,9 @@
 
     function isTaskHardwareEditing() {
       const active = document.activeElement;
-      return Date.now() < hardwareEditingUntil || (active instanceof Element && Boolean(els.taskHardwareFormEl?.contains(active)));
+      return Date.now() < hardwareEditingUntil || (active instanceof Element && Boolean(
+        els.taskHardwareFormEl?.contains(active) || els.taskBrowserFormEl?.contains(active)
+      ));
     }
 
     function resetEditing() {
@@ -774,6 +838,27 @@
       await api.loadStatus({ forceTaskHardware: true });
     }
 
+    async function saveTaskBrowserConfig() {
+      const task = getTaskSettingsTask();
+      if (!task) return;
+      const form = els.taskBrowserFormEl;
+      const value = key => String(form?.querySelector(`[data-browser-field="${key}"]`)?.value || "").trim();
+      const browserControl = {
+        mode: String(form?.querySelector("[data-browser-mode]")?.value || "off"),
+        start_url: value("start_url"),
+        agent_access: value("agent_access") || "read_only",
+        profile: value("profile") || "ephemeral",
+        profile_name: value("profile_name")
+      };
+      await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/browser-control`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(api.runScopedPayload(browserControl))
+      }, "Failed to update task browser control");
+      hardwareEditingUntil = 0;
+      await api.loadStatus({ forceTaskBrowser: true });
+    }
+
     function bind() {
       els.runProxyFormEl?.addEventListener("pointerdown", () => markTaskProxyEditing());
       els.runProxyFormEl?.addEventListener("focusin", () => markTaskProxyEditing());
@@ -877,6 +962,23 @@
           alertUser(err?.message || String(err));
         }
       });
+      els.taskBrowserFormEl?.addEventListener("pointerdown", () => markTaskHardwareEditing());
+      els.taskBrowserFormEl?.addEventListener("focusin", () => markTaskHardwareEditing());
+      els.taskBrowserFormEl?.addEventListener("input", () => markTaskHardwareEditing());
+      els.taskBrowserFormEl?.addEventListener("change", event => {
+        markTaskHardwareEditing();
+        if (event.target instanceof Element && event.target.matches('[data-browser-mode], [data-browser-field="profile"]')) {
+          syncTaskBrowserControlFields();
+        }
+      });
+      els.taskBrowserFormEl?.addEventListener("submit", async event => {
+        event.preventDefault();
+        try {
+          await saveTaskBrowserConfig();
+        } catch (err) {
+          alertUser(err?.message || String(err));
+        }
+      });
       [els.runHttpProxyEl, els.runHttpsProxyEl].forEach(input => {
         input?.addEventListener("input", () => {
           const configured = Boolean(els.runHttpProxyEl?.value.trim() || els.runHttpsProxyEl?.value.trim());
@@ -936,6 +1038,7 @@
       saveTaskContextConfig,
       saveTaskObserveProxyConfig,
       saveTaskHardwareConfig,
+      saveTaskBrowserConfig,
       saveTaskSkillsConfig,
       saveRunProxyConfig,
       saveTaskProxyConfig,

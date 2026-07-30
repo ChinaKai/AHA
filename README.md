@@ -27,6 +27,24 @@ http://127.0.0.1:8788
 首次打开时，UI 会显示初始化表单。保存后才会在选定的 AHA home 中写入
 `.aha/config.json`。之后先创建 run，再在 run 里创建 task。
 
+### 共享浏览器（可选）
+
+任务可以启用 Browser 模式，让用户和 agent 共用同一个任务级 Chromium
+会话。先安装可选依赖与浏览器：
+
+```bash
+python3 -m pip install -e '.[browser]'
+python3 -m playwright install chromium
+python3 -m aha_cli browser doctor
+```
+
+在新建任务或任务设置里启用“共享浏览器”后，默认在 AHA 主机桌面打开任务独占
+的 Chromium 原生窗口；无桌面环境自动回退到 Browser 内嵌面板。agent 使用
+`aha browser status|snapshot|click|fill|navigate ...` 操作同一会话。
+默认 agent 只读，用户可随时接管；Browser 设置支持 360p 帧流与独立/继承
+代理。完整配置、安全边界和命令见
+[`docs/browser-control.md`](docs/browser-control.md)。
+
 ## 打包 Onebin
 
 从源码目录打包单文件 zipapp：

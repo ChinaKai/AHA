@@ -38,6 +38,8 @@ COMMANDS = {
     "hardware-disarm",
     "hardware-rules",
     "hardware-stop",
+    "browser",
+    "browser-bridge",
     "commit",
     "commit-check",
     "package",
@@ -383,6 +385,54 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_io_p.add_argument("--data", default="")
     hardware_io_p.add_argument("--json", action="store_true")
     hardware_io_p.set_defaults(func=handlers["hardware-io"])
+
+    browser_bridge_p = sub.add_parser(
+        "browser-bridge",
+        help="Run the task-scoped shared browser bridge (managed by the AHA runtime; blocks)",
+    )
+    browser_bridge_p.add_argument("run_id")
+    browser_bridge_p.add_argument("task_id")
+    browser_bridge_p.set_defaults(func=handlers["browser-bridge"])
+
+    browser_p = sub.add_parser("browser", help="Inspect or control a task's shared browser")
+    browser_sub = browser_p.add_subparsers(dest="browser_action", required=True)
+    browser_doctor_p = browser_sub.add_parser("doctor", help="Check Playwright and Chromium availability")
+    browser_doctor_p.set_defaults(func=handlers["browser"])
+
+    def add_browser_scope(command: str, help_text: str) -> argparse.ArgumentParser:
+        action_p = browser_sub.add_parser(command, help=help_text)
+        action_p.add_argument("run_id")
+        action_p.add_argument("task_id")
+        action_p.add_argument("--agent-id", default="main")
+        action_p.set_defaults(func=handlers["browser"])
+        return action_p
+
+    add_browser_scope("status", "Start if needed and show shared browser status")
+    add_browser_scope("tabs", "List shared browser tabs")
+    add_browser_scope("snapshot", "Return visible text and interactive element refs")
+    screenshot_p = add_browser_scope("screenshot", "Save a screenshot from the shared browser")
+    screenshot_p.add_argument("--output", "-o", default="")
+    screenshot_p.add_argument("--type", choices=["png", "jpeg"], default="png")
+    screenshot_p.add_argument("--full-page", action="store_true")
+    navigate_p = add_browser_scope("navigate", "Navigate the active shared browser tab")
+    navigate_p.add_argument("url")
+    click_p = add_browser_scope("click", "Click an element ref from the latest snapshot")
+    click_p.add_argument("ref")
+    fill_p = add_browser_scope("fill", "Fill an element ref from the latest snapshot")
+    fill_p.add_argument("ref")
+    fill_p.add_argument("text")
+    press_p = add_browser_scope("press", "Press a key in the active shared browser tab")
+    press_p.add_argument("key")
+    add_browser_scope("back", "Navigate back")
+    add_browser_scope("forward", "Navigate forward")
+    add_browser_scope("reload", "Reload the active tab")
+    add_browser_scope("focus-window", "Focus the native shared browser window")
+    new_tab_p = add_browser_scope("new-tab", "Open a new shared browser tab")
+    new_tab_p.add_argument("--url", default="")
+    select_tab_p = add_browser_scope("select-tab", "Select a shared browser tab")
+    select_tab_p.add_argument("page_id")
+    close_tab_p = add_browser_scope("close-tab", "Close a shared browser tab")
+    close_tab_p.add_argument("--page-id", default="")
 
     hardware_bridge_p = sub.add_parser(
         "hardware-bridge",

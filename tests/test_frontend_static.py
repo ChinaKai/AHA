@@ -527,8 +527,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=terminal-ui-v10">', html)
-        self.assertIn('<script src="/static/i18n.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=browser-bookmarks-safe-v45">', html)
+        self.assertIn('<script src="/static/i18n.js?v=chat-only-input-v38"></script>', html)
         self.assertIn('<script src="/static/token_usage.js?v=usage-v8"></script>', html)
         self.assertIn('"run.token_usage": "Daily usage"', i18n)
         self.assertIn('"run.token_usage": "每日用量"', i18n)
@@ -1648,6 +1648,1060 @@ controller.unmount();
         self.assertIn('data-hardware-network-settings hidden', html)
         self.assertIn('mode: String(form?.querySelector("[data-hardware-mode]")', config_controller)
 
+    def test_shared_browser_panel_and_settings_are_wired(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        browser = (root / "browser_session.js").read_text(encoding="utf-8")
+        conversation = (root / "conversation_panel.js").read_text(encoding="utf-8")
+        panel = (root / "panel_controller.js").read_text(encoding="utf-8")
+        task_list = (root / "task_list.js").read_text(encoding="utf-8")
+        create_controller = (root / "task_create_controller.js").read_text(encoding="utf-8")
+        config_controller = (root / "task_config_controller.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="task-browser-mode" data-browser-mode', html)
+        self.assertIn('id="task-browser-form"', html)
+        self.assertIn('data-mobile-action="browser"', html)
+        self.assertIn('/static/browser_session.js?v=browser-bookmarks-safe-v45', html)
+        self.assertIn('"/ws/browser-session"', browser)
+        self.assertIn("let frameWidth = 1280", browser)
+        self.assertIn("let frameHeight = 720", browser)
+        self.assertIn('send("mouse"', browser)
+        self.assertIn('send("text"', browser)
+        self.assertIn("function browserAddressTarget", browser)
+        self.assertIn("https://www.bing.com/search?q=", browser)
+        self.assertIn('data-browser-keyboard-input', conversation)
+        self.assertIn('class="browser-frame-area" data-browser-embedded-session', conversation)
+        self.assertIn('data-browser-input-surface tabindex="0"', conversation)
+        self.assertIn('data-browser-start-url="${escapeHtml(policy.start_url || "")}"', conversation)
+        self.assertIn('data-browser-config-device-mode="${deviceMode}"', conversation)
+        self.assertNotIn('data-browser-device-mode="desktop"', conversation)
+        self.assertNotIn('data-browser-device-mode="mobile"', conversation)
+        self.assertIn('data-browser-lifecycle="start"', conversation)
+        self.assertNotIn('data-browser-lifecycle="restart"', conversation)
+        self.assertIn('data-browser-lifecycle="close"', conversation)
+        self.assertNotIn('aria-label="Browser device mode"', conversation)
+        self.assertIn('data-browser-lifecycle="start" title="Start" aria-label="Start"', conversation)
+        self.assertNotIn('title="Restart" aria-label="Restart"', conversation)
+        self.assertIn('data-browser-lifecycle="close" title="Close" aria-label="Close"', conversation)
+        self.assertIn('summary class="browser-toolbar-icon-button" aria-label="Browser settings"', conversation)
+        self.assertIn(
+            'class="browser-session-status idle" data-browser-status role="status" '
+            'aria-label="Browser status: connecting" title="connecting"></span>',
+            conversation,
+        )
+        self.assertNotIn('data-i18n="browser.settings">Settings</span>', conversation)
+        self.assertNotIn("browser-toolbar-meta", conversation)
+        self.assertNotIn("data-browser-display-status", conversation)
+        self.assertNotIn("data-browser-agent-access", conversation)
+        self.assertLess(conversation.index("data-browser-status"), conversation.index("browser-navigation-controls"))
+        self.assertIn('data-browser-display="${nativeRequested ? "native" : "embedded"}"', conversation)
+        self.assertIn("data-browser-native-session", conversation)
+        self.assertIn("focus_window", conversation)
+        self.assertIn("rootEl?.dataset?.browserStartUrl", browser)
+        self.assertIn('payload.state?.display?.active !== "native"', browser)
+        self.assertIn('querySelectorAll?.("[data-browser-embedded-session]")', browser)
+        self.assertIn('data-browser-frame alt="Shared browser viewport" draggable="false" hidden', conversation)
+        self.assertIn('data-browser-keyboard-input', conversation)
+        self.assertIn('listen(keyboardInput, "input"', browser)
+        self.assertIn('listen(keyboardInput, "compositionend"', browser)
+        self.assertNotIn("composerInput", browser)
+        self.assertIn("accepts_text_input", browser)
+        self.assertNotIn('listen(stage, "beforeinput"', browser)
+        self.assertIn('send("screenshot", { type: "jpeg", quality: 70, full_page: false });', browser)
+        self.assertIn("renderFrame({", browser)
+        for advanced_field in (
+            "runtime",
+            "display",
+            "downloads",
+            "uploads",
+            "proxy_mode",
+            "proxy_server",
+            "proxy_bypass",
+            "proxy_username",
+            "proxy_password",
+        ):
+            self.assertNotIn(f'data-browser-field="{advanced_field}"', html)
+            self.assertIn(f'data-browser-runtime-field="{advanced_field}"', conversation)
+        self.assertNotIn('data-browser-runtime-field="allowed_hosts"', conversation)
+        self.assertEqual(html.count('data-browser-field="profile_name"'), 2)
+        self.assertEqual(html.count('value="named" data-i18n="task.browser_profile_named"'), 2)
+        self.assertIn('value="native"${selected(display, "native")}', conversation)
+        self.assertIn('"task.browser_display_native": "Chromium 原生窗口"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertEqual(html.count('value="https://www.bing.com/"'), 2)
+        self.assertIn('const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";', create_controller)
+        self.assertIn('const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";', config_controller)
+        self.assertNotIn("proxy_password", create_controller + config_controller)
+        self.assertIn("browserProfileOptions", create_controller + config_controller)
+        self.assertIn('profile_name: value("profile_name")', create_controller + config_controller)
+        self.assertNotIn('runtime: value("runtime")', create_controller + config_controller)
+        self.assertIn("data-browser-status-settings", conversation)
+        self.assertIn("data-browser-runtime-settings", conversation)
+        self.assertIn("async function saveRuntimeSettings", browser)
+        self.assertIn("restart_browser: shouldRestart", browser)
+        self.assertIn("applyRuntimeSettings(policy)", browser)
+        self.assertIn(".browser-runtime-settings", styles)
+        self.assertIn("position: absolute;", styles)
+        self.assertIn(".browser-management-toolbar .browser-toolbar-icon-button", styles)
+        self.assertIn(".browser-session-status.running", styles)
+        self.assertIn("background: #12b76a;", styles)
+        self.assertIn(".browser-session-status.failed", styles)
+        self.assertIn("background: #f04438;", styles)
+        self.assertIn("background: #98a2b3;", styles)
+        mobile_browser_toolbar = styles[
+            styles.index("@media (max-width: 640px)") : styles.index("@media (min-width: 641px)")
+        ]
+        self.assertIn(
+            ".browser-management-toolbar {\n"
+            "    flex-wrap: nowrap;",
+            mobile_browser_toolbar,
+        )
+        self.assertIn("flex-basis: clamp(24px, 7.6vw, 28px);", mobile_browser_toolbar)
+        self.assertNotIn(".browser-status-settings[open] {\n  flex:", styles)
+        self.assertNotIn(".browser-toolbar-meta", styles)
+        self.assertNotIn(".browser-display-status", styles)
+        self.assertNotIn(".browser-agent-access", styles)
+        self.assertIn(".browser-frame-empty[hidden]", styles)
+        self.assertNotIn(".browser-mobile-keyboard", styles)
+        self.assertIn('listen(stage, "touchmove"', browser)
+        self.assertIn('listen(stage, "touchend"', browser)
+        self.assertNotIn('send("set_viewport"', browser)
+        self.assertIn("restart_browser: true", browser)
+        self.assertIn("bridgeInstanceId", browser)
+        self.assertIn("frameInputReady", browser)
+        self.assertIn("browserFrameInstance", browser)
+        self.assertIn("--browser-stable-viewport-height", browser)
+        self.assertIn('setProperty?.("--mobile-keyboard-inset", "0px")', browser)
+        self.assertIn('classList?.remove?.("mobile-keyboard-active")', browser)
+        self.assertIn('String(element.dataset?.browserAction || "") === "focus_window"', browser)
+        self.assertIn('/browser-session`)', browser)
+        self.assertIn("manualClosed", browser)
+        browser_wiring = wiring.split("createBrowserSessionController", 1)[1].split(
+            "createInitialControllers", 1
+        )[0]
+        self.assertIn("fetchJson", browser_wiring)
+        self.assertNotIn("messageEl: domRefs.messageEl", browser_wiring)
+        self.assertNotIn("sendFormEl: domRefs.sendFormEl", browser_wiring)
+        self.assertIn(".browser-management-toolbar", styles)
+        self.assertIn(".browser-device-controls button.active", styles)
+        self.assertNotIn("windowRef.ResizeObserver", browser)
+        self.assertNotIn("data-browser-keyboard-toggle", conversation)
+        self.assertNotIn('.composer[data-composer-context="browser"]', styles)
+        self.assertIn('.composer[data-composer-enabled="false"]', styles)
+        self.assertNotIn(
+            '.composer[data-composer-enabled="false"] {\n  opacity:',
+            styles,
+        )
+        self.assertIn(
+            '.composer[data-composer-enabled="false"] button:not(.mobile-actions-toggle)',
+            styles,
+        )
+        self.assertIn("syncComposerAvailability(tab)", panel)
+        self.assertIn('button:not(.mobile-actions-toggle)', panel)
+        self.assertIn("browser-search-bar", conversation)
+        self.assertIn('data-browser-address type="search"', conversation)
+        self.assertIn("data-browser-bookmark-toggle", conversation)
+        self.assertIn("data-browser-bookmarks-popover", conversation)
+        self.assertIn("data-browser-bookmarks", conversation)
+        self.assertLess(conversation.index("browser-management-toolbar"), conversation.index("browser-search-bar"))
+        self.assertLess(conversation.index("data-browser-bookmarks-popover"), conversation.index("data-browser-status-settings"))
+        self.assertLess(conversation.index("browser-search-bar"), conversation.index("browser-tabs"))
+        self.assertLess(conversation.index("browser-tabs"), conversation.index("browser-frame-area"))
+        self.assertIn("/browser-bookmarks", browser)
+        self.assertIn('updateBookmark("toggle"', browser)
+        self.assertNotIn("data-browser-bookmark-remove", conversation + browser)
+        self.assertNotIn("browser-bookmark-remove", styles)
+        self.assertIn("browser-bookmarks-popover", styles)
+        self.assertIn("browser-bookmarks-menu", styles)
+        self.assertIn("browserSessionController?.mount", panel)
+        self.assertIn("browserSessionController?.focus?.();", panel)
+        self.assertLess(
+            panel.index("prepareForTab(activeTab());"),
+            panel.index("await ensureActiveTabData();"),
+        )
+        browser_panel_branch = panel.split('} else if (tab === "browser") {', 1)[1].split(
+            '} else if (tab === "context") {', 1
+        )[0]
+        self.assertNotIn("browserSessionController?.unmount", browser_panel_branch)
+        self.assertIn("taskBrowserControlEnabled", task_list)
+        self.assertIn("createBrowserControlPayload", create_controller)
+        self.assertIn("/browser-control", config_controller)
+        self.assertIn(".browser-frame-stage", styles)
+        self.assertIn(".browser-frame-area", styles)
+        self.assertIn("touch-action: none", styles)
+        self.assertIn(".composer[hidden]", styles)
+        self.assertNotIn("browser-navigation-only", panel)
+        self.assertNotIn(".composer.browser-navigation-only", styles)
+        self.assertIn("html.browser-keyboard-capture-active", styles)
+        self.assertIn("body.mobile-keyboard-active", styles)
+        self.assertNotIn(
+            "html.browser-keyboard-capture-active body.mobile-keyboard-active\n"
+            "    .browser-session-view[data-browser-config-device-mode=\"mobile\"]\n"
+            "    .browser-frame-stage img {\n"
+            "    transform:",
+            styles,
+        )
+        self.assertNotIn(
+            "html.browser-keyboard-capture-active body.mobile-keyboard-active {\n"
+            "    transform:",
+            styles,
+        )
+        self.assertIn(
+            '.browser-session-view[data-browser-config-device-mode="mobile"]',
+            styles,
+        )
+        self.assertIn("aspect-ratio: 16 / 9", styles)
+        self.assertIn("aspect-ratio: 9 / 16", styles)
+        self.assertIn("100cqh * 16 / 9", styles)
+        self.assertIn("100cqh * 9 / 16", styles)
+        mobile_browser_styles = styles.split("@media (max-width: 640px) {", 1)[1]
+        self.assertIn("overflow-y: auto", mobile_browser_styles)
+        self.assertIn("container-type: inline-size", mobile_browser_styles)
+        self.assertIn(
+            '.browser-session-view[data-browser-config-device-mode="mobile"] .browser-frame-stage {\n'
+            "    width: min(100%, 360px);\n"
+            "    max-height: none;",
+            mobile_browser_styles,
+        )
+        self.assertIn("transform: none", mobile_browser_styles)
+        frame_stage_block = styles.split(".browser-frame-stage {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--color-surface-muted)", frame_stage_block)
+        self.assertNotIn("#101828", frame_stage_block)
+
+    def test_shared_browser_keyboard_input_handles_text_ime_paste_and_keys(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        browser = static_root() / "browser_session.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+
+class FakeElement {
+  constructor(name) {
+    this.name = name;
+    this.listeners = {};
+    this.value = "";
+    this.focused = false;
+    this.dataset = {};
+    this.attributes = new Map();
+    this.textContent = "";
+  }
+  addEventListener(type, handler) {
+    (this.listeners[type] ||= []).push(handler);
+  }
+  removeEventListener(type, handler) {
+    this.listeners[type] = (this.listeners[type] || []).filter(item => item !== handler);
+  }
+  dispatch(type, event = {}) {
+    event.target ||= this;
+    event.preventDefault ||= () => { event.defaultPrevented = true; };
+    for (const handler of this.listeners[type] || []) handler(event);
+  }
+  focus() {
+    this.focused = true;
+    global.document.activeElement = this;
+  }
+  blur() {
+    this.focused = false;
+    if (global.document.activeElement === this) global.document.activeElement = null;
+  }
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+  }
+  getAttribute(name) {
+    return this.attributes.has(name) ? this.attributes.get(name) : null;
+  }
+  removeAttribute(name) {
+    this.attributes.delete(name);
+  }
+  matches(selector) {
+    if (this.name === "image" && selector === "[data-browser-frame]") return true;
+    return (
+      selector === '[data-browser-runtime-field="proxy_mode"]'
+      && this.dataset.browserRuntimeField === "proxy_mode"
+    );
+  }
+  closest(selector) {
+    if (selector === "[data-browser-action]" && this.dataset?.browserAction) return this;
+    return null;
+  }
+  getBoundingClientRect() {
+    return { left: 0, top: 0, width: 360, height: 480 };
+  }
+}
+global.Element = FakeElement;
+const documentClasses = new Set();
+const documentStyles = new Map();
+global.document = {
+  activeElement: null,
+  documentElement: {
+    classList: {
+      add(value) { documentClasses.add(value); },
+      remove(value) { documentClasses.delete(value); }
+    },
+    style: {
+      setProperty(name, value) { documentStyles.set(name, value); },
+      removeProperty(name) { documentStyles.delete(name); }
+    }
+  }
+};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+class FakeWebSocket extends FakeElement {
+  static OPEN = 1;
+  constructor() {
+    super("socket");
+    this.readyState = FakeWebSocket.OPEN;
+    this.sent = [];
+    FakeWebSocket.last = this;
+  }
+  send(data) {
+    this.sent.push(JSON.parse(data));
+  }
+  close() {}
+}
+
+const addressForm = new FakeElement("address-form");
+const stage = new FakeElement("stage");
+const keyboardInput = new FakeElement("keyboard-input");
+const composer = new FakeElement("composer");
+composer.value = "saved chat draft";
+composer.setAttribute("placeholder", "Message in the selected task context");
+const image = new FakeElement("image");
+image.dataset = {};
+image.naturalWidth = 1080;
+image.naturalHeight = 1920;
+const root = new FakeElement("root");
+root.dataset = {
+  browserStartUrl: "https://www.bing.com/",
+  browserConfigDeviceMode: "mobile"
+};
+const selectors = {
+  "[data-browser-address-form]": addressForm,
+  "[data-browser-input-surface]": stage,
+  "[data-browser-keyboard-input]": keyboardInput,
+  "[data-browser-frame]": image
+};
+root.querySelector = selector => selectors[selector] || null;
+let currentRoot = root;
+const panel = {
+  querySelector(selector) {
+    return selector === "[data-browser-session-root]" ? currentRoot : null;
+  }
+};
+const visualViewport = new FakeElement("visual-viewport");
+visualViewport.height = 800;
+visualViewport.offsetTop = 0;
+const windowRef = {
+  WebSocket: FakeWebSocket,
+  location: { href: "http://127.0.0.1/" },
+  innerHeight: 800,
+  visualViewport,
+  matchMedia: () => ({ matches: true }),
+  setTimeout() { return 1; },
+  clearTimeout() {}
+};
+const controller = window.AHABrowserSession.createBrowserSessionController(
+  { panelEl: panel },
+  { windowRef, apiUrl: path => `http://127.0.0.1${path}?task_id=task-012` }
+);
+controller.mount("task-012");
+if (composer.value !== "saved chat draft" || composer.dataset.composerContext) {
+  throw new Error("Browser changed the Chat-only composer");
+}
+FakeWebSocket.last.dispatch("message", {
+  data: JSON.stringify({
+    type: "ready",
+    state: {
+      instance_id: "bridge-keyboard",
+      status: "running",
+      display: { requested: "embedded", active: "embedded" },
+      viewport: { width: 1280, height: 720 },
+      tabs: []
+    }
+  })
+});
+FakeWebSocket.last.dispatch("message", {
+  data: JSON.stringify({
+    type: "event",
+    event: "frame",
+    instance_id: "bridge-keyboard",
+    data: "mobile-frame",
+    width: 360,
+    height: 640,
+    image_width: 180,
+    image_height: 320
+  })
+});
+image.onload();
+
+const newTabButton = new FakeElement("new-tab");
+newTabButton.dataset = { browserAction: "new_tab" };
+root.dispatch("click", { target: newTabButton });
+controller.focus();
+if (stage.focused || !keyboardInput.focused) {
+  throw new Error("opening the Desktop browser on mobile did not open the soft keyboard");
+}
+if (!documentClasses.has("browser-keyboard-capture-active")) {
+  throw new Error("the default browser keyboard was not pinned open");
+}
+visualViewport.height = 480;
+visualViewport.dispatch("resize");
+if (!keyboardInput.focused) {
+  throw new Error("opening the soft keyboard released browser keyboard capture");
+}
+visualViewport.height = 800;
+visualViewport.dispatch("resize");
+if (keyboardInput.focused || documentClasses.has("browser-keyboard-capture-active")) {
+  throw new Error("manually dismissing the soft keyboard did not release its pin");
+}
+const firstTouch = {
+  target: image,
+  touches: [{ clientX: 180, clientY: 240 }]
+};
+stage.dispatch("touchstart", firstTouch);
+stage.dispatch("touchend", {
+  target: image,
+  changedTouches: [{ clientX: 180, clientY: 240 }]
+});
+const firstClick = FakeWebSocket.last.sent.find(item => (
+  item.type === "command" && item.action === "mouse" && item.args.event === "click"
+));
+if (!firstClick) throw new Error("mobile touch did not click the browser");
+FakeWebSocket.last.dispatch("message", {
+  data: JSON.stringify({
+    type: "result",
+    id: firstClick.id,
+    ok: true,
+    result: { accepts_text_input: true }
+  })
+});
+if (!keyboardInput.focused) throw new Error("remote editable focus did not activate the page keyboard");
+if (!documentClasses.has("browser-keyboard-capture-active")) {
+  throw new Error("mobile keyboard capture did not freeze the app viewport");
+}
+visualViewport.height = 480;
+visualViewport.dispatch("resize");
+if (documentStyles.get("--browser-stable-viewport-height") !== "800px") {
+  throw new Error("the stable browser viewport was overwritten by the soft keyboard");
+}
+const keyboardTouchStart = {
+  target: image,
+  touches: [{ clientX: 180, clientY: 240 }]
+};
+stage.dispatch("touchstart", keyboardTouchStart);
+if (!keyboardTouchStart.defaultPrevented || global.document.activeElement !== keyboardInput) {
+  throw new Error("touching the browser frame dismissed the open mobile keyboard");
+}
+stage.dispatch("touchmove", { target: image, touches: [{ clientX: 180, clientY: 210 }] });
+stage.dispatch("touchmove", { target: image, touches: [{ clientX: 180, clientY: 180 }] });
+stage.dispatch("touchend", { target: image, changedTouches: [{ clientX: 180, clientY: 180 }] });
+root.dispatch("click", { target: image, clientX: 180, clientY: 240, detail: 1 });
+
+keyboardInput.value = "abc";
+keyboardInput.dispatch("input", { isComposing: false, inputType: "insertText", data: null });
+keyboardInput.dispatch("compositionstart");
+keyboardInput.value = "ni";
+keyboardInput.dispatch("input", { isComposing: true });
+keyboardInput.value = "你";
+keyboardInput.dispatch("compositionend", { data: "你" });
+keyboardInput.dispatch("input", { isComposing: false, inputType: "insertCompositionText", data: "你" });
+keyboardInput.value = "pasted";
+keyboardInput.dispatch("input", { isComposing: false, inputType: "insertFromPaste", data: null });
+keyboardInput.dispatch("beforeinput", { isComposing: false, inputType: "deleteContentBackward" });
+keyboardInput.dispatch("keydown", { key: "Enter" });
+
+const commands = FakeWebSocket.last.sent.filter(item => item.type === "command");
+if (commands.some(item => item.action === "set_viewport")) {
+  throw new Error("the browser viewport was hot-switched");
+}
+if (!commands.some(item => (
+  item.action === "new_tab"
+  && item.args.url === "https://www.bing.com/"
+))) {
+  throw new Error("new tab did not use the configured browser start URL");
+}
+const textValues = commands.filter(item => item.action === "text").map(item => item.args.text);
+if (JSON.stringify(textValues) !== JSON.stringify(["abc", "你", "pasted"])) {
+  throw new Error(`unexpected text commands: ${JSON.stringify(textValues)}`);
+}
+if (!commands.some(item => item.action === "press" && item.args.key === "Backspace")) {
+  throw new Error("special key was not forwarded");
+}
+if (!commands.some(item => item.action === "press" && item.args.key === "Enter")) {
+  throw new Error("shared composer submit did not forward Enter");
+}
+const touchWheelDistance = commands
+  .filter(item => item.action === "mouse" && item.args.event === "wheel")
+  .reduce((total, item) => total + item.args.delta_y, 0);
+if (Math.abs(touchWheelDistance - 120) > 0.01) {
+  throw new Error(`mobile touch scroll lost throttled movement: ${touchWheelDistance}`);
+}
+if (!commands.some(item => item.action === "mouse" && item.args.event === "wheel" && item.args.delta_y > 0)) {
+  throw new Error("mobile touch scroll was not forwarded");
+}
+const mobileClicks = commands.filter(item => item.action === "mouse" && item.args.event === "click");
+if (mobileClicks.length !== 1) {
+  throw new Error("mobile touch tap was not forwarded exactly once");
+}
+if (
+  Math.abs(mobileClicks[0].args.x - 180) > 0.01
+  || Math.abs(mobileClicks[0].args.y - 320) > 0.01
+) {
+  throw new Error(`mobile touch used incorrect 9:16 coordinates: ${JSON.stringify(mobileClicks[0])}`);
+}
+if (composer.value !== "saved chat draft") {
+  throw new Error("browser page input changed the Chat composer");
+}
+const replacementRoot = new FakeElement("replacement-root");
+replacementRoot.dataset = { ...root.dataset };
+replacementRoot.querySelector = selector => selectors[selector] || null;
+currentRoot = replacementRoot;
+controller.mount("task-012");
+if (composer.value !== "saved chat draft" || composer.dataset.composerContext) {
+  throw new Error("same-task Browser remount changed the Chat composer");
+}
+if (!keyboardInput.focused || !documentClasses.has("browser-keyboard-capture-active")) {
+  throw new Error("same-task Browser remount dismissed the active input session");
+}
+FakeWebSocket.last.dispatch("message", {
+  data: JSON.stringify({
+    type: "ready",
+    state: {
+      instance_id: "bridge-remount",
+      status: "running",
+      display: { requested: "embedded", active: "embedded" },
+      viewport: { width: 360, height: 640 },
+      tabs: []
+    }
+  })
+});
+FakeWebSocket.last.dispatch("message", {
+  data: JSON.stringify({
+    type: "event",
+    event: "frame",
+    instance_id: "bridge-remount",
+    data: "remount-frame",
+    width: 360,
+    height: 640,
+    image_width: 1080,
+    image_height: 1920
+  })
+});
+image.onload();
+controller.send("mouse", { event: "click", x: 10, y: 10 });
+const lastCommand = FakeWebSocket.last.sent.filter(item => item.type === "command").at(-1);
+FakeWebSocket.last.dispatch("message", {
+  data: JSON.stringify({
+    type: "result",
+    id: lastCommand.id,
+    ok: true,
+    result: { accepts_text_input: false }
+  })
+});
+if (!keyboardInput.focused || !documentClasses.has("browser-keyboard-capture-active")) {
+  throw new Error("a non-editable browser click dismissed the pinned keyboard");
+}
+visualViewport.height = 800;
+visualViewport.dispatch("resize");
+if (keyboardInput.focused || documentClasses.has("browser-keyboard-capture-active")) {
+  throw new Error("the user could not dismiss the pinned browser keyboard");
+}
+controller.unmount();
+if (composer.value !== "saved chat draft" || composer.dataset.composerContext) {
+  throw new Error("leaving Browser changed the Chat composer draft");
+}
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(browser)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_non_chat_tabs_disable_composer_and_chat_reenables_before_async_load(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        panel_controller = static_root() / "panel_controller.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+let activeTab = "browser";
+let resolveData;
+let browserUnmounts = 0;
+const composer = {
+  value: "saved chat draft",
+  disabled: false,
+  blur() { this.blurred = true; }
+};
+const sendButton = { disabled: false };
+const uploadInput = { disabled: false };
+const mobileActionsToggle = { disabled: false };
+const controls = [composer, sendButton, uploadInput];
+const sendForm = {
+  dataset: {},
+  hidden: false,
+  setAttribute() {},
+  querySelectorAll(selector) {
+    if (!String(selector).includes("button:not(.mobile-actions-toggle)")) {
+      mobileActionsToggle.disabled = true;
+    }
+    return controls;
+  }
+};
+const browserSessionController = {
+  unmount() {
+    browserUnmounts += 1;
+  },
+  mount() {}
+};
+const panelEl = {
+  innerHTML: "",
+  scrollHeight: 0,
+  scrollTop: 0,
+  clientHeight: 0,
+  querySelector() { return null; }
+};
+const documentRef = {
+  querySelectorAll() { return []; },
+  querySelector() { return null; }
+};
+const controller = window.AHAPanelController.createPanelController(
+  { panelEl, sendFormEl: sendForm, messageEl: composer, documentRef },
+  {
+    activeTab: () => activeTab,
+    setActiveTab: value => { activeTab = value; },
+    currentRunId: () => "run-1",
+    selectedTask: () => ({ id: "task-012" }),
+    selectedTaskId: () => "task-012",
+    browserSessionController,
+    renderConversation: () => "<div>chat</div>",
+    ensureActiveTabData: () => new Promise(resolve => { resolveData = resolve; })
+  }
+);
+
+(async () => {
+  controller.renderPanel();
+  if (!composer.disabled || !sendButton.disabled || !uploadInput.disabled) {
+    throw new Error("Browser did not disable the Chat-only composer");
+  }
+  if (mobileActionsToggle.disabled) {
+    throw new Error("non-Chat composer disabled the mobile navigation toggle");
+  }
+  if (sendForm.hidden || sendForm.dataset.composerEnabled !== "false") {
+    throw new Error("non-Chat composer layout was hidden instead of disabled");
+  }
+  const activation = controller.activateTab("conversation");
+  if (browserUnmounts < 1) {
+    throw new Error("Browser was not unmounted before Chat data loading");
+  }
+  if (composer.disabled || sendButton.disabled || uploadInput.disabled) {
+    throw new Error("Chat composer was not enabled synchronously");
+  }
+  if (sendForm.dataset.composerEnabled !== "true") {
+    throw new Error("Chat composer state was not exposed");
+  }
+  composer.value = "new chat input while loading";
+  resolveData();
+  await activation;
+  if (composer.value !== "new chat input while loading") {
+    throw new Error("late Browser cleanup overwrote in-progress Chat input");
+  }
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(panel_controller)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_shared_browser_toolbar_persists_device_mode_and_controls_lifecycle(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        browser = static_root() / "browser_session.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+
+class FakeElement {
+  constructor(name, dataset = {}) {
+    this.name = name;
+    this.dataset = dataset;
+    this.listeners = {};
+    this.hidden = false;
+    this.disabled = false;
+    this.textContent = "";
+    this.className = "";
+    this.classList = { toggle() {} };
+  }
+  addEventListener(type, handler) {
+    (this.listeners[type] ||= []).push(handler);
+  }
+  removeEventListener() {}
+  dispatch(type, event = {}) {
+    event.target ||= this;
+    event.preventDefault ||= () => {};
+    for (const handler of this.listeners[type] || []) handler(event);
+  }
+  closest(selector) {
+    if (selector === "[data-browser-device-mode]" && this.dataset.browserDeviceMode) return this;
+    if (selector === "[data-browser-lifecycle]" && this.dataset.browserLifecycle) return this;
+    return null;
+  }
+  matches(selector) {
+    if (this.name === "image" && selector === "[data-browser-frame]") return true;
+    return (
+      selector === '[data-browser-runtime-field="proxy_mode"]'
+      && this.dataset.browserRuntimeField === "proxy_mode"
+    );
+  }
+  setAttribute(name, value) {
+    this[name] = value;
+  }
+  removeAttribute(name) {
+    delete this[name];
+  }
+  replaceChildren() {}
+  getBoundingClientRect() {
+    return { left: 0, top: 0, width: 400, height: 720 };
+  }
+}
+global.Element = FakeElement;
+global.document = { activeElement: null };
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+class FakeWebSocket extends FakeElement {
+  static OPEN = 1;
+  static instances = [];
+  constructor() {
+    super("socket");
+    this.readyState = FakeWebSocket.OPEN;
+    this.sent = [];
+    FakeWebSocket.instances.push(this);
+  }
+  send(data) {
+    this.sent.push(JSON.parse(data));
+  }
+  close() {}
+}
+
+const desktop = new FakeElement("desktop", { browserDeviceMode: "desktop" });
+const mobile = new FakeElement("mobile", { browserDeviceMode: "mobile" });
+const start = new FakeElement("start", { browserLifecycle: "start" });
+const restart = new FakeElement("restart", { browserLifecycle: "restart" });
+const close = new FakeElement("close", { browserLifecycle: "close" });
+const stage = new FakeElement("stage");
+const addressForm = new FakeElement("address-form");
+const keyboard = new FakeElement("keyboard");
+const tabs = new FakeElement("tabs");
+const image = new FakeElement("image");
+image.naturalWidth = 1080;
+image.naturalHeight = 1920;
+const empty = new FakeElement("empty");
+const error = new FakeElement("error");
+const status = new FakeElement("status");
+const runtimeSettings = new FakeElement("runtime-settings");
+const runtimeSettingsCancel = new FakeElement("runtime-settings-cancel");
+const runtimeSettingsSave = new FakeElement("runtime-settings-save");
+const statusSettings = new FakeElement("status-settings");
+statusSettings.open = true;
+const runtime = new FakeElement("runtime", { browserRuntimeField: "runtime" });
+runtime.value = "user_chrome";
+const display = new FakeElement("display", { browserRuntimeField: "display" });
+display.value = "embedded";
+const downloads = new FakeElement("downloads", { browserRuntimeField: "downloads" });
+downloads.value = "allow";
+const uploads = new FakeElement("uploads", { browserRuntimeField: "uploads" });
+uploads.value = "allow";
+const proxyMode = new FakeElement("proxy-mode", { browserRuntimeField: "proxy_mode" });
+proxyMode.value = "inherit";
+const proxyServer = new FakeElement("proxy-server", { browserRuntimeField: "proxy_server" });
+const proxyBypass = new FakeElement("proxy-bypass", { browserRuntimeField: "proxy_bypass" });
+const proxyUsername = new FakeElement("proxy-username", { browserRuntimeField: "proxy_username" });
+const proxyPassword = new FakeElement("proxy-password", { browserRuntimeField: "proxy_password" });
+const clearProxyPassword = new FakeElement("clear-proxy-password");
+clearProxyPassword.checked = false;
+const proxyCustom = new FakeElement("proxy-custom");
+const root = new FakeElement("root", {
+  browserStartUrl: "https://www.bing.com/",
+  browserConfigDeviceMode: "desktop"
+});
+const selectors = {
+  "[data-browser-address-form]": addressForm,
+  "[data-browser-input-surface]": stage,
+  "[data-browser-keyboard-input]": keyboard,
+  "[data-browser-tabs]": tabs,
+  "[data-browser-frame]": image,
+  "[data-browser-empty]": empty,
+  "[data-browser-error]": error,
+  "[data-browser-status]": status,
+  "[data-browser-runtime-settings]": runtimeSettings,
+  "[data-browser-runtime-settings-cancel]": runtimeSettingsCancel,
+  "[data-browser-runtime-settings-save]": runtimeSettingsSave,
+  "[data-browser-status-settings]": statusSettings,
+  '[data-browser-runtime-field="runtime"]': runtime,
+  '[data-browser-runtime-field="display"]': display,
+  '[data-browser-runtime-field="downloads"]': downloads,
+  '[data-browser-runtime-field="uploads"]': uploads,
+  '[data-browser-runtime-field="proxy_mode"]': proxyMode,
+  '[data-browser-runtime-field="proxy_server"]': proxyServer,
+  '[data-browser-runtime-field="proxy_bypass"]': proxyBypass,
+  '[data-browser-runtime-field="proxy_username"]': proxyUsername,
+  '[data-browser-runtime-field="proxy_password"]': proxyPassword,
+  "[data-browser-runtime-clear-password]": clearProxyPassword,
+  "[data-browser-runtime-proxy-custom]": proxyCustom
+};
+root.querySelector = selector => selectors[selector] || null;
+root.querySelectorAll = selector => {
+  if (selector === "[data-browser-device-mode]") return [desktop, mobile];
+  if (selector === "[data-browser-lifecycle]") return [start, restart, close];
+  return [];
+};
+const panel = { querySelector: () => root };
+const requests = [];
+const windowRef = {
+  WebSocket: FakeWebSocket,
+  location: { href: "http://127.0.0.1/" },
+  setTimeout() { return 1; },
+  clearTimeout() {}
+};
+const fetchJson = async (url, options) => {
+  const body = JSON.parse(options.body);
+  requests.push({ url, body });
+  if (body.action === "close") return { bridge: { status: "closed" } };
+  if (body.action === "start") return { bridge: { status: "running", alive: true } };
+  if (body.device_mode) {
+    return {
+      ok: true,
+      task: { browser_control: { device_mode: body.device_mode } },
+      browser_session: { action: "restart", bridge: { status: "running", alive: true } }
+    };
+  }
+  return {
+    ok: true,
+    task: {
+      browser_control: {
+        ...body,
+        proxy_password_configured: true
+      }
+    },
+    browser_session: { action: "restart", bridge: { status: "running", alive: true } }
+  };
+};
+const controller = window.AHABrowserSession.createBrowserSessionController(
+  { panelEl: panel },
+  { windowRef, fetchJson, apiUrl: path => `${path}?run_id=run-001` }
+);
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+(async () => {
+  controller.mount("task-012");
+  root.dispatch("pointerup", { target: mobile, pointerType: "touch" });
+  root.dispatch("touchend", { target: mobile });
+  root.dispatch("click", { target: mobile });
+  FakeWebSocket.instances[0].dispatch("message", {
+    data: JSON.stringify({
+      type: "event",
+      event: "state",
+      state: {
+        status: "running",
+        display: { requested: "embedded", active: "embedded" },
+        viewport: { width: 1280, height: 720 },
+        mobile_emulation: false,
+        tabs: []
+      }
+    })
+  });
+  await tick();
+  if (requests[0].body.device_mode !== "mobile") throw new Error("mobile mode was not persisted");
+  if (requests.filter(item => item.body.device_mode === "mobile").length !== 1) {
+    throw new Error("mobile touch generated a duplicate settings request");
+  }
+  if (requests[0].body.restart_browser !== true) {
+    throw new Error("mobile mode did not request a cold browser restart");
+  }
+  if (FakeWebSocket.instances.some(socket => socket.sent.some(item => item.action === "set_viewport"))) {
+    throw new Error("device mode still used a hot viewport mutation");
+  }
+  if (FakeWebSocket.instances.length !== 2 || mobile["aria-pressed"] !== "true") {
+    throw new Error("stale desktop state overrode the selected mobile mode");
+  }
+  const restartedSocket = FakeWebSocket.instances[1];
+  restartedSocket.dispatch("message", {
+    data: JSON.stringify({
+      type: "ready",
+      state: {
+        instance_id: "bridge-new",
+        status: "running",
+        display: { requested: "embedded", active: "embedded" },
+        viewport: { width: 360, height: 640 },
+        mobile_emulation: true,
+        tabs: []
+      }
+    })
+  });
+  restartedSocket.dispatch("message", {
+    data: JSON.stringify({
+      type: "event",
+      event: "frame",
+      instance_id: "bridge-old",
+      data: "old-frame",
+      width: 1280,
+      height: 720
+    })
+  });
+  if (image.src) throw new Error("a stale bridge frame was rendered after restart");
+  restartedSocket.dispatch("message", {
+    data: JSON.stringify({
+      type: "event",
+      event: "frame",
+      instance_id: "bridge-new",
+      data: "new-frame",
+      width: 360,
+      height: 640
+    })
+  });
+  if (!String(image.src || "").includes("new-frame")) {
+    throw new Error("the first frame from the restarted bridge was not rendered");
+  }
+  image.onload();
+
+  root.dispatch("click", { target: desktop });
+  await tick();
+  if (requests[1].body.device_mode !== "desktop" || requests[1].body.restart_browser !== true) {
+    throw new Error("desktop mode did not request a cold browser restart");
+  }
+  if (FakeWebSocket.instances.length !== 3) {
+    throw new Error("desktop cold restart did not create a fresh browser socket");
+  }
+  if (controller.send("mouse", { event: "click", x: 200, y: 400 }) !== false) {
+    throw new Error("page input was accepted before the desktop frame arrived");
+  }
+  const desktopSocket = FakeWebSocket.instances[2];
+  desktopSocket.dispatch("message", {
+    data: JSON.stringify({
+      type: "ready",
+      state: {
+        instance_id: "bridge-desktop",
+        status: "running",
+        display: { requested: "embedded", active: "embedded" },
+        viewport: { width: 1280, height: 720 },
+        mobile_emulation: false,
+        tabs: []
+      }
+    })
+  });
+  desktopSocket.dispatch("message", {
+    data: JSON.stringify({
+      type: "event",
+      event: "frame",
+      instance_id: "bridge-new",
+      data: "stale-mobile-frame",
+      width: 360,
+      height: 640,
+      image_width: 180,
+      image_height: 320
+    })
+  });
+  if (image.src) throw new Error("the previous mobile frame survived the desktop restart");
+  desktopSocket.dispatch("message", {
+    data: JSON.stringify({
+      type: "event",
+      event: "frame",
+      instance_id: "bridge-desktop",
+      data: "desktop-frame",
+      width: 1280,
+      height: 720,
+      image_width: 640,
+      image_height: 360
+    })
+  });
+  if (controller.send("mouse", { event: "click", x: 200, y: 400 }) !== false) {
+    throw new Error("page input was accepted before the desktop frame decoded");
+  }
+  image.naturalWidth = 1920;
+  image.naturalHeight = 1080;
+  image.onload();
+  stage.dispatch("touchstart", {
+    target: image,
+    touches: [{ clientX: 200, clientY: 360 }]
+  });
+  stage.dispatch("touchend", {
+    target: image,
+    changedTouches: [{ clientX: 200, clientY: 360 }]
+  });
+  const desktopClick = desktopSocket.sent.find(item => (
+    item.type === "command"
+    && item.action === "mouse"
+    && item.args.event === "click"
+  ));
+  if (!desktopClick || Math.abs(desktopClick.args.x - 640) > 0.01 || Math.abs(desktopClick.args.y - 360) > 0.01) {
+    throw new Error(`desktop click used stale mobile coordinates: ${JSON.stringify(desktopClick)}`);
+  }
+
+  root.dispatch("click", { target: close });
+  await tick();
+  if (requests[2].body.action !== "close") throw new Error("close lifecycle request was not sent");
+  if (
+    start.hidden
+    || close.hidden !== true
+    || status.textContent !== ""
+    || status.title !== "closed"
+    || status["aria-label"] !== "Browser status: closed"
+    || !status.className.includes("idle")
+  ) {
+    throw new Error("closed state controls were not rendered");
+  }
+
+  root.dispatch("click", { target: start });
+  await tick();
+  if (requests[3].body.action !== "start") throw new Error("start lifecycle request was not sent");
+  if (FakeWebSocket.instances.length !== 4) throw new Error("start did not reconnect the browser session");
+
+  runtimeSettings.dispatch("submit");
+  await tick();
+  const advanced = requests[4].body;
+  if (
+    advanced.runtime !== "user_chrome"
+    || advanced.display !== "embedded"
+    || advanced.downloads !== "allow"
+    || advanced.uploads !== "allow"
+    || advanced.proxy_mode !== "inherit"
+    || advanced.restart_browser !== true
+  ) {
+    throw new Error(`runtime settings were not saved atomically: ${JSON.stringify(advanced)}`);
+  }
+  if (FakeWebSocket.instances.length !== 5) {
+    throw new Error("saving running browser settings did not reconnect after cold restart");
+  }
+  if (statusSettings.open !== undefined) {
+    throw new Error("browser settings popover did not close after save");
+  }
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(browser)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_hardware_card_visibility_is_gated_by_master_switch(self) -> None:
         root = static_root()
         task_list = (root / "task_list.js").read_text(encoding="utf-8")
@@ -1769,9 +2823,10 @@ controller.unmount();
         keybar_css = styles[styles.index(".hardware-keybar-keys {"):]
         self.assertIn("overflow-x: auto", keybar_css)
         # The WebSocket terminal owns live updates, so the legacy HTTP poll stands down while
-        # xterm is mounted and the chat composer is hidden on the Hardware tab.
+        # xterm is mounted and the Chat-only composer stays visible but disabled.
         self.assertIn("hardwareTerminalController.isMounted()", wiring)
-        self.assertIn('sendFormEl.hidden = tab === "hardware"', panel_controller)
+        self.assertIn("syncComposerAvailability(tab)", panel_controller)
+        self.assertIn("sendFormEl.hidden = false", panel_controller)
         # The toggle handler is wired through bindTopLevelEvents -> bindPanelEvents.
         self.assertIn("hardwareToggleRawMode", bind_args)
         registry = (root / "controller_registry.js").read_text(encoding="utf-8")
@@ -2727,7 +3782,7 @@ controller.unmount();
         self.assertIn('messageImageUploadEl: "message-image-upload"', registry)
         self.assertIn("messageImageFileEl", factory)
         self.assertIn("messageImageUploadEl", factory)
-        self.assertIn("imageUploadsEnabled: () => deps.activeTab?.() !== \"hardware\"", factory)
+        self.assertIn('imageUploadsEnabled: () => deps.activeTab?.() === "conversation"', factory)
         self.assertIn("markdownForImage: async ({ dataUrl, file, index })", factory)
         self.assertIn("window.AHATaskMemoMarkdown.uploadMemoImageMarkdown", factory)
         self.assertIn("activeTab: () => activeTab", wiring)
@@ -3681,24 +4736,24 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=chat-only-input-v38"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/task_config_controller.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/task_config_controller.js?v=browser-bing-proxy-v31"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
         self.assertIn('<script src="/static/run_metadata.js"></script>', html)
         self.assertIn('<script src="/static/run_lifecycle_view.js"></script>', html)
         self.assertIn('<script src="/static/run_maintenance.js"></script>', html)
         self.assertIn('<script src="/static/agent_metadata.js"></script>', html)
-        self.assertIn('<script src="/static/task_list.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/task_list.js?v=browser-session-v1"></script>', html)
         self.assertIn('<script src="/static/task_controller.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/agent_controller.js"></script>', html)
         self.assertIn('<script src="/static/conversation_metadata.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/conversation_state.js"></script>', html)
-        self.assertIn('<script src="/static/conversation_panel.js?v=terminal-ui-v7"></script>', html)
+        self.assertIn('<script src="/static/conversation_panel.js?v=browser-bookmarks-safe-v45"></script>', html)
         self.assertIn('<script src="/static/conversation_controller.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/compact_reset.js"></script>', html)
         self.assertIn('<script src="/static/timeline_view.js?v=token-saving-v8"></script>', html)
@@ -3718,17 +4773,17 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/event_cursor_store.js"></script>', html)
         self.assertIn('<script src="/static/realtime_state.js"></script>', html)
         self.assertIn('<script src="/static/realtime_client.js"></script>', html)
-        self.assertIn('<script src="/static/ui_shell.js"></script>', html)
+        self.assertIn('<script src="/static/ui_shell.js?v=browser-keyboard-scope-v26"></script>', html)
         self.assertIn('<script src="/static/auth_controller.js"></script>', html)
         self.assertIn('<script src="/static/backend_status.js"></script>', html)
-        self.assertIn('<script src="/static/message_composer.js"></script>', html)
+        self.assertIn('<script src="/static/message_composer.js?v=chat-only-input-v38"></script>', html)
         self.assertIn('<script src="/static/event_bindings.js?v=terminal-ui-v6"></script>', html)
-        self.assertIn('<script src="/static/panel_controller.js?v=hardware-xterm-v1"></script>', html)
+        self.assertIn('<script src="/static/panel_controller.js?v=browser-bookmarks-safe-v45"></script>', html)
         self.assertIn('<script src="/static/render_orchestrator.js"></script>', html)
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
         self.assertIn('<script src="/static/run_actions.js"></script>', html)
-        self.assertIn('<script src="/static/task_create_controller.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/task_create_controller.js?v=browser-bing-proxy-v31"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
         self.assertIn('<script src="/static/settings_controller.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=token-saving-v8"></script>', html)
@@ -3737,9 +4792,9 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
         self.assertIn('<script src="/static/controller_registry.js?v=terminal-ui-v6"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=hardware-xterm-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_setup.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=terminal-ui-v6"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=chat-only-input-v38"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_setup.js?v=browser-session-v1"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=chat-only-input-v38"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))
@@ -4353,6 +5408,25 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn(".task-settings-panel", styles)
         self.assertIn("body.task-settings-editor-open #task-settings-panel:not(.hidden)", styles)
         self.assertIn("body.task-settings-editor-open .task-settings-body", styles)
+        self.assertIn(
+            ".task-settings-panel .field-row,\n"
+            ".task-settings-panel .supervision-gate-list {\n"
+            "  grid-template-columns: minmax(0, 1fr);",
+            styles,
+        )
+        task_settings_desktop = styles[
+            styles.index("@media (min-width: 641px)") : styles.index(".task-memo-dialog")
+        ]
+        self.assertIn(
+            "body.task-settings-editor-open .task-settings-body {\n"
+            "    grid-template-columns: minmax(0, 1fr);",
+            task_settings_desktop,
+        )
+        self.assertNotIn(
+            "body.task-settings-editor-open .task-settings-body {\n"
+            "    grid-template-columns: repeat(2",
+            task_settings_desktop,
+        )
         self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr));", styles)
         self.assertIn(".agent-settings-panel", styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", styles)
@@ -5378,6 +6452,10 @@ if (!/class="message-body collapsed-message"[^>]* open>/.test(refreshedHtml)) {
         self.assertIn("initMobileViewport", script)
         self.assertIn("windowRef.visualViewport", script)
         self.assertIn("navigatorRef.virtualKeyboard", script)
+        self.assertIn("mobileViewportBaselineHeight", script)
+        self.assertIn("browserStableViewportHeight", script)
+        self.assertIn("browserKeyboardCaptureActive", script)
+        self.assertIn("--browser-stable-viewport-height", script)
         self.assertIn("keepMobileControlVisible", script)
         self.assertIn("mobileDialogScrollerFor", script)
         self.assertIn('elements.taskMemoDialogEl?.open || elements.taskMemoDialogEl?.hasAttribute?.("open")', ui_shell_script)
@@ -5398,3 +6476,103 @@ if (!/class="message-body collapsed-message"[^>]* open>/.test(refreshedHtml)) {
         self.assertIn("body.mobile-keyboard-active .task-dialog-panel", styles)
         self.assertIn("body.mobile-keyboard-active .task-dialog-actions", styles)
         self.assertIn("body.mobile-keyboard-active.task-memo-home .task-memo-page", styles)
+
+    def test_mobile_keyboard_inset_uses_pre_keyboard_layout_height(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        ui_shell = static_root() / "ui_shell.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+eval(fs.readFileSync(process.argv[1], "utf8"));
+
+class FakeHTMLElement {}
+class FakeTextArea extends FakeHTMLElement {}
+class FakeInput extends FakeHTMLElement {}
+const styleValues = new Map();
+const style = {
+  setProperty(name, value) { styleValues.set(name, String(value)); },
+  getPropertyValue(name) { return styleValues.get(name) || ""; }
+};
+const rootClasses = new Set();
+const classes = new Set();
+const documentRef = {
+  activeElement: null,
+  documentElement: {
+    style,
+    classList: {
+      add(name) { rootClasses.add(name); },
+      remove(name) { rootClasses.delete(name); },
+      contains(name) { return rootClasses.has(name); }
+    }
+  },
+  body: {
+    classList: {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+      toggle(name, enabled) {
+        if (enabled) classes.add(name);
+        else classes.delete(name);
+      }
+    }
+  },
+  addEventListener() {}
+};
+const visualViewport = {
+  height: 800,
+  offsetTop: 0,
+  addEventListener() {}
+};
+const windowRef = {
+  HTMLElement: FakeHTMLElement,
+  HTMLTextAreaElement: FakeTextArea,
+  HTMLInputElement: FakeInput,
+  innerHeight: 800,
+  visualViewport,
+  matchMedia() {
+    return { matches: true, addEventListener() {}, addListener() {} };
+  }
+};
+const controller = window.AHAUiShell.createUiShell({}, {
+  windowRef,
+  documentRef,
+  navigatorRef: {}
+});
+
+controller.applyMobileViewport();
+documentRef.activeElement = new FakeTextArea();
+windowRef.innerHeight = 500;
+visualViewport.height = 500;
+if (controller.mobileKeyboardInset() !== 0) {
+  throw new Error(`resized chat viewport received a duplicate inset: ${controller.mobileKeyboardInset()}`);
+}
+rootClasses.add("browser-keyboard-capture-active");
+if (controller.mobileKeyboardInset() !== 300) {
+  throw new Error(`keyboard inset lost its stable baseline: ${controller.mobileKeyboardInset()}`);
+}
+controller.applyMobileViewport();
+if (styleValues.get("--mobile-keyboard-inset") !== "300px") {
+  throw new Error(`keyboard inset was not published: ${styleValues.get("--mobile-keyboard-inset")}`);
+}
+if (!classes.has("mobile-keyboard-active")) {
+  throw new Error("keyboard-active body state was not enabled");
+}
+
+style.setProperty("--browser-stable-viewport-height", "820px");
+visualViewport.offsetTop = 20;
+if (controller.mobileKeyboardInset() !== 300) {
+  throw new Error(`browser stable viewport or offset compensation was ignored: ${controller.mobileKeyboardInset()}`);
+}
+rootClasses.delete("browser-keyboard-capture-active");
+if (controller.mobileKeyboardInset() !== 0) {
+  throw new Error(`browser baseline leaked into chat: ${controller.mobileKeyboardInset()}`);
+}
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(ui_shell)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)

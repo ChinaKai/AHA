@@ -9,6 +9,7 @@ from aha_cli.domain.models import (
     make_task,
     make_task_round,
     next_task_id,
+    normalize_task_browser_control,
     normalize_task_context_management,
     normalize_task_hardware_debug,
     normalize_task_observe_proxy,
@@ -434,6 +435,7 @@ def add_task(
     context_management: dict | None = None,
     token_saving: dict | None = None,
     observe_proxy: dict | None = None,
+    browser_control: dict | None = None,
     task_skills: dict | None = None,
     hardware_debug: dict | None = None,
 ) -> dict:
@@ -474,6 +476,7 @@ def add_task(
             context_management=context_management,
             token_saving=token_saving,
             observe_proxy=observe_proxy,
+            browser_control=browser_control,
             task_skills=task_skills,
             hardware_debug=hardware_debug,
         )
@@ -1097,6 +1100,86 @@ def update_task_hardware_debug_config(
             "mode": mode_value,
             "transports": transports,
             "access": task["hardware_debug"].get("permissions", {}).get("access"),
+        },
+    )
+    return task
+
+
+def update_task_browser_control_config(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    mode: object = UNSET,
+    start_url: object = UNSET,
+    agent_access: object = UNSET,
+    runtime: object = UNSET,
+    profile: object = UNSET,
+    profile_name: object = UNSET,
+    display: object = UNSET,
+    device_mode: object = UNSET,
+    allowed_hosts: object = UNSET,
+    downloads: object = UNSET,
+    uploads: object = UNSET,
+    proxy_mode: object = UNSET,
+    proxy_server: object = UNSET,
+    proxy_bypass: object = UNSET,
+    proxy_username: object = UNSET,
+    proxy_password: object = UNSET,
+    clear_proxy_password: object = UNSET,
+) -> dict:
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        config = normalize_task_browser_control(task.get("browser_control"))
+        updates = {
+            "mode": mode,
+            "start_url": start_url,
+            "agent_access": agent_access,
+            "runtime": runtime,
+            "profile": profile,
+            "profile_name": profile_name,
+            "display": display,
+            "device_mode": device_mode,
+            "allowed_hosts": allowed_hosts,
+            "downloads": downloads,
+            "uploads": uploads,
+            "proxy_mode": proxy_mode,
+            "proxy_server": proxy_server,
+            "proxy_bypass": proxy_bypass,
+            "proxy_username": proxy_username,
+        }
+        for key, value in updates.items():
+            if value is not UNSET:
+                config[key] = value
+        if clear_proxy_password is not UNSET and bool(clear_proxy_password):
+            config["proxy_password"] = ""
+        elif proxy_password is not UNSET and str(proxy_password or ""):
+            config["proxy_password"] = str(proxy_password)
+        task["browser_control"] = normalize_task_browser_control(config)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "task_browser_control_config_updated",
+        {
+            "task_id": task_id,
+            "mode": task["browser_control"].get("mode"),
+            "agent_access": task["browser_control"].get("agent_access"),
+            "runtime": task["browser_control"].get("runtime"),
+            "profile": task["browser_control"].get("profile"),
+            "profile_name": task["browser_control"].get("profile_name"),
+            "display": task["browser_control"].get("display"),
+            "device_mode": task["browser_control"].get("device_mode"),
+            "allowed_host_count": len(task["browser_control"].get("allowed_hosts") or []),
+            "downloads": task["browser_control"].get("downloads"),
+            "uploads": task["browser_control"].get("uploads"),
+            "proxy_mode": task["browser_control"].get("proxy_mode"),
+            "proxy_configured": bool(task["browser_control"].get("proxy_server")),
         },
     )
     return task

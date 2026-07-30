@@ -23,6 +23,14 @@ const hardwareTerminalController = window.AHAHardwareTerminal.createHardwareTerm
   currentRunId: () => currentRunId,
   windowRef: window
 });
+const browserSessionController = window.AHABrowserSession.createBrowserSessionController({
+  panelEl
+}, {
+  apiUrl,
+  currentRunId: () => currentRunId,
+  fetchJson,
+  windowRef: window
+});
 const initialControllers = window.AHAAppControllerFactory.createInitialControllers(domRefs, {
   accessControlData: () => accessControlData,
   accessControlError: () => accessControlError,
@@ -93,6 +101,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   logState,
   hardwareIoState,
   hardwareTerminalController,
+  browserSessionController,
   messageComposer: () => messageComposer,
   navigatorRef: navigator,
   normalizeAskUserGates,
@@ -107,6 +116,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   renderFinalPanelHtml,
   renderFirstRunState,
   renderHardwareIoPanelHtml,
+  renderBrowserPanelHtml,
   renderLogsPanelHtml,
   renderPromptMetricsPanel,
   renderRawPromptSection,

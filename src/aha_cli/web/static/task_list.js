@@ -217,12 +217,20 @@
     return Array.isArray(policy.channels) && policy.channels.length > 0;
   }
 
+  function taskBrowserControlEnabled(task) {
+    const policy = task?.browser_control && typeof task.browser_control === "object" ? task.browser_control : null;
+    return Boolean(policy && String(policy.mode || "off") === "managed");
+  }
+
   function taskViewSwitcherHtml(activeTab = "conversation", task = null) {
     const items = [
       ["conversation", t("conversation.chat", "Chat"), t("conversation.chat", "Chat")],
       ["logs", t("conversation.logs", "Logs"), t("conversation.logs", "Logs")],
       ...(taskHardwareDebugEnabled(task)
         ? [["hardware", t("conversation.hardware", "Hardware"), t("conversation.hardware", "Hardware")]]
+        : []),
+      ...(taskBrowserControlEnabled(task)
+        ? [["browser", t("conversation.browser", "Browser"), t("conversation.browser", "Browser")]]
         : []),
       ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")],
       ["context-evidence", t("conversation.context_evidence_short", "Evd"), t("conversation.context_evidence", "Context evidence")]
@@ -298,6 +306,7 @@
     taskListTitle,
     taskListItemClass,
     taskListItemHtml,
-    taskHardwareDebugEnabled
+    taskHardwareDebugEnabled,
+    taskBrowserControlEnabled
   });
 })();

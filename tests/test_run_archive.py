@@ -9,7 +9,12 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import main
-from aha_cli.store.filesystem import read_json, run_dir, status_snapshot
+from aha_cli.store.filesystem import (
+    read_json,
+    run_dir,
+    status_snapshot,
+    update_task_browser_control_config,
+)
 
 
 def run_cli(*args: str) -> tuple[int, str]:
@@ -38,12 +43,21 @@ class RunArchiveTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                update_task_browser_control_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    proxy_mode="custom",
+                    proxy_server="http://browser.proxy:7890",
+                    proxy_username="browser-user",
+                    proxy_password="browser-secret",
+                )
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-secret"
                 session_file.write_text(json.dumps(session), encoding="utf-8")
                 runtime_file = run_dir(root, run_id) / "runtime" / "local.cache"
-                runtime_file.parent.mkdir(parents=True)
+                runtime_file.parent.mkdir(parents=True, exist_ok=True)
                 runtime_file.write_text("local-only", encoding="utf-8")
 
                 archive = root / "portable.tar.gz"
@@ -59,6 +73,9 @@ class RunArchiveTests(unittest.TestCase):
                     plan = json.load(exported.extractfile("run/plan.json"))
                     exported_session = json.load(exported.extractfile("run/tasks/task-001/sessions/main.json"))
                 self.assertEqual(plan["proxy"]["http_proxy"], "<redacted>")
+                browser_control = plan["tasks"][0]["browser_control"]
+                self.assertEqual(browser_control["proxy_server"], "<redacted>")
+                self.assertEqual(browser_control["proxy_password"], "<redacted>")
                 self.assertNotIn("secret", json.dumps(plan))
                 self.assertIsNone(exported_session["backend_session_id"])
                 self.assertEqual(exported_session["imported_backend_session_id"], "backend-secret")

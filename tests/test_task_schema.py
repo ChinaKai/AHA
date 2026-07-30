@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from aha_cli.domain.models import normalize_task_token_saving, task_metadata_projection
+from aha_cli.domain.models import normalize_task_browser_control, normalize_task_token_saving, task_metadata_projection
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.filesystem import create_plan, status_snapshot
 from aha_cli.store.io import write_json
@@ -12,6 +12,71 @@ from aha_cli.store.runs import require_plan
 
 
 class TaskSchemaTests(unittest.TestCase):
+    def test_task_browser_control_defaults_and_normalizes_hosts(self) -> None:
+        default_policy = normalize_task_browser_control()
+        self.assertEqual(default_policy["mode"], "off")
+        self.assertEqual(default_policy["start_url"], "https://www.bing.com/")
+        self.assertEqual(default_policy["display"], "native")
+        self.assertEqual(default_policy["device_mode"], "desktop")
+        self.assertEqual(default_policy["runtime"], "playwright")
+        self.assertEqual(default_policy["profile_name"], "")
+        policy = normalize_task_browser_control({
+            "mode": "managed",
+            "agent_access": "read-write",
+            "runtime": "user_chrome",
+            "profile": "task",
+            "display": "embedded",
+            "device_mode": "mobile",
+            "allowed_hosts": "Example.com, *.Example.org\nhttps://invalid.example",
+            "downloads": "allow",
+        })
+
+        self.assertEqual(policy["mode"], "managed")
+        self.assertEqual(policy["agent_access"], "read_write")
+        self.assertEqual(policy["runtime"], "user_chrome")
+        self.assertEqual(policy["profile"], "task")
+        self.assertEqual(policy["display"], "embedded")
+        self.assertEqual(policy["device_mode"], "mobile")
+        self.assertEqual(policy["allowed_hosts"], ["example.com", "*.example.org"])
+        self.assertEqual(policy["downloads"], "allow")
+        self.assertEqual(policy["uploads"], "deny")
+        self.assertEqual(policy["proxy_mode"], "direct")
+        self.assertEqual(policy["proxy_server"], "")
+
+        proxied = normalize_task_browser_control({
+            "proxy_mode": "custom",
+            "proxy_server": "http://proxy.example:7890",
+            "proxy_bypass": "localhost",
+            "proxy_username": "alice",
+            "proxy_password": "secret",
+        })
+        self.assertEqual(proxied["proxy_mode"], "custom")
+        self.assertEqual(proxied["proxy_server"], "http://proxy.example:7890")
+        self.assertEqual(proxied["proxy_password"], "secret")
+        self.assertEqual(
+            normalize_task_browser_control({"display": "invalid"})["display"],
+            "native",
+        )
+        self.assertEqual(
+            normalize_task_browser_control({"device_mode": "invalid"})["device_mode"],
+            "desktop",
+        )
+        self.assertEqual(
+            normalize_task_browser_control({"runtime": "invalid"})["runtime"],
+            "playwright",
+        )
+        self.assertEqual(
+            normalize_task_browser_control({"start_url": "https://example.com/"})["start_url"],
+            "https://example.com/",
+        )
+        named = normalize_task_browser_control({"profile": "named", "profile_name": " 工作 "})
+        self.assertEqual(named["profile"], "named")
+        self.assertEqual(named["profile_name"], "工作")
+        self.assertEqual(
+            normalize_task_browser_control({"profile": "named", "profile_name": ""})["profile"],
+            "ephemeral",
+        )
+
     def test_task_token_saving_normalizes_related_project_keys(self) -> None:
         policy = normalize_task_token_saving({
             "enabled": True,
