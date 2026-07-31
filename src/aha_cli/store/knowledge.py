@@ -160,7 +160,12 @@ def resolved_project_identity(
     goal: str | None = None,
 ) -> dict:
     """Resolve a workspace against synchronized project manifests."""
-    return resolve_project_identity(knowledge_root(root, config), workspace, goal=goal)
+    return resolve_project_identity(
+        knowledge_root(root, config),
+        workspace,
+        goal=goal,
+        aha_root=root,
+    )
 
 
 def resolved_project_key_aliases(

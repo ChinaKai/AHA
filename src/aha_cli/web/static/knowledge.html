@@ -1159,6 +1159,7 @@
       } else {
         const sourceLabels = {
           manifest: t("knowledge.project_identity_source_manifest", "Synchronized manifest"),
+          local_binding: t("knowledge.project_identity_source_local", "Local workspace binding"),
           derived_git: t("knowledge.project_identity_source_derived", "Derived from Git origin"),
           workspace_fallback: t("knowledge.project_identity_source_workspace", "Derived from workspace"),
           ambiguous: t("knowledge.project_identity_source_ambiguous", "Ambiguous binding")
@@ -1178,7 +1179,7 @@
         ? previous
         : (values.includes(identity?.project_key) ? identity.project_key : values[0]);
       if (preferred) target.value = preferred;
-      bind.disabled = !identity?.git_identity || !values.length || identity?.source === "ambiguous";
+      bind.disabled = !identity || !values.length || identity.source === "ambiguous";
       renderProjectRelations();
     }
 
@@ -1193,7 +1194,7 @@
       const result = $("#project-relations-result");
       if (!list || !add || !save || !result) return;
       const identity = state.projectIdentity;
-      const bound = identity?.source === "manifest";
+      const bound = Boolean(identity?.manifest);
       const currentKey = String(identity?.project_key || "");
       const projects = state.projectIdentityProjects.filter(project => project.project_key !== currentKey);
       if (!bound) {
@@ -1308,8 +1309,8 @@
       if (!workspacePath || !targetProjectKey) return;
       const message = formatText(
         "knowledge.project_identity_confirm_bind",
-        { identity: state.projectIdentity?.git_identity || "-", project: targetProjectKey },
-        `Bind ${state.projectIdentity?.git_identity || "this repository"} to ${targetProjectKey}?`
+        { identity: state.projectIdentity?.git_identity || workspacePath, project: targetProjectKey },
+        `Bind ${state.projectIdentity?.git_identity || workspacePath} to ${targetProjectKey}?`
       );
       if (!window.confirm(message)) return;
       const button = $("#project-identity-bind");
@@ -1329,7 +1330,9 @@
           ? data.identity.manifest.related_projects.map(item => ({ ...item }))
           : [];
         state.projectIdentityError = "";
-        $("#project-identity-result").textContent = t("knowledge.project_identity_bound", "Project identity bound and ready to sync.");
+        $("#project-identity-result").textContent = data.identity?.source === "local_binding"
+          ? t("knowledge.project_identity_bound_local", "Workspace bound on this client. Bind it once on each additional client.")
+          : t("knowledge.project_identity_bound", "Project identity bound and ready to sync.");
         renderProjectIdentity();
       } catch (error) {
         $("#project-identity-result").textContent = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);

@@ -10,7 +10,9 @@ from aha_cli.domain.models import utc_now
 from aha_cli.store.io import read_json, write_json
 
 PROJECT_IDENTITY_SCHEMA_VERSION = 2
+LOCAL_PROJECT_BINDINGS_SCHEMA_VERSION = 1
 PROJECT_MANIFEST_FILE = "project.json"
+LOCAL_PROJECT_BINDINGS_FILE = "project_identity_bindings.json"
 PROJECTS_DIR = "projects"
 PROJECT_RELATION_TYPES = ("upstream", "sdk", "fork", "reference", "other")
 MAX_PROJECT_RELATIONS = 5
@@ -102,6 +104,79 @@ def validate_project_key(project_key: str) -> str:
 
 def project_manifest_path(kb_root: Path, project_key: str) -> Path:
     return Path(kb_root) / PROJECTS_DIR / validate_project_key(project_key) / PROJECT_MANIFEST_FILE
+
+
+def local_project_bindings_path(aha_root: Path) -> Path:
+    return Path(aha_root).expanduser() / "runtime" / LOCAL_PROJECT_BINDINGS_FILE
+
+
+def _workspace_binding_key(workspace: Path) -> str:
+    return str(Path(workspace).expanduser().resolve())
+
+
+def _read_local_project_bindings(aha_root: Path | None) -> list[dict]:
+    if aha_root is None:
+        return []
+    path = local_project_bindings_path(aha_root)
+    if not path.is_file():
+        return []
+    try:
+        data = read_json(path)
+    except (OSError, ValueError):
+        return []
+    raw_bindings = data.get("bindings") if isinstance(data, dict) else []
+    if not isinstance(raw_bindings, list):
+        return []
+    bindings: list[dict] = []
+    seen: set[str] = set()
+    for item in raw_bindings:
+        if not isinstance(item, dict):
+            continue
+        workspace_path = str(item.get("workspace_path") or "").strip()
+        if not workspace_path or workspace_path in seen:
+            continue
+        try:
+            project_key = validate_project_key(str(item.get("project_key") or ""))
+        except ProjectIdentityError:
+            continue
+        bindings.append({
+            "workspace_path": workspace_path,
+            "project_key": project_key,
+            "created_at": str(item.get("created_at") or ""),
+            "updated_at": str(item.get("updated_at") or ""),
+        })
+        seen.add(workspace_path)
+    return bindings
+
+
+def _write_local_project_binding(
+    aha_root: Path,
+    workspace: Path,
+    project_key: str,
+) -> Path:
+    path = local_project_bindings_path(aha_root)
+    workspace_path = _workspace_binding_key(workspace)
+    target_key = validate_project_key(project_key)
+    now = utc_now()
+    existing_bindings = _read_local_project_bindings(aha_root)
+    existing = next(
+        (item for item in existing_bindings if item["workspace_path"] == workspace_path),
+        None,
+    )
+    bindings = [
+        item for item in existing_bindings if item["workspace_path"] != workspace_path
+    ]
+    bindings.append({
+        "workspace_path": workspace_path,
+        "project_key": target_key,
+        "created_at": str((existing or {}).get("created_at") or now),
+        "updated_at": now,
+    })
+    write_json(path, {
+        "schema_version": LOCAL_PROJECT_BINDINGS_SCHEMA_VERSION,
+        "bindings": sorted(bindings, key=lambda item: item["workspace_path"]),
+    })
+    return path
 
 
 def _string_list(value: object) -> list[str]:
@@ -241,6 +316,8 @@ def resolve_project_identity(
     kb_root: Path,
     workspace: Path,
     goal: str | None = None,
+    *,
+    aha_root: Path | None = None,
 ) -> dict:
     """Resolve a workspace through synced manifests before using derived keys."""
     workspace = Path(workspace).expanduser()
@@ -264,6 +341,30 @@ def resolve_project_identity(
             "manifest": manifest,
             "ambiguous_project_keys": [],
         }
+    if not git_identity:
+        workspace_path = _workspace_binding_key(workspace)
+        local_binding = next(
+            (
+                item
+                for item in _read_local_project_bindings(aha_root)
+                if item["workspace_path"] == workspace_path
+            ),
+            None,
+        )
+        if local_binding is not None:
+            manifest = read_project_manifest(kb_root, local_binding["project_key"])
+            if manifest is not None:
+                aliases = _string_list(
+                    [manifest["project_key"], *manifest.get("legacy_keys", []), *derived_aliases]
+                )
+                return {
+                    "project_key": manifest["project_key"],
+                    "aliases": aliases,
+                    "source": "local_binding",
+                    "git_identity": "",
+                    "manifest": manifest,
+                    "ambiguous_project_keys": [],
+                }
     source = "ambiguous" if len(matches) > 1 else ("derived_git" if git_identity else "workspace_fallback")
     return {
         "project_key": derived_aliases[0],
@@ -286,8 +387,9 @@ def bind_project_identity(
     target_project_key: str,
     *,
     display_name: str | None = None,
+    aha_root: Path | None = None,
 ) -> dict:
-    """Bind the workspace's normalized origin to an existing KB project."""
+    """Bind a Git identity or local workspace path to an existing KB project."""
     target_key = validate_project_key(target_project_key)
     target_dir = Path(kb_root) / PROJECTS_DIR / target_key
     if not target_dir.is_dir():
@@ -295,7 +397,35 @@ def bind_project_identity(
     workspace = Path(workspace).expanduser()
     git_identity = normalize_git_remote(git_remote_for(workspace))
     if not git_identity:
-        raise ProjectIdentityError("workspace has no Git origin to bind")
+        if aha_root is None:
+            raise ProjectIdentityError(
+                "workspace has no Git origin; aha_root is required for a local binding"
+            )
+        existing = read_project_manifest(kb_root, target_key)
+        now = utc_now()
+        if existing is None:
+            path = project_manifest_path(kb_root, target_key)
+            write_json(path, {
+                "schema_version": PROJECT_IDENTITY_SCHEMA_VERSION,
+                "project_key": target_key,
+                "display_name": (
+                    str(display_name or "").strip() or _default_display_name(target_key)
+                ),
+                "git_identities": [],
+                "legacy_keys": [],
+                "related_projects": [],
+                "created_at": now,
+                "updated_at": now,
+            })
+        _write_local_project_binding(aha_root, workspace, target_key)
+        result = resolve_project_identity(
+            kb_root,
+            workspace,
+            aha_root=aha_root,
+        )
+        result["path"] = str(project_manifest_path(kb_root, target_key))
+        result["local_binding_path"] = str(local_project_bindings_path(aha_root))
+        return result
     for manifest in list_project_manifests(kb_root):
         if git_identity not in manifest.get("git_identities", []):
             continue
@@ -332,7 +462,7 @@ def bind_project_identity(
     }
     path = project_manifest_path(kb_root, target_key)
     write_json(path, manifest)
-    result = resolve_project_identity(kb_root, workspace)
+    result = resolve_project_identity(kb_root, workspace, aha_root=aha_root)
     result["path"] = str(path)
     return result
 

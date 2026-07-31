@@ -76,12 +76,14 @@
 策略（按优先级）：
 1. 将当前 `remote origin` 规范化后，优先匹配同步知识库 `projects/*/project.json` 的 `git_identities`；命中时使用 manifest 中稳定的 `project_key`。
 2. 未命中 manifest 且 workspace 是 git 仓库 → 用 repo 名 + normalized origin hash 推导，例如 `aha-git-<hash>`。
-3. 非 git workspace → 用 run goal + workspace 目录名生成 slug。
-4. Web 的 Project Identity 面板允许把当前 normalized origin 绑定到已有 Knowledge Project；绑定只修改同步知识库，不向 workspace 仓库写 AHA 文件。
+3. 非 git workspace → 先读取当前 AHA Home 的 `runtime/project_identity_bindings.json` 本机绑定；命中后使用其指向的同步 Knowledge Project。
+4. 未命中本机绑定的非 git workspace → 用 run goal + workspace 目录名生成 slug。
+5. Web 的 Project Identity 面板允许把当前 workspace 绑定到已有 Knowledge Project：Git origin 写入同步 `project.json`；非 Git workspace 的绝对路径映射只写当前客户端 AHA Home 的 runtime。本方案始终不向业务 workspace 写 AHA 文件。
 
 > 边界：同一项目在不同机器/路径下应映射到同一 project-key。git remote 优先正是为此。
 > 兼容：旧版本写入的 `git-<hash>` 目录作为 legacy alias 继续参与检索，不强制迁移。
 > 改名：仓库或 remote 改名后需要在任一客户端手动绑定一次；`project.json` 同步后，其他客户端会自动命中新增 identity。
+> 非 Git：本机绝对路径不进入同步知识库；每个客户端首次使用时需各绑定一次。workspace 增加 Git origin 后，Git manifest 匹配优先于已有本机路径绑定。
 
 关联知识库采用“项目级配置 + 任务内部快照”：
 
@@ -353,6 +355,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 | 2026-06-19 | Follow-up | project_key git 格式改为 `<repo-name>-git-<hash>`，检索兼容旧 `git-<hash>`；知识库 entries 改为原卡片内 View/Close 展开，避免重复标题 | 用户体验/可读性修复 |
 | 2026-07-28 | Follow-up | 新增同步 `projects/<project-key>/project.json` identity manifest；task/nav/distill 统一 manifest 优先解析；Knowledge Web 支持把当前 Git origin 绑定到已有 project | 原仓库零 AHA 文件；remote 改名只需绑定一次并随 KB 多端同步 |
 | 2026-07-30 | Follow-up | Related projects 改为 Project Identity 项目级唯一配置源；创建任务时服务端保存只读快照，任务 UI 只保留 AHA KB 开关 | 关系随 KB 多端同步，任务上下文可复现，不做自动正文检索 |
+| 2026-07-31 | Follow-up | Project Identity 支持非 Git workspace 本机绑定；路径映射保存到 AHA Home runtime，Git manifest 仍保持最高优先级 | 不写业务目录；非 Git workspace 每个客户端首次各绑定一次 |
 | 2026-06-19 | Follow-up | memo completion report 成功生成后接入知识沉淀；distill 时附带本项目命中的既有知识摘要，候选中提示审核时更新/废弃冲突旧条目 | 完善生产入口与消费后的更新复核线 |
 | 2026-06-20 | Follow-up | Web entries 支持 project-key 模糊过滤与标题/标签/正文搜索；heuristic 改为保留 Markdown 结构、抽取高价值章节，不再硬截断存储正文 | 修复知识库可查性与候选内容质量 |
 | 2026-06-20 | Follow-up | final/report 提示词支持 knowledge sidecar；AHA 写入 final/report 前剥离 sidecar 并以 sidecar 优先生成候选；pending 按 source_group + normalized title 幂等合并 | 明确 final/report/KB 三层心智模型，解决执行顺序与重复执行问题 |

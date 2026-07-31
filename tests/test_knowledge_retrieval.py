@@ -432,6 +432,40 @@ def test_context_uses_synced_manifest_after_remote_rename(tmp_path: Path):
     assert "projects/stable-project/" in ctx
 
 
+def test_context_uses_local_binding_for_non_git_workspace(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg(enabled=True)
+    write_json(config_path(root), cfg)
+    init_knowledge_base(root, cfg)
+    workspace = tmp_path / "plain-workspace"
+    workspace.mkdir()
+    write_entry(
+        root,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="stable-project",
+        title="Stable non-Git workspace knowledge",
+        body="reuse the local project identity binding",
+        meta={"tags": ["identity"]},
+    )
+    bind_project_identity(
+        knowledge_root(root, cfg),
+        workspace,
+        "stable-project",
+        aha_root=root,
+    )
+
+    ctx = knowledge_context_for_task(root, "norun", {
+        "workspace_path": str(workspace),
+        "title": "identity regression",
+        "description": "plain workspace",
+    })
+
+    assert "Stable non-Git workspace knowledge" in ctx
+    assert "projects/stable-project/" in ctx
+
+
 def test_context_runs_auto_pull_and_tolerates_failure(tmp_path: Path, monkeypatch):
     root = tmp_path / ".aha"
     cfg = _cfg(enabled=True)

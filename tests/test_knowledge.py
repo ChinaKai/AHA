@@ -10,7 +10,7 @@ import pytest
 from aha_cli.cli import main
 from aha_cli.domain.models import default_config
 from aha_cli.store.config import load_config
-from aha_cli.store.io import write_json
+from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import (
     init_knowledge_base,
     knowledge_root,
@@ -31,6 +31,7 @@ from aha_cli.store.project_identity import (
     ProjectIdentityConflict,
     ProjectIdentityError,
     bind_project_identity,
+    local_project_bindings_path,
     project_manifest_path,
     read_project_manifest,
     resolve_project_identity,
@@ -136,6 +137,74 @@ def test_project_key_fallback_is_migratable(tmp_path: Path):
     # Different dir name yields a different key.
     (tmp_path / "other").mkdir()
     assert project_key(tmp_path / "other", goal="g") != key_a
+
+
+def test_non_git_workspace_can_bind_to_project_in_local_aha_state(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    target_key = "stable-project"
+    (kb_root / "projects" / target_key).mkdir(parents=True)
+    workspace = tmp_path / "plain-workspace"
+    workspace.mkdir()
+
+    bound = bind_project_identity(
+        kb_root,
+        workspace,
+        target_key,
+        aha_root=home,
+    )
+    local_state = read_json(local_project_bindings_path(home))
+
+    assert bound["source"] == "local_binding"
+    assert bound["project_key"] == target_key
+    assert bound["git_identity"] == ""
+    assert local_state["schema_version"] == 1
+    assert local_state["bindings"][0]["workspace_path"] == str(workspace.resolve())
+    assert local_state["bindings"][0]["project_key"] == target_key
+    assert resolve_project_identity(
+        kb_root,
+        workspace,
+        aha_root=home,
+    )["project_key"] == target_key
+    assert resolve_project_identity(kb_root, workspace)["source"] == "workspace_fallback"
+    assert read_project_manifest(kb_root, target_key)["git_identities"] == []
+    assert not (workspace / ".aha").exists()
+    assert not (workspace / "project.json").exists()
+
+
+def test_git_manifest_takes_priority_over_stale_local_workspace_binding(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    for key in ("local-project", "git-project"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    bind_project_identity(
+        kb_root,
+        workspace,
+        "local-project",
+        aha_root=home,
+    )
+
+    (workspace / ".git").mkdir()
+    (workspace / ".git" / "config").write_text(
+        '[remote "origin"]\n  url = git@github.com:user/git-project.git\n',
+        encoding="utf-8",
+    )
+    bind_project_identity(
+        kb_root,
+        workspace,
+        "git-project",
+        aha_root=home,
+    )
+
+    resolved = resolve_project_identity(kb_root, workspace, aha_root=home)
+    assert resolved["source"] == "manifest"
+    assert resolved["project_key"] == "git-project"
 
 
 def test_synced_project_manifest_overrides_changed_remote(tmp_path: Path):

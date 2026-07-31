@@ -21,7 +21,10 @@ from aha_cli.store.knowledge import (
     write_entry,
 )
 from aha_cli.store.paths import config_path
-from aha_cli.store.project_identity import project_manifest_path
+from aha_cli.store.project_identity import (
+    local_project_bindings_path,
+    project_manifest_path,
+)
 from aha_cli.web.knowledge_routes import knowledge_route_response
 from tests.helpers import fetch_ui_response, json_response_body
 
@@ -177,6 +180,76 @@ def test_project_identity_api_binds_workspace_to_existing_synced_project(tmp_pat
     )
     assert nav["project_key"] == "stable-project"
     assert nav["entries"][0]["title"] == "Stable project navigation"
+
+
+def test_project_identity_api_binds_non_git_workspace_locally(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="stable-project",
+        title="Stable project navigation",
+        body="## Project",
+        slug="index",
+        meta={"type": "navigation", "navigation_role": "index"},
+    )
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="related-project",
+        title="Related project",
+        body="details",
+    )
+    workspace = tmp_path / "plain-workspace"
+    workspace.mkdir()
+
+    before = _get(
+        home,
+        "/api/kb/project-identity",
+        {"workspace_path": [str(workspace)]},
+    )
+    bound = json_response_body(_post(
+        home,
+        "/api/kb/project-identity/bind",
+        {
+            "workspace_path": str(workspace),
+            "target_project_key": "stable-project",
+        },
+    ))
+    after = _get(
+        home,
+        "/api/kb/project-identity",
+        {"workspace_path": [str(workspace)]},
+    )
+    relations = json_response_body(_put(
+        home,
+        "/api/kb/project-relations",
+        {
+            "workspace_path": str(workspace),
+            "related_projects": [
+                {
+                    "project_key": "related-project",
+                    "relation": "reference",
+                    "note": "Local binding regression",
+                }
+            ],
+        },
+    ))
+
+    assert before["identity"]["source"] == "workspace_fallback"
+    assert bound["identity"]["source"] == "local_binding"
+    assert bound["identity"]["project_key"] == "stable-project"
+    assert after["identity"]["source"] == "local_binding"
+    assert after["identity"]["manifest"]["project_key"] == "stable-project"
+    assert relations["identity"]["manifest"]["related_projects"][0]["project_key"] == "related-project"
+    assert local_project_bindings_path(home).is_file()
+    assert not (workspace / ".aha").exists()
+    assert not (workspace / "project.json").exists()
 
 
 def test_project_relations_api_updates_bound_project_manifest(tmp_path: Path):

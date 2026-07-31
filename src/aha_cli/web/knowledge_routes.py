@@ -981,6 +981,7 @@ def knowledge_route_response(
                 Path(context["workspace_path"]),
                 target_project_key,
                 display_name=str(payload.get("display_name") or "").strip() or None,
+                aha_root=root,
             )
         except FileNotFoundError as exc:
             return json_response({"error": str(exc)}, "404 Not Found")
@@ -1005,9 +1006,9 @@ def knowledge_route_response(
         try:
             context = _project_nav_bootstrap_context(root, payload, query)
             identity = _resolved_project_identity(root, cfg, context)
-            if identity.get("source") != "manifest":
+            if not identity.get("manifest"):
                 return json_response(
-                    {"error": "bind the current repository before editing related projects"},
+                    {"error": "bind the current workspace before editing related projects"},
                     "409 Conflict",
                 )
             update_project_relations(
