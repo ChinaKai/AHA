@@ -78,7 +78,7 @@
 2. 未命中 manifest 且 workspace 是 git 仓库 → 用 repo 名 + normalized origin hash 推导，例如 `aha-git-<hash>`。
 3. 非 git workspace → 先读取当前 AHA Home 的 `runtime/project_identity_bindings.json` 本机绑定；命中后使用其指向的同步 Knowledge Project。
 4. 未命中本机绑定的非 git workspace → 用 run goal + workspace 目录名生成 slug。
-5. Web 的 Project Identity 面板允许把当前 workspace 绑定到已有 Knowledge Project：Git origin 写入同步 `project.json`；非 Git workspace 的绝对路径映射只写当前客户端 AHA Home 的 runtime。本方案始终不向业务 workspace 写 AHA 文件。
+5. Web Nav 顶部选择当前 workspace，各项目导航卡片通过单排 `Bind / Unbind` 操作管理 Project Identity：Git origin 写入同步 `project.json`；非 Git workspace 的绝对路径映射只写当前客户端 AHA Home 的 runtime。本方案始终不向业务 workspace 写 AHA 文件。解绑不会删除项目知识；Git 解绑仅移除当前 normalized origin，非 Git 解绑仅移除当前客户端路径映射。
 
 > 边界：同一项目在不同机器/路径下应映射到同一 project-key。git remote 优先正是为此。
 > 兼容：旧版本写入的 `git-<hash>` 目录作为 legacy alias 继续参与检索，不强制迁移。
@@ -87,7 +87,7 @@
 
 关联知识库采用“项目级配置 + 任务内部快照”：
 
-- Knowledge → Project Identity 独立维护最多 5 个 `related_projects`，关系类型固定为 `upstream/sdk/fork/reference/other`，并允许可选说明。
+- Knowledge → Nav 的项目卡片通过单排 `Related` 操作打开弹窗，独立维护最多 5 个 `related_projects`，关系类型固定为 `upstream/sdk/fork/reference/other`，并允许可选说明；无需先把当前 workspace 绑定到该项目。
 - New Task / Task Settings 不展示关联项目选择器。创建任务时，服务端自动把当前 manifest 的 project keys 快照到 task `token_saving.related_project_keys`；后续只允许任务 UI 修改 AHA KB 开关。
 - 旧任务已有快照继续使用；没有快照的旧任务保持为空，不因项目关系变化突然改变上下文。
 - AHA KB 只向 agent 暴露快照项目的 relation/note 与 navigation/solutions/worklog 入口，不递归、不枚举或注入历史正文。

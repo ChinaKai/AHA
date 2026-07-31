@@ -179,6 +179,22 @@ def _write_local_project_binding(
     return path
 
 
+def _remove_local_project_binding(aha_root: Path, workspace: Path) -> bool:
+    path = local_project_bindings_path(aha_root)
+    workspace_path = _workspace_binding_key(workspace)
+    existing_bindings = _read_local_project_bindings(aha_root)
+    bindings = [
+        item for item in existing_bindings if item["workspace_path"] != workspace_path
+    ]
+    if len(bindings) == len(existing_bindings):
+        return False
+    write_json(path, {
+        "schema_version": LOCAL_PROJECT_BINDINGS_SCHEMA_VERSION,
+        "bindings": sorted(bindings, key=lambda item: item["workspace_path"]),
+    })
+    return True
+
+
 def _string_list(value: object) -> list[str]:
     items = value if isinstance(value, list) else []
     result: list[str] = []
@@ -467,15 +483,91 @@ def bind_project_identity(
     return result
 
 
+def unbind_project_identity(
+    kb_root: Path,
+    workspace: Path,
+    *,
+    aha_root: Path | None = None,
+) -> dict:
+    """Remove the current workspace binding without deleting project knowledge."""
+    workspace = Path(workspace).expanduser()
+    identity = resolve_project_identity(
+        kb_root,
+        workspace,
+        aha_root=aha_root,
+    )
+    source = str(identity.get("source") or "")
+    if source == "ambiguous":
+        raise ProjectIdentityConflict(
+            "Git identity matches multiple knowledge projects; resolve the conflict before unbinding"
+        )
+    if source not in {"manifest", "local_binding"}:
+        raise ProjectIdentityError("the current workspace is not bound to a knowledge project")
+
+    project_key = validate_project_key(str(identity.get("project_key") or ""))
+    binding_scope = "git" if source == "manifest" else "local"
+    synced_changed = False
+    if source == "manifest":
+        existing = read_project_manifest(kb_root, project_key)
+        if existing is None:
+            raise ProjectIdentityError(f"project manifest not found: {project_key}")
+        git_identity = str(identity.get("git_identity") or "")
+        remaining = [
+            value
+            for value in existing.get("git_identities", [])
+            if value != git_identity
+        ]
+        if len(remaining) == len(existing.get("git_identities", [])):
+            raise ProjectIdentityError("Git identity is not present in the project manifest")
+        write_json(project_manifest_path(kb_root, project_key), {
+            "schema_version": PROJECT_IDENTITY_SCHEMA_VERSION,
+            "project_key": project_key,
+            "display_name": existing["display_name"],
+            "git_identities": remaining,
+            "legacy_keys": list(existing.get("legacy_keys") or []),
+            "related_projects": list(existing.get("related_projects") or []),
+            "created_at": existing.get("created_at") or utc_now(),
+            "updated_at": utc_now(),
+        })
+        synced_changed = True
+    if aha_root is not None:
+        _remove_local_project_binding(aha_root, workspace)
+
+    result = resolve_project_identity(
+        kb_root,
+        workspace,
+        aha_root=aha_root,
+    )
+    result.update({
+        "unbound_project_key": project_key,
+        "binding_scope": binding_scope,
+        "synced_changed": synced_changed,
+    })
+    return result
+
+
 def update_project_relations(
     kb_root: Path,
     project_key: str,
     related_projects: object,
+    *,
+    create_manifest: bool = False,
 ) -> dict:
     key = validate_project_key(project_key)
     existing = read_project_manifest(kb_root, key)
     if existing is None:
-        raise ProjectIdentityError("bind the current repository before editing related projects")
+        if not create_manifest:
+            raise ProjectIdentityError("bind the current repository before editing related projects")
+        if not (Path(kb_root) / PROJECTS_DIR / key).is_dir():
+            raise FileNotFoundError(f"knowledge project not found: {key}")
+        now = utc_now()
+        existing = {
+            "display_name": _default_display_name(key),
+            "git_identities": [],
+            "legacy_keys": [],
+            "related_projects": [],
+            "created_at": now,
+        }
     relations = normalize_project_relations(
         related_projects,
         current_project_key=key,

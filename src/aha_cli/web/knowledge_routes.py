@@ -61,7 +61,10 @@ from aha_cli.store.project_identity import (
     ProjectIdentityError,
     bind_project_identity,
     list_project_manifests,
+    read_project_manifest,
+    unbind_project_identity,
     update_project_relations,
+    validate_project_key,
 )
 from aha_cli.store.knowledge_assets import EntryImageRejected, add_entry_image, read_entry_image
 from aha_cli.store import knowledge_capture as capture
@@ -1001,37 +1004,103 @@ def knowledge_route_response(
             "git": git_result,
         })
 
-    if method == "PUT" and path == "/api/kb/project-relations":
+    if method == "DELETE" and path == "/api/kb/project-identity/bind":
         payload = parse_json_body(body) if body.strip() else {}
         try:
             context = _project_nav_bootstrap_context(root, payload, query)
-            identity = _resolved_project_identity(root, cfg, context)
-            if not identity.get("manifest"):
-                return json_response(
-                    {"error": "bind the current workspace before editing related projects"},
-                    "409 Conflict",
-                )
-            update_project_relations(
+            identity = unbind_project_identity(
                 knowledge_root(root, cfg),
-                str(identity.get("project_key") or ""),
-                payload.get("related_projects"),
+                Path(context["workspace_path"]),
+                aha_root=root,
             )
-            identity = _resolved_project_identity(root, cfg, context)
         except FileNotFoundError as exc:
             return json_response({"error": str(exc)}, "404 Not Found")
+        except ProjectIdentityConflict as exc:
+            return json_response({"error": str(exc)}, "409 Conflict")
         except (OSError, ProjectIdentityError, ValueError) as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
-        git_result = auto_commit_after_change(
-            root,
-            f"chore(knowledge): update project relations '{identity['project_key']}'",
-            cfg,
-        )
+        unbound_key = str(identity.get("unbound_project_key") or "")
+        git_result = None
+        if identity.get("synced_changed"):
+            git_result = auto_commit_after_change(
+                root, f"chore(knowledge): unbind project identity '{unbound_key}'", cfg
+            )
         return json_response({
             "ok": True,
             "identity": identity,
             "projects": _project_identity_candidates(root, cfg),
             "relation_types": list(PROJECT_RELATION_TYPES),
             "workspace_path": context["workspace_path"],
+            "git": git_result,
+        })
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/project-relations":
+        project_key_value = str(query.get("project_key", [""])[0] or "").strip()
+        if not project_key_value:
+            return json_response({"error": "project_key required"}, "400 Bad Request")
+        try:
+            project_key_value = validate_project_key(project_key_value)
+            project_dir = knowledge_root(root, cfg) / "projects" / project_key_value
+            if not project_dir.is_dir():
+                raise FileNotFoundError(f"knowledge project not found: {project_key_value}")
+            manifest = read_project_manifest(knowledge_root(root, cfg), project_key_value)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except (OSError, ProjectIdentityError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        return _ok(method, {
+            "project_key": project_key_value,
+            "manifest": manifest,
+            "projects": _project_identity_candidates(root, cfg),
+            "relation_types": list(PROJECT_RELATION_TYPES),
+        })
+
+    if method == "PUT" and path == "/api/kb/project-relations":
+        payload = parse_json_body(body) if body.strip() else {}
+        direct_project_key = str(payload.get("project_key") or "").strip()
+        try:
+            if direct_project_key:
+                manifest = update_project_relations(
+                    knowledge_root(root, cfg),
+                    direct_project_key,
+                    payload.get("related_projects"),
+                    create_manifest=True,
+                )
+                identity = None
+                context = None
+                updated_project_key = direct_project_key
+            else:
+                context = _project_nav_bootstrap_context(root, payload, query)
+                identity = _resolved_project_identity(root, cfg, context)
+                if not identity.get("manifest"):
+                    return json_response(
+                        {"error": "bind the current workspace before editing related projects"},
+                        "409 Conflict",
+                    )
+                updated_project_key = str(identity.get("project_key") or "")
+                manifest = update_project_relations(
+                    knowledge_root(root, cfg),
+                    updated_project_key,
+                    payload.get("related_projects"),
+                )
+                identity = _resolved_project_identity(root, cfg, context)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except (OSError, ProjectIdentityError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        git_result = auto_commit_after_change(
+            root,
+            f"chore(knowledge): update project relations '{updated_project_key}'",
+            cfg,
+        )
+        return json_response({
+            "ok": True,
+            "identity": identity,
+            "project_key": updated_project_key,
+            "manifest": manifest,
+            "projects": _project_identity_candidates(root, cfg),
+            "relation_types": list(PROJECT_RELATION_TYPES),
+            "workspace_path": context["workspace_path"] if context else None,
             "git": git_result,
         })
 

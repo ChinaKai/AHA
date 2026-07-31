@@ -395,14 +395,25 @@
     .kb-project-nav-controls #nav-model { min-width: 180px; }
     .kb-project-nav-controls #nav-effort { min-width: 120px; }
     .kb-project-nav-controls button { flex: 0 0 auto; }
-    .kb-project-identity-panel { display: grid; gap: 8px; }
-    .kb-project-identity-panel .kb-row { margin: 0; }
-    .kb-project-identity-panel select { min-width: min(360px, 100%); }
-    .kb-project-identity-summary { display: grid; gap: 4px; }
+    .kb-project-identity-toolbar {
+      display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-md); background: var(--color-surface-muted);
+    }
+    .kb-project-identity-toolbar select { min-width: min(280px, 100%); }
+    .kb-project-identity-summary { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     .kb-project-identity-summary code { overflow-wrap: anywhere; white-space: normal; }
+    .kb-bound-badge {
+      display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px;
+      background: var(--color-primary-surface); color: var(--color-primary-strong);
+      font-size: 11px; font-weight: 600;
+    }
+    .kb-nav-card-heading { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .kb-nav-card-heading h3 { margin: 0; }
+    .kb-nav-card-actions { gap: 4px; padding-bottom: 2px; scrollbar-width: thin; }
+    .kb-nav-card-actions button { min-height: 30px; padding-inline: 8px; }
     .kb-project-relations-editor {
-      display: grid; gap: 8px; margin-top: 8px; padding-top: 12px;
-      border-top: 1px solid var(--color-border-subtle);
+      display: grid; gap: 8px;
     }
     .kb-project-relations-editor h4 { margin: 0; font-size: 13px; color: var(--color-text-strong); }
     .kb-project-relations-list { display: grid; gap: 8px; }
@@ -532,36 +543,16 @@
   </section>
 
   <section id="tab-navigation" hidden>
-    <div id="project-identity-panel" class="kb-card kb-project-identity-panel">
-      <h3 data-i18n="knowledge.project_identity">Project identity</h3>
-      <div class="kb-muted" data-i18n="knowledge.project_identity_hint">Bind this workspace's Git origin to a stable project stored in the synchronized knowledge base.</div>
-      <div class="kb-row">
-        <select id="identity-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
-        <input id="identity-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
-      </div>
+    <div id="project-identity-toolbar" class="kb-project-identity-toolbar">
+      <select id="nav-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
+      <input id="nav-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
       <div id="project-identity-summary" class="kb-project-identity-summary kb-muted"></div>
-      <div class="kb-row">
-        <select id="project-identity-target" aria-label="Knowledge project" data-i18n-aria-label="knowledge.project_identity_target"></select>
-        <button class="button-ghost" id="project-identity-bind" type="button" data-i18n="knowledge.project_identity_bind">Bind current repository</button>
-      </div>
       <div id="project-identity-result" class="kb-muted"></div>
-      <div id="project-relations-editor" class="kb-project-relations-editor">
-        <h4 data-i18n="knowledge.project_relations">Related knowledge projects</h4>
-        <div class="kb-muted" data-i18n="knowledge.project_relations_hint">AHA KB tasks snapshot these project relationships automatically.</div>
-        <div id="project-relations-list" class="kb-project-relations-list"></div>
-        <div class="kb-card-actions">
-          <button class="button-ghost" id="project-relation-add" type="button" data-i18n="knowledge.project_relation_add">Add related project</button>
-          <button class="primary" id="project-relations-save" type="button" data-i18n="knowledge.project_relations_save">Save relations</button>
-        </div>
-        <div id="project-relations-result" class="kb-muted"></div>
-      </div>
     </div>
     <div id="project-nav-panel" class="kb-card kb-project-nav-panel" hidden>
       <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
       <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Project navigation is maintained by agents during token-saving tasks.</div>
       <div class="kb-row kb-project-nav-controls">
-        <select id="nav-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
-        <input id="nav-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
         <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
         <select id="nav-backend" aria-label="Project navigation backend"></select>
         <select id="nav-model" aria-label="Project navigation model"></select>
@@ -691,6 +682,23 @@
       <div class="kb-card-actions">
         <button class="kb-reject" type="button" id="nav-agent-stop" data-i18n="knowledge.stop">Stop</button>
         <button class="button-ghost" type="button" id="nav-agent-close" data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="project-relations-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card" role="dialog" aria-modal="true" aria-labelledby="project-relations-title">
+      <h3 id="project-relations-title" data-i18n="knowledge.project_relations">Related knowledge projects</h3>
+      <div id="project-relations-project" class="kb-muted"></div>
+      <div id="project-relations-editor" class="kb-project-relations-editor">
+        <div class="kb-muted" data-i18n="knowledge.project_relations_hint">AHA KB tasks snapshot these project relationships automatically.</div>
+        <div id="project-relations-list" class="kb-project-relations-list"></div>
+        <div class="kb-card-actions">
+          <button class="button-ghost" id="project-relation-add" type="button" data-i18n="knowledge.project_relation_add">Add related project</button>
+          <button class="primary" id="project-relations-save" type="button" data-i18n="knowledge.project_relations_save">Save relations</button>
+          <button class="button-ghost" id="project-relations-close" type="button" data-i18n="common.close">Close</button>
+        </div>
+        <div id="project-relations-result" class="kb-muted"></div>
       </div>
     </div>
   </div>
@@ -846,7 +854,7 @@
       }
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", projectIdentity: null, projectIdentityProjects: [], projectIdentityError: "", projectIdentityRequestSeq: 0, projectRelationTypes: ["upstream", "sdk", "fork", "reference", "other"], projectRelations: [], skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", projectIdentity: null, projectIdentityProjects: [], projectIdentityError: "", projectIdentityRequestSeq: 0, projectRelationTypes: ["upstream", "sdk", "fork", "reference", "other"], projectRelationProjectKey: "", projectRelations: [], skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -1096,63 +1104,26 @@
         state.defaultWorkspacePath = payload.default_workspace_path || "";
         state.workspaces = Array.isArray(payload.workspaces) ? payload.workspaces : [];
         renderProjectNavWorkspaceSelect();
-        renderProjectIdentityWorkspaceSelect();
         await loadProjectIdentity();
       } catch (e) {
         $("#nav-result").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message);
       }
     }
 
-    function syncProjectIdentityCustomWorkspace() {
-      const select = $("#identity-workspace-select");
-      const custom = $("#identity-workspace-custom");
-      if (!select || !custom) return;
-      custom.classList.toggle("hidden", select.value !== "__custom__");
-    }
-
-    function renderProjectIdentityWorkspaceSelect() {
-      const select = $("#identity-workspace-select");
-      const customInput = $("#identity-workspace-custom");
-      if (!select || !customInput) return;
-      const previous = select.value;
-      select.innerHTML = "";
-      for (const workspace of state.workspaces) {
-        if (!workspace?.path) continue;
-        const option = document.createElement("option");
-        option.value = workspace.path;
-        option.textContent = workspace.label || workspace.name || workspace.path;
-        select.appendChild(option);
-      }
-      const custom = document.createElement("option");
-      custom.value = "__custom__";
-      custom.textContent = t("task.workspace_custom", "Custom path...");
-      select.appendChild(custom);
-      const preferred = state.workspaces.find(item => item.path === previous) || state.workspaces[0];
-      if (preferred?.path) {
-        select.value = preferred.path;
-      } else {
-        select.value = "__custom__";
-        if (!customInput.value && state.defaultWorkspacePath) customInput.value = state.defaultWorkspacePath;
-      }
-      syncProjectIdentityCustomWorkspace();
-    }
-
     function selectedProjectIdentityWorkspacePath() {
-      const select = $("#identity-workspace-select");
-      if (!select) return "";
-      if (select.value === "__custom__") return $("#identity-workspace-custom").value.trim();
-      return select.value.trim();
+      return selectedProjectNavWorkspacePath();
     }
 
-    function projectEntryCount(project) {
-      return Object.values(project?.counts || {}).reduce((total, value) => total + Number(value || 0), 0);
+    function boundProjectKey() {
+      const identity = state.projectIdentity;
+      return identity?.manifest && ["manifest", "local_binding"].includes(identity.source)
+        ? String(identity.project_key || "")
+        : "";
     }
 
     function renderProjectIdentity() {
       const summary = $("#project-identity-summary");
-      const target = $("#project-identity-target");
-      const bind = $("#project-identity-bind");
-      if (!summary || !target || !bind) return;
+      if (!summary) return;
       const identity = state.projectIdentity;
       if (!identity) {
         summary.textContent = state.projectIdentityError || t("knowledge.project_identity_loading", "Loading project identity...");
@@ -1164,23 +1135,13 @@
           workspace_fallback: t("knowledge.project_identity_source_workspace", "Derived from workspace"),
           ambiguous: t("knowledge.project_identity_source_ambiguous", "Ambiguous binding")
         };
-        summary.innerHTML = `
-          <span>${esc(t("knowledge.project_identity_resolved", "Resolved key"))}: <code>${esc(identity.project_key || "-")}</code></span>
-          <span>${esc(t("knowledge.project_identity_source", "Source"))}: ${esc(sourceLabels[identity.source] || identity.source || "-")}</span>
-          <span>${esc(t("knowledge.project_identity_git", "Git identity"))}: <code>${esc(identity.git_identity || "-")}</code></span>`;
+        const isBound = Boolean(boundProjectKey());
+        const hasBoundCard = state.navigation.some(entry => entry.project_key === identity.project_key);
+        summary.innerHTML = `${isBound ? `<span class="kb-bound-badge">${esc(t("knowledge.project_identity_bound_badge", "Bound"))}</span>` : ""}
+          <span><code>${esc(identity.project_key || "-")}</code> · ${esc(sourceLabels[identity.source] || identity.source || "-")}</span>
+          ${isBound && !hasBoundCard ? `<button class="button-ghost" type="button" onclick="unbindProjectIdentity()">${esc(t("knowledge.project_identity_unbind", "Unbind"))}</button>` : ""}`;
       }
-      const previous = target.value;
-      target.innerHTML = state.projectIdentityProjects.map(project => {
-        const label = `${project.display_name || project.project_key} · ${project.project_key} · ${projectEntryCount(project)} entries`;
-        return `<option value="${esc(project.project_key)}">${esc(label)}</option>`;
-      }).join("");
-      const values = [...target.options].map(option => option.value);
-      const preferred = values.includes(previous)
-        ? previous
-        : (values.includes(identity?.project_key) ? identity.project_key : values[0]);
-      if (preferred) target.value = preferred;
-      bind.disabled = !identity || !values.length || identity.source === "ambiguous";
-      renderProjectRelations();
+      renderNavigationList();
     }
 
     function projectRelationTypeLabel(value) {
@@ -1193,18 +1154,14 @@
       const save = $("#project-relations-save");
       const result = $("#project-relations-result");
       if (!list || !add || !save || !result) return;
-      const identity = state.projectIdentity;
-      const bound = Boolean(identity?.manifest);
-      const currentKey = String(identity?.project_key || "");
+      const currentKey = state.projectRelationProjectKey;
       const projects = state.projectIdentityProjects.filter(project => project.project_key !== currentKey);
-      if (!bound) {
+      if (!currentKey) {
         list.innerHTML = "";
-        result.textContent = t("knowledge.project_relations_requires_binding", "Bind this repository before editing related projects.");
         add.disabled = true;
         save.disabled = true;
         return;
       }
-      result.textContent = "";
       list.innerHTML = state.projectRelations.map((relation, index) => {
         const projectOptions = projects.map(project => {
           const selected = project.project_key === relation.project_key ? " selected" : "";
@@ -1234,7 +1191,7 @@
     }
 
     function addProjectRelation() {
-      const currentKey = String(state.projectIdentity?.project_key || "");
+      const currentKey = state.projectRelationProjectKey;
       const used = new Set(readProjectRelations().map(item => item.project_key));
       const project = state.projectIdentityProjects.find(item => item.project_key !== currentKey && !used.has(item.project_key));
       if (!project || state.projectRelations.length >= 5) return;
@@ -1247,31 +1204,60 @@
     }
 
     async function saveProjectRelations() {
-      const workspacePath = selectedProjectIdentityWorkspacePath();
-      if (!workspacePath || state.projectIdentity?.source !== "manifest") return;
+      const projectKey = state.projectRelationProjectKey;
+      if (!projectKey) return;
       const button = $("#project-relations-save");
       if (button) button.disabled = true;
       try {
         const data = await api("/api/kb/project-relations", {
           method: "PUT",
           body: JSON.stringify({
-            workspace_path: workspacePath,
+            project_key: projectKey,
             related_projects: readProjectRelations()
           })
         });
-        state.projectIdentity = data.identity || null;
         state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
         state.projectRelationTypes = Array.isArray(data.relation_types) ? data.relation_types : state.projectRelationTypes;
-        state.projectRelations = Array.isArray(data.identity?.manifest?.related_projects)
-          ? data.identity.manifest.related_projects.map(item => ({ ...item }))
+        state.projectRelations = Array.isArray(data.manifest?.related_projects)
+          ? data.manifest.related_projects.map(item => ({ ...item }))
           : [];
-        renderProjectIdentity();
+        renderProjectRelations();
         $("#project-relations-result").textContent = t("knowledge.project_relations_saved", "Related projects saved and ready to sync.");
       } catch (error) {
         $("#project-relations-result").textContent = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
       } finally {
         if (button) button.disabled = false;
       }
+    }
+
+    async function openProjectRelations(encodedProjectKey) {
+      const projectKey = decodeURIComponent(encodedProjectKey || "");
+      if (!projectKey) return;
+      state.projectRelationProjectKey = projectKey;
+      state.projectRelations = [];
+      $("#project-relations-project").textContent = projectKey;
+      $("#project-relations-result").textContent = t("common.loading", "Loading...");
+      $("#project-relations-modal").hidden = false;
+      renderProjectRelations();
+      try {
+        const data = await api("/api/kb/project-relations?project_key=" + encodeURIComponent(projectKey));
+        if (state.projectRelationProjectKey !== projectKey) return;
+        state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
+        state.projectRelationTypes = Array.isArray(data.relation_types) ? data.relation_types : state.projectRelationTypes;
+        state.projectRelations = Array.isArray(data.manifest?.related_projects)
+          ? data.manifest.related_projects.map(item => ({ ...item }))
+          : [];
+        $("#project-relations-result").textContent = "";
+        renderProjectRelations();
+      } catch (error) {
+        $("#project-relations-result").textContent = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
+      }
+    }
+
+    function closeProjectRelations() {
+      $("#project-relations-modal").hidden = true;
+      state.projectRelationProjectKey = "";
+      state.projectRelations = [];
     }
 
     async function loadProjectIdentity() {
@@ -1290,22 +1276,18 @@
         state.projectIdentity = data.identity || null;
         state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
         state.projectRelationTypes = Array.isArray(data.relation_types) ? data.relation_types : state.projectRelationTypes;
-        state.projectRelations = Array.isArray(data.identity?.manifest?.related_projects)
-          ? data.identity.manifest.related_projects.map(item => ({ ...item }))
-          : [];
       } catch (error) {
         if (requestSeq !== state.projectIdentityRequestSeq) return;
         state.projectIdentity = null;
         state.projectIdentityProjects = [];
-        state.projectRelations = [];
         state.projectIdentityError = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
       }
       renderProjectIdentity();
     }
 
-    async function bindProjectIdentity() {
+    async function bindProjectIdentity(encodedProjectKey) {
       const workspacePath = selectedProjectIdentityWorkspacePath();
-      const targetProjectKey = $("#project-identity-target")?.value || "";
+      const targetProjectKey = decodeURIComponent(encodedProjectKey || "");
       if (!workspacePath || !targetProjectKey) return;
       const message = formatText(
         "knowledge.project_identity_confirm_bind",
@@ -1313,8 +1295,6 @@
         `Bind ${state.projectIdentity?.git_identity || workspacePath} to ${targetProjectKey}?`
       );
       if (!window.confirm(message)) return;
-      const button = $("#project-identity-bind");
-      if (button) button.disabled = true;
       try {
         const data = await api("/api/kb/project-identity/bind", {
           method: "POST",
@@ -1326,9 +1306,6 @@
         state.projectIdentity = data.identity || null;
         state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
         state.projectRelationTypes = Array.isArray(data.relation_types) ? data.relation_types : state.projectRelationTypes;
-        state.projectRelations = Array.isArray(data.identity?.manifest?.related_projects)
-          ? data.identity.manifest.related_projects.map(item => ({ ...item }))
-          : [];
         state.projectIdentityError = "";
         $("#project-identity-result").textContent = data.identity?.source === "local_binding"
           ? t("knowledge.project_identity_bound_local", "Workspace bound on this client. Bind it once on each additional client.")
@@ -1336,8 +1313,37 @@
         renderProjectIdentity();
       } catch (error) {
         $("#project-identity-result").textContent = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
-      } finally {
-        if (button) button.disabled = false;
+      }
+    }
+
+    async function unbindProjectIdentity() {
+      const workspacePath = selectedProjectIdentityWorkspacePath();
+      const identity = state.projectIdentity;
+      const projectKey = boundProjectKey();
+      if (!workspacePath || !projectKey) return;
+      const local = identity?.source === "local_binding";
+      const message = formatText(
+        local ? "knowledge.project_identity_confirm_unbind_local" : "knowledge.project_identity_confirm_unbind_git",
+        { identity: identity?.git_identity || workspacePath, project: projectKey },
+        local
+          ? `Unbind this client workspace from ${projectKey}?`
+          : `Remove Git identity ${identity?.git_identity || ""} from ${projectKey}?`
+      );
+      if (!window.confirm(message)) return;
+      try {
+        const data = await api("/api/kb/project-identity/bind", {
+          method: "DELETE",
+          body: JSON.stringify({ workspace_path: workspacePath })
+        });
+        state.projectIdentity = data.identity || null;
+        state.projectIdentityProjects = Array.isArray(data.projects) ? data.projects : [];
+        state.projectIdentityError = "";
+        $("#project-identity-result").textContent = local
+          ? t("knowledge.project_identity_unbound_local", "Local workspace binding removed from this client.")
+          : t("knowledge.project_identity_unbound_git", "Git identity removed from the synchronized project.");
+        renderProjectIdentity();
+      } catch (error) {
+        $("#project-identity-result").textContent = formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message);
       }
     }
 
@@ -1386,21 +1392,29 @@
     }
 
     function renderNavigationList() {
+      const activeBoundProject = boundProjectKey();
+      const canBind = Boolean(state.projectIdentity) && !activeBoundProject && state.projectIdentity?.source !== "ambiguous";
       $("#navigation-list").innerHTML = state.navigation.length
         ? state.navigation.map((e) => {
             const entryId = e.id || e.slug;
             const encodedId = encodeURIComponent(entryId);
+            const projectKey = String(e.project_key || "");
+            const encodedProjectKey = encodeURIComponent(projectKey);
+            const isBound = Boolean(projectKey) && projectKey === activeBoundProject;
             const status = e.status || "active";
-            const deleteLabel = t("knowledge.reset_project_nav", "Reset project nav");
-            return `<div class="kb-card"><h3>${esc(e.title)}</h3>
+            const deleteLabel = t("knowledge.reset_project_nav_short", "Reset");
+            const identityAction = isBound
+              ? `<button class="button-ghost" type="button" onclick="unbindProjectIdentity()">${esc(t("knowledge.project_identity_unbind", "Unbind"))}</button>`
+              : (canBind ? `<button class="button-ghost" type="button" onclick="bindProjectIdentity('${encodedProjectKey}')">${esc(t("knowledge.project_identity_bind_action", "Bind"))}</button>` : "");
+            return `<div class="kb-card"><div class="kb-nav-card-heading"><h3>${esc(e.title)}</h3>${isBound ? `<span class="kb-bound-badge">${esc(t("knowledge.project_identity_bound_badge", "Bound"))}</span>` : ""}</div>
               <div class="kb-muted">${esc(e.project_key || "-")} · ${esc(e.slug || entryId)} · ${esc(status)}</div>
               <div class="kb-muted">${esc(timeLine(e))}</div>
               <div>${(e.tags || []).map((tag) => `<span class="kb-tag">${esc(tag)}</span>`).join("")}</div>
-              <div class="kb-card-actions kb-entry-actions kb-inline-actions">
+              <div class="kb-card-actions kb-entry-actions kb-inline-actions kb-nav-card-actions">
                 <button class="button-ghost" type="button" onclick="openEntryReference('${encodedId}')">${esc(t("knowledge.view", "View"))}</button>
                 <button class="button-ghost" type="button" onclick="editEntryReference('${encodedId}')">${esc(t("knowledge.edit", "Edit"))}</button>
-                <button class="button-ghost" type="button" onclick="setEntryStatus('${encodedId}', '${status === "deprecated" ? "active" : "deprecated"}')">${esc(status === "deprecated" ? t("knowledge.restore", "Restore") : t("knowledge.deprecate", "Deprecate"))}</button>
-                <button class="button-ghost" type="button" onclick="${status === "stale" ? `markEntryReviewed('${encodedId}')` : `markEntryStale('${encodedId}')`}">${esc(status === "stale" ? t("knowledge.reviewed", "Reviewed") : t("knowledge.mark_stale", "Mark stale"))}</button>
+                ${identityAction}
+                <button class="button-ghost" type="button" onclick="openProjectRelations('${encodedProjectKey}')">${esc(t("knowledge.project_relations_action", "Related"))}</button>
                 <button class="kb-reject" type="button" onclick="deleteEntry('${encodedId}', true)">${esc(deleteLabel)}</button>
               </div>
             </div>`;
@@ -1412,7 +1426,7 @@
       try {
         const data = await api("/api/kb/project-nav");
         state.navigation = data.entries || [];
-        renderNavigationList();
+        renderProjectIdentity();
       } catch (e) {
         state.navigation = [];
         $("#navigation-list").innerHTML = `<p class="kb-muted">${esc(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message))}</p>`;
@@ -3650,20 +3664,16 @@
 
     for (const button of syncButtons()) button.addEventListener("click", runKnowledgeSync);
 
-    $("#nav-workspace-select").addEventListener("change", () => { syncProjectNavCustomWorkspace(); loadProjectNavDrafts(); loadNavigation(); });
+    $("#nav-workspace-select").addEventListener("change", () => { syncProjectNavCustomWorkspace(); loadProjectIdentity(); loadProjectNavDrafts(); loadNavigation(); });
     $("#nav-workspace-custom").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") { loadProjectNavDrafts(); loadNavigation(); }
+      if (event.key === "Enter") { loadProjectIdentity(); loadProjectNavDrafts(); loadNavigation(); }
     });
-    $("#identity-workspace-select").addEventListener("change", () => {
-      syncProjectIdentityCustomWorkspace();
-      loadProjectIdentity();
-    });
-    $("#identity-workspace-custom").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") loadProjectIdentity();
-    });
-    $("#project-identity-bind").addEventListener("click", bindProjectIdentity);
     $("#project-relation-add").addEventListener("click", addProjectRelation);
     $("#project-relations-save").addEventListener("click", saveProjectRelations);
+    $("#project-relations-close").addEventListener("click", closeProjectRelations);
+    $("#project-relations-modal").addEventListener("click", (event) => {
+      if (event.target.id === "project-relations-modal") closeProjectRelations();
+    });
     $("#project-relations-list").addEventListener("click", event => {
       const button = event.target instanceof Element ? event.target.closest("[data-project-relation-remove]") : null;
       if (!button) return;
@@ -3717,6 +3727,10 @@
       return Boolean(modal && !modal.hidden);
     }
     function closeTopKnowledgeModal() {
+      if (knowledgeModalOpen("#project-relations-modal")) {
+        closeProjectRelations();
+        return true;
+      }
       if (knowledgeModalOpen("#nav-agent-modal")) {
         closeProjectNavAgentModal();
         return true;
@@ -3791,8 +3805,8 @@
       renderProjectNavDraftModal();
       renderProjectNavAgentModal();
       renderProjectNavWorkspaceSelect();
-      renderProjectIdentityWorkspaceSelect();
       renderProjectIdentity();
+      renderProjectRelations();
       renderNavigationAgents();
       renderSkills();
       if (state.activeTab === "settings") loadSettings();

@@ -35,6 +35,7 @@ from aha_cli.store.project_identity import (
     project_manifest_path,
     read_project_manifest,
     resolve_project_identity,
+    unbind_project_identity,
     update_project_relations,
 )
 
@@ -205,6 +206,66 @@ def test_git_manifest_takes_priority_over_stale_local_workspace_binding(tmp_path
     resolved = resolve_project_identity(kb_root, workspace, aha_root=home)
     assert resolved["source"] == "manifest"
     assert resolved["project_key"] == "git-project"
+
+
+def test_unbind_non_git_workspace_removes_only_local_mapping(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    (kb_root / "projects" / "stable-project").mkdir(parents=True)
+    workspace = tmp_path / "plain-workspace"
+    workspace.mkdir()
+    bind_project_identity(
+        kb_root,
+        workspace,
+        "stable-project",
+        aha_root=home,
+    )
+
+    result = unbind_project_identity(kb_root, workspace, aha_root=home)
+
+    assert result["source"] == "workspace_fallback"
+    assert result["unbound_project_key"] == "stable-project"
+    assert result["binding_scope"] == "local"
+    assert result["synced_changed"] is False
+    assert read_json(local_project_bindings_path(home))["bindings"] == []
+    assert read_project_manifest(kb_root, "stable-project") is not None
+
+
+def test_unbind_git_workspace_preserves_other_identities_and_project_metadata(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    for key in ("stable-project", "related-project"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+    workspace = _make_git_workspace(
+        tmp_path / "workspace", "git@github.com:user/stable-project.git"
+    )
+    mirror = _make_git_workspace(
+        tmp_path / "mirror", "git@gitlab.com:user/stable-project.git"
+    )
+    bind_project_identity(kb_root, workspace, "stable-project")
+    bind_project_identity(kb_root, mirror, "stable-project")
+    update_project_relations(
+        kb_root,
+        "stable-project",
+        [{"project_key": "related-project", "relation": "reference", "note": "Docs"}],
+    )
+
+    result = unbind_project_identity(kb_root, workspace, aha_root=home)
+    manifest = read_project_manifest(kb_root, "stable-project")
+
+    assert result["source"] == "derived_git"
+    assert result["binding_scope"] == "git"
+    assert result["synced_changed"] is True
+    assert manifest is not None
+    assert manifest["git_identities"] == ["gitlab.com/user/stable-project"]
+    assert manifest["related_projects"] == [
+        {"project_key": "related-project", "relation": "reference", "note": "Docs"}
+    ]
+    assert resolve_project_identity(kb_root, mirror)["source"] == "manifest"
 
 
 def test_synced_project_manifest_overrides_changed_remote(tmp_path: Path):

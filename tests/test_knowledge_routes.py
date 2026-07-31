@@ -304,6 +304,100 @@ def test_project_relations_api_updates_bound_project_manifest(tmp_path: Path):
     assert loaded["relation_types"] == ["upstream", "sdk", "fork", "reference", "other"]
 
 
+def test_project_identity_api_unbinds_local_workspace(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="stable-project",
+        title="Stable project navigation",
+        body="## Project",
+        slug="index",
+        meta={"type": "navigation", "navigation_role": "index"},
+    )
+    workspace = tmp_path / "plain-workspace"
+    workspace.mkdir()
+    json_response_body(_post(
+        home,
+        "/api/kb/project-identity/bind",
+        {"workspace_path": str(workspace), "target_project_key": "stable-project"},
+    ))
+
+    response = json_response_body(_delete(
+        home,
+        "/api/kb/project-identity/bind",
+        {"workspace_path": str(workspace)},
+    ))
+
+    assert response["ok"] is True
+    assert response["identity"]["source"] == "workspace_fallback"
+    assert response["identity"]["unbound_project_key"] == "stable-project"
+    assert response["identity"]["binding_scope"] == "local"
+    assert response["git"] is None
+    assert read_json(local_project_bindings_path(home))["bindings"] == []
+
+
+def test_project_relations_api_can_edit_project_card_without_workspace_binding(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    for key in ("project-a", "project-b"):
+        write_entry(
+            home,
+            config=cfg,
+            scope="project",
+            kind="navigation",
+            project_key_value=key,
+            title=f"{key} navigation",
+            body="## Project",
+            slug="index",
+            meta={"type": "navigation", "navigation_role": "index"},
+        )
+
+    before = _get(
+        home,
+        "/api/kb/project-relations",
+        {"project_key": ["project-a"]},
+    )
+    invalid = _put(
+        home,
+        "/api/kb/project-relations",
+        {
+            "project_key": "project-a",
+            "related_projects": [
+                {"project_key": "missing-project", "relation": "reference"}
+            ],
+        },
+    )
+    assert b"404 Not Found" in invalid
+    assert not project_manifest_path(
+        knowledge_root(home, cfg), "project-a"
+    ).is_file()
+    updated = json_response_body(_put(
+        home,
+        "/api/kb/project-relations",
+        {
+            "project_key": "project-a",
+            "related_projects": [
+                {"project_key": "project-b", "relation": "upstream", "note": "Base"}
+            ],
+        },
+    ))
+    after = _get(
+        home,
+        "/api/kb/project-relations",
+        {"project_key": ["project-a"]},
+    )
+
+    assert before["manifest"] is None
+    assert updated["identity"] is None
+    assert updated["project_key"] == "project-a"
+    assert updated["manifest"]["related_projects"][0]["project_key"] == "project-b"
+    assert after["manifest"]["related_projects"] == updated["manifest"]["related_projects"]
+
+
 def test_entries_mark_dirty_knowledge_files(tmp_path: Path, monkeypatch):
     home = _setup(tmp_path)
     cfg = load_config(home)
