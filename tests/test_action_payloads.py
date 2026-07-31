@@ -87,6 +87,25 @@ class ActionPayloadTests(unittest.TestCase):
             invalid_action_schema_reason({"actions": [{"type": "unknown"}]}),
             "unknown action type: unknown",
         )
+        self.assertEqual(
+            invalid_action_schema_reason(
+                {"actions": [{"type": "spawn_sub", "assignment": ""}]}
+            ),
+            "spawn_sub assignment must be a non-empty string",
+        )
+        self.assertIsNone(
+            invalid_action_schema_reason(
+                {
+                    "actions": [
+                        {
+                            "type": "spawn_sub",
+                            "title": "Inspect API",
+                            "assignment": "Inspect api.py and report validation gaps.",
+                        }
+                    ]
+                }
+            )
+        )
 
     def test_action_response_text_keeps_orchestrator_re_export_compatible(self) -> None:
         reply = json.dumps({"actions": [], "response": "  done  "})

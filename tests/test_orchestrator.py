@@ -1339,7 +1339,24 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 append_message(root, run_id, "main", "delegate this", sender="browser", task_id="task-001", role="main")
-                reply = '{"complexity":"complex","actions":[{"type":"spawn_sub","title":"Inspect one slice","backend":"codex","reason":"parallel research"}],"response":"delegating"}'
+                reply = json.dumps(
+                    {
+                        "complexity": "complex",
+                        "actions": [
+                            {
+                                "type": "spawn_sub",
+                                "title": "Inspect one slice",
+                                "assignment": (
+                                    "Inspect src/aha_cli/backends and report behavior gaps "
+                                    "plus the exact validation command."
+                                ),
+                                "backend": "codex",
+                                "reason": "parallel research",
+                            }
+                        ],
+                        "response": "delegating",
+                    }
+                )
 
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
@@ -1352,10 +1369,14 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(start_backend.call_args.args[:3], (root / ".aha", run_id, "sub-001"))
                 self.assertTrue(start_backend.call_args.kwargs["from_start"])
                 messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
-                self.assertEqual(messages[-1]["message"], "Inspect one slice")
+                expected_assignment = (
+                    "Inspect src/aha_cli/backends and report behavior gaps "
+                    "plus the exact validation command."
+                )
+                self.assertEqual(messages[-1]["message"], expected_assignment)
                 detail = task_snapshot(root, run_id, "task-001")
                 sub_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")
-                self.assertEqual(sub_agent["assignment"], "Inspect one slice")
+                self.assertEqual(sub_agent["assignment"], expected_assignment)
                 self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
 
     def test_spawn_sub_action_model_normalizes_selected_sub_agent_model(self) -> None:

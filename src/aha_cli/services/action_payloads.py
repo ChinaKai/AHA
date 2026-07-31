@@ -139,6 +139,10 @@ def invalid_action_schema_reason(payload: dict) -> str | None:
             return "each action must include type"
         if action_type not in AHA_ACTION_TYPES:
             return f"unknown action type: {action_type}"
+        if action_type == "spawn_sub" and "assignment" in action:
+            assignment = action.get("assignment")
+            if not isinstance(assignment, str) or not assignment.strip():
+                return "spawn_sub assignment must be a non-empty string"
     return None
 
 

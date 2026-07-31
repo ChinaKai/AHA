@@ -45,9 +45,21 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(extract_action_payload(json.dumps(payload)), payload)
 
         spawn = next(action for action in actions if action["type"] == "spawn_sub")
-        for field in ("agent_id", "scope_id", "title", "backend", "model", "sandbox", "approval", "main_followup", "reason"):
+        for field in (
+            "agent_id",
+            "scope_id",
+            "title",
+            "assignment",
+            "backend",
+            "model",
+            "sandbox",
+            "approval",
+            "main_followup",
+            "reason",
+        ):
             self.assertIn(field, spawn)
         self.assertIsNone(spawn["agent_id"])
+        self.assertNotEqual(spawn["title"], spawn["assignment"])
 
         route = next(action for action in actions if action["type"] == "route_to_agent")
         for field in ("agent_id", "message", "main_followup", "reason"):
@@ -67,8 +79,14 @@ class ProtocolContractTests(unittest.TestCase):
             self.assertIn('"type": "spawn_sub"', text, path)
             self.assertIn("agent_id", text, path)
             self.assertIn("scope_id", text, path)
+            self.assertIn("assignment", text, path)
             self.assertIn("main_followup", text, path)
             self.assertIn("For a brand-new sub-agent", text, path)
+        coordination = read_repo_file(
+            "src/aha_cli/prompts/backend_coordination_policy_full.md"
+        )
+        self.assertIn('"assignment":"complete handoff assignment"', coordination)
+        self.assertIn("AHA uses `title` when `assignment` is absent", coordination)
 
 
 if __name__ == "__main__":

@@ -25,5 +25,10 @@ Candidate JSON fields:
 - `navigation_reason`: why this update improves future project navigation
 - optional `confidence`: number from 0 to 1
 
+Navigation contract:
+- Never use a bare child slug. Module documents use `modules/<name>` and role `module`; flow documents use `flows/<name>` and role `flow`; the root uses `index` and role `index`.
+- Internal Markdown links use full navigation slugs: `modules/<name>.md`, `flows/<name>.md`, or `index.md`. Do not use `../index.md` or a bare `<name>.md`; the Knowledge Web UI resolves links by persisted `slug`.
+- A custom `id` is optional. `slug` is the Web/API lookup and internal-link key.
+
 User request:
 $instruction

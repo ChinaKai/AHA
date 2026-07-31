@@ -540,7 +540,12 @@ def dispatch_spawn_to_existing_sub_agent(
         "sandbox": action.get("sandbox") if action.get("sandbox") is not None else agent.get("sandbox") or task.get("preferred_sandbox"),
         "approval": action.get("approval") if action.get("approval") is not None else agent.get("approval") or task.get("preferred_approval"),
         "created_by": "main",
-        "created_reason": str(action.get("reason") or action.get("title") or "main requested sub-agent recovery"),
+        "created_reason": str(
+            action.get("reason")
+            or action.get("title")
+            or action.get("assignment")
+            or "main requested sub-agent recovery"
+        ),
         "recovery_attempts": 0,
         "last_recovery_at": "",
         "reused_at": utc_now(),
@@ -809,7 +814,12 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         if task.get("delegation_policy") == "disabled":
             append_spawn_sub_skipped(root, run_id, task_id, reason="delegation disabled", max_sub_agents=max_sub_agents)
             continue
-        assignment = str(action.get("title") or action.get("prompt") or "Assist task-main with this task.")
+        assignment = str(
+            action.get("assignment")
+            or action.get("title")
+            or action.get("prompt")
+            or "Assist task-main with this task."
+        )
         ensure_followup_round_started()
         set_task_status(root, run_id, task_id, "running")
         requested_agent_id = str(action.get("agent_id") or action.get("target") or "").strip()
@@ -919,7 +929,12 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
             sandbox=action.get("sandbox") if action.get("sandbox") is not None else task.get("preferred_sandbox"),
             approval=action.get("approval") if action.get("approval") is not None else task.get("preferred_approval"),
             created_by="main",
-            created_reason=str(action.get("reason") or action.get("title") or "main requested sub-agent"),
+            created_reason=str(
+                action.get("reason")
+                or action.get("title")
+                or action.get("assignment")
+                or "main requested sub-agent"
+            ),
         )
         used_sub_agent_ids.add(str(agent["id"]))
         generation = 1

@@ -474,7 +474,8 @@ The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard ex
       "type": "spawn_sub",
       "agent_id": null,
       "scope_id": "optional stable scope id when continuing the same scope",
-      "title": "Inspect package rules. Read docs/package-rules.md and src/package_rules.py first. Focus only on validation behavior and report risks plus test suggestions.",
+      "title": "Inspect package-rule validation",
+      "assignment": "Read docs/package-rules.md and src/package_rules.py first. Focus only on validation behavior. Do not edit main-owned files. Report risks, exact test suggestions, and the validation command.",
       "backend": "codex",
       "model": null,
       "sandbox": null,
@@ -503,7 +504,7 @@ The legacy `delegation_policy` and `max_sub_agents` fields remain as the hard ex
 
 `spawn_sub` creates a new task-scoped sub-agent or reassigns a terminal sub-agent when `agent_id` names a specific reusable `sub-*`. For a brand-new sub-agent, omit `agent_id` or set it to `null`; do not invent `sub-001` / `sub-002` names. Use a concrete `agent_id` only when that sub-agent already appears in the task's agents list. Use `scope_id` only when intentionally continuing the same scope; omit it or change it for a fresh scope. `sandbox` and `approval` may be `null` to inherit the task defaults. `route_to_agent` sends a concrete follow-up message to an existing sub-agent and is used when ownership already belongs to that agent.
 
-Sub-agent handoffs should be complete enough for independent work: include relevant files or commands already inspected, key facts, ownership boundaries, expected output, and validation target in `title`/`prompt` or `message`. When task-main should keep working after delegation, include `main_followup`; AHA will queue that message back to `main` after the sub-agent is started or routed. If `main_followup` is omitted, task-main waits for sub-agent results before the round summary.
+For `spawn_sub`, keep `title` as a short UI label and put the complete independent handoff in `assignment`: relevant files or commands already inspected, key facts, ownership boundaries, expected output, and validation target. Older payloads remain compatible: when `assignment` is absent, AHA falls back to `title`, then legacy `prompt`. `route_to_agent` continues to carry its follow-up handoff in `message`. When task-main should keep working after delegation, include `main_followup`; AHA will queue that message back to `main` after the sub-agent is started or routed. If `main_followup` is omitted, task-main waits for sub-agent results before the round summary.
 
 `spawn_sub.backend` may explicitly choose the child agent backend:
 
@@ -512,7 +513,8 @@ Sub-agent handoffs should be complete enough for independent work: include relev
   "type": "spawn_sub",
   "agent_id": null,
   "scope_id": "claude-behavior-check",
-  "title": "Check Claude-specific behavior in src/aha_cli/backends/claude.py and tests/test_backend_runners.py. Report behavior gaps and the exact tests main should run.",
+  "title": "Check Claude backend behavior",
+  "assignment": "Inspect src/aha_cli/backends/claude.py and tests/test_backend_runners.py without editing main-owned files. Report behavior gaps and the exact tests task-main should run.",
   "backend": "claude",
   "model": null,
   "sandbox": "read-only",
