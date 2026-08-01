@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import time
 
+from aha_cli import platform
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
 from aha_cli.store.io import read_json
 from aha_cli.store.paths import aha_home_path
@@ -32,7 +33,7 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 
 
 def _allowed_tmp_roots() -> list[Path]:
-    candidates = {Path(tempfile.gettempdir()), Path("/tmp"), Path("/var/tmp")}
+    candidates = set(platform.candidate_temp_roots())
     return sorted((_resolved(path) for path in candidates), key=str)
 
 

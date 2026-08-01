@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -11,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 
 from aha_cli.services.browser_runtime import (
     BrowserBridgeError,
@@ -19,7 +22,7 @@ from aha_cli.services.browser_runtime import (
     browser_native_display_available,
     browser_native_display_environment,
 )
-from aha_cli.services.hardware_bridge import set_parent_death_signal
+from aha_cli import process_control
 
 _CONNECT_TIMEOUT_SECONDS = 12.0
 _CDP_DETACH_TIMEOUT_SECONDS = 2.0
@@ -108,13 +111,26 @@ def _known_user_browser_candidates(
 def resolve_user_browser_executable(
     playwright_chromium_path: object = "",
     *,
+    channel: str | None = None,
     platform_name: str | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> tuple[Path, str]:
-    for candidate, product in _known_user_browser_candidates(
+    candidates = _known_user_browser_candidates(
         platform_name=platform_name,
         environ=environ,
-    ):
+    )
+    wanted = str(channel or "auto").strip().lower()
+    wanted_product = {"chrome": "Google Chrome", "msedge": "Microsoft Edge"}.get(wanted)
+    # Honor an explicit browser choice first: "daily" mode must launch the browser
+    # the user selected (Edge daily -> real Edge), not always the Chrome-first default.
+    if wanted_product:
+        for candidate, product in candidates:
+            if product != wanted_product:
+                continue
+            path = Path(candidate).expanduser()
+            if path.is_file() and os.access(path, os.X_OK):
+                return path.resolve(), product
+    for candidate, product in candidates:
         path = Path(candidate).expanduser()
         if path.is_file() and os.access(path, os.X_OK):
             return path.resolve(), product
@@ -125,6 +141,126 @@ def resolve_user_browser_executable(
         "user_browser_missing",
         "No local Chrome/Chromium executable is available. Install Google Chrome or Playwright Chromium.",
     )
+
+
+def detect_installed_browser_channel(
+    *,
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Return a Playwright channel for an installed Chrome/Edge, else ``None``.
+
+    ``None`` means "use Playwright's bundled Chromium". Prefers Chrome, then Edge,
+    so on a typical Windows machine (Edge always present, Chrome common) it picks
+    Chrome when available and otherwise Edge — no ``playwright install chromium``
+    needed.
+    """
+    for _candidate, product in _known_user_browser_candidates(
+        platform_name=platform_name,
+        environ=environ,
+    ):
+        if product == "Google Chrome":
+            return "chrome"
+        if product == "Microsoft Edge":
+            return "msedge"
+    return None
+
+
+def resolve_browser_channel(browser_config: dict | None) -> str | None:
+    """Resolve the Playwright channel: explicit config override, else auto-detect.
+
+    ``channel`` values: ``chrome`` / ``msedge`` (pin to that browser);
+    ``chromium`` / ``bundled`` (force Playwright's bundled Chromium);
+    ``auto`` or unset (detect an installed Chrome/Edge, fall back to bundled).
+    """
+    explicit = str((browser_config or {}).get("channel") or "auto").strip().lower()
+    if explicit in {"chrome", "msedge"}:
+        return explicit
+    if explicit in {"chromium", "bundled"}:
+        return None
+    return detect_installed_browser_channel()
+
+
+_AVAILABLE_CHANNELS_CACHE: dict = {"value": None, "fetched_at": 0.0}
+_AVAILABLE_CHANNELS_TTL_SECONDS = 60.0
+
+
+def _chromium_executable_available() -> bool:
+    spec = importlib.util.find_spec("playwright")
+    locations = list(spec.submodule_search_locations or []) if spec is not None else []
+    if not locations:
+        return False
+    try:
+        package_root = Path(locations[0]).resolve()
+        browser_manifest = json.loads(
+            (package_root / "driver" / "package" / "browsers.json").read_text(encoding="utf-8")
+        )
+        chromium = next(
+            item
+            for item in browser_manifest.get("browsers", [])
+            if item.get("name") == "chromium"
+        )
+        revision = str(chromium.get("revision") or "").strip()
+        if not revision:
+            return False
+        configured_root = str(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+        if configured_root == "0":
+            registry_root = package_root / "driver" / "package" / ".local-browsers"
+        elif configured_root:
+            registry_root = Path(configured_root).expanduser()
+            if not registry_root.is_absolute():
+                registry_root = Path(os.environ.get("INIT_CWD") or Path.cwd()) / registry_root
+        elif sys.platform == "win32":
+            registry_root = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "ms-playwright"
+        elif sys.platform == "darwin":
+            registry_root = Path.home() / "Library" / "Caches" / "ms-playwright"
+        else:
+            registry_root = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "ms-playwright"
+        browser_dirs = [registry_root / f"chromium-{revision}"]
+        browser_dirs.extend(registry_root.glob(f"chromium_*-{revision}"))
+        if sys.platform == "win32":
+            suffixes = (("chrome-win64", "chrome.exe"), ("chrome-win", "chrome.exe"))
+        elif sys.platform == "darwin":
+            suffixes = (
+                ("chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+                ("chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+            )
+        else:
+            suffixes = (("chrome-linux64", "chrome"), ("chrome-linux", "chrome"))
+        return any((browser_dir.joinpath(*suffix)).is_file() for browser_dir in browser_dirs for suffix in suffixes)
+    except (OSError, ValueError, StopIteration, TypeError):
+        return False
+
+
+def available_browser_channels() -> dict:
+    """Detect which shared-browser channels are usable on this host.
+
+    Returns ``{chrome, msedge, chromium}`` booleans so the browser picker can be
+    populated from what is actually installed instead of a fixed list.
+    """
+    now = time.monotonic()
+    cached = _AVAILABLE_CHANNELS_CACHE["value"]
+    if cached is not None and now - _AVAILABLE_CHANNELS_CACHE["fetched_at"] < _AVAILABLE_CHANNELS_TTL_SECONDS:
+        return cached
+    chrome = False
+    msedge = False
+    for candidate, product in _known_user_browser_candidates():
+        try:
+            if Path(candidate).expanduser().is_file():
+                if product == "Google Chrome":
+                    chrome = True
+                elif product == "Microsoft Edge":
+                    msedge = True
+        except Exception:
+            continue
+    value = {
+        "chrome": chrome,
+        "msedge": msedge,
+        "chromium": _chromium_executable_available(),
+    }
+    _AVAILABLE_CHANNELS_CACHE["value"] = value
+    _AVAILABLE_CHANNELS_CACHE["fetched_at"] = now
+    return value
 
 
 def _reserve_loopback_port() -> int:
@@ -197,7 +333,7 @@ class BrowserLaunchSession:
         width: int,
         height: int,
         mobile: bool | None = None,
-    ) -> None:
+    ) -> tuple[int, int] | None:
         if self.runtime != "user_chrome":
             await page.set_viewport_size({"width": width, "height": height})
         identity = id(page)
@@ -225,22 +361,36 @@ class BrowserLaunchSession:
             ),
         )
         if self.runtime == "user_chrome":
-            device_metrics = {
-                # A raw CDP mobile viewport falls back to a 980px layout on pages
-                # without a viewport meta tag. Mobile identity and touch are applied
-                # separately, while fixed CSS metrics keep the shared frame exact.
-                "mobile": False,
-                "width": width,
-                "height": height,
-                "deviceScaleFactor": browser_capture_scale(mobile),
-                "screenWidth": width,
-                "screenHeight": height,
-            }
-            await session.send("Emulation.setDeviceMetricsOverride", device_metrics)
+            if mobile:
+                # Mobile keeps emulated metrics (rare path; avoids the 980px layout
+                # fallback on pages without a viewport meta tag).
+                device_metrics = {
+                    "mobile": False,
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": browser_capture_scale(mobile),
+                    "screenWidth": width,
+                    "screenHeight": height,
+                }
+                await session.send("Emulation.setDeviceMetricsOverride", device_metrics)
+                measured = None
+            else:
+                # Desktop: Emulation.setDeviceMetricsOverride freezes page.screenshot()
+                # on a CDP-attached real browser (the mirror stays on the first frame).
+                # Skip it and use the window's real viewport; return the measured CSS
+                # size so the reported frame and mouse coordinates stay accurate.
+                try:
+                    measured = await page.evaluate("() => [window.innerWidth, window.innerHeight]")
+                    measured = (max(1, int(measured[0] or 1)), max(1, int(measured[1] or 1)))
+                except Exception:
+                    measured = None
+        else:
+            measured = None
         await session.send(
             "Emulation.setTouchEmulationEnabled",
             {"enabled": mobile, "maxTouchPoints": 5 if mobile else 1},
         )
+        return measured
 
     async def close(self) -> None:
         sessions = [session for _page, session in self.cdp_sessions.values()]
@@ -291,6 +441,7 @@ async def _launch_user_chrome(
         )
     executable, product = resolve_user_browser_executable(
         playwright.chromium.executable_path,
+        channel=browser_config.get("channel"),
     )
     port = _reserve_loopback_port()
     environment = dict(os.environ)
@@ -304,6 +455,11 @@ async def _launch_user_chrome(
         "--no-default-browser-check",
         "--disable-dev-shm-usage",
         "--disable-session-crashed-bubble",
+        # Keep the shared window painting even when occluded/non-foreground so
+        # CDP page.screenshot() stays live (otherwise Windows stops compositing
+        # the occluded window and the mirror freezes on the first frame).
+        "--disable-backgrounding-occluded-windows",
+        "--disable-features=CalculateNativeWinOcclusion",
         f"--window-size={viewport_width},{viewport_height + 150}",
         *_user_browser_proxy_args(proxy_options),
     ]
@@ -313,8 +469,9 @@ async def _launch_user_chrome(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=environment,
-        preexec_fn=set_parent_death_signal if not sys.platform.startswith("win") else None,
+        preexec_fn=process_control.parent_death_preexec(),
     )
+    process_control.assign_parent_death(process)
     browser = None
     deadline = asyncio.get_running_loop().time() + _CONNECT_TIMEOUT_SECONDS
     try:
@@ -385,19 +542,25 @@ async def launch_browser_session(
         viewport_width=viewport_width,
         viewport_height=viewport_height,
     )
+    channel = resolve_browser_channel(browser_config)
+    if channel:
+        options["channel"] = channel
     context = await playwright.chromium.launch_persistent_context(
         str(profile_path),
         **options,
     )
+    product = {"chrome": "Google Chrome", "msedge": "Microsoft Edge"}.get(channel, "Playwright Chromium")
     return BrowserLaunchSession(
         context,
         runtime="playwright",
-        product="Playwright Chromium",
+        product=product,
     )
 
 
 __all__ = [
     "BrowserLaunchSession",
+    "detect_installed_browser_channel",
     "launch_browser_session",
+    "resolve_browser_channel",
     "resolve_user_browser_executable",
 ]

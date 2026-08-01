@@ -6,7 +6,7 @@ the current module boundaries.
 ## Change Strategy
 
 - Prefer narrow, behavior-preserving moves before functional changes.
-- Keep each source file below 1000 lines. Split mixed responsibilities before
+- Keep each source file below 2000 lines. Split mixed responsibilities before
   adding more logic.
 - Make one ownership move per commit when possible, then run the focused
   verification commands.

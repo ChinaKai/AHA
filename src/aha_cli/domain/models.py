@@ -177,6 +177,8 @@ TASK_BROWSER_CONTROL_MODES = ("off", "managed")
 TASK_BROWSER_ACCESS_MODES = ("read_only", "read_write")
 TASK_BROWSER_RUNTIME_MODES = ("playwright", "user_chrome")
 TASK_BROWSER_PROFILE_MODES = ("ephemeral", "task", "named")
+TASK_BROWSER_CHANNEL_MODES = ("auto", "chrome", "msedge", "chromium")
+TASK_BROWSER_MODE_VALUES = ("privacy", "daily")
 TASK_BROWSER_DISPLAY_MODES = ("native", "embedded")
 TASK_BROWSER_DEVICE_MODES = ("desktop", "mobile")
 TASK_BROWSER_TRANSFER_MODES = ("deny", "allow")
@@ -382,6 +384,8 @@ def default_task_browser_control() -> dict:
         "runtime": "playwright",
         "profile": "ephemeral",
         "profile_name": "",
+        "channel": "auto",
+        "browser_mode": "privacy",
         "display": "native",
         "device_mode": "desktop",
         "allowed_hosts": [],
@@ -429,6 +433,8 @@ def normalize_task_browser_control(value: object | None = None) -> dict:
     profile = str(raw.get("profile") or "ephemeral").strip().lower()
     config["profile"] = profile if profile in TASK_BROWSER_PROFILE_MODES else "ephemeral"
     config["profile_name"] = normalize_browser_profile_name(raw.get("profile_name"))
+    channel = str(raw.get("channel") or "auto").strip().lower()
+    config["channel"] = channel if channel in TASK_BROWSER_CHANNEL_MODES else "auto"
     if config["profile"] != "named":
         config["profile_name"] = ""
     elif not config["profile_name"]:
@@ -461,6 +467,24 @@ def normalize_task_browser_control(value: object | None = None) -> dict:
     config["proxy_bypass"] = str(raw.get("proxy_bypass") or "").strip()[:4096]
     config["proxy_username"] = str(raw.get("proxy_username") or "").strip()[:512]
     config["proxy_password"] = str(raw.get("proxy_password") or "")[:4096]
+    # Simplified browser model: a single privacy/daily choice drives the launch
+    # fields, and enabling a browser always grants full read/write + transfers.
+    # Legacy runtime/profile/display/permission values are derived, not exposed.
+    browser_mode = str(raw.get("browser_mode") or "privacy").strip().lower()
+    config["browser_mode"] = browser_mode if browser_mode in TASK_BROWSER_MODE_VALUES else "privacy"
+    if config["browser_mode"] == "daily":
+        config["runtime"] = "user_chrome"
+        # Persistent (not ephemeral) so logins/sync survive browser restarts;
+        # it is a dedicated per-task profile, not the host desktop profile.
+        config["profile"] = "task"
+    else:
+        config["runtime"] = "playwright"
+        config["profile"] = "task"
+    config["profile_name"] = ""
+    config["display"] = "native"  # real window + embedded panel both active
+    config["agent_access"] = "read_write"
+    config["downloads"] = "allow"
+    config["uploads"] = "allow"
     return config
 
 

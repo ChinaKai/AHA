@@ -1870,7 +1870,7 @@ controller.unmount();
         self.assertIn('id="task-browser-mode" data-browser-mode', html)
         self.assertIn('id="task-browser-form"', html)
         self.assertIn('data-mobile-action="browser"', html)
-        self.assertIn('/static/browser_session.js?v=browser-bookmarks-safe-v45', html)
+        self.assertIn('/static/browser_session.js?v=browser-bookmarks-safe-v46', html)
         self.assertIn('"/ws/browser-session"', browser)
         self.assertIn("let frameWidth = 1280", browser)
         self.assertIn("let frameHeight = 720", browser)
@@ -1892,7 +1892,9 @@ controller.unmount();
         self.assertIn('data-browser-lifecycle="start" title="Start" aria-label="Start"', conversation)
         self.assertNotIn('title="Restart" aria-label="Restart"', conversation)
         self.assertIn('data-browser-lifecycle="close" title="Close" aria-label="Close"', conversation)
-        self.assertIn('summary class="browser-toolbar-icon-button" aria-label="Browser settings"', conversation)
+        self.assertNotIn('aria-label="Browser settings"', conversation)
+        self.assertNotIn("data-browser-status-settings", conversation)
+        self.assertNotIn("data-browser-runtime-settings", conversation)
         self.assertIn(
             'class="browser-session-status idle" data-browser-status role="status" '
             'aria-label="Browser status: connecting" title="connecting"></span>',
@@ -1902,12 +1904,20 @@ controller.unmount();
         self.assertNotIn("browser-toolbar-meta", conversation)
         self.assertNotIn("data-browser-display-status", conversation)
         self.assertNotIn("data-browser-agent-access", conversation)
-        self.assertLess(conversation.index("data-browser-status"), conversation.index("browser-navigation-controls"))
+        self.assertLess(conversation.index("data-browser-status"), conversation.index('data-browser-lifecycle="start"'))
+        # Stripped browser panel: toolbar holds only status + start/stop (proxy
+        # moved to new-task / task-settings as a simple Direct/Inherit choice);
+        # the native window is viewed and operated via the embedded mirror below.
+        self.assertNotIn("browser-navigation-controls", conversation)
+        self.assertNotIn('data-browser-action="new_tab"', conversation)
+        self.assertNotIn("data-browser-bookmarks-popover", conversation)
+        self.assertNotIn("data-browser-address-form", conversation)
+        self.assertNotIn("data-browser-tabs", conversation)
         self.assertIn('data-browser-display="${nativeRequested ? "native" : "embedded"}"', conversation)
-        self.assertIn("data-browser-native-session", conversation)
-        self.assertIn("focus_window", conversation)
+        self.assertNotIn("data-browser-native-session", conversation)
+        self.assertNotIn("focus_window", conversation)
         self.assertIn("rootEl?.dataset?.browserStartUrl", browser)
-        self.assertIn('payload.state?.display?.active !== "native"', browser)
+        self.assertNotIn('payload.state?.display?.active !== "native"', browser)
         self.assertIn('querySelectorAll?.("[data-browser-embedded-session]")', browser)
         self.assertIn('data-browser-frame alt="Shared browser viewport" draggable="false" hidden', conversation)
         self.assertIn('data-browser-keyboard-input', conversation)
@@ -1918,27 +1928,26 @@ controller.unmount();
         self.assertNotIn('listen(stage, "beforeinput"', browser)
         self.assertIn('send("screenshot", { type: "jpeg", quality: 70, full_page: false });', browser)
         self.assertIn("renderFrame({", browser)
-        for advanced_field in (
-            "runtime",
-            "display",
-            "downloads",
-            "uploads",
-            "proxy_mode",
-            "proxy_server",
-            "proxy_bypass",
-            "proxy_username",
-            "proxy_password",
-        ):
-            self.assertNotIn(f'data-browser-field="{advanced_field}"', html)
-            self.assertIn(f'data-browser-runtime-field="{advanced_field}"', conversation)
+        # Browser proxy is now a simple Direct/Inherit select inside the task
+        # forms (proxy_mode via data-browser-field); custom proxy + its server/
+        # auth fields were removed from the panel popover entirely.
+        self.assertEqual(html.count('data-browser-field="proxy_mode"'), 2)
+        self.assertIn('value="direct" data-i18n="task.browser_proxy_direct"', html)
+        self.assertIn('value="inherit" data-i18n="task.browser_proxy_inherit"', html)
+        for removed_proxy_field in ("proxy_server", "proxy_bypass", "proxy_username", "proxy_password"):
+            self.assertNotIn(f'data-browser-field="{removed_proxy_field}"', html)
+            self.assertNotIn(f'data-browser-runtime-field="{removed_proxy_field}"', conversation)
+        self.assertNotIn('data-browser-runtime-field="proxy_mode"', conversation)
+        # runtime/display/downloads/uploads were removed from the browser panel:
+        # the simplified browser model derives/forces them from browser_mode.
+        for removed_field in ("runtime", "display", "downloads", "uploads"):
+            self.assertNotIn(f'data-browser-runtime-field="{removed_field}"', conversation)
         self.assertNotIn('data-browser-runtime-field="allowed_hosts"', conversation)
-        self.assertEqual(html.count('data-browser-field="profile_name"'), 2)
-        self.assertEqual(html.count("data-browser-profile-select"), 2)
-        self.assertEqual(html.count("data-browser-profile-new-name"), 2)
-        self.assertEqual(html.count("data-browser-profile-new hidden"), 2)
-        self.assertNotIn("<datalist", html)
-        self.assertEqual(html.count('value="named" data-i18n="task.browser_profile_named"'), 2)
-        self.assertIn('value="native"${selected(display, "native")}', conversation)
+        self.assertEqual(html.count('data-browser-field="browser_mode"'), 2)
+        self.assertEqual(html.count('value="privacy" data-i18n="task.browser_mode_privacy"'), 2)
+        self.assertEqual(html.count('value="daily" data-i18n="task.browser_mode_daily"'), 2)
+        self.assertEqual(html.count("<datalist"), 1)
+        self.assertIn('<datalist id="aha-serial-ports">', html)
         self.assertIn('"task.browser_display_native": "Chromium 原生窗口"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertEqual(html.count('value="https://www.bing.com/"'), 2)
         self.assertIn('const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";', create_controller)
@@ -1948,7 +1957,7 @@ controller.unmount();
         self.assertEqual((create_controller + config_controller).count('const NEW_BROWSER_PROFILE_VALUE = "__new__";'), 2)
         self.assertEqual((create_controller + config_controller).count("function selectedBrowserProfileName(form)"), 2)
         self.assertEqual((create_controller + config_controller).count("function renderBrowserProfileOptions(form, selectedName = \"\")"), 2)
-        self.assertEqual((create_controller + config_controller).count("profile_name: selectedBrowserProfileName(form)"), 2)
+        self.assertNotIn("profile_name: selectedBrowserProfileName(form)", create_controller + config_controller)
         self.assertEqual(
             create_controller.count(
                 "renderBrowserProfileOptions(elements.taskFormEl, selectedBrowserProfileName(elements.taskFormEl));"
@@ -1956,8 +1965,6 @@ controller.unmount();
             2,
         )
         self.assertNotIn('runtime: value("runtime")', create_controller + config_controller)
-        self.assertIn("data-browser-status-settings", conversation)
-        self.assertIn("data-browser-runtime-settings", conversation)
         self.assertIn("async function saveRuntimeSettings", browser)
         self.assertIn("restart_browser: shouldRestart", browser)
         self.assertIn("applyRuntimeSettings(policy)", browser)
@@ -2019,15 +2026,14 @@ controller.unmount();
         )
         self.assertIn("syncComposerAvailability(tab)", panel)
         self.assertIn('button:not(.mobile-actions-toggle)', panel)
-        self.assertIn("browser-search-bar", conversation)
-        self.assertIn('data-browser-address type="search"', conversation)
-        self.assertIn("data-browser-bookmark-toggle", conversation)
-        self.assertIn("data-browser-bookmarks-popover", conversation)
-        self.assertIn("data-browser-bookmarks", conversation)
-        self.assertLess(conversation.index("browser-management-toolbar"), conversation.index("browser-search-bar"))
-        self.assertLess(conversation.index("data-browser-bookmarks-popover"), conversation.index("data-browser-status-settings"))
-        self.assertLess(conversation.index("browser-search-bar"), conversation.index("browser-tabs"))
-        self.assertLess(conversation.index("browser-tabs"), conversation.index("browser-frame-area"))
+        # Stripped panel: address bar / bookmark toggle / bookmarks popover / tabs
+        # are gone; only toolbar (status + start/stop + settings) + mirror remain.
+        self.assertNotIn("browser-search-bar", conversation)
+        self.assertNotIn('data-browser-address type="search"', conversation)
+        self.assertNotIn("data-browser-bookmark-toggle", conversation)
+        self.assertNotIn("data-browser-bookmarks-popover", conversation)
+        self.assertNotIn("data-browser-bookmarks", conversation)
+        self.assertLess(conversation.index("browser-management-toolbar"), conversation.index("browser-frame-area"))
         self.assertIn("/browser-bookmarks", browser)
         self.assertIn('updateBookmark("toggle"', browser)
         self.assertNotIn("data-browser-bookmark-remove", conversation + browser)
@@ -2433,6 +2439,69 @@ controller.unmount();
 if (composer.value !== "saved chat draft" || composer.dataset.composerContext) {
   throw new Error("leaving Browser changed the Chat composer draft");
 }
+
+// Desktop physical-keyboard capture must not depend on editable-focus
+// detection. Edge's new-tab search field can live inside Shadow DOM and report
+// accepts_text_input=false even though typing should still reach the page.
+windowRef.matchMedia = () => ({ matches: false });
+currentRoot = root;
+keyboardInput.focused = false;
+global.document.activeElement = null;
+const desktopController = window.AHABrowserSession.createBrowserSessionController(
+  { panelEl: panel },
+  { windowRef, apiUrl: path => `http://127.0.0.1${path}?task_id=task-012` }
+);
+desktopController.mount("task-012");
+const desktopKeyboardSocket = FakeWebSocket.last;
+desktopKeyboardSocket.dispatch("message", {
+  data: JSON.stringify({
+    type: "ready",
+    state: {
+      instance_id: "bridge-desktop-keyboard",
+      status: "running",
+      display: { requested: "native", active: "native" },
+      viewport: { width: 1280, height: 720 },
+      tabs: []
+    }
+  })
+});
+desktopKeyboardSocket.dispatch("message", {
+  data: JSON.stringify({
+    type: "event",
+    event: "frame",
+    instance_id: "bridge-desktop-keyboard",
+    data: "desktop-keyboard-frame",
+    width: 1280,
+    height: 720,
+    image_width: 1280,
+    image_height: 720
+  })
+});
+image.onload();
+root.dispatch("click", { target: image, clientX: 180, clientY: 240, detail: 1 });
+const desktopMouse = desktopKeyboardSocket.sent.find(item => (
+  item.type === "command" && item.action === "mouse" && item.args.event === "click"
+));
+if (!desktopMouse) throw new Error("desktop browser click was not forwarded");
+desktopKeyboardSocket.dispatch("message", {
+  data: JSON.stringify({
+    type: "result",
+    id: desktopMouse.id,
+    ok: true,
+    result: { accepts_text_input: false }
+  })
+});
+if (!keyboardInput.focused || global.document.activeElement !== keyboardInput) {
+  throw new Error("desktop browser click did not capture the physical keyboard");
+}
+keyboardInput.value = "desktop-input";
+keyboardInput.dispatch("input", { isComposing: false, inputType: "insertText", data: null });
+if (!desktopKeyboardSocket.sent.some(item => (
+  item.type === "command" && item.action === "text" && item.args.text === "desktop-input"
+))) {
+  throw new Error("desktop physical keyboard text was not forwarded");
+}
+desktopController.unmount();
 '''
         result = subprocess.run(
             [node, "-e", assertion, str(browser)],

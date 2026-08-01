@@ -883,6 +883,39 @@ class CliCoreTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(calls, [(home, "", "127.0.0.1", 0, 1000, "secret-token")])
 
+    def test_ui_web_restart_replaces_process_with_original_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            argv = ["--home", str(home), "ui", "--host", "127.0.0.1", "--port", "8766"]
+            with (
+                mock.patch("aha_cli.cli.run_ui_server", side_effect=SystemExit(75)),
+                mock.patch(
+                    "aha_cli.cli.aha_cli_invocation",
+                    return_value=["/usr/bin/python3", "-m", "aha_cli"],
+                ),
+                mock.patch("aha_cli.cli.os.execv", return_value=None) as execv,
+            ):
+                code, _ = self.run_cli(*argv)
+
+            self.assertEqual(code, 1)
+            execv.assert_called_once_with(
+                "/usr/bin/python3",
+                ["/usr/bin/python3", "-m", "aha_cli", *argv],
+            )
+
+    def test_ui_non_restart_system_exit_is_not_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            with (
+                mock.patch("aha_cli.cli.run_ui_server", side_effect=SystemExit(2)),
+                mock.patch("aha_cli.cli.os.execv") as execv,
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    self.run_cli("--home", str(home), "ui", "--port", "0")
+
+            self.assertEqual(raised.exception.code, 2)
+            execv.assert_not_called()
+
     def test_explicit_tasks_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

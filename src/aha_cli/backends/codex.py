@@ -13,6 +13,7 @@ import sys
 from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort, resolve_model
 from aha_cli.backends.codex_litellm_bridge import start_litellm_responses_bridge
 from aha_cli.domain.models import utc_now
+from aha_cli.platform import spawn_command
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
@@ -672,11 +673,14 @@ def run_codex_exec(
         apply_proxy_environment(env, proxy_env)
 
         print(f"Running Codex backend: {' '.join(shlex.quote(part) for part in cmd[:-1])} -", flush=True)
+        cmd = spawn_command(cmd)
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

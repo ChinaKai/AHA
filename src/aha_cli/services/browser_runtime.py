@@ -21,8 +21,10 @@ import time
 from urllib.parse import unquote, urlparse
 import uuid
 
+from aha_cli import process_control
+from aha_cli.services import loopback_ipc
 from aha_cli.domain.models import normalize_browser_profile_name, normalize_task_browser_control, utc_now
-from aha_cli.services.hardware_bridge import bridge_launcher, pid_alive, set_parent_death_signal
+from aha_cli.services.hardware_bridge import bridge_launcher, pid_alive
 from aha_cli.services.proxy import backend_proxy_config
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import require_plan, task_snapshot
@@ -67,15 +69,7 @@ def _browser_bridge_socket_accepting(root: Path, run_id: str, task_id: str) -> b
     socket_path = browser_bridge_socket_path(root, run_id, task_id)
     if not socket_path.exists():
         return False
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(0.2)
-    try:
-        client.connect(str(socket_path))
-        return True
-    except OSError:
-        return False
-    finally:
-        client.close()
+    return loopback_ipc.is_accepting(socket_path)
 
 
 def browser_bridge_lock_path(root: Path, run_id: str, task_id: str) -> Path:
@@ -177,11 +171,11 @@ class BrowserProfileLease:
 
     def close(self) -> None:
         if self.lock_fd is not None:
-            import fcntl
+            from aha_cli import locking
 
             try:
                 os.ftruncate(self.lock_fd, 0)
-                fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+                locking.release(self.lock_fd)
             finally:
                 os.close(self.lock_fd)
                 self.lock_fd = None
@@ -202,14 +196,14 @@ def acquire_browser_profile(
         path.mkdir(parents=True, exist_ok=True)
         return BrowserProfileLease(path, mode=mode)
     if mode == "named":
-        import fcntl
+        from aha_cli import locking
 
         profile = ensure_named_browser_profile(root, browser_config.get("profile_name"))
         path = browser_named_profile_dir(root, profile["name"])
         lock_path = browser_named_profiles_dir(root) / f".{profile['id']}.lock"
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.acquire(lock_fd, blocking=False)
         except BlockingIOError as exc:
             os.close(lock_fd)
             raise BrowserBridgeError(
@@ -224,7 +218,7 @@ def acquire_browser_profile(
             os.ftruncate(lock_fd, 0)
             os.write(lock_fd, owner)
         except Exception:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            locking.release(lock_fd)
             os.close(lock_fd)
             raise
         return BrowserProfileLease(path, mode=mode, name=profile["name"], lock_fd=lock_fd)
@@ -512,7 +506,7 @@ def ensure_browser_bridge(
 ) -> dict:
     """Idempotently start the one browser bridge for a task."""
 
-    import fcntl
+    from aha_cli import locking
 
     task, config = task_browser_config(root, run_id, task_id)
     if config.get("mode") != "managed":
@@ -525,7 +519,7 @@ def ensure_browser_bridge(
     runtime_dir.mkdir(parents=True, exist_ok=True)
     lock_fd = os.open(browser_bridge_lock_path(root, run_id, task_id), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locking.acquire(lock_fd)
         state = read_browser_bridge_state(root, run_id, task_id)
         if state and pid_alive(state.get("pid")):
             state_status = str(state.get("status") or "")
@@ -555,10 +549,11 @@ def ensure_browser_bridge(
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
-                preexec_fn=set_parent_death_signal if parent_bound else None,
+                preexec_fn=process_control.parent_death_preexec() if parent_bound else None,
                 start_new_session=not parent_bound,
                 env=child_env,
             )
+            process_control.assign_parent_death(proc)
         state_path = browser_bridge_state_path(root, run_id, task_id)
         state_path.write_text(
             json.dumps(
@@ -580,7 +575,7 @@ def ensure_browser_bridge(
         return {**browser_bridge_status(root, run_id, task_id), "pid": proc.pid, "alive": True}
     finally:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            locking.release(lock_fd)
         finally:
             os.close(lock_fd)
 
@@ -612,7 +607,7 @@ def _stop_browser_bridge(root: Path, run_id: str, task_id: str, *, timeout: floa
             "Refusing to stop a process that does not match this task Browser Bridge.",
         )
     try:
-        os.kill(pid, signal.SIGTERM)
+        process_control.send_signal(pid, signal.SIGTERM)
     except ProcessLookupError:
         return browser_bridge_status(root, run_id, task_id)
     except PermissionError as exc:
@@ -625,7 +620,7 @@ def _stop_browser_bridge(root: Path, run_id: str, task_id: str, *, timeout: floa
         time.sleep(0.05)
     if pid_alive(pid):
         try:
-            os.kill(pid, signal.SIGKILL)
+            process_control.send_signal(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         except PermissionError as exc:
@@ -717,7 +712,7 @@ async def open_browser_bridge_ipc(
                 str(state.get("error") or "Browser bridge failed to start."),
             )
         try:
-            reader, writer = await asyncio.open_unix_connection(str(socket_path), limit=MAX_BROWSER_FRAME_BYTES)
+            reader, writer = await loopback_ipc.open_connection(socket_path, limit=MAX_BROWSER_FRAME_BYTES)
             ready = await asyncio.wait_for(read_browser_frame(reader), timeout=2.0)
             if not ready or ready.get("type") != "ready":
                 writer.close()
@@ -784,6 +779,8 @@ async def browser_doctor() -> dict:
         "playwright_installed": importlib.util.find_spec("playwright") is not None,
         "chromium_path": "",
         "chromium_installed": False,
+        "channel": "",
+        "channel_product": "",
         "user_browser_path": "",
         "user_browser_product": "",
         "user_browser_available": False,
@@ -791,8 +788,9 @@ async def browser_doctor() -> dict:
         "error": "",
     }
     if not result["playwright_installed"]:
-        result["error"] = "Python Playwright is not installed. Install the AHA browser extra, then run `python3 -m playwright install chromium`."
+        result["error"] = "Python Playwright is not installed. Install the AHA browser extra (pip install \"aha-cli[browser]\")."
         return result
+    executable_path = ""
     try:
         from playwright.async_api import async_playwright
 
@@ -801,20 +799,30 @@ async def browser_doctor() -> dict:
             executable_path = str(playwright.chromium.executable_path or "")
             result["chromium_path"] = executable_path
             result["chromium_installed"] = bool(executable_path and Path(executable_path).is_file())
-            from aha_cli.services.browser_external import resolve_user_browser_executable
-
-            user_path, user_product = resolve_user_browser_executable(executable_path)
-            result["user_browser_path"] = str(user_path)
-            result["user_browser_product"] = user_product
-            result["user_browser_available"] = True
         finally:
             await playwright.stop()
     except Exception as exc:
         result["error"] = str(exc)
         return result
-    result["ok"] = bool(result["playwright_installed"] and result["chromium_installed"])
+    from aha_cli.services.browser_external import detect_installed_browser_channel, resolve_user_browser_executable
+
+    channel = detect_installed_browser_channel()
+    result["channel"] = channel or ""
+    result["channel_product"] = {"chrome": "Google Chrome", "msedge": "Microsoft Edge"}.get(channel, "")
+    try:
+        user_path, user_product = resolve_user_browser_executable(executable_path)
+        result["user_browser_path"] = str(user_path)
+        result["user_browser_product"] = user_product
+        result["user_browser_available"] = True
+    except Exception:
+        pass
+    has_browser = result["chromium_installed"] or bool(result["channel"])
+    result["ok"] = bool(result["playwright_installed"] and has_browser)
     if not result["ok"]:
-        result["error"] = "Playwright Chromium is not installed. Run `python3 -m playwright install chromium`."
+        result["error"] = (
+            "No browser available. Install Google Chrome or Microsoft Edge, "
+            "or run `python -m playwright install chromium`."
+        )
     return result
 
 

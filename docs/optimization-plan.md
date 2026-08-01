@@ -2,6 +2,14 @@
 
 This document is the running plan for reducing AHA maintenance cost while preserving the local-first, onebin-friendly workflow. Keep it updated before and after each optimization slice so future agents can resume without reconstructing context from chat history.
 
+> **📌 Pinned (2026-08):** The strategic plan is
+> [`docs/architecture-optimization-plan.md`](architecture-optimization-plan.md)
+> — high cohesion / low coupling, compatibility, and **full functionality on
+> Windows** as the end goal. Beneath it, the row-level current-code plan is
+> [`docs/optimization-current.md`](optimization-current.md). This historical
+> document (Phases 0–13) and `docs/web-ui-optimization.md` remain the format
+> and decision reference.
+
 ## Goals
 
 - Keep AHA fast to change without breaking existing runs, task archives, or local UI behavior.

@@ -10,7 +10,21 @@ from aha_cli.services.browser_bridge import (
     BrowserBridgeError,
     open_browser_bridge_ipc,
 )
+from aha_cli.services.browser_external import available_browser_channels
+from aha_cli.web.http_utils import http_response
 from aha_cli.websocket.server import ws_read_text, ws_send_text
+
+
+async def browser_options_response(method: str, path: str) -> bytes | None:
+    """``GET /api/browser/options`` — detected installed browsers for the picker."""
+    if method != "GET" or path != "/api/browser/options":
+        return None
+    # Playwright's sync API rejects calls made from a running asyncio loop.
+    # Detection uses that API to resolve bundled Chromium, so keep it off the
+    # HTTP server's event-loop thread.
+    channels = await asyncio.to_thread(available_browser_channels)
+    body = json.dumps(channels, ensure_ascii=False).encode("utf-8")
+    return http_response("200 OK", body, "application/json; charset=utf-8")
 
 _MAX_WEB_MESSAGE_CHARS = 1024 * 1024
 
@@ -66,21 +80,21 @@ async def handle_browser_session_ws_connection(
                 "state": ready.get("state") or {},
             },
         )
-        ready_state = ready.get("state") if isinstance(ready.get("state"), dict) else {}
-        display = ready_state.get("display") if isinstance(ready_state.get("display"), dict) else {}
-        if display.get("active") != "native":
-            subscribe_id = uuid.uuid4().hex
-            await _send_ipc(
-                ipc_writer,
-                {
-                    "type": "command",
-                    "id": subscribe_id,
-                    "action": "subscribe",
-                    "args": {},
-                    "source": "user",
-                    "agent_id": "browser",
-                },
-            )
+        # The embedded panel remains a live mirror even when a native/daily
+        # browser window is open. Without this subscription native mode only
+        # receives the one screenshot requested by the frontend on connect.
+        subscribe_id = uuid.uuid4().hex
+        await _send_ipc(
+            ipc_writer,
+            {
+                "type": "command",
+                "id": subscribe_id,
+                "action": "subscribe",
+                "args": {},
+                "source": "user",
+                "agent_id": "browser",
+            },
+        )
         browser_task = asyncio.create_task(ws_read_text(reader))
         ipc_task = asyncio.create_task(_read_ipc(ipc_reader))
         while True:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import fcntl
+from aha_cli import locking
 import json
 import os
 from pathlib import Path
@@ -34,7 +34,7 @@ def append_jsonl(path: Path, data: dict) -> int:
     fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
     try:
         with os.fdopen(fd, "ab", closefd=False) as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            locking.acquire(f.fileno())
             try:
                 payload = line.encode("utf-8")
                 written = 0
@@ -45,7 +45,7 @@ def append_jsonl(path: Path, data: dict) -> int:
                     written += count
                 return os.lseek(f.fileno(), 0, os.SEEK_CUR)
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                locking.release(f.fileno())
     finally:
         os.close(fd)
 

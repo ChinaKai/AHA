@@ -40,7 +40,9 @@ import sys
 import time
 from pathlib import Path
 
+from aha_cli import process_control
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
+from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
 from aha_cli.services.hardware_session import (
     ArmedRuleEngine,
@@ -196,24 +198,21 @@ def append_bridge_control(root: Path, device: str, command: dict) -> dict:
 
 
 def set_parent_death_signal() -> None:
-    # Run in the child between fork and exec: ask the kernel to SIGTERM us when the
-    # spawning runtime dies, so the port is never held by an orphaned bridge.
-    try:
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
-    except Exception:
-        pass
+    # Backward-compatible alias; the canonical cross-platform helper is
+    # ``aha_cli.process_control.parent_death_preexec``.
+    process_control._posix_parent_death_signal()
 
 
 def bridge_launcher() -> list[str]:
     """How to launch an ``aha`` subcommand using the *current* runtime's code.
 
-    Deliberately not a ``PATH`` lookup: the installed ``aha`` may be a frozen build
-    that predates the bridge. Using ``sys.executable -m aha_cli`` guarantees the
-    spawned bridge runs the same code as the runtime spawning it.
+    Onebin-aware: runs the running zipapp when present (a packaged dashboard has
+    no importable ``aha_cli`` module), otherwise ``python -m aha_cli`` for source
+    checkouts. Deliberately not a ``PATH`` lookup so the bridge runs the same
+    code as the runtime spawning it.
     """
 
-    return [sys.executable, "-m", "aha_cli"]
+    return aha_cli_invocation()
 
 
 def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: list[str] | None = None) -> dict:
@@ -224,13 +223,13 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
     detached daemon.
     """
 
-    import fcntl
+    from aha_cli import locking
 
     bridge_dir = device_bridge_dir(root, device)
     bridge_dir.mkdir(parents=True, exist_ok=True)
     lock_fd = os.open(device_lock_path(root, device), os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locking.acquire(lock_fd)
         state = read_bridge_state(root, device)
         if state and pid_alive(state.get("pid")):
             return bridge_status(root, device)
@@ -250,15 +249,22 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
         child_env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p) + (
             os.pathsep + child_env["PYTHONPATH"] if child_env.get("PYTHONPATH") else ""
         )
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            preexec_fn=set_parent_death_signal,
-            start_new_session=False,
-            env=child_env,
-        )
+        bridge_log = bridge_dir / "bridge.log"
+        bridge_log.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = bridge_log.open("ab")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                preexec_fn=process_control.parent_death_preexec(),
+                start_new_session=False,
+                env=child_env,
+            )
+        finally:
+            log_handle.close()
+        process_control.assign_parent_death(proc)
         # The child writes its own authoritative bridge.json on boot; record a
         # provisional pid so concurrent callers see it immediately.
         device_bridge_state_path(root, device).write_text(
@@ -271,7 +277,7 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
         return {"device": device, "status": "starting", "alive": True, "paused": False, "pid": proc.pid}
     finally:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            locking.release(lock_fd)
         finally:
             os.close(lock_fd)
 

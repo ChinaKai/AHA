@@ -355,7 +355,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("Shared browser context:", prompt)
         self.assertIn("agent access: read_write", prompt)
         self.assertIn("allowed hosts: example.com", prompt)
-        self.assertIn("display: embedded", prompt)
+        self.assertIn("display: native", prompt)
         self.assertIn("proxy mode: custom", prompt)
         self.assertIn("aha browser snapshot", prompt)
         self.assertIn("Never keep more than 5 browser tabs open at once", prompt)

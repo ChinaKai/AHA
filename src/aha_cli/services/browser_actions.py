@@ -115,7 +115,10 @@ async def browser_mouse_action(
 async def browser_page_accepts_text_input(page) -> bool:
     script = """
     () => {
-      const element = document.activeElement;
+      let element = document.activeElement;
+      while (element?.shadowRoot?.activeElement) {
+        element = element.shadowRoot.activeElement;
+      }
       if (!element) return false;
       if (element.isContentEditable) return true;
       const tag = String(element.tagName || "").toLowerCase();

@@ -18,8 +18,8 @@ from aha_cli.store.paths import config_path
 from aha_cli.websocket.server import handle_ws_connection, ws_handshake_from_headers
 from aha_cli.websocket.server import ws_accept_from_headers
 from aha_cli.web.game_routes import game_route_response
-from aha_cli.web.hardware_terminal import handle_hardware_terminal_ws_connection
-from aha_cli.web.browser_session import handle_browser_session_ws_connection
+from aha_cli.web.hardware_terminal import handle_hardware_terminal_ws_connection, hardware_serial_ports_response
+from aha_cli.web.browser_session import browser_options_response, handle_browser_session_ws_connection
 from aha_cli.web.auth import (
     append_response_headers,
     auth_cookie_header,
@@ -100,11 +100,14 @@ async def handle_ui_client(
         public_ui_shell = method in {"GET", "HEAD"} and (path == "/" or path.startswith("/static/"))
         public_auth_route = path in {"/api/login", "/api/logout"}
         public_health = method in {"GET", "HEAD"} and path == "/api/health"
+        # Browser detection is not sensitive and is needed before login to render
+        # the picker, so serve it publicly (like /api/health).
+        public_browser_options = method == "GET" and path == "/api/browser/options"
         if auth_token and public_ui_shell:
             authorized, set_auth_cookie = optional_authorized_request(auth_token, target, headers)
             if not authorized:
                 set_auth_cookie = False
-        elif auth_token and not (public_health or public_auth_route):
+        elif auth_token and not (public_health or public_auth_route or public_browser_options):
             authorized, set_auth_cookie = is_authorized_request(auth_token, target, headers)
             if not authorized:
                 writer.write(unauthorized_response(method))
@@ -189,6 +192,10 @@ async def handle_ui_client(
                 response = knowledge_route_response(root, method, path, query, body, headers)
             if response is None:
                 response = game_route_response(root, run_id, method, path)
+            if response is None:
+                response = hardware_serial_ports_response(method, path)
+            if response is None:
+                response = await browser_options_response(method, path)
             if response is None:
                 response = skill_route_response(root, method, path, query, body)
             if response is None:
@@ -309,5 +316,5 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
         for task in (weixin_keepalive, retention_policy_reporter):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        with contextlib.suppress(WeixinError):
+        with contextlib.suppress(WeixinError, RuntimeError):
             await asyncio.to_thread(notify_channel_stop, root)

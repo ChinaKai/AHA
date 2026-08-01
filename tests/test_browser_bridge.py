@@ -52,6 +52,7 @@ class BrowserPolicyTests(unittest.TestCase):
         self.assertTrue(asyncio.run(browser_page_accepts_text_input(page)))
         script = editable.evaluate.await_args.args[0]
         self.assertIn("document.activeElement", script)
+        self.assertIn("element?.shadowRoot?.activeElement", script)
         self.assertNotIn(".value", script)
 
         editable.evaluate = mock.AsyncMock(return_value=False)

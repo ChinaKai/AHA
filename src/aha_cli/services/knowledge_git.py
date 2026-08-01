@@ -59,6 +59,8 @@ def _run_git(repo: Path, args: list[str], *, author: dict | None = None) -> dict
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_GIT_TIMEOUT,
         )
     except FileNotFoundError:
@@ -412,9 +414,21 @@ def pull(root: Path, config: dict | None = None) -> dict:
     if not fetch["ok"]:
         return {"ok": False, "pulled": False, "error": f"fetch failed: {fetch['stderr']}"}
 
-    rebase = _run_git(repo, ["rebase", f"origin/{branch}"], author=git_cfg)
+    onto = f"origin/{branch}"
+    rebase = _run_git(repo, ["rebase", onto], author=git_cfg)
     if not rebase["ok"]:
         _run_git(repo, ["rebase", "--abort"])
+        # Unrelated histories (e.g. a prior sync committed the local skeleton
+        # before the remote existed): rebase has no common base to replay onto.
+        # When the working tree is clean, adopt the remote as the authoritative
+        # base; otherwise surface the conflict so uncommitted work is not lost.
+        base = _run_git(repo, ["merge-base", "HEAD", onto])
+        dirty = _run_git(repo, ["status", "--porcelain"])
+        if not base["ok"] and not dirty["stdout"]:
+            reset = _run_git(repo, ["reset", "--hard", onto])
+            if reset["ok"]:
+                return {"ok": True, "pulled": True, "adopted_remote": True}
+            return {"ok": False, "pulled": False, "error": f"failed to adopt remote: {reset['stderr']}"}
         return {
             "ok": False,
             "pulled": False,
@@ -422,6 +436,32 @@ def pull(root: Path, config: dict | None = None) -> dict:
             "error": "rebase conflict with remote; aborted to keep repo clean",
         }
     return {"ok": True, "pulled": True}
+
+
+def _adopt_remote_base(root: Path, config: dict | None = None) -> dict | None:
+    """On a freshly-created repo, fetch and reset onto the remote branch.
+
+    Adopting the remote as the base before the first local commit avoids a
+    divergent local history with no common ancestor, which would make the
+    subsequent ``rebase`` fail. Returns ``None`` when there is nothing to adopt
+    (no remote, unreachable, or the branch does not exist yet).
+    """
+    git_cfg = _git_cfg(config)
+    remote = (git_cfg.get("remote") or "").strip()
+    if not remote:
+        return None
+    branch = git_cfg.get("branch") or "main"
+    repo = knowledge_root(root, config)
+    ls = _run_git(repo, ["ls-remote", "--heads", "origin", branch])
+    if not ls["ok"] or not ls["stdout"]:
+        return None
+    fetch = _run_git(repo, ["fetch", "origin", branch])
+    if not fetch["ok"]:
+        return {"ok": False, "error": f"fetch failed: {fetch['stderr']}"}
+    reset = _run_git(repo, ["reset", "--hard", f"origin/{branch}"])
+    if not reset["ok"]:
+        return {"ok": False, "error": f"reset failed: {reset['stderr']}"}
+    return {"ok": True, "adopted": True}
 
 
 def push(root: Path, config: dict | None = None) -> dict:
@@ -505,6 +545,15 @@ def sync(
     steps["ensure"] = ensure_repo(root, config)
     if not steps["ensure"]["ok"]:
         return {"ok": False, "steps": steps}
+    # Fresh repo: adopt the remote base before committing any local work, so we
+    # never create a local commit whose history is unrelated to the remote
+    # (which would make the rebase below fail on first sync).
+    if steps["ensure"].get("created"):
+        adopted = _adopt_remote_base(root, config)
+        if adopted is not None:
+            steps["adopt_remote"] = adopted
+            if not adopted["ok"]:
+                return {"ok": False, "steps": steps}
     # Commit local changes BEFORE rebasing: a dirty work tree makes
     # `rebase` fail outright when the remote has new commits, so the local
     # work must land as a commit first, then rebase onto the remote, then push.

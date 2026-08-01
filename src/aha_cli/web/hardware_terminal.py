@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +14,8 @@ from aha_cli.services.hardware_bridge import (
     ensure_bridge,
     task_devices,
 )
+from aha_cli.services.serial_ports import list_serial_ports
+from aha_cli.web.http_utils import http_response
 from aha_cli.services.local_terminal import normalize_terminal_size
 from aha_cli.services.network_terminal import (
     ensure_network_terminal,
@@ -28,6 +31,14 @@ _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 _INITIAL_EVENT_LIMIT = 1000
 _MAX_INPUT_CHARS = 65536
 _IPC_CONNECT_TIMEOUT_SECONDS = 4.0
+
+
+def hardware_serial_ports_response(method: str, path: str) -> bytes | None:
+    """``GET /api/hardware/serial-ports`` — detected serial devices for the dropdown."""
+    if method != "GET" or path != "/api/hardware/serial-ports":
+        return None
+    body = json.dumps({"ports": list_serial_ports()}, ensure_ascii=False).encode("utf-8")
+    return http_response("200 OK", body, "application/json; charset=utf-8")
 
 
 def hardware_terminal_target(task: dict, requested: object = "") -> dict | None:
@@ -110,13 +121,48 @@ async def _open_target_ipc(root: Path, target: dict) -> tuple[asyncio.StreamRead
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _IPC_CONNECT_TIMEOUT_SECONDS
     last_error: OSError | None = None
+    use_unix = hasattr(socket, "AF_UNIX")
     while loop.time() < deadline:
         try:
-            return await asyncio.open_unix_connection(str(socket_path))
+            if use_unix:
+                return await asyncio.open_unix_connection(str(socket_path))
+            # Windows (no AF_UNIX): the bridge wrote its loopback TCP port to the
+            # socket_path file; connect to 127.0.0.1:<port>.
+            port = _read_ipc_port(socket_path)
+            if port:
+                return await asyncio.open_connection("127.0.0.1", int(port))
         except OSError as exc:
             last_error = exc
-            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.02)
     raise ConnectionError(f"hardware terminal bridge IPC unavailable: {last_error or socket_path}")
+
+
+def _read_ipc_port(socket_path: Path) -> int | None:
+    try:
+        text = socket_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        return int(text) if text else None
+    except ValueError:
+        return None
+
+
+def _arm_auto_login(root: Path, task: dict, target: dict) -> None:
+    # Best-effort: arm login/password rules from the task's credentials so opening
+    # the terminal logs in automatically. Never let it block the terminal.
+    try:
+        from aha_cli.domain.models import normalize_task_hardware_debug
+        from aha_cli.services.hardware_login import arm_auto_login
+
+        hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
+        credentials = hardware.get("credentials") if isinstance(hardware.get("credentials"), dict) else {}
+        if target.get("transport") == "network":
+            arm_auto_login(root, credentials, host=target.get("host"), port=target.get("port"))
+        else:
+            arm_auto_login(root, credentials, device=target.get("device"))
+    except Exception:
+        pass
 
 
 async def _send_ipc_message(writer: asyncio.StreamWriter, message_type: str, **data: object) -> None:
@@ -181,6 +227,7 @@ async def handle_hardware_terminal_ws_connection(
         ipc_reader: asyncio.StreamReader | None = None
         if not archived:
             _ensure_target(root, target)
+            _arm_auto_login(root, task, target)
             ipc_reader, ipc_writer = await _open_target_ipc(root, target)
             hello = await asyncio.wait_for(
                 _read_ipc_message(ipc_reader),

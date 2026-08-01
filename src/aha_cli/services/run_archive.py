@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aha_cli.domain.models import new_run_id, utc_now
+from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_event, run_dir
 
 ARCHIVE_MANIFEST = "aha-run-manifest.json"
@@ -100,7 +101,14 @@ def import_run_archive(
                 raise RunArchiveError(f"Run already exists: {imported_run_id}")
             shutil.rmtree(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        _copy_imported_run(source_root, destination, source_run_id, imported_run_id)
+        configured_roots = [Path(p) for p in (load_config(root).get("workspace_roots") or []) if str(p).strip()]
+        _copy_imported_run(
+            source_root,
+            destination,
+            source_run_id,
+            imported_run_id,
+            _make_workspace_resolver(configured_roots),
+        )
         append_event(
             root,
             imported_run_id,
@@ -164,23 +172,23 @@ def _export_text(path: Path, relative: Path) -> bytes:
     return b"".join(records)
 
 
-def _copy_imported_run(source: Path, destination: Path, source_run_id: str, target_run_id: str) -> None:
+def _copy_imported_run(source: Path, destination: Path, source_run_id: str, target_run_id: str, resolve_workspace) -> None:
     imported_at = utc_now()
     for path in sorted(item for item in source.rglob("*") if item.is_file()):
         relative = path.relative_to(source)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if _is_structured_text(relative):
-            payload = _import_text(path, relative, source_run_id, target_run_id, imported_at)
+            payload = _import_text(path, relative, source_run_id, target_run_id, imported_at, resolve_workspace)
             target.write_bytes(payload)
         else:
             shutil.copy2(path, target)
 
 
-def _import_text(path: Path, relative: Path, source_run_id: str, target_run_id: str, imported_at: str) -> bytes:
+def _import_text(path: Path, relative: Path, source_run_id: str, target_run_id: str, imported_at: str, resolve_workspace) -> bytes:
     if relative.suffix == ".json":
         data = json.loads(path.read_text(encoding="utf-8"))
-        data = _transform_import(data, source_run_id, target_run_id)
+        data = _transform_import(data, source_run_id, target_run_id, resolve_workspace)
         if relative == Path("plan.json"):
             data["id"] = target_run_id
         if _is_session_file(relative):
@@ -191,7 +199,7 @@ def _import_text(path: Path, relative: Path, source_run_id: str, target_run_id: 
         if not line.strip():
             continue
         try:
-            payload = _transform_import(json.loads(line), source_run_id, target_run_id)
+            payload = _transform_import(json.loads(line), source_run_id, target_run_id, resolve_workspace)
             records.append(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
         except json.JSONDecodeError:
             records.append(line.encode("utf-8") + b"\n")
@@ -221,7 +229,7 @@ def _transform_export(value: Any) -> Any:
     return value
 
 
-def _transform_import(value: Any, source_run_id: str, target_run_id: str) -> Any:
+def _transform_import(value: Any, source_run_id: str, target_run_id: str, resolve_workspace) -> Any:
     if isinstance(value, dict):
         result: dict[str, Any] = {}
         for key, item in value.items():
@@ -229,12 +237,47 @@ def _transform_import(value: Any, source_run_id: str, target_run_id: str) -> Any
                 result[key] = target_run_id
             elif key == "scope" and isinstance(item, str):
                 result[key] = item.replace(f"run:{source_run_id}", f"run:{target_run_id}")
+            elif key == "workspace_path" and isinstance(item, str):
+                result[key] = resolve_workspace(item)
             else:
-                result[key] = _transform_import(item, source_run_id, target_run_id)
+                result[key] = _transform_import(item, source_run_id, target_run_id, resolve_workspace)
         return result
     if isinstance(value, list):
-        return [_transform_import(item, source_run_id, target_run_id) for item in value]
+        return [_transform_import(item, source_run_id, target_run_id, resolve_workspace) for item in value]
     return value
+
+
+def _make_workspace_resolver(roots: list[Path]):
+    """Build a best-effort ``workspace_path`` relocator for imported runs.
+
+    When an imported task's absolute ``workspace_path`` does not exist on this
+    machine, try to relocate it to a subdirectory of a configured workspace root
+    that shares the same basename. Relocation happens only when exactly one such
+    match exists (avoids silently pointing at the wrong project); otherwise the
+    original value is preserved, so behavior is unchanged from before.
+    """
+    def resolve(value: Any) -> Any:
+        if not isinstance(value, str) or not value.strip():
+            return value
+        try:
+            current = Path(value)
+        except (TypeError, ValueError):
+            return value
+        if current.exists():
+            return value
+        name = current.name
+        if not name:
+            return value
+        matches: list[Path] = []
+        for base in roots:
+            candidate = Path(base) / name
+            if candidate.is_dir():
+                matches.append(candidate)
+        if len(matches) == 1:
+            return str(matches[0])
+        return value
+
+    return resolve
 
 
 def _mark_session_imported(session: dict, source_run_id: str, imported_at: str) -> dict:

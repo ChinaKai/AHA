@@ -9,8 +9,10 @@ from aha_cli.domain.models import (
     TASK_HARDWARE_DEBUG_PERMISSION_KEYS,
     TASK_HARDWARE_DEBUG_MODES,
     TASK_BROWSER_ACCESS_MODES,
+    TASK_BROWSER_CHANNEL_MODES,
     TASK_BROWSER_CONTROL_MODES,
     TASK_BROWSER_DEVICE_MODES,
+    TASK_BROWSER_MODE_VALUES,
     TASK_BROWSER_DISPLAY_MODES,
     TASK_BROWSER_PROFILE_MODES,
     TASK_BROWSER_PROXY_MODES,
@@ -228,6 +230,16 @@ def parse_task_browser_control_fields(payload: dict) -> dict[str, object]:
         if str(payload.get("profile_name") or "").strip() and not profile_name:
             raise ValueError("profile_name must be 1-80 printable characters")
         update["profile_name"] = profile_name
+    if "channel" in payload:
+        channel = str(payload.get("channel") or "auto").strip().lower()
+        if channel not in TASK_BROWSER_CHANNEL_MODES:
+            raise ValueError(f"channel must be one of: {', '.join(TASK_BROWSER_CHANNEL_MODES)}")
+        update["channel"] = channel
+    if "browser_mode" in payload:
+        browser_mode = str(payload.get("browser_mode") or "privacy").strip().lower()
+        if browser_mode not in TASK_BROWSER_MODE_VALUES:
+            raise ValueError(f"browser_mode must be one of: {', '.join(TASK_BROWSER_MODE_VALUES)}")
+        update["browser_mode"] = browser_mode
     if "display" in payload:
         display = str(payload.get("display") or "").strip().lower()
         if display not in TASK_BROWSER_DISPLAY_MODES:

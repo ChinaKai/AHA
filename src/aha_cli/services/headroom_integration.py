@@ -11,6 +11,7 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from aha_cli import process_control
 from aha_cli.backends.codex import (
     codex_config_env,
     codex_config_for_model,
@@ -121,19 +122,7 @@ def _resolve_command(command: object) -> str | None:
 
 
 def _process_alive(pid: object) -> bool:
-    try:
-        value = int(pid)
-    except (TypeError, ValueError):
-        return False
-    if value <= 0:
-        return False
-    try:
-        os.kill(value, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    return process_control.process_exists(pid)
 
 
 def _headroom_health(port: int) -> bool:
@@ -224,7 +213,7 @@ def _stop_state_process(root: Path, scope: dict | None = None) -> None:
     if not _process_alive(pid):
         return
     try:
-        os.kill(int(pid), signal.SIGTERM)
+        process_control.send_signal(int(pid), signal.SIGTERM)
     except (OSError, TypeError, ValueError):
         return
     deadline = time.monotonic() + 3.0

@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import zlib
 
+from aha_cli import process_control
 from aha_cli.backends.claude import claude_config_env
 from aha_cli.backends.codex import (
     codex_config_env,
@@ -25,6 +26,7 @@ from aha_cli.backends.codex import (
 )
 from aha_cli.domain.models import normalize_integrations_config, normalize_task_observe_proxy, utc_now
 from aha_cli.services.headroom_integration import codex_upstream_base_url
+from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.services.proxy import DEFAULT_NO_PROXY, apply_proxy_environment
 from aha_cli.store.filesystem import append_event_to_file
 from aha_cli.store.io import iter_jsonl_from, iter_jsonl_reverse, read_json, write_json
@@ -107,19 +109,7 @@ def _read_state(root: Path, scope: dict | None) -> dict:
 
 
 def _process_alive(pid: object) -> bool:
-    try:
-        value = int(pid)
-    except (TypeError, ValueError):
-        return False
-    if value <= 0:
-        return False
-    try:
-        os.kill(value, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    return process_control.process_exists(pid)
 
 
 def _health(port: int) -> bool:
@@ -169,7 +159,7 @@ def _stop_state_process(root: Path, scope: dict | None) -> None:
     if not _process_alive(pid):
         return
     try:
-        os.kill(int(pid), signal.SIGTERM)
+        process_control.send_signal(int(pid), signal.SIGTERM)
     except (OSError, TypeError, ValueError):
         return
     deadline = time.monotonic() + 3.0
@@ -562,13 +552,10 @@ def claude_proxy_env_for_observe(proxy_env: dict[str, str] | None, local_base_ur
 
 
 def _current_aha_command() -> list[str]:
-    executable = str(sys.argv[0] or "").strip()
-    if executable and Path(executable).exists():
-        return [executable]
-    resolved = shutil.which("aha")
-    if resolved:
-        return [resolved]
-    return [sys.executable, "-m", "aha_cli"]
+    # Onebin-aware: run the running zipapp with the current interpreter (a
+    # packaged dashboard has no importable aha_cli, and Windows cannot exec a
+    # zipapp directly); otherwise ``python -m aha_cli``.
+    return aha_cli_invocation()
 
 
 def _observe_proxy_command_args(

@@ -24,6 +24,28 @@
     let observeProxyEditingUntil = 0;
     let hardwareEditingUntil = 0;
     let taskSettingsEditorTaskId = "";
+    let serialPortsLoaded = false;
+
+    function loadSerialPortOptions() {
+      if (serialPortsLoaded) return;
+      serialPortsLoaded = true;
+      fetch("/api/hardware/serial-ports", { headers: { Accept: "application/json" } })
+        .then(resp => (resp.ok ? resp.json() : { ports: [] }))
+        .then(data => {
+          const datalist = document.getElementById("aha-serial-ports");
+          if (!datalist) return;
+          const ports = Array.isArray(data && data.ports) ? data.ports : [];
+          datalist.innerHTML = "";
+          for (const port of ports) {
+            const opt = document.createElement("option");
+            opt.value = port.device || "";
+            const desc = port.description && port.description !== port.device ? port.description : "";
+            if (desc) opt.label = desc;
+            datalist.appendChild(opt);
+          }
+        })
+        .catch(() => {});
+    }
 
     function taskById(taskId) {
       const id = String(taskId || "");
@@ -437,6 +459,7 @@
       const settings = form?.querySelector("[data-hardware-settings]");
       if (settings) settings.hidden = !enabled;
       form?.querySelectorAll("[data-hardware-serial-settings]").forEach(item => { item.hidden = !serial; });
+      if (serial) loadSerialPortOptions();
       form?.querySelectorAll("[data-hardware-network-settings]").forEach(item => { item.hidden = !network; });
       form?.querySelectorAll('[data-hardware-field^="serial."]').forEach(input => { input.disabled = disabled || !serial; });
       form?.querySelectorAll('[data-hardware-field^="network."]').forEach(input => { input.disabled = disabled || !network; });
@@ -503,7 +526,7 @@
       const form = els.taskBrowserFormEl;
       const disabled = Boolean(options.disabled);
       const mode = String(form?.querySelector("[data-browser-mode]")?.value || "off");
-      const enabled = mode === "managed";
+      const enabled = mode !== "off";
       const modeEl = form?.querySelector("[data-browser-mode]");
       if (modeEl) modeEl.disabled = disabled;
       const settings = form?.querySelector("[data-browser-settings]");
@@ -564,7 +587,7 @@
     function setTaskBrowserPolicy(policy = {}) {
       const form = els.taskBrowserFormEl;
       const mode = form?.querySelector("[data-browser-mode]");
-      if (mode) mode.value = policy.mode || "off";
+      if (mode) mode.value = policy.mode === "managed" && policy.channel ? policy.channel : "off";
       const set = (key, value) => {
         const input = form?.querySelector(`[data-browser-field="${key}"]`);
         if (input) input.value = value ?? input.defaultValue ?? "";
@@ -572,6 +595,9 @@
       set("start_url", policy.start_url || DEFAULT_BROWSER_START_URL);
       set("agent_access", policy.agent_access || "read_only");
       set("profile", policy.profile || "ephemeral");
+      set("channel", policy.channel || "auto");
+      set("browser_mode", policy.browser_mode || "privacy");
+      set("proxy_mode", policy.proxy_mode === "inherit" ? "inherit" : "direct");
       renderBrowserProfileOptions(form, policy.profile_name || "");
     }
 
@@ -585,7 +611,7 @@
         els.taskBrowserStateEl.textContent = disabled
           ? "Select a task to edit shared browser."
           : policy.mode === "managed"
-            ? `${policy.agent_access || "read_only"} · ${policy.runtime || "playwright"} · ${policy.profile === "named" ? `named:${policy.profile_name || "?"}` : policy.profile || "ephemeral"} · ${policy.display || "native"} · ${policy.proxy_mode || "direct"}`
+            ? `${policy.channel || "auto"} · ${policy.browser_mode || "privacy"}${policy.proxy_mode && policy.proxy_mode !== "direct" ? ` · ${policy.proxy_mode}` : ""}`
             : "off";
       }
     }
@@ -779,12 +805,14 @@
       if (!task) return;
       const form = els.taskBrowserFormEl;
       const value = key => String(form?.querySelector(`[data-browser-field="${key}"]`)?.value || "").trim();
+      const browserSelect = String(form?.querySelector("[data-browser-mode]")?.value || "off");
+      const managed = browserSelect !== "off";
       const browserControl = {
-        mode: String(form?.querySelector("[data-browser-mode]")?.value || "off"),
+        mode: managed ? "managed" : "off",
+        channel: managed ? browserSelect : "auto",
         start_url: value("start_url"),
-        agent_access: value("agent_access") || "read_only",
-        profile: value("profile") || "ephemeral",
-        profile_name: selectedBrowserProfileName(form)
+        browser_mode: value("browser_mode") || "privacy",
+        proxy_mode: value("proxy_mode") === "inherit" ? "inherit" : "direct"
       };
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/browser-control`), {
         method: "POST",

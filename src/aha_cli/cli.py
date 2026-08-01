@@ -44,7 +44,7 @@ from aha_cli.services.network_terminal import (
 )
 from aha_cli.services.messages import format_event
 from aha_cli.services.observe_proxy import run_observe_proxy_server
-from aha_cli.services.onebin import build_onebin
+from aha_cli.services.onebin import aha_cli_invocation, build_onebin
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_cleanup import cleanup_temp_runs, format_cleanup_summary
 from aha_cli.services.run_delete import RunDeleteError, delete_run
@@ -133,7 +133,7 @@ from aha_cli.store.knowledge import (
 )
 from aha_cli.store.sessions import backend_session_usage_archive_fields
 from aha_cli.services.knowledge_git import auto_commit_after_change as knowledge_auto_commit
-from aha_cli.web.server import run_ui_server
+from aha_cli.web.server import run_ui_server, WEB_RESTART_EXIT_CODE
 from aha_cli.web.task_command_actions import complete_selected_task
 from aha_cli.websocket.server import run_ws_server
 
@@ -1686,9 +1686,22 @@ def cmd_ui(args: argparse.Namespace) -> int:
         )
     try:
         asyncio.run(run_ui_server(root, run_id, args.host, args.port, args.poll_interval, auth_token=auth_token))
+        return 0
     except KeyboardInterrupt:
         return 130
-    return 0
+    except SystemExit as exc:
+        if exc.code != WEB_RESTART_EXIT_CODE:
+            raise
+        # Replace the whole process image so updated source modules or a newly
+        # installed onebin are loaded. os.execv preserves the PID and parent
+        # relationship, while closing non-inheritable server sockets.
+        command = aha_cli_invocation()
+        restart_argv = list(getattr(args, "_aha_restart_argv", []))
+        try:
+            os.execv(command[0], [*command, *restart_argv])
+        except OSError as restart_error:
+            print(f"Failed to restart AHA Web process: {restart_error}", file=sys.stderr)
+        return 1
 
 
 def cmd_package(args: argparse.Namespace) -> int:
@@ -1924,9 +1937,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     parser = build_parser()
-    normalized = normalize_run_subcommand(list(sys.argv[1:] if argv is None else argv))
+    original_argv = list(sys.argv[1:] if argv is None else argv)
+    normalized = normalize_run_subcommand(original_argv)
     args = parser.parse_args(with_default_command(normalized))
+    args._aha_restart_argv = original_argv
     return args.func(args)
 
 

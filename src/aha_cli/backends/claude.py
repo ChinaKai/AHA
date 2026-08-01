@@ -16,6 +16,7 @@ from aha_cli.backends.codex import (
     tail_text,
 )
 from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort
+from aha_cli.platform import spawn_command
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.native_subagents import (
@@ -381,12 +382,15 @@ def run_claude_exec(
         return 1, message, session
 
     print(f"Running Claude backend: {' '.join(shlex.quote(part) for part in cmd)}", flush=True)
+    cmd = spawn_command(cmd)
     try:
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

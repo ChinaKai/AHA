@@ -407,13 +407,14 @@
                 <div class="field-row" data-hardware-serial-settings hidden>
                   <label class="field-label">
                     <span data-i18n="task.hardware_serial_device">Serial device</span>
-                    <input id="selected-task-hardware-serial-device" data-hardware-field="serial.device" placeholder="/dev/ttyUSB0">
+                    <input id="selected-task-hardware-serial-device" data-hardware-field="serial.device" list="aha-serial-ports" placeholder="/dev/ttyUSB0 or COM3">
                   </label>
                   <label class="field-label">
                     <span data-i18n="task.hardware_baudrate">Baudrate</span>
                     <input id="selected-task-hardware-serial-baudrate" data-hardware-field="serial.baudrate" type="number" min="1" value="115200">
                   </label>
                 </div>
+                <datalist id="aha-serial-ports"></datalist>
                 <label class="field-label" data-hardware-network-settings hidden>
                   <span data-i18n="task.hardware_device_ip">Device IP</span>
                   <input id="selected-task-hardware-device-ip" data-hardware-field="network.device_ip" placeholder="192.168.1.20">
@@ -437,10 +438,12 @@
             <h3 data-i18n="task.browser_control">Shared browser</h3>
             <form id="task-browser-form" class="browser-control-form">
               <label class="field-label">
-                <span data-i18n="task.browser_mode">Browser mode</span>
+                <span data-i18n="task.browser_mode">Browser</span>
                 <select data-browser-mode>
                   <option value="off" data-i18n="task.browser_mode_off">Off</option>
-                  <option value="managed" data-i18n="task.browser_mode_managed">Managed shared browser</option>
+                  <option value="chrome" data-i18n="task.browser_channel_chrome">Google Chrome</option>
+                  <option value="msedge" data-i18n="task.browser_channel_edge">Microsoft Edge</option>
+                  <option value="chromium" data-i18n="task.browser_channel_chromium">Bundled Chromium</option>
                 </select>
               </label>
               <div class="browser-control-settings" data-browser-settings hidden>
@@ -448,33 +451,20 @@
                   <span data-i18n="task.browser_start_url">Start URL</span>
                   <input data-browser-field="start_url" type="url" value="https://www.bing.com/" placeholder="https://www.bing.com/">
                 </label>
-                <div class="field-row">
-                  <label class="field-label">
-                    <span data-i18n="task.browser_agent_access">Agent access</span>
-                    <select data-browser-field="agent_access">
-                      <option value="read_only" data-i18n="task.browser_read_only">Read only</option>
-                      <option value="read_write" data-i18n="task.browser_read_write">Read and write</option>
-                    </select>
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.browser_profile">Profile</span>
-                    <select data-browser-field="profile">
-                      <option value="ephemeral" data-i18n="task.browser_profile_ephemeral">Ephemeral</option>
-                      <option value="task" data-i18n="task.browser_profile_task">Keep for task</option>
-                      <option value="named" data-i18n="task.browser_profile_named">Named profile</option>
-                    </select>
-                  </label>
-                </div>
-                <label class="field-label" data-browser-profile-named hidden>
-                  <span data-i18n="task.browser_profile_name">Profile name</span>
-                  <select data-browser-field="profile_name" data-browser-profile-select></select>
-                  <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or create a new one. One task may use it at a time.</span>
+                <label class="field-label">
+                  <span data-i18n="task.browser_mode_label">Mode</span>
+                  <select data-browser-field="browser_mode">
+                    <option value="privacy" data-i18n="task.browser_mode_privacy">Privacy (clean profile)</option>
+                    <option value="daily" data-i18n="task.browser_mode_daily">Daily (my profile)</option>
+                  </select>
                 </label>
-                <label class="field-label" data-browser-profile-new hidden>
-                  <span data-i18n="task.browser_profile_new_name">New profile name</span>
-                  <input data-browser-profile-new-name maxlength="80" autocomplete="off">
+                <label class="field-label">
+                  <span data-i18n="task.browser_proxy_mode">Browser proxy</span>
+                  <select data-browser-field="proxy_mode">
+                    <option value="direct" data-i18n="task.browser_proxy_direct">Direct</option>
+                    <option value="inherit" data-i18n="task.browser_proxy_inherit">Inherit task proxy</option>
+                  </select>
                 </label>
-                <div class="field-help" data-i18n="task.browser_profile_help">A task profile can retain signed-in browser data and is not included in run archives.</div>
               </div>
               <button type="submit" data-i18n="task.browser_save">Save Browser</button>
               <div id="task-browser-state" class="meta"></div>
@@ -805,7 +795,7 @@
                   <div class="field-row task-defaults-grid" data-hardware-serial-settings hidden>
                     <label class="field-label">
                       <span data-i18n="task.hardware_serial_device">Serial device</span>
-                      <input id="task-hardware-serial-device" data-hardware-field="serial.device" placeholder="/dev/ttyUSB0">
+                      <input id="task-hardware-serial-device" data-hardware-field="serial.device" list="aha-serial-ports" placeholder="/dev/ttyUSB0 or COM3">
                     </label>
                     <label class="field-label">
                       <span data-i18n="task.hardware_baudrate">Baudrate</span>
@@ -832,10 +822,12 @@
               <div class="field-label">
                 <span data-i18n="task.browser_control">Shared browser</span>
                 <label class="field-label">
-                  <span data-i18n="task.browser_mode">Browser mode</span>
+                  <span data-i18n="task.browser_mode">Browser</span>
                   <select id="task-browser-mode" data-browser-mode>
                     <option value="off" data-i18n="task.browser_mode_off">Off</option>
-                    <option value="managed" data-i18n="task.browser_mode_managed">Managed shared browser</option>
+                    <option value="chrome" data-i18n="task.browser_channel_chrome">Google Chrome</option>
+                    <option value="msedge" data-i18n="task.browser_channel_edge">Microsoft Edge</option>
+                    <option value="chromium" data-i18n="task.browser_channel_chromium">Bundled Chromium</option>
                   </select>
                 </label>
                 <div class="browser-control-settings compact" data-browser-settings hidden>
@@ -843,33 +835,20 @@
                     <span data-i18n="task.browser_start_url">Start URL</span>
                     <input data-browser-field="start_url" type="url" value="https://www.bing.com/" placeholder="https://www.bing.com/">
                   </label>
-                  <div class="field-row task-defaults-grid">
-                    <label class="field-label">
-                      <span data-i18n="task.browser_agent_access">Agent access</span>
-                      <select data-browser-field="agent_access">
-                        <option value="read_only" data-i18n="task.browser_read_only">Read only</option>
-                        <option value="read_write" data-i18n="task.browser_read_write">Read and write</option>
-                      </select>
-                    </label>
-                    <label class="field-label">
-                      <span data-i18n="task.browser_profile">Profile</span>
-                      <select data-browser-field="profile">
-                        <option value="ephemeral" data-i18n="task.browser_profile_ephemeral">Ephemeral</option>
-                        <option value="task" data-i18n="task.browser_profile_task">Keep for task</option>
-                        <option value="named" data-i18n="task.browser_profile_named">Named profile</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label class="field-label" data-browser-profile-named hidden>
-                    <span data-i18n="task.browser_profile_name">Profile name</span>
-                    <select data-browser-field="profile_name" data-browser-profile-select></select>
-                    <span class="field-help" data-i18n="task.browser_profile_named_help">Choose an existing AHA profile or create a new one. One task may use it at a time.</span>
+                  <label class="field-label">
+                    <span data-i18n="task.browser_mode_label">Mode</span>
+                    <select data-browser-field="browser_mode">
+                      <option value="privacy" data-i18n="task.browser_mode_privacy">Privacy (clean profile)</option>
+                      <option value="daily" data-i18n="task.browser_mode_daily">Daily (my profile)</option>
+                    </select>
                   </label>
-                  <label class="field-label" data-browser-profile-new hidden>
-                    <span data-i18n="task.browser_profile_new_name">New profile name</span>
-                    <input data-browser-profile-new-name maxlength="80" autocomplete="off">
+                  <label class="field-label">
+                    <span data-i18n="task.browser_proxy_mode">Browser proxy</span>
+                    <select data-browser-field="proxy_mode">
+                      <option value="direct" data-i18n="task.browser_proxy_direct">Direct</option>
+                      <option value="inherit" data-i18n="task.browser_proxy_inherit">Inherit task proxy</option>
+                    </select>
                   </label>
-                  <span class="field-help" data-i18n="task.browser_profile_help">A task profile can retain signed-in browser data and is not included in run archives.</span>
                 </div>
                 <div class="field-help" data-i18n="task.browser_help">User and agent share one task-scoped browser. Agent access defaults to read-only.</div>
               </div>
@@ -1069,7 +1048,7 @@
   <script src="/static/terminal_ui.js?v=terminal-ui-v9"></script>
   <script src="/static/local_terminal.js?v=terminal-ui-v9"></script>
   <script src="/static/hardware_terminal.js?v=terminal-ui-v9"></script>
-  <script src="/static/browser_session.js?v=browser-bookmarks-safe-v45"></script>
+  <script src="/static/browser_session.js?v=browser-bookmarks-safe-v46"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
   <script src="/static/weixin_console.js"></script>
@@ -1107,6 +1086,7 @@
   <script src="/static/app_controller_factory.js?v=global-search-v5"></script>
   <script src="/static/app_runtime_setup.js?v=global-search-v4"></script>
   <script src="/static/app_runtime_wiring.js?v=global-search-v4"></script>
+  <script src="/static/browser_options.js?v=browser-options-v1"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

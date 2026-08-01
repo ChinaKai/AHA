@@ -4,11 +4,12 @@ import asyncio
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 from aha_cli.store.io import write_json
-from aha_cli.web.browser_session import handle_browser_session_ws_connection
+from aha_cli.web.browser_session import browser_options_response, handle_browser_session_ws_connection
 from aha_cli.web.server import handle_ui_client
 
 
@@ -36,7 +37,25 @@ class _IpcWriter(_Writer):
 
 
 class BrowserSessionTests(unittest.TestCase):
-    def test_native_browser_websocket_does_not_subscribe_to_page_frames(self) -> None:
+    def test_browser_options_detection_runs_outside_the_event_loop(self) -> None:
+        detection_threads: list[int] = []
+
+        def detect() -> dict:
+            detection_threads.append(threading.get_ident())
+            with self.assertRaises(RuntimeError):
+                asyncio.get_running_loop()
+            return {"chrome": False, "msedge": False, "chromium": True}
+
+        event_loop_thread = threading.get_ident()
+        with mock.patch("aha_cli.web.browser_session.available_browser_channels", side_effect=detect):
+            response = asyncio.run(browser_options_response("GET", "/api/browser/options"))
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b'"chromium": true', response or b"")
+        self.assertEqual(len(detection_threads), 1)
+        self.assertNotEqual(detection_threads[0], event_loop_thread)
+
+    def test_native_browser_websocket_subscribes_to_page_frames(self) -> None:
         sent: list[dict] = []
         ipc_writer = _IpcWriter()
 
@@ -79,7 +98,11 @@ class BrowserSessionTests(unittest.TestCase):
 
         asyncio.run(run())
 
-        self.assertEqual(bytes(ipc_writer.data), b"")
+        ipc_frames = [json.loads(line) for line in bytes(ipc_writer.data).splitlines()]
+        self.assertEqual(len(ipc_frames), 1)
+        self.assertEqual(ipc_frames[0]["action"], "subscribe")
+        self.assertEqual(ipc_frames[0]["source"], "user")
+        self.assertEqual(ipc_frames[0]["agent_id"], "browser")
         self.assertEqual(sent[0]["state"]["display"]["active"], "native")
 
     def test_websocket_proxies_commands_as_user_actions(self) -> None:

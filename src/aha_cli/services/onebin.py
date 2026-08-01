@@ -5,14 +5,46 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import zipapp
+import zipfile
 
 
 def _ignore_build_artifacts(_path: str, names: list[str]) -> set[str]:
     ignored = {"__pycache__"}
     ignored.update(name for name in names if name.endswith((".pyc", ".pyo")))
     return ignored
+
+
+def running_zipapp_path() -> Path | None:
+    """Path to the zipapp (onebin) this process is running from, or ``None``."""
+    raw_path = sys.argv[0] if sys.argv else ""
+    if not raw_path:
+        return None
+    try:
+        candidate = Path(raw_path).expanduser().resolve()
+    except OSError:
+        return None
+    try:
+        if candidate.is_file() and zipfile.is_zipfile(candidate):
+            return candidate
+    except OSError:
+        return None
+    return None
+
+
+def aha_cli_invocation() -> list[str]:
+    """Command prefix to invoke this AHA runtime's CLI in a subprocess.
+
+    Uses the running zipapp (onebin) when present so a packaged dashboard can
+    spawn bridges/backends without an importable ``aha_cli`` module; otherwise
+    ``python -m aha_cli`` for source checkouts.
+    """
+    zipapp_path = running_zipapp_path()
+    if zipapp_path:
+        return [sys.executable, str(zipapp_path)]
+    return [sys.executable, "-m", "aha_cli"]
 
 
 def default_source_root() -> Path:
@@ -28,6 +60,26 @@ def _git_output(root: Path, args: list[str]) -> str:
         timeout=2,
     )
     return result.stdout.strip()
+
+
+def _bundle_optional_package(staging: Path, name: str) -> bool:
+    """Copy a pure-Python third-party package into the onebin staging dir.
+
+    Used to bundle pyserial (the ``serial`` package) so a packaged dashboard can
+    do hardware serial debug without a separate ``pip install``. Silently skips
+    when the package is not installed in the build environment.
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.submodule_search_locations is None:
+        return False
+    for location in spec.submodule_search_locations:
+        source = Path(location)
+        if source.is_dir() and not (staging / name).exists():
+            shutil.copytree(source, staging / name, ignore=_ignore_build_artifacts)
+            return True
+    return False
 
 
 def _existing_build_version(package_dir: Path) -> str:
@@ -73,6 +125,8 @@ def build_onebin(
         staging = Path(tmp) / "app"
         staging.mkdir()
         shutil.copytree(package_dir, staging / "aha_cli", ignore=_ignore_build_artifacts)
+        # Bundle pure-Python optional deps so the packaged artifact is self-contained.
+        _bundle_optional_package(staging, "serial")  # pyserial: hardware serial debug
         version = build_version_for_source(source)
         (staging / "aha_cli" / "_build_version.py").write_text(
             f"from __future__ import annotations\n\nBUILD_VERSION = {version!r}\n",

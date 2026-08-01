@@ -14,6 +14,7 @@ import uuid
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services import browser_external
+from aha_cli.services import loopback_ipc
 from aha_cli.services import browser_runtime as browser_client
 from aha_cli.services.browser_actions import (
     NATIVE_USER_ACTIVITY_SCRIPT,
@@ -286,12 +287,11 @@ class BrowserBridgeDaemon:
                 await self._register_page(page)
             if not self.pages:
                 await self._register_page(await self.context.new_page())
-            self.server = await asyncio.start_unix_server(
+            self.server = await loopback_ipc.start_server(
                 self._handle_client,
-                path=str(socket_path),
+                path=socket_path,
                 limit=_MAX_FRAME_BYTES,
             )
-            os.chmod(socket_path, 0o600)
             self._write_state("running")
             self._spawn(self._frame_loop())
             self._spawn(self._reap_loop())
@@ -336,8 +336,10 @@ class BrowserBridgeDaemon:
 
     async def _register_page(self, page) -> str:
         if self.browser_session is not None:
-            await self.browser_session.prepare_page(
+            measured = await self.browser_session.prepare_page(
                 page, width=self.viewport_width, height=self.viewport_height, mobile=self.mobile_emulation)
+            if isinstance(measured, (tuple, list)) and len(measured) == 2:
+                self.viewport_width, self.viewport_height = int(measured[0]), int(measured[1])
         identity = id(page)
         existing = self.page_ids.get(identity)
         if existing:
@@ -355,6 +357,11 @@ class BrowserBridgeDaemon:
             if frame == page.main_frame
             else None,
         )
+        # Lightweight re-capture triggers: a load/domcontentloaded (e.g. SPA route
+        # or sub-frame finishing) should wake the frame loop without re-running the
+        # heavier prepare_page, so the mirror reflects the settled page promptly.
+        page.on("domcontentloaded", lambda: self.frame_wake_event.set())
+        page.on("load", lambda: self.frame_wake_event.set())
         page.on("dialog", lambda dialog: self._spawn(self._dismiss_dialog(dialog)))
         page.on("download", lambda download: self._spawn(self._handle_download(download)))
         self.revision += 1
@@ -402,8 +409,10 @@ class BrowserBridgeDaemon:
     async def _page_navigated(self, page_id: str) -> None:
         page = self.pages.get(page_id)
         if page is not None and self.browser_session is not None:
-            await self.browser_session.prepare_page(
+            measured = await self.browser_session.prepare_page(
                 page, width=self.viewport_width, height=self.viewport_height, mobile=self.mobile_emulation)
+            if isinstance(measured, (tuple, list)) and len(measured) == 2:
+                self.viewport_width, self.viewport_height = int(measured[0]), int(measured[1])
         if page_id in self.pages:
             self.active_page_id = page_id
         self.revision += 1

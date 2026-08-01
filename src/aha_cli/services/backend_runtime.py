@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
+from aha_cli import locking, process_control
 import hashlib
 import os
 from pathlib import Path
@@ -70,31 +70,15 @@ def locked_backend(root: Path, run_id: str, target: str = "main", task_id: str |
     lock_path = backend_lock_path(root, run_id, target, task_id)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        locking.acquire(lock_file.fileno())
         try:
             yield
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            locking.release(lock_file.fileno())
 
 
 def pid_is_running(pid: int | None) -> bool:
-    if not pid or pid <= 0:
-        return False
-    proc_stat = Path("/proc") / str(pid) / "stat"
-    if proc_stat.exists():
-        try:
-            parts = proc_stat.read_text(encoding="utf-8").split()
-            if len(parts) > 2 and parts[2] == "Z":
-                return False
-        except OSError:
-            pass
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return process_control.process_exists(pid)
 
 
 def _read_state(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
@@ -800,6 +784,10 @@ def start_backend(
             "AHA_BACKEND": backend,
             "AHA_MODEL": resolved_model or "",
             "AHA_GENERATED_BY": generated_by_for_backend_model(backend, resolved_model),
+            # Force UTF-8 mode so subprocess pipes and default file I/O inside the
+            # backend use UTF-8 regardless of the host locale (e.g. GBK on Chinese
+            # Windows), matching the UTF-8 stream-json the CLIs emit.
+            "PYTHONUTF8": "1",
         }
         if task_id:
             aha_env["AHA_TASK_ID"] = task_id
@@ -862,11 +850,11 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str 
             current["already_stopped"] = True
             return current
         try:
-            pgid = os.getpgid(int(pid))
+            pgid = process_control.process_group_id(int(pid))
             if pgid == int(pid):
-                os.killpg(pgid, signal.SIGTERM)
+                process_control.signal_process_group(pgid, signal.SIGTERM)
             else:
-                os.kill(int(pid), signal.SIGTERM)
+                process_control.send_signal(int(pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
         deadline = time.monotonic() + timeout
@@ -876,11 +864,11 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str 
             time.sleep(0.1)
         if pid_is_running(int(pid)):
             try:
-                pgid = os.getpgid(int(pid))
+                pgid = process_control.process_group_id(int(pid))
                 if pgid == int(pid):
-                    os.killpg(pgid, signal.SIGKILL)
+                    process_control.signal_process_group(pgid, signal.SIGKILL)
                 else:
-                    os.kill(int(pid), signal.SIGKILL)
+                    process_control.send_signal(int(pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
         state = _read_state(root, run_id, target, task_id)

@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import signal
 
+from aha_cli import process_control
 from aha_cli.backends.registry import normalize_reasoning_effort
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
@@ -158,9 +159,9 @@ def _stop_nav_agent_process(draft: dict) -> dict:
         return {"stopped": False, "reason": "no process recorded"}
     try:
         if pgid:
-            os.killpg(pgid, signal.SIGTERM)
+            process_control.signal_process_group(pgid, signal.SIGTERM)
             return {"stopped": True, "process_group": pgid, "signal": "SIGTERM"}
-        os.kill(pid, signal.SIGTERM)
+        process_control.send_signal(pid, signal.SIGTERM)
         return {"stopped": True, "pid": pid, "signal": "SIGTERM"}
     except ProcessLookupError:
         return {"stopped": False, "already_exited": True, "pid": pid or None, "process_group": pgid or None}

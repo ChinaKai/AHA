@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 
+from aha_cli import platform
 from aha_cli.backends.registry import CLAUDE_REASONING_EFFORT_NAMES, REASONING_EFFORT_NAMES, agent_backend_names, backend_names
 from aha_cli.domain.run_lifecycle import RUN_LIFECYCLE_CHOICES
 from aha_cli.domain.workflow_templates import workflow_template_ids
@@ -145,7 +146,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     runs_sub = runs_p.add_subparsers(dest="runs_cmd", required=True)
     runs_cleanup = runs_sub.add_parser("cleanup", help="List or clean stale temporary run leftovers")
     runs_cleanup.add_argument("--current-run", default=None, help="Run id that must never be deleted; defaults to $AHA_RUN_ID")
-    runs_cleanup.add_argument("--tmp-root", default="/tmp", help="Temporary root to scan for nested .aha homes")
+    runs_cleanup.add_argument("--tmp-root", default=str(platform.temp_root()), help="Temporary root to scan for nested .aha homes")
     runs_cleanup.add_argument("--stale-seconds", type=int, default=3600, help="Minimum age before a temporary candidate is deletable")
     runs_cleanup.add_argument("--active-heartbeat-seconds", type=int, default=120, help="Fresh heartbeat window that protects a run")
     runs_cleanup.add_argument("--allow-non-temp-root", action="store_true", help="Allow scanning a tmp-root outside the system temporary directory")

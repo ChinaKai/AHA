@@ -334,7 +334,8 @@ applies Android UA/client hints, fixed CSS device metrics, and touch emulation.
 Fixed CSS metrics avoid the raw mobile-emulation 980px fallback on documents
 without a viewport meta tag. The Bridge reapplies the current emulation after
 main-frame navigations, and newly opened pages inherit the same state. Desktop
-mode restores the desktop UA, 1280×720 metrics, and non-touch input. Frame
+mode restores the desktop UA and non-touch input without applying device metric
+emulation; the Bridge reports the real attached-window viewport instead. Frame
 `width`/`height` describe the logical input coordinate space;
 `image_width`/`image_height` describe the encoded pixels. Active changes are
 sampled at roughly 150 ms; unchanged frames are suppressed and capture backs
@@ -353,14 +354,18 @@ keyboard is visible, the whole AHA body translates upward by the reported
 keyboard inset instead of shrinking the shared frame. Frame pointer/touch down
 prevents the host browser's default blur and refocuses the remote capture field
 within the same user gesture, so clicking the shared page keeps the keyboard
-open.
+open. On desktop AHA clients, every accepted page click focuses that hidden
+capture field so the physical keyboard is forwarded even when the remote page's
+editable element is inside Shadow DOM. On mobile, editable-focus detection walks
+nested `shadowRoot.activeElement` values before deciding whether to open the soft
+keyboard.
 
 `browser_control.display=native|embedded` selects the presentation. Native
 launches a headed Chromium window on the AHA host desktop; if no desktop
 display is available, status reports `fallback=true` and the Web UI uses the
-embedded stream. Native Web sessions do not subscribe to continuous page
-frames. The task Browser tab becomes a session/focus controller while Chromium
-provides its own address bar, bookmarks, history, and tab UI. On WSL2, an
+embedded stream. Native Web sessions also subscribe to continuous page frames,
+so the task Browser tab remains a live mirror and remote controller while
+Chromium provides its own address bar, bookmarks, history, and tab UI. On WSL2, an
 available `/mnt/wslg/.X11-unix/X0` socket supplies `DISPLAY=:0` to the Bridge
 child when the AHA service did not inherit a display variable.
 

@@ -53,7 +53,7 @@
       if (options.forceTaskProxy || !isTaskProxyEditing()) renderTaskProxyEditor();
       if (options.forceTaskSupervision || !isTaskSupervisionEditing()) renderTaskSupervisionEditor();
       if (options.forceTaskContext || !isTaskContextEditing()) renderTaskContextEditor();
-      if (options.forceTaskHardware || !isTaskHardwareEditing()) renderTaskHardwareEditor();
+      if (options.forceTaskHardware || options.forceTaskBrowser || !isTaskHardwareEditing()) renderTaskHardwareEditor();
       if (options.forceAgents || !isAgentsPanelEditing()) {
         renderAgents();
       } else {

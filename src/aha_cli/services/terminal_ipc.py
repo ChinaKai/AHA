@@ -37,6 +37,12 @@ class BridgeTerminalIpc:
 
     def start(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
+        if hasattr(socket, "AF_UNIX"):
+            self._start_unix()
+        else:
+            self._start_tcp_loopback()
+
+    def _start_unix(self) -> None:
         if self.socket_path.exists():
             if not stat.S_ISSOCK(self.socket_path.stat().st_mode):
                 raise RuntimeError(f"terminal IPC path is not a socket: {self.socket_path}")
@@ -52,6 +58,26 @@ class BridgeTerminalIpc:
             raise
         self._listener = listener
 
+    def _start_tcp_loopback(self) -> None:
+        # No AF_UNIX on this build (e.g. some Windows Python): serve the IPC over
+        # a localhost TCP socket and record the chosen port in socket_path so
+        # clients can find it. Same newline-JSON framing; the daemon's select loop
+        # works unchanged because Windows select supports TCP sockets.
+        if self.socket_path.exists():
+            self.socket_path.unlink()
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(_MAX_CLIENTS)
+            listener.setblocking(False)
+            port = int(listener.getsockname()[1])
+            self.socket_path.write_text(str(port), encoding="utf-8")
+        except Exception:
+            listener.close()
+            raise
+        self._listener = listener
+
     def close(self) -> None:
         for client in list(self._clients):
             self._disconnect(client)
@@ -59,7 +85,7 @@ class BridgeTerminalIpc:
             self._listener.close()
             self._listener = None
         try:
-            if self.socket_path.is_socket():
+            if self.socket_path.exists():
                 self.socket_path.unlink()
         except OSError:
             pass

@@ -22,26 +22,31 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(default_policy["profile_name"], "")
         policy = normalize_task_browser_control({
             "mode": "managed",
-            "agent_access": "read-write",
-            "runtime": "user_chrome",
-            "profile": "task",
-            "display": "embedded",
+            "browser_mode": "daily",
             "device_mode": "mobile",
             "allowed_hosts": "Example.com, *.Example.org\nhttps://invalid.example",
-            "downloads": "allow",
+            "agent_access": "read_only",
+            "downloads": "deny",
         })
 
         self.assertEqual(policy["mode"], "managed")
-        self.assertEqual(policy["agent_access"], "read_write")
+        self.assertEqual(policy["browser_mode"], "daily")
         self.assertEqual(policy["runtime"], "user_chrome")
+        # Daily mode keeps a persistent per-task profile so logins survive restarts.
         self.assertEqual(policy["profile"], "task")
-        self.assertEqual(policy["display"], "embedded")
+        self.assertEqual(policy["display"], "native")
         self.assertEqual(policy["device_mode"], "mobile")
         self.assertEqual(policy["allowed_hosts"], ["example.com", "*.example.org"])
+        # Enabling a browser always grants full access and transfers.
+        self.assertEqual(policy["agent_access"], "read_write")
         self.assertEqual(policy["downloads"], "allow")
-        self.assertEqual(policy["uploads"], "deny")
+        self.assertEqual(policy["uploads"], "allow")
         self.assertEqual(policy["proxy_mode"], "direct")
         self.assertEqual(policy["proxy_server"], "")
+        # Privacy mode uses a clean managed browser.
+        privacy = normalize_task_browser_control({"mode": "managed", "browser_mode": "privacy"})
+        self.assertEqual(privacy["runtime"], "playwright")
+        self.assertEqual(privacy["profile"], "task")
 
         proxied = normalize_task_browser_control({
             "proxy_mode": "custom",
@@ -69,12 +74,14 @@ class TaskSchemaTests(unittest.TestCase):
             normalize_task_browser_control({"start_url": "https://example.com/"})["start_url"],
             "https://example.com/",
         )
-        named = normalize_task_browser_control({"profile": "named", "profile_name": " 工作 "})
-        self.assertEqual(named["profile"], "named")
-        self.assertEqual(named["profile_name"], "工作")
+        # Named profiles were removed: profile is derived from browser_mode and
+        # profile_name is always empty.
+        daily = normalize_task_browser_control({"browser_mode": "daily", "profile": "named", "profile_name": "工作"})
+        self.assertEqual(daily["profile"], "task")
+        self.assertEqual(daily["profile_name"], "")
         self.assertEqual(
             normalize_task_browser_control({"profile": "named", "profile_name": ""})["profile"],
-            "ephemeral",
+            "task",
         )
 
     def test_task_token_saving_normalizes_related_project_keys(self) -> None:

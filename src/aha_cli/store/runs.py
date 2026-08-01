@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
+from aha_cli import locking
 from pathlib import Path
 import threading
 
@@ -23,11 +23,11 @@ def locked_plan(root: Path, run_id: str):
     with _PLAN_LOCK:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            locking.acquire(lock_file.fileno())
             try:
                 yield
             finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                locking.release(lock_file.fileno())
 
 
 def require_plan(root: Path, run_id: str) -> dict:

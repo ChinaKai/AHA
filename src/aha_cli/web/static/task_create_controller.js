@@ -217,12 +217,14 @@
     function createBrowserControlPayload() {
       const form = elements.taskFormEl;
       const value = key => String(form?.querySelector(`[data-browser-field="${key}"]`)?.value || "").trim();
+      const browserSelect = String(form?.querySelector("[data-browser-mode]")?.value || "off");
+      const managed = browserSelect !== "off";
       return {
-        mode: String(form?.querySelector("[data-browser-mode]")?.value || "off"),
+        mode: managed ? "managed" : "off",
+        channel: managed ? browserSelect : "auto",
         start_url: value("start_url"),
-        agent_access: value("agent_access") || "read_only",
-        profile: value("profile") || "ephemeral",
-        profile_name: selectedBrowserProfileName(form)
+        browser_mode: value("browser_mode") || "privacy",
+        proxy_mode: value("proxy_mode") === "inherit" ? "inherit" : "direct"
       };
     }
 

@@ -22,10 +22,13 @@ real device; the daemon loop is verified against a PTY loopback.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import select
+import socket
+import threading
 import time
 from pathlib import Path
 
@@ -325,16 +328,105 @@ def _configure_tty(fd: int, baudrate: int) -> None:
         pass
 
 
-def open_uart_transport(device: str, baudrate: int = 115200) -> FdTransport:
+def _termios_available() -> bool:
+    try:
+        import termios  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class _ThreadedSerialTransport:
+    """pyserial-backed transport that exposes a select-able fileno.
+
+    Windows ``select`` only supports sockets, not COM handles, so a background
+    reader thread moves serial bytes into a socketpair; the daemon's existing
+    select-based loop then works unchanged on every platform. ``fileno()`` is the
+    socketpair read end (readable when serial bytes arrive or on EOF); ``write()``
+    goes straight to the serial port.
+    """
+
+    def __init__(self, serial_port, *, serial_lock=None) -> None:
+        self._serial = serial_port
+        self._serial_lock = serial_lock
+        self._read_sock, self._write_sock = socket.socketpair()
+        self._read_sock.setblocking(False)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._pump, name="aha-serial-rx", daemon=True)
+        self._thread.start()
+
+    def _pump(self) -> None:
+        self._serial.timeout = 0.1
+        while not self._stop.is_set():
+            try:
+                chunk = self._serial.read(4096)
+            except Exception:
+                break
+            if chunk:
+                try:
+                    self._write_sock.sendall(chunk)
+                except Exception:
+                    break
+        # Signal EOF to the daemon's read loop.
+        with contextlib.suppress(Exception):
+            self._write_sock.shutdown(socket.SHUT_WR)
+
+    def fileno(self) -> int:
+        return self._read_sock.fileno()
+
+    def read(self, size: int = 4096) -> bytes | None:
+        try:
+            return self._read_sock.recv(size)
+        except (BlockingIOError, InterruptedError):
+            return None
+        except OSError:
+            return b""
+
+    def write(self, data: bytes) -> int:
+        try:
+            return int(self._serial.write(data) or 0)
+        except Exception:
+            return 0
+
+    def close(self) -> None:
+        self._stop.set()
+        with contextlib.suppress(Exception):
+            self._write_sock.shutdown(socket.SHUT_WR)
+        with contextlib.suppress(Exception):
+            self._thread.join(timeout=1.0)
+        for sock in (self._read_sock, self._write_sock):
+            with contextlib.suppress(Exception):
+                sock.close()
+        with contextlib.suppress(Exception):
+            self._serial.close()
+        if self._serial_lock is not None:
+            self._serial_lock.release()
+
+
+def open_uart_transport(device: str, baudrate: int = 115200):
+    """Open a serial transport for ``device``.
+
+    POSIX keeps the raw-fd + termios path (well-tested). Windows (no termios)
+    uses a pyserial-backed threaded transport so the daemon's select loop works.
+    """
     serial_lock = acquire_serial_lock(device)
     try:
-        fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        if _termios_available():
+            fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            _configure_tty(fd, baudrate)
+            return FdTransport(fd, serial_lock=serial_lock)
+        try:
+            import serial
+        except ImportError as exc:
+            raise OSError(
+                "Serial hardware debug on Windows requires pyserial; install it with: pip install pyserial"
+            ) from exc
+        port = serial.Serial(device, baudrate=baudrate, timeout=0.1)
+        return _ThreadedSerialTransport(port, serial_lock=serial_lock)
     except Exception:
         if serial_lock is not None:
             serial_lock.release()
         raise
-    _configure_tty(fd, baudrate)
-    return FdTransport(fd, serial_lock=serial_lock)
 
 
 class HardwareSessionDaemon:

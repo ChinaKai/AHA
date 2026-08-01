@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
+from aha_cli import locking
 import hashlib
 import os
 from pathlib import Path
@@ -107,10 +107,10 @@ def _bookmark_lock(path: Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locking.acquire(lock_fd)
         yield
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        locking.release(lock_fd)
         os.close(lock_fd)
 
 

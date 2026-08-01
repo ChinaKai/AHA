@@ -202,6 +202,13 @@
     }
 
     function syncBrowserKeyboardForRemoteFocus(acceptsTextInput) {
+      // A desktop remote-control surface should capture the physical keyboard
+      // after every page click. Editable-focus detection is only needed on
+      // mobile, where focusing the hidden textarea opens the soft keyboard.
+      if (!mobileViewportMatches()) {
+        focusBrowserKeyboardInput();
+        return;
+      }
       if (acceptsTextInput) {
         focusBrowserKeyboardInput({ pin: true });
         return;
@@ -427,8 +434,11 @@
         : {};
       const active = String(runtime.active || "embedded");
       const nativeActive = active === "native";
+      // Embedded realtime view stays visible even when a native window is also
+      // open: the native window is for direct interaction, the embedded panel is
+      // the live mirror inside AHA. Both are active together.
       rootEl?.querySelectorAll?.("[data-browser-embedded-session]")?.forEach(element => {
-        element.hidden = nativeActive;
+        element.hidden = false;
       });
       const nativeSession = rootEl?.querySelector?.("[data-browser-native-session]");
       if (nativeSession) nativeSession.hidden = !nativeActive;
@@ -525,9 +535,10 @@
         setFrameInputReady(false);
         bridgeInstanceId = String(payload.state?.instance_id || "");
         renderState(payload.state || {});
-        if (payload.state?.display?.active !== "native") {
-          send("screenshot", { type: "jpeg", quality: 70, full_page: false });
-        }
+        // Always request an initial frame so the embedded mirror shows even in
+        // native mode (the native window is the primary view, the mirror is the
+        // remote-controllable copy inside AHA).
+        send("screenshot", { type: "jpeg", quality: 70, full_page: false });
         return;
       }
       if (payload.type === "event") {

@@ -17,7 +17,7 @@ Tests live in `tests/` and are grouped by behavior, for example `tests/test_stor
 
 ## Coding Style & Naming Conventions
 
-Use Python 3.10+ with 4-space indentation, type hints where practical, and `from __future__ import annotations` for new modules. Follow existing naming: modules and functions use `snake_case`, classes use `PascalCase`, tests use `test_<behavior>.py` and `test_<expected_behavior>`. Prefer `pathlib.Path` and the structured helpers in `store/io.py` for JSON, JSONL, and text persistence. Keep source files below 1000 lines and split mixed responsibilities before adding more logic.
+Use Python 3.10+ with 4-space indentation, type hints where practical, and `from __future__ import annotations` for new modules. Follow existing naming: modules and functions use `snake_case`, classes use `PascalCase`, tests use `test_<behavior>.py` and `test_<expected_behavior>`. Prefer `pathlib.Path` and the structured helpers in `store/io.py` for JSON, JSONL, and text persistence. Keep source files below 2000 lines and split mixed responsibilities before adding more logic.
 
 ## Testing Guidelines
 

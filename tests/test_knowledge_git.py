@@ -106,6 +106,58 @@ def test_pull_picks_up_remote_changes(tmp_path: Path):
     assert (knowledge_root(root, cfg) / "general" / "wiki" / "new.md").exists()
 
 
+def test_sync_first_time_adopts_remote_on_fresh_repo(tmp_path: Path):
+    # A brand-new local KB syncing against a remote that already has history.
+    # Without adopting the remote first, the local skeleton commit diverges
+    # (unrelated histories) and the rebase fails. sync must adopt the remote
+    # base on a freshly-created repo so the remote content lands cleanly.
+    remote = _bare_remote(tmp_path / "remote.git")
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", remote, str(seed)], check=True, capture_output=True)
+    (seed / "general" / "wiki").mkdir(parents=True, exist_ok=True)
+    (seed / "general" / "wiki" / "remote.md").write_text("remote-content", encoding="utf-8")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-m", "remote init")
+    _git(seed, "push", "origin", "main")
+
+    root = tmp_path / ".aha"
+    cfg = _config(remote)
+    res = kg.sync(root, cfg, message="first sync")
+    assert res["ok"], res
+    assert res["steps"].get("adopt_remote", {}).get("adopted") is True
+    assert (knowledge_root(root, cfg) / "general" / "wiki" / "remote.md").exists()
+
+
+def test_pull_unrelated_history_adopts_remote_when_clean(tmp_path: Path):
+    # An already-divergent local repo (e.g. a prior failed sync committed the
+    # local skeleton, unrelated to the remote). With a clean working tree, pull
+    # adopts the remote as the authoritative base instead of failing.
+    remote = _bare_remote(tmp_path / "remote.git")
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", remote, str(seed)], check=True, capture_output=True)
+    (seed / "general" / "wiki").mkdir(parents=True, exist_ok=True)
+    (seed / "general" / "wiki" / "shared.md").write_text("remote", encoding="utf-8")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-m", "remote init")
+    _git(seed, "push", "origin", "main")
+
+    root = tmp_path / ".aha"
+    cfg = _config(remote)
+    # Ensure the repo exists, then commit a LOCAL version of the same path so the
+    # local history is unrelated to the remote AND they overlap -> rebase must
+    # conflict, exercising the adopt-remote fallback.
+    kg.ensure_repo(root, cfg)
+    repo = knowledge_root(root, cfg)
+    (repo / "general" / "wiki").mkdir(parents=True, exist_ok=True)
+    (repo / "general" / "wiki" / "shared.md").write_text("local", encoding="utf-8")
+    assert kg.commit_all(root, "local skeleton", cfg)["committed"] is True
+
+    res = kg.pull(root, cfg)
+    assert res["ok"] and res.get("adopted_remote") is True
+    # Remote content wins after adoption.
+    assert (repo / "general" / "wiki" / "shared.md").read_text(encoding="utf-8") == "remote"
+
+
 def test_pull_conflict_aborts_cleanly(tmp_path: Path):
     root = tmp_path / ".aha"
     remote = _bare_remote(tmp_path / "remote.git")

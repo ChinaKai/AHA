@@ -15,29 +15,11 @@ from pathlib import Path
 import signal
 import sys
 import time
+from aha_cli import process_control
 
 
 def process_alive(pid: object) -> bool:
-    try:
-        value = int(pid)
-    except (TypeError, ValueError):
-        return False
-    if value <= 0:
-        return False
-    try:
-        os.kill(value, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    try:
-        stat_text = Path(f"/proc/{value}/stat").read_text(encoding="utf-8")
-        closing = stat_text.rfind(")")
-        if closing >= 0 and stat_text[closing + 2 : closing + 3] == "Z":
-            return False
-    except OSError:
-        pass
-    return True
+    return process_control.process_exists(pid)
 
 
 def serial_lock_path(device: str, *, lock_directory: Path | None = None) -> Path | None:
@@ -81,7 +63,7 @@ def serial_lock_owner(device: str, *, lock_directory: Path | None = None) -> dic
         pid = None
     alive = process_alive(pid)
     uid = _process_uid(pid) if pid else None
-    effective_uid = os.geteuid()
+    effective_uid = process_control.current_uid()
     return {
         "path": str(path),
         "pid": pid,
@@ -203,18 +185,18 @@ def takeover_serial_device(
         owner_identity = f"UID {owner_uid}" if owner_uid is not None else "an unknown UID"
         raise PermissionError(
             errno.EPERM,
-            f"AHA runs as UID {os.geteuid()} and cannot terminate {process} "
+            f"AHA runs as UID {process_control.current_uid()} and cannot terminate {process} "
             f"PID {pid} owned by {owner_identity}; close it manually.",
         )
     try:
-        os.kill(int(pid), signal.SIGTERM)
+        process_control.send_signal(int(pid), signal.SIGTERM)
     except PermissionError as exc:
         process = owner.get("process") or "process"
         owner_uid = owner.get("uid")
         owner_identity = f"UID {owner_uid}" if owner_uid is not None else "an unknown UID"
         raise PermissionError(
             errno.EPERM,
-            f"AHA runs as UID {os.geteuid()} and cannot terminate {process} "
+            f"AHA runs as UID {process_control.current_uid()} and cannot terminate {process} "
             f"PID {pid} owned by {owner_identity}; close it manually.",
         ) from exc
     deadline = time.monotonic() + max(0.1, float(timeout))

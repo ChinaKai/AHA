@@ -13,9 +13,11 @@ import sys
 import time
 from pathlib import Path
 
+from aha_cli import process_control
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
 from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
-from aha_cli.services.hardware_bridge import pid_alive, set_parent_death_signal
+from aha_cli.services.hardware_bridge import pid_alive
+from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.services.hardware_session import ArmedRuleEngine, decode_escapes
 from aha_cli.services.terminal_ipc import BridgeTerminalIpc
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from, iter_jsonl_reverse
@@ -146,7 +148,7 @@ def ensure_network_terminal(
     password: str = "",
     launcher: list[str] | None = None,
 ) -> dict:
-    import fcntl
+    from aha_cli import locking
 
     terminal_dir = network_terminal_dir(root, host, port)
     terminal_dir.mkdir(parents=True, exist_ok=True)
@@ -154,12 +156,12 @@ def ensure_network_terminal(
     lock_path = terminal_dir / "bridge.lock"
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locking.acquire(lock_fd)
         status = network_status(root, host, port)
         if status.get("alive"):
             return status
         command = [
-            *(launcher or [sys.executable, "-m", "aha_cli"]),
+            *(launcher or aha_cli_invocation()),
             "--home",
             str(aha_home_path(root)),
             "hardware-network-bridge",
@@ -171,15 +173,22 @@ def ensure_network_terminal(
         child_env["PYTHONPATH"] = os.pathsep.join(item for item in sys.path if item) + (
             os.pathsep + child_env["PYTHONPATH"] if child_env.get("PYTHONPATH") else ""
         )
-        proc = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            preexec_fn=set_parent_death_signal,
-            start_new_session=False,
-            env=child_env,
-        )
+        bridge_log = terminal_dir / "bridge.log"
+        bridge_log.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = bridge_log.open("ab")
+        try:
+            proc = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                preexec_fn=process_control.parent_death_preexec(),
+                start_new_session=False,
+                env=child_env,
+            )
+        finally:
+            log_handle.close()
+        process_control.assign_parent_death(proc)
         network_state_path(root, host, port).write_text(
             json.dumps(
                 {"host": host, "port": int(port), "pid": proc.pid, "status": "starting", "updated_at": utc_now()},
@@ -190,7 +199,7 @@ def ensure_network_terminal(
         return {"endpoint": f"{host}:{int(port)}", "status": "starting", "alive": True, "paused": False, "pid": proc.pid}
     finally:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            locking.release(lock_fd)
         finally:
             os.close(lock_fd)
 

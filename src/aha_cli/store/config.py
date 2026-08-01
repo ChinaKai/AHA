@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from aha_cli import platform
 from aha_cli.domain.models import default_config, normalize_integrations_config
 from aha_cli.services.proxy import proxy_configured
 from aha_cli.store.io import read_json
@@ -51,4 +53,36 @@ def load_config(root: Path) -> dict:
     cfg["integrations"] = normalize_integrations_config(loaded.get("integrations", {}))
     if cfg.get("runner_command") and cfg.get("backend") == "stub":
         cfg["backend"] = "command"
+    _apply_portable_overrides(cfg)
     return cfg
+
+
+def _apply_portable_overrides(cfg: dict) -> None:
+    """Resolve ``~``/``$VAR`` tokens in configured paths and apply env overrides.
+
+    Machine-local paths (workspace roots, backend binaries) may be written
+    portably (e.g. ``$HOME/proj``) and/or overridden via ``AHA_WORKSPACE_ROOTS``,
+    ``AHA_CODEX_BIN``, ``AHA_CLAUDE_BIN`` so a single AHA home works across
+    machines. Resolution happens only on the in-memory config returned by
+    ``load_config``; disk contents are never rewritten by this function.
+    """
+    env_roots = os.environ.get("AHA_WORKSPACE_ROOTS")
+    if env_roots:
+        roots = [platform.expand_path(part) for part in env_roots.split(os.pathsep) if part.strip()]
+        if roots:
+            cfg["workspace_roots"] = roots
+    else:
+        raw_roots = cfg.get("workspace_roots") or []
+        if isinstance(raw_roots, str):
+            raw_roots = [raw_roots]
+        if isinstance(raw_roots, list):
+            cfg["workspace_roots"] = [platform.expand_path(str(item)) for item in raw_roots if str(item).strip()]
+    for backend, env_name in (("codex", "AHA_CODEX_BIN"), ("claude", "AHA_CLAUDE_BIN")):
+        section = cfg.get(backend)
+        if not isinstance(section, dict):
+            continue
+        override = os.environ.get(env_name)
+        if override:
+            section["bin"] = platform.expand_path(override)
+        elif isinstance(section.get("bin"), str) and section["bin"]:
+            section["bin"] = platform.expand_path(section["bin"])

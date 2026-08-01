@@ -164,114 +164,12 @@
         <div class="browser-session-view" data-browser-session-root data-browser-task-id="${escapeHtml(task?.id || "")}" data-browser-start-url="${escapeHtml(policy.start_url || "")}" data-browser-display="${nativeRequested ? "native" : "embedded"}" data-browser-runtime="${userChrome ? "user_chrome" : "playwright"}" data-browser-config-device-mode="${deviceMode}">
           <div class="browser-management-toolbar">
             <span class="browser-session-status idle" data-browser-status role="status" aria-label="Browser status: connecting" title="connecting"></span>
-            <span class="browser-navigation-controls" data-browser-embedded-session${nativeRequested ? " hidden" : ""}>
-              <button class="browser-toolbar-icon-button" type="button" data-browser-action="back" title="Back" aria-label="Back"><span aria-hidden="true">←</span></button>
-              <button class="browser-toolbar-icon-button" type="button" data-browser-action="forward" title="Forward" aria-label="Forward"><span aria-hidden="true">→</span></button>
-              <button class="browser-toolbar-icon-button" type="button" data-browser-action="reload" title="Reload" aria-label="Reload"><span aria-hidden="true">↻</span></button>
-            </span>
-            <button class="browser-toolbar-icon-button" type="button" data-browser-action="new_tab" data-browser-embedded-session title="New tab" aria-label="New tab"${nativeRequested ? " hidden" : ""}><span aria-hidden="true">＋</span></button>
             <span class="browser-lifecycle-controls">
               <button class="browser-toolbar-icon-button" type="button" data-browser-lifecycle="start" title="Start" aria-label="Start" hidden><span aria-hidden="true">▶</span></button>
               <button class="browser-toolbar-icon-button" type="button" data-browser-lifecycle="close" title="Close" aria-label="Close"><span aria-hidden="true">■</span></button>
             </span>
-            <details class="browser-bookmarks-popover" data-browser-bookmarks-popover data-browser-embedded-session${nativeRequested ? " hidden" : ""}>
-              <summary class="browser-toolbar-icon-button" aria-label="Bookmarks" title="Bookmarks"><span aria-hidden="true">★</span></summary>
-              <div class="browser-bookmarks-menu">
-                <div class="browser-bookmarks-menu-header">
-                  <strong>Bookmarks</strong>
-                  <span data-browser-bookmarks-count>0</span>
-                </div>
-                <div class="browser-bookmarks" data-browser-bookmarks></div>
-              </div>
-            </details>
-            <details class="browser-status-settings" data-browser-status-settings>
-              <summary class="browser-toolbar-icon-button" aria-label="Browser settings" title="Browser settings"><span aria-hidden="true">⚙</span></summary>
-              <form class="browser-runtime-settings" data-browser-runtime-settings>
-                <div class="browser-runtime-settings-grid">
-                  <label class="field-label">
-                    <span data-i18n="task.browser_runtime">Browser runtime</span>
-                    <select data-browser-runtime-field="runtime">
-                      <option value="playwright"${selected(runtime, "playwright")} data-i18n="task.browser_runtime_playwright">Playwright Chromium</option>
-                      <option value="user_chrome"${selected(runtime, "user_chrome")} data-i18n="task.browser_runtime_user_chrome">User Chrome (local CDP)</option>
-                    </select>
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.browser_display">Display</span>
-                    <select data-browser-runtime-field="display">
-                      <option value="native"${selected(display, "native")} data-i18n="task.browser_display_native">Native Chromium window</option>
-                      <option value="embedded"${selected(display, "embedded")} data-i18n="task.browser_display_embedded">Embedded panel</option>
-                    </select>
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.browser_downloads">Downloads</span>
-                    <select data-browser-runtime-field="downloads">
-                      <option value="deny"${selected(downloads, "deny")} data-i18n="common.deny">Deny</option>
-                      <option value="allow"${selected(downloads, "allow")} data-i18n="common.allow">Allow</option>
-                    </select>
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.browser_uploads">Uploads</span>
-                    <select data-browser-runtime-field="uploads">
-                      <option value="deny"${selected(uploads, "deny")} data-i18n="common.deny">Deny</option>
-                      <option value="allow"${selected(uploads, "allow")} data-i18n="common.allow">Allow</option>
-                    </select>
-                  </label>
-                </div>
-                <label class="field-label">
-                  <span data-i18n="task.browser_proxy_mode">Browser proxy</span>
-                  <select data-browser-runtime-field="proxy_mode">
-                    <option value="direct"${selected(proxyMode, "direct")} data-i18n="task.browser_proxy_direct">Direct</option>
-                    <option value="inherit"${selected(proxyMode, "inherit")} data-i18n="task.browser_proxy_inherit">Inherit task proxy</option>
-                    <option value="custom"${selected(proxyMode, "custom")} data-i18n="task.browser_proxy_custom">Custom proxy</option>
-                  </select>
-                </label>
-                <div class="browser-runtime-proxy-settings" data-browser-runtime-proxy-custom${proxyMode === "custom" ? "" : " hidden"}>
-                  <label class="field-label">
-                    <span data-i18n="task.browser_proxy_server">Proxy server</span>
-                    <input data-browser-runtime-field="proxy_server" type="url" value="${escapeHtml(policy.proxy_server || "")}" placeholder="http://127.0.0.1:7890" autocomplete="off">
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.browser_proxy_bypass">Proxy bypass</span>
-                    <input data-browser-runtime-field="proxy_bypass" value="${escapeHtml(policy.proxy_bypass || "")}" placeholder="localhost,127.0.0.1,*.example.com" autocomplete="off">
-                  </label>
-                  <div class="browser-runtime-settings-grid">
-                    <label class="field-label">
-                      <span data-i18n="task.browser_proxy_username">Proxy username</span>
-                      <input data-browser-runtime-field="proxy_username" value="${escapeHtml(policy.proxy_username || "")}" autocomplete="off">
-                    </label>
-                    <label class="field-label">
-                      <span data-i18n="task.browser_proxy_password">Proxy password</span>
-                      <input data-browser-runtime-field="proxy_password" type="password" placeholder="${policy.proxy_password_configured ? "Configured; leave blank to keep" : ""}" autocomplete="new-password">
-                    </label>
-                  </div>
-                  <label class="checkbox-field">
-                    <input type="checkbox" data-browser-runtime-clear-password>
-                    <span data-i18n="task.browser_proxy_clear_password">Clear saved proxy password</span>
-                  </label>
-                </div>
-                <span class="field-help" data-i18n="browser.settings_restart_help">Saving running settings restarts only this task browser.</span>
-                <div class="browser-runtime-settings-actions">
-                  <button type="button" data-browser-runtime-settings-cancel data-i18n="common.cancel">Cancel</button>
-                  <button type="submit" data-browser-runtime-settings-save data-i18n="common.save">Save</button>
-                </div>
-              </form>
-            </details>
           </div>
-          <div class="browser-native-session" data-browser-native-session${nativeRequested ? "" : " hidden"}>
-            <span class="browser-native-icon" aria-hidden="true">◉</span>
-            <span class="browser-native-copy">
-              <strong>${userChrome ? "User Chrome window" : "Native Chromium window"}</strong>
-              <span data-browser-native-message>Opening on the AHA host desktop…</span>
-            </span>
-            <button type="button" data-browser-action="focus_window">Focus window</button>
-          </div>
-          <form class="browser-address-form browser-search-bar" data-browser-address-form data-browser-embedded-session${nativeRequested ? " hidden" : ""}>
-            <input data-browser-address type="search" inputmode="search" enterkeyhint="go" autocomplete="off" spellcheck="false" placeholder="Search or enter address" aria-label="Browser search or address">
-            <button class="browser-bookmark-toggle" type="button" data-browser-bookmark-toggle title="Bookmark current page" aria-label="Bookmark current page" aria-pressed="false">☆</button>
-            <button type="submit" data-browser-go>Go</button>
-          </form>
-          <div class="browser-tabs" data-browser-tabs data-browser-embedded-session role="tablist" aria-label="Browser tabs"${nativeRequested ? " hidden" : ""}></div>
-          <div class="browser-frame-area" data-browser-embedded-session${nativeRequested ? " hidden" : ""}>
+          <div class="browser-frame-area" data-browser-embedded-session>
             <div class="browser-frame-stage" data-browser-input-surface tabindex="0" aria-label="Shared browser viewport" aria-busy="true">
               <img data-browser-frame alt="Shared browser viewport" draggable="false" hidden>
               <div class="browser-frame-empty" data-browser-empty>Starting shared browser…</div>

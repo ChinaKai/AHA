@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import fcntl
 import os
 from pathlib import Path
-import pty
 import signal
 import struct
 import subprocess
-import termios
+
+from aha_cli import platform as _platform
 
 
 DEFAULT_TERMINAL_COLS = 100
@@ -17,10 +16,7 @@ DEFAULT_TERMINAL_ROWS = 28
 
 
 def default_shell() -> str:
-    shell = str(os.environ.get("SHELL") or "").strip()
-    if shell and Path(shell).exists():
-        return shell
-    return "/bin/sh"
+    return _platform.default_shell()
 
 
 def normalize_terminal_size(cols: object, rows: object) -> tuple[int, int]:
@@ -48,6 +44,11 @@ class LocalTerminalSession:
     def start(self, *, cols: int = DEFAULT_TERMINAL_COLS, rows: int = DEFAULT_TERMINAL_ROWS) -> None:
         if self.process is not None:
             return
+        if _platform.is_windows():
+            raise RuntimeError("Local terminal is not yet supported on Windows (requires ConPTY).")
+        import fcntl
+        import pty
+
         master_fd, slave_fd = pty.openpty()
         self.master_fd = master_fd
         self._slave_fd = slave_fd
@@ -115,6 +116,9 @@ class LocalTerminalSession:
     def resize(self, *, cols: object, rows: object) -> None:
         if self.master_fd is None:
             return
+        import fcntl
+        import termios
+
         normalized_cols, normalized_rows = normalize_terminal_size(cols, rows)
         size = struct.pack("HHHH", normalized_rows, normalized_cols, 0, 0)
         fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, size)
