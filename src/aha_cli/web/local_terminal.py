@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from aha_cli.services.local_terminal import LocalTerminalSession, normalize_terminal_size
+from aha_cli.services.local_terminal import LocalTerminalSession, local_terminal_shell_options, normalize_terminal_size
+from aha_cli.web.http_utils import http_response
 from aha_cli.websocket.server import ws_read_text, ws_send_text
 
 
@@ -24,6 +25,17 @@ async def _send_terminal_message(writer: asyncio.StreamWriter, message_type: str
     await ws_send_text(writer, json.dumps({"type": message_type, **data}, ensure_ascii=False))
 
 
+async def local_terminal_options_response(method: str, path: str) -> bytes | None:
+    if method != "GET" or path != "/api/local-terminal/options":
+        return None
+    payload = await asyncio.to_thread(local_terminal_shell_options)
+    return http_response(
+        "200 OK",
+        json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        "application/json; charset=utf-8",
+    )
+
+
 async def handle_local_terminal_ws_connection(
     root: Path,
     run_id: str,
@@ -33,12 +45,14 @@ async def handle_local_terminal_ws_connection(
 ) -> None:
     query = parse_qs(urlparse(target).query, keep_blank_values=True)
     cols, rows = normalize_terminal_size((query.get("cols") or [""])[0], (query.get("rows") or [""])[0])
-    session = LocalTerminalSession()
+    shell_id = str((query.get("shell") or ["auto"])[0] or "auto").strip().lower()
+    session: LocalTerminalSession | None = None
     loop = asyncio.get_running_loop()
     read_task: asyncio.Task[str | None] | None = None
     output_task: asyncio.Task[bytes | None] | None = None
     exit_task: asyncio.Task[int] | None = None
     try:
+        session = LocalTerminalSession(shell_id=shell_id)
         session.start(cols=cols, rows=rows)
         session.attach_reader(loop)
         await _send_terminal_message(
@@ -47,6 +61,8 @@ async def handle_local_terminal_ws_connection(
             run_id=run_id,
             cwd=str(session.cwd),
             shell=session.shell,
+            shell_id=session.shell_id,
+            requested_shell_id=session.requested_shell_id,
             cols=cols,
             rows=rows,
         )
@@ -94,7 +110,8 @@ async def handle_local_terminal_ws_connection(
     except Exception as exc:
         await _send_terminal_message(writer, "error", message=str(exc))
     finally:
-        session.detach_reader(loop)
+        if session is not None:
+            session.detach_reader(loop)
         for task in (read_task, output_task, exit_task):
             if task is not None and not task.done():
                 task.cancel()
@@ -102,6 +119,7 @@ async def handle_local_terminal_ws_connection(
                     await task
                 except asyncio.CancelledError:
                     pass
-        await session.terminate()
+        if session is not None:
+            await session.terminate()
         writer.close()
         await writer.wait_closed()

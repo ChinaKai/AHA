@@ -505,16 +505,18 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn('<link rel="stylesheet" href="/static/xterm.css?v=6.0.0">', html)
         self.assertIn('<script src="/static/xterm.js?v=6.0.0"></script>', html)
         self.assertIn('<script src="/static/terminal_ui.js?v=terminal-ui-v9"></script>', html)
-        self.assertIn('<script src="/static/local_terminal.js?v=terminal-ui-v9"></script>', html)
+        self.assertIn('<script src="/static/local_terminal.js?v=terminal-shell-v10"></script>', html)
         self.assertIn('<script src="/static/hardware_terminal.js?v=terminal-ui-v9"></script>', html)
         self.assertLess(html.index("/static/xterm.js?v=6.0.0"), html.index("/static/terminal_ui.js?v=terminal-ui-v9"))
-        self.assertLess(html.index("/static/terminal_ui.js?v=terminal-ui-v9"), html.index("/static/local_terminal.js?v=terminal-ui-v9"))
+        self.assertLess(html.index("/static/terminal_ui.js?v=terminal-ui-v9"), html.index("/static/local_terminal.js?v=terminal-shell-v10"))
         self.assertLess(html.index("/static/terminal_ui.js?v=terminal-ui-v9"), html.index("/static/hardware_terminal.js?v=terminal-ui-v9"))
         self.assertTrue((root / "xterm.js").exists())
         self.assertTrue((root / "xterm.css").exists())
         self.assertTrue((root / "xterm.LICENSE").exists())
         self.assertIn('"local_terminal.title": "Local terminal"', i18n)
         self.assertIn('"local_terminal.title": "本机终端"', i18n)
+        self.assertIn('"local_terminal.shell_pwsh": "PowerShell 7"', i18n)
+        self.assertIn('"local_terminal.shell_wsl": "WSL"', i18n)
         self.assertIn(".local-terminal-popover", styles)
         self.assertIn(".local-terminal-xterm", styles)
         self.assertIn("body.settings-home .session-menu.local-terminal-open .local-terminal-popover", styles)
@@ -533,6 +535,10 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("localTerminalController = featureControllers.localTerminalController", wiring)
         self.assertIn("renderLocalTerminalPopover", wiring)
         self.assertIn('"/ws/terminal"', terminal_script)
+        self.assertIn('"/api/local-terminal/options"', terminal_script)
+        self.assertIn("aha.localTerminal.shell.v1", terminal_script)
+        self.assertIn("data-local-terminal-shell", terminal_script)
+        self.assertIn("shell: state.shellId", terminal_script)
         self.assertIn("new Terminal", terminal_script)
         self.assertIn("term.onData", terminal_script)
         self.assertIn("term.resize", terminal_script)
@@ -606,6 +612,10 @@ vm.runInContext(fs.readFileSync(0, "utf8"), context);
 const api = context.window.AHALocalTerminal;
 const rendered = api.renderLocalTerminal({ connected: true, canConnect: true });
 if (!rendered.includes("data-local-terminal-xterm") || !rendered.includes('data-local-terminal-action="close"')) process.exit(1);
+if (!rendered.includes("data-local-terminal-shell") || !rendered.includes("PowerShell 7")) {
+  const withShells = api.renderLocalTerminal({ connected: false, canConnect: true, shellId: "pwsh", shellOptions: [{ id: "auto" }, { id: "pwsh" }] });
+  if (!withShells.includes('value="pwsh" selected') || !withShells.includes("PowerShell 7")) process.exit(1);
+}
 const size = api.terminalSizeForElement({ getBoundingClientRect: () => ({ width: 840, height: 360 }) });
 if (size.cols < 40 || size.rows < 12) process.exit(1);
 const values = {};
@@ -729,8 +739,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=memo-weekdays-v1">', html)
-        self.assertIn('<script src="/static/i18n.js?v=memo-weekdays-v1"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=terminal-shell-v10">', html)
+        self.assertIn('<script src="/static/i18n.js?v=terminal-shell-v10"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -5085,7 +5095,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=memo-weekdays-v1"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=terminal-shell-v10"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)

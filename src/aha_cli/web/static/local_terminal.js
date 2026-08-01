@@ -1,4 +1,7 @@
 (() => {
+  const SHELL_STORAGE_KEY = "aha.localTerminal.shell.v1";
+  const SHELL_IDS = new Set(["auto", "pwsh", "powershell", "cmd", "wsl"]);
+
   function escapeFallback(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -34,12 +37,35 @@
     return `<div class="hardware-keybar local-terminal-keybar"><span class="hardware-keybar-keys">${keys}</span></div>`;
   }
 
+  function shellOptionLabel(option = {}) {
+    const id = String(option.id || "auto");
+    const fallbacks = {
+      auto: "Auto",
+      pwsh: "PowerShell 7",
+      powershell: "Windows PowerShell",
+      cmd: "Command Prompt",
+      wsl: "WSL"
+    };
+    const label = t(`local_terminal.shell_${id}`, String(option.label || fallbacks[id] || id));
+    if (id !== "auto" || !option.resolved) return label;
+    const resolved = shellOptionLabel({ id: option.resolved });
+    return `${label} (${resolved})`;
+  }
+
   function renderLocalTerminal(state = {}, options = {}) {
     const escapeHtml = options.escapeHtml || escapeFallback;
     const connected = Boolean(state.connected);
     const canConnect = Boolean(state.canConnect);
     const statusClass = state.error ? "error" : connected ? "connected" : state.connecting ? "connecting" : "";
     const connectLabel = state.connecting ? t("local_terminal.connecting_short", "Connecting") : t("local_terminal.connect", "Connect");
+    const shellOptions = Array.isArray(state.shellOptions) && state.shellOptions.length
+      ? state.shellOptions
+      : [{ id: "auto", label: "Auto" }];
+    const shellId = String(state.shellId || "auto");
+    const shellOptionsHtml = shellOptions.map(option => {
+      const id = String(option.id || "auto");
+      return `<option value="${escapeHtml(id)}" ${id === shellId ? "selected" : ""}>${escapeHtml(shellOptionLabel(option))}</option>`;
+    }).join("");
     return `
       <div class="local-terminal-panel">
         <div class="local-terminal-head">
@@ -53,6 +79,10 @@
           </span>
         </div>
         <div class="local-terminal-actions">
+          <label class="local-terminal-shell-picker">
+            <span>${escapeHtml(t("local_terminal.shell", "Shell"))}</span>
+            <select data-local-terminal-shell ${connected || state.connecting ? "disabled" : ""}>${shellOptionsHtml}</select>
+          </label>
           <button type="button" data-local-terminal-action="connect" ${connected || state.connecting || !canConnect ? "disabled" : ""}>${escapeHtml(connectLabel)}</button>
           <button type="button" data-local-terminal-action="disconnect" ${!connected && !state.connecting ? "disabled" : ""}>${escapeHtml(t("local_terminal.disconnect", "Disconnect"))}</button>
           <button type="button" data-local-terminal-action="clear">${escapeHtml(t("local_terminal.clear", "Clear"))}</button>
@@ -72,14 +102,25 @@
     let viewportResizeCleanup = null;
     let keyboardActive = false;
     let expandedTerminalHeight = 0;
+    let shellOptionsLoading = false;
     const disposables = [];
+    const storedShellId = (() => {
+      try {
+        const value = String(deps.windowRef?.localStorage?.getItem?.(SHELL_STORAGE_KEY) || "").trim().toLowerCase();
+        return SHELL_IDS.has(value) ? value : "auto";
+      } catch (_err) {
+        return "auto";
+      }
+    })();
     const state = {
       canConnect: true,
       connected: false,
       connecting: false,
       error: "",
       cols: 100,
-      rows: 28
+      rows: 28,
+      shellId: storedShellId,
+      shellOptions: [{ id: "auto", label: "Auto" }]
     };
 
     function currentRunId() {
@@ -95,10 +136,64 @@
     }
 
     function terminalWsUrl() {
-      const path = deps.apiUrl?.("/ws/terminal", { cols: state.cols, rows: state.rows }) || "/ws/terminal";
+      const path = deps.apiUrl?.("/ws/terminal", { cols: state.cols, rows: state.rows, shell: state.shellId }) || "/ws/terminal";
       const url = new URL(path, deps.windowRef?.location?.href || window.location.href);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return url.toString();
+    }
+
+    function persistShellId() {
+      try {
+        deps.windowRef?.localStorage?.setItem?.(SHELL_STORAGE_KEY, state.shellId);
+      } catch (_err) {
+        // Storage can be unavailable in private or embedded browser contexts.
+      }
+    }
+
+    function syncShellPicker() {
+      const select = elements.localTerminalPopoverEl?.querySelector?.("[data-local-terminal-shell]");
+      if (!select) return;
+      const documentRef = deps.windowRef?.document || window.document;
+      const optionElements = state.shellOptions.map(option => {
+        const element = documentRef.createElement("option");
+        element.value = String(option.id || "auto");
+        element.textContent = shellOptionLabel(option);
+        return element;
+      });
+      select.replaceChildren(...optionElements);
+      select.value = state.shellId;
+      select.disabled = Boolean(state.connected || state.connecting || shellOptionsLoading);
+    }
+
+    async function loadShellOptions() {
+      if (shellOptionsLoading) return;
+      shellOptionsLoading = true;
+      syncPopover();
+      try {
+        const path = deps.apiUrl?.("/api/local-terminal/options", {}, { runScoped: false }) || "/api/local-terminal/options";
+        const payload = await deps.fetchJson?.(path, {}, "Failed to detect local terminal shells");
+        const options = (Array.isArray(payload?.options) ? payload.options : [])
+          .map(option => ({
+            id: String(option?.id || "").trim().toLowerCase(),
+            label: String(option?.label || ""),
+            resolved: String(option?.resolved || "").trim().toLowerCase()
+          }))
+          .filter(option => SHELL_IDS.has(option.id));
+        state.shellOptions = options.length ? options : [{ id: "auto", label: "Auto" }];
+        if (!state.shellOptions.some(option => option.id === state.shellId)) {
+          state.shellId = String(payload?.default || "auto").trim().toLowerCase();
+          if (!SHELL_IDS.has(state.shellId) || !state.shellOptions.some(option => option.id === state.shellId)) {
+            state.shellId = "auto";
+          }
+          persistShellId();
+        }
+      } catch (_err) {
+        state.shellOptions = [{ id: "auto", label: "Auto" }];
+        state.shellId = "auto";
+      } finally {
+        shellOptionsLoading = false;
+        syncPopover();
+      }
     }
 
     function sendMessage(payload) {
@@ -311,13 +406,14 @@
       }
       const connectEl = popover.querySelector('[data-local-terminal-action="connect"]');
       if (connectEl) {
-        connectEl.disabled = connected || state.connecting || !state.canConnect;
+        connectEl.disabled = connected || state.connecting || shellOptionsLoading || !state.canConnect;
         connectEl.textContent = state.connecting
           ? t("local_terminal.connecting_short", "Connecting")
           : t("local_terminal.connect", "Connect");
       }
       const disconnectEl = popover.querySelector('[data-local-terminal-action="disconnect"]');
       if (disconnectEl) disconnectEl.disabled = !connected && !state.connecting;
+      syncShellPicker();
     }
 
     function renderPopover() {
@@ -347,7 +443,7 @@
     }
 
     function connect() {
-      if (socket || state.connecting || !currentRunId()) return;
+      if (socket || state.connecting || shellOptionsLoading || !currentRunId()) return;
       state.error = "";
       state.connecting = true;
       syncPopover();
@@ -420,6 +516,13 @@
           focusTerminal();
         });
       });
+      popover.querySelector("[data-local-terminal-shell]")?.addEventListener("change", event => {
+        if (state.connected || state.connecting) return;
+        const shellId = String(event.target?.value || "auto").trim().toLowerCase();
+        state.shellId = SHELL_IDS.has(shellId) ? shellId : "auto";
+        persistShellId();
+        syncPopover();
+      });
     }
 
     function setOpen(nextOpen) {
@@ -435,6 +538,7 @@
         elements.sessionMenuEl?.classList.toggle("local-terminal-open", true);
         elements.localTerminalPopoverEl.hidden = false;
         renderPopover();
+        loadShellOptions();
         attachViewportResizeListeners();
         setTimeout(() => {
           resizeToContainer({ force: true });
@@ -462,5 +566,5 @@
     });
   }
 
-  window.AHALocalTerminal = Object.freeze({ createLocalTerminalController, renderLocalTerminal, terminalSizeForElement });
+  window.AHALocalTerminal = Object.freeze({ createLocalTerminalController, renderLocalTerminal, shellOptionLabel, terminalSizeForElement });
 })();

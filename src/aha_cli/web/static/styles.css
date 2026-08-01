@@ -976,6 +976,18 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
 .local-terminal-actions {
   justify-content: flex-start;
   flex-wrap: wrap;
+  align-items: flex-end;
+}
+.local-terminal-shell-picker {
+  display: grid;
+  gap: 3px;
+  min-width: 190px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.local-terminal-shell-picker select {
+  min-height: 34px;
+  color: var(--color-text);
 }
 .local-terminal-xterm {
   --terminal-bottom-gap: var(--local-terminal-bottom-gap);

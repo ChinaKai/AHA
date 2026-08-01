@@ -635,3 +635,10 @@ file list with relative path, size, mtime, and group. Restore reads only
 manifest-listed `run/` members, rejects unsafe paths, refuses current or active
 heartbeat runs, skips existing files by default, and overwrites only with
 `--force`.
+
+## Local Integrations
+
+- `GET /api/local-terminal/options` returns the host-detected safe shell IDs used by the Local Terminal picker. Windows can expose `pwsh`, `powershell`, `cmd`, and `wsl` (WSL is included only when at least one distribution is registered); `auto` resolves in the order PowerShell 7 → Windows PowerShell → Command Prompt. The browser persists only the selected ID and never sends an arbitrary executable path.
+- `GET /ws/terminal` provides the Integrations local terminal and accepts the validated `shell=<id>` query parameter. POSIX hosts use a PTY; supported Windows hosts use the native ConPTY API with UTF-8 VT input/output, incremental keyboard input, control keys, interactive line editing, resize support, and Job Object parent-death binding. Windows versions without ConPTY fall back to a redirected-pipe shell with host-codepage conversion and no resize support. The WebSocket JSON protocol remains `ready`, `input`, `resize`, `output`, `error`, `exit`, and `close` on both platforms; `ready` includes the resolved and requested shell IDs.
+- `GET /api/usage/daily`, `POST /api/usage/daily/refresh`, and `POST /api/usage/daily/stop` expose the ccusage-backed Daily Usage integration. Windows Python installations may have no IANA `tzdata`; `UTC`/`GMT` are always accepted, and a well-formed browser IANA timezone is passed through to ccusage when the host timezone database is absent. The host-local date is used only for the future-date validation gate.
+- Optional npm `.cmd`/`.bat` launchers such as `npx.CMD` are normalized through the cross-platform spawn helper before ccusage starts.

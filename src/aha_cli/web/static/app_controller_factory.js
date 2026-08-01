@@ -541,6 +541,7 @@
       apiUrl: deps.apiUrl,
       currentRunId: deps.currentRunId,
       escapeHtml: deps.escapeHtml,
+      fetchJson: deps.fetchJson,
       setObserveProxyOpen: deps.setObserveProxyOpen,
       setPlayConsoleOpen: deps.setPlayConsoleOpen,
       setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,

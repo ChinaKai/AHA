@@ -239,6 +239,17 @@ class TokenUsageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "since must be today or earlier"):
                 daily_token_usage_report(root, "run-usage", since="2999-01-01")
 
+    def test_windows_without_tzdata_accepts_utc_and_browser_iana_timezone(self) -> None:
+        missing = token_usage.ZoneInfoNotFoundError("missing tzdata")
+        with (
+            mock.patch("aha_cli.services.token_usage._platform.is_windows", return_value=True),
+            mock.patch("aha_cli.services.token_usage.available_timezones", return_value=set()),
+            mock.patch("aha_cli.services.token_usage.ZoneInfo", side_effect=missing),
+        ):
+            self.assertEqual(token_usage._timezone_name("UTC"), "UTC")
+            self.assertEqual(token_usage._timezone_name("Asia/Shanghai"), "Asia/Shanghai")
+            self.assertIsInstance(token_usage._today_in_timezone("Asia/Shanghai"), token_usage.dt.date)
+
     @mock.patch("aha_cli.services.token_usage._run_ccusage_json")
     def test_daily_route_reads_cache_and_refreshes_in_background(self, run_ccusage: mock.Mock) -> None:
         with TemporaryDirectory() as tmp:

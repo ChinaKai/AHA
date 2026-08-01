@@ -3,14 +3,16 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import threading
 import time
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
+from aha_cli import platform as _platform
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.store.io import read_json, write_json
@@ -98,11 +100,28 @@ def _parse_date(value: str | None, field: str) -> dt.date | None:
 
 def _timezone_name(name: str | None) -> str:
     tz_name = str(name or "UTC").strip() or "UTC"
+    if tz_name.upper() in {"UTC", "GMT"}:
+        return tz_name
     try:
         ZoneInfo(tz_name)
     except ZoneInfoNotFoundError as exc:
+        timezone_shape = r"[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)+"
+        if _platform.is_windows() and not available_timezones() and re.fullmatch(timezone_shape, tz_name):
+            return tz_name
         raise ValueError(f"unknown timezone: {tz_name}") from exc
     return tz_name
+
+
+def _today_in_timezone(tz_name: str) -> dt.date:
+    if tz_name.upper() in {"UTC", "GMT"}:
+        return dt.datetime.now(dt.timezone.utc).date()
+    try:
+        return dt.datetime.now(ZoneInfo(tz_name)).date()
+    except ZoneInfoNotFoundError:
+        # Windows does not ship Python's IANA timezone database. The browser and
+        # ccusage still understand the requested IANA name; using the host-local
+        # date here is sufficient for the future-date validation gate.
+        return dt.datetime.now().astimezone().date()
 
 
 def _empty_counts() -> dict:
@@ -299,7 +318,7 @@ def _run_ccusage_json_with_job(
 
 def _run_ccusage_json(args: list[str], *, root: Path | None = None, refresh_job: dict[str, object] | None = None) -> dict:
     env = _ccusage_env()
-    command = _ccusage_base_command(env) + args
+    command = _platform.spawn_command(_ccusage_base_command(env) + args)
     if refresh_job is not None:
         return _run_ccusage_json_with_job(command, env=env, root=root, refresh_job=refresh_job)
     try:
@@ -528,7 +547,7 @@ def _daily_usage_request(
     until_date = _parse_date(until, "until")
     if since_date and until_date and since_date > until_date:
         raise ValueError("since must be before or equal to until")
-    today = dt.datetime.now(ZoneInfo(tz_name)).date()
+    today = _today_in_timezone(tz_name)
     if since_date and since_date > today:
         raise ValueError("since must be today or earlier")
 
