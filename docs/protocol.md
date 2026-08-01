@@ -65,6 +65,31 @@ backend_stopped
 run_imported
 ```
 
+## Web Upgrade
+
+Installed onebin runtimes expose a read-only update check:
+
+```text
+GET /api/web/upgrade/status?run_id=<run-id>
+```
+
+The response includes `current_version`, `latest_version`, `update_available`,
+and `platform` (`system`, `release`, `machine`, `python_version`, and `label`).
+`update_available` is `null` when two builds cannot be ordered safely.
+
+Installing an update requires an explicit confirmation payload:
+
+```http
+POST /api/web/upgrade
+Content-Type: application/json
+
+{"run_id":"<run-id>","confirm":"upgrade"}
+```
+
+The server validates and atomically replaces the onebin, then schedules a full
+process restart. Requests without the exact confirmation return `400`. Source
+checkouts use `/api/web/publish/status` and `/api/web/publish` instead.
+
 ## Messages
 
 Messages are also append-only JSONL. New messages should include explicit routing fields:

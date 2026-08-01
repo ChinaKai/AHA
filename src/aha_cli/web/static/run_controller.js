@@ -86,6 +86,22 @@
       elements.sessionMenuEl?.classList?.remove("settings-open");
     }
 
+    function closeIntegrationPanels(except = "") {
+      if (except !== "feishu") deps.setFeishuConsoleOpen?.(false);
+      if (except !== "weixin") deps.setWeixinConsoleOpen?.(false);
+      if (except !== "play") deps.setPlayConsoleOpen?.(false);
+      if (except !== "observe-proxy") deps.setObserveProxyOpen?.(false);
+      if (except !== "local-terminal") deps.setLocalTerminalOpen?.(false);
+      if (except !== "skills") deps.setSkillsConsoleOpen?.(false);
+      if (except !== "usage") deps.setTokenUsageOpen?.(false);
+    }
+
+    function closeExclusiveSettingsPanels(except = "") {
+      if (except !== "settings") closeSystemSettingsPanel();
+      if (except !== "upgrade") setWebPublishConsoleOpen(false, { load: false });
+      closeIntegrationPanels(except);
+    }
+
     function setSettingsTab(tab, options = {}) {
       settingsTab = normalizeSettingsTab(tab);
       elements.sessionMenuEl?.setAttribute("data-settings-tab", settingsTab);
@@ -103,6 +119,7 @@
         }
       }
       if (settingsTab !== "integrations") {
+        deps.setFeishuConsoleOpen?.(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
         deps.setObserveProxyOpen?.(false);
@@ -506,16 +523,59 @@
       }
     }
 
+    function renderWebUpgradeConsole(panel) {
+      const status = webPublishStatus || {};
+      const currentVersion = String(status.current_version || deps.currentAppVersion?.() || "-");
+      const latestVersion = String(status.latest_version || "-");
+      const platformLabel = String(status.platform?.label || "-");
+      const updateAvailable = status.update_available === true;
+      const updateKnown = typeof status.update_available === "boolean";
+      const updateLabel = webPublishLoading
+        ? t("run.upgrade_checking", "Checking for updates...")
+        : (updateAvailable
+          ? t("run.upgrade_available", "Update available")
+          : (updateKnown ? t("run.upgrade_current", "Up to date") : t("run.upgrade_unknown", "Unable to determine")));
+      const updateClass = updateAvailable ? "warning" : (updateKnown ? "success" : "");
+      const busy = webPublishLoading || Boolean(deps.webRestartInFlight?.());
+      const noteHtml = webPublishNotice ? `<div class="web-publish-message success">${escapeHtml(webPublishNotice)}</div>` : "";
+      const errorHtml = webPublishError ? `<div class="web-publish-message error">${escapeHtml(webPublishError)}</div>` : "";
+      panel.innerHTML = `<section class="web-publish-panel">
+        <div class="web-publish-head">
+          <div>
+            <h3>${escapeHtml(t("run.upgrade_console_title", "AHA update"))}</h3>
+            <p>${escapeHtml(t("run.upgrade_console_hint", "Review the installed and latest versions before upgrading."))}</p>
+          </div>
+          <button class="button-ghost" type="button" data-web-publish-action="close">${escapeHtml(t("common.close", "Close"))}</button>
+        </div>
+        ${noteHtml}${errorHtml}
+        <div class="web-publish-status-grid">
+          <section><span>${escapeHtml(t("run.upgrade_current_version", "Current version"))}</span><code>${escapeHtml(currentVersion)}</code></section>
+          <section><span>${escapeHtml(t("run.upgrade_latest_version", "Latest version"))}</span><code>${escapeHtml(latestVersion)}</code></section>
+          <section><span>${escapeHtml(t("run.upgrade_platform", "Platform"))}</span><strong>${escapeHtml(platformLabel)}</strong></section>
+          <section><span>${escapeHtml(t("run.upgrade_status", "Update status"))}</span><strong class="${updateClass}">${escapeHtml(updateLabel)}</strong></section>
+        </div>
+        <div class="web-publish-actions">
+          <button class="button-ghost" type="button" data-web-publish-action="refresh" ${busy ? "disabled" : ""}>${escapeHtml(t("common.refresh", "Refresh"))}</button>
+          <button type="button" data-web-upgrade-action="install" ${busy || !updateAvailable ? "disabled" : ""}>${escapeHtml(t("run.upgrade_install", "Upgrade now"))}</button>
+        </div>
+        ${webPublishLoading ? `<div class="web-publish-message">${escapeHtml(t("run.upgrade_checking", "Checking for updates..."))}</div>` : ""}
+      </section>`;
+    }
+
     function renderWebPublishConsole() {
       const panel = elements.webPublishConsoleEl;
       if (!panel) return;
       const isPublish = webUpgradeAction() === "publish";
-      if (!webPublishConsoleOpen || !isPublish) {
+      if (!webPublishConsoleOpen) {
         panel.hidden = true;
         panel.innerHTML = "";
         return;
       }
       panel.hidden = false;
+      if (!isPublish) {
+        renderWebUpgradeConsole(panel);
+        return;
+      }
       const status = webPublishStatus || {};
       const dirty = Boolean(status.dirty);
       const dirtyText = dirty
@@ -563,17 +623,24 @@
     }
 
     async function loadWebPublishStatus(options = {}) {
-      if (!webPublishConsoleOpen || webUpgradeAction() !== "publish") return;
+      if (!webPublishConsoleOpen) return;
+      const publish = webUpgradeAction() === "publish";
       webPublishLoading = true;
       webPublishError = "";
       if (!options.keepNotice) webPublishNotice = "";
       renderWebPublishConsole();
       try {
-        const payload = await deps.fetchJson?.(deps.apiUrl?.("/api/web/publish/status"), {}, t("run.publish_status_failed", "Failed to load publish status"));
+        const endpoint = publish ? "/api/web/publish/status" : "/api/web/upgrade/status";
+        const failedText = publish
+          ? t("run.publish_status_failed", "Failed to load publish status")
+          : t("run.upgrade_status_failed", "Failed to check for updates");
+        const payload = await deps.fetchJson?.(deps.apiUrl?.(endpoint), { cache: "no-store" }, failedText);
         webPublishStatus = payload || null;
-        if (!options.keepTag) webPublishTag = String(payload?.next_tag || "");
+        if (publish && !options.keepTag) webPublishTag = String(payload?.next_tag || "");
       } catch (err) {
-        webPublishError = err?.message || String(err || t("run.publish_status_failed", "Failed to load publish status"));
+        webPublishError = err?.message || String(err || (publish
+          ? t("run.publish_status_failed", "Failed to load publish status")
+          : t("run.upgrade_status_failed", "Failed to check for updates")));
       } finally {
         webPublishLoading = false;
         renderWebPublishConsole();
@@ -581,13 +648,15 @@
     }
 
     function setWebPublishConsoleOpen(value, options = {}) {
-      const nextOpen = Boolean(value && currentRunId() && webUpgradeAction() === "publish" && deps.webUpgradeAvailable?.());
+      const nextOpen = Boolean(value && currentRunId() && deps.webUpgradeAvailable?.());
       webPublishConsoleOpen = nextOpen;
       elements.sessionMenuEl?.classList?.toggle("web-publish-open", nextOpen);
       elements.webUpgradeEl?.setAttribute("aria-expanded", String(nextOpen));
       if (!nextOpen) {
         webPublishError = "";
         webPublishNotice = "";
+      } else {
+        webPublishStatus = null;
       }
       renderWebPublishConsole();
       if (nextOpen && options.load !== false) void loadWebPublishStatus();
@@ -627,6 +696,37 @@
         await loadWebPublishStatus({ keepNotice: true });
       } catch (err) {
         webPublishError = err?.message || String(err || t("run.publish_failed", "Failed to publish Web"));
+      } finally {
+        webPublishLoading = false;
+        renderWebPublishConsole();
+      }
+    }
+
+    async function submitWebUpgrade() {
+      const status = webPublishStatus || {};
+      if (status.update_available !== true) return;
+      const currentVersion = String(status.current_version || deps.currentAppVersion?.() || "-");
+      const latestVersion = String(status.latest_version || "-");
+      const platformLabel = String(status.platform?.label || "-");
+      const confirmed = await (deps.confirmDialogAction?.({
+        title: t("run.upgrade_confirm_title", "Upgrade AHA?"),
+        message: t("run.upgrade_confirm_message", "AHA will replace the current onebin and restart the Web process."),
+        confirmLabel: t("run.upgrade_install", "Upgrade now"),
+        details: [
+          [t("run.upgrade_current_version", "Current version"), currentVersion],
+          [t("run.upgrade_latest_version", "Latest version"), latestVersion],
+          [t("run.upgrade_platform", "Platform"), platformLabel],
+        ],
+      }) ?? Promise.resolve(true));
+      if (!confirmed) return;
+      webPublishLoading = true;
+      webPublishError = "";
+      webPublishNotice = "";
+      renderWebPublishConsole();
+      try {
+        await deps.upgradeWebService?.();
+      } catch (err) {
+        webPublishError = err?.message || String(err || t("run.upgrade_failed", "Failed to upgrade Web"));
       } finally {
         webPublishLoading = false;
         renderWebPublishConsole();
@@ -681,11 +781,12 @@
         elements.webUpgradeEl.title = label;
         elements.webUpgradeEl.hidden = !upgradeAvailable;
         elements.webUpgradeEl.disabled = !upgradeAvailable || Boolean(deps.webRestartInFlight?.()) || !hasRun;
-        if (upgradeAction !== "publish" || !upgradeAvailable || !hasRun) {
+        if (!upgradeAvailable || !hasRun) {
           setWebPublishConsoleOpen(false, { load: false });
         }
       }
       if (elements.observeProxyEl) elements.observeProxyEl.disabled = actionInFlight;
+      if (elements.feishuConsoleEl) elements.feishuConsoleEl.disabled = actionInFlight;
       if (elements.localTerminalEl) elements.localTerminalEl.disabled = actionInFlight || !hasRun;
       if (elements.weixinConsoleEl) elements.weixinConsoleEl.disabled = actionInFlight || !hasRun;
       if (elements.playConsoleEl) elements.playConsoleEl.disabled = actionInFlight || !hasRun;
@@ -705,12 +806,15 @@
         deps.setLocalTerminalOpen?.(false);
         deps.setTokenUsageOpen?.(false);
         if (actionInFlight) {
+          deps.setFeishuConsoleOpen?.(false);
           deps.setObserveProxyOpen?.(false);
           deps.setLocalTerminalOpen?.(false);
           deps.setSkillsConsoleOpen?.(false);
         }
       } else if (runMaintenanceConsoleOpen && elements.runMaintenancePopoverEl) {
         renderRunMaintenance();
+      } else if (deps.feishuConsoleOpen?.() && elements.feishuConsolePopoverEl) {
+        deps.renderFeishuConsolePopover?.();
       } else if (deps.observeProxyOpen?.() && elements.observeProxyPopoverEl) {
         deps.renderObserveProxyPopover?.();
       } else if (deps.localTerminalOpen?.() && elements.localTerminalPopoverEl) {
@@ -779,6 +883,7 @@
         }
       }
       if (!sessionMenuOpen) {
+        deps.setFeishuConsoleOpen?.(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
         deps.setLocalTerminalOpen?.(false);
@@ -793,6 +898,7 @@
       runMaintenanceConsoleOpen = Boolean(open && (runMaintenanceRunId || currentRunId()) && elements.runMaintenancePopoverEl);
       if (!elements.runMaintenancePopoverEl) return;
       if (runMaintenanceConsoleOpen) {
+        deps.setFeishuConsoleOpen?.(false);
         deps.setWeixinConsoleOpen?.(false);
         deps.setPlayConsoleOpen?.(false);
         deps.setSkillsConsoleOpen?.(false);
@@ -958,14 +1064,20 @@
       });
       elements.webUpgradeEl?.addEventListener("click", () => {
         if (!deps.webUpgradeAvailable?.()) return;
-        if (webUpgradeAction() === "publish") {
-          setWebPublishConsoleOpen(!webPublishConsoleOpen);
-          return;
-        }
-        void deps.dispatchAction?.("web-upgrade");
+        const nextOpen = !webPublishConsoleOpen;
+        if (nextOpen) closeExclusiveSettingsPanels("upgrade");
+        setWebPublishConsoleOpen(nextOpen);
+      });
+      elements.documentRef?.getElementById?.("aha-settings")?.addEventListener("click", () => {
+        closeExclusiveSettingsPanels("settings");
       });
       elements.webPublishConsoleEl?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
+        const upgradeActionEl = target?.closest("[data-web-upgrade-action]");
+        if (upgradeActionEl?.getAttribute("data-web-upgrade-action") === "install") {
+          void submitWebUpgrade();
+          return;
+        }
         const actionEl = target?.closest("[data-web-publish-action]");
         if (!actionEl) return;
         const action = actionEl.getAttribute("data-web-publish-action") || "";
@@ -984,78 +1096,53 @@
         void submitWebPublish(form);
       });
       elements.authLogoutEl?.addEventListener("click", deps.logoutAuthSession);
+      elements.feishuConsoleEl?.addEventListener("click", event => {
+        event.stopPropagation();
+        if (runActionInFlight()) return;
+        const nextOpen = !deps.feishuConsoleOpen?.();
+        if (nextOpen) closeExclusiveSettingsPanels("feishu");
+        deps.setFeishuConsoleOpen?.(nextOpen);
+      });
       elements.weixinConsoleEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
         const nextOpen = !deps.weixinConsoleOpen?.();
-        if (nextOpen) {
-          deps.setPlayConsoleOpen?.(false);
-          deps.setLocalTerminalOpen?.(false);
-          deps.setSkillsConsoleOpen?.(false);
-          deps.setTokenUsageOpen?.(false);
-        }
+        if (nextOpen) closeExclusiveSettingsPanels("weixin");
         deps.setWeixinConsoleOpen?.(nextOpen);
       });
       elements.playConsoleEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
         const nextOpen = !deps.playConsoleOpen?.();
-        if (nextOpen) {
-          deps.setWeixinConsoleOpen?.(false);
-          deps.setLocalTerminalOpen?.(false);
-          deps.setSkillsConsoleOpen?.(false);
-          deps.setTokenUsageOpen?.(false);
-        }
+        if (nextOpen) closeExclusiveSettingsPanels("play");
         deps.setPlayConsoleOpen?.(nextOpen);
       });
       elements.skillsConsoleEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight()) return;
         const nextOpen = !deps.skillsConsoleOpen?.();
-        if (nextOpen) {
-          deps.setWeixinConsoleOpen?.(false);
-          deps.setPlayConsoleOpen?.(false);
-          deps.setLocalTerminalOpen?.(false);
-          deps.setTokenUsageOpen?.(false);
-        }
+        if (nextOpen) closeExclusiveSettingsPanels("skills");
         deps.setSkillsConsoleOpen?.(nextOpen);
       });
       elements.observeProxyEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight()) return;
         const nextOpen = !deps.observeProxyOpen?.();
-        if (nextOpen) {
-          deps.setWeixinConsoleOpen?.(false);
-          deps.setPlayConsoleOpen?.(false);
-          deps.setLocalTerminalOpen?.(false);
-          deps.setSkillsConsoleOpen?.(false);
-          deps.setTokenUsageOpen?.(false);
-        }
+        if (nextOpen) closeExclusiveSettingsPanels("observe-proxy");
         deps.setObserveProxyOpen?.(nextOpen);
       });
       elements.localTerminalEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
         const nextOpen = !deps.localTerminalOpen?.();
-        if (nextOpen) {
-          deps.setWeixinConsoleOpen?.(false);
-          deps.setPlayConsoleOpen?.(false);
-          deps.setObserveProxyOpen?.(false);
-          deps.setSkillsConsoleOpen?.(false);
-          deps.setTokenUsageOpen?.(false);
-        }
+        if (nextOpen) closeExclusiveSettingsPanels("local-terminal");
         deps.setLocalTerminalOpen?.(nextOpen);
       });
       elements.tokenUsageEl?.addEventListener("click", event => {
         event.stopPropagation();
         if (runActionInFlight() || !currentRunId()) return;
         const nextOpen = !deps.tokenUsageOpen?.();
-        if (nextOpen) {
-          deps.setWeixinConsoleOpen?.(false);
-          deps.setPlayConsoleOpen?.(false);
-          deps.setLocalTerminalOpen?.(false);
-          deps.setSkillsConsoleOpen?.(false);
-        }
+        if (nextOpen) closeExclusiveSettingsPanels("usage");
         deps.setTokenUsageOpen?.(nextOpen);
       });
       elements.runMaintenancePopoverEl?.addEventListener("click", event => {
@@ -1075,6 +1162,7 @@
         }
       });
       elements.weixinConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
+      elements.feishuConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.playConsolePopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.observeProxyPopoverEl?.addEventListener("click", event => event.stopPropagation());
       elements.localTerminalPopoverEl?.addEventListener("click", event => event.stopPropagation());

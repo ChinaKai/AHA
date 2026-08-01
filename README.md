@@ -146,5 +146,8 @@ PYTHONPATH=src python3 -m aha_cli ui --host 127.0.0.1 --port 8788
 运行测试：`python3 -m pytest`；构建 onebin：
 `python3 scripts/build_onebin.py --output dist/aha`。更多说明见 [`docs/`](docs/)。
 
+通过飞书与 AHA 助手对话、查询/创建任务和接收任务推送，参见
+[`docs/feishu-assistant.md`](docs/feishu-assistant.md)。
+
 > AHA 默认只监听 `127.0.0.1`。跨设备访问时请启用 Web auth token，并优先使用
 > SSH、VPN 或受保护的反向代理，不要把无认证端口直接暴露到公网。

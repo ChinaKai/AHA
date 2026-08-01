@@ -11,7 +11,15 @@ from unittest import mock
 from aha_cli.cli import append_message, main
 from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.services import headroom_integration
-from aha_cli.services.chat import chat_offset_path, chat_prompt, chat_prompt_with_metrics, load_chat_offset, save_chat_offset
+from aha_cli.services.chat import (
+    CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS,
+    _flush_channel_notifications,
+    chat_offset_path,
+    chat_prompt,
+    chat_prompt_with_metrics,
+    load_chat_offset,
+    save_chat_offset,
+)
 from aha_cli.services.context_planner import (
     _project_kind_reference,
     _related_project_references,
@@ -100,6 +108,52 @@ class ChatPromptTests(unittest.TestCase):
                 scoped_offset = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 self.assertTrue(scoped_offset.exists())
                 self.assertFalse(chat_offset_path(run_dir(root, run_id), "main", "task-002").exists())
+
+    def test_task_scoped_codex_chat_flushes_notifications_before_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Flush notifications", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "reply once", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "done", None)),
+                    mock.patch("aha_cli.services.chat._flush_channel_notifications") as flush,
+                ):
+                    code, _ = self.run_cli(
+                        "codex-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+
+        self.assertEqual(code, 0)
+        flush.assert_called_once_with(root / ".aha", run_id)
+
+    def test_notification_flush_timeout_is_recorded_without_requeueing(self) -> None:
+        root = Path("/tmp/aha-notification-flush-test")
+        with (
+            mock.patch(
+                "aha_cli.services.channel_notifications.wait_for_notification_queue",
+                return_value=False,
+            ) as wait,
+            mock.patch("aha_cli.store.events.append_event") as record,
+        ):
+            _flush_channel_notifications(root, "run-001")
+
+        wait.assert_called_once_with(timeout_seconds=CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS)
+        record.assert_called_once()
+        self.assertEqual(record.call_args.args[:3], (root, "run-001", "channel_notification_flush_timeout"))
+        self.assertEqual(
+            record.call_args.args[3],
+            {"timeout_seconds": CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS},
+        )
 
     def test_codex_chat_once_saves_offset_after_processed_message_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

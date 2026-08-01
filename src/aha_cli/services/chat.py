@@ -104,6 +104,7 @@ SUPERVISION_SKIP_COORDINATIONS = {
     "system_status",
     "verification_status",
 }
+CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS = 10.0
 
 
 def _apply_context_fingerprint_updates(session: dict, prompt_metrics: dict) -> None:
@@ -689,6 +690,24 @@ def auto_reply(root: Path, run_id: str, args) -> int:
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return 130
+    finally:
+        _flush_channel_notifications(root, run_id)
+
+
+def _flush_channel_notifications(root: Path, run_id: str) -> None:
+    """Bound delivery drain so a broken channel cannot hold backend shutdown."""
+    from aha_cli.services.channel_notifications import wait_for_notification_queue
+    from aha_cli.store.events import append_event as append_raw_event
+
+    if wait_for_notification_queue(timeout_seconds=CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS):
+        return
+    append_raw_event(
+        root,
+        run_id,
+        "channel_notification_flush_timeout",
+        {"timeout_seconds": CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS},
+        ts=utc_now(),
+    )
 
 
 def codex_chat(root: Path, run_id: str, args) -> int:
@@ -1589,3 +1608,5 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return 130
+    finally:
+        _flush_channel_notifications(root, run_id)

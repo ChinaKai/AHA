@@ -448,6 +448,7 @@ body.settings-home .session-menu[data-settings-tab="run"] .settings-popover {
 body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrations-section {
   grid-column: 1 / -1;
 }
+.session-menu.feishu-open,
 .session-menu.weixin-open,
 .session-menu.play-open,
 .session-menu.observe-proxy-open,
@@ -456,6 +457,7 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrat
 .session-menu.token-usage-open {
   overflow: visible;
 }
+body.settings-home .session-menu.feishu-open,
 body.settings-home .session-menu.weixin-open,
 body.settings-home .session-menu.play-open,
 body.settings-home .session-menu.observe-proxy-open,
@@ -478,6 +480,7 @@ body.settings-home .session-menu.local-terminal-open .run-integrations-section {
   min-height: 0;
   overflow: visible;
 }
+body.settings-home .session-menu.feishu-open .feishu-console-popover,
 body.settings-home .session-menu.weixin-open .weixin-console-popover,
 body.settings-home .session-menu.play-open .play-console-popover,
 body.settings-home .session-menu.observe-proxy-open .observe-proxy-popover,
@@ -845,6 +848,133 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
+.feishu-console-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(78dvh, 720px);
+  overflow: auto;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+}
+.feishu-console-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+.feishu-console-head,
+.feishu-console-actions,
+.feishu-console-status-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.feishu-console-head h3 {
+  margin: 0;
+}
+.feishu-console-head p,
+.feishu-console-footnote {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.feishu-console-actions {
+  flex: 0 0 auto;
+}
+.feishu-console-status-line {
+  align-items: center;
+  justify-content: flex-start;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #475467;
+  font-size: 12px;
+}
+.feishu-console-badge {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eaecf0;
+  color: #475467;
+  font-weight: 700;
+}
+.feishu-console-badge.connected { background: #dcfae6; color: #067647; }
+.feishu-console-badge.pending { background: #fef0c7; color: #b54708; }
+.feishu-console-badge.error { background: #fee4e2; color: #b42318; }
+.feishu-console-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.feishu-console-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fff;
+}
+.feishu-console-metric span,
+.feishu-console-command span {
+  color: #667085;
+  font-size: 11px;
+}
+.feishu-console-metric strong,
+.feishu-console-metric code {
+  overflow: hidden;
+  color: #101828;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feishu-console-message,
+.feishu-console-command {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.feishu-console-message.error {
+  border: 1px solid #fecdca;
+  background: #fef3f2;
+  color: #b42318;
+}
+.feishu-console-message.success {
+  border: 1px solid #abefc6;
+  background: #ecfdf3;
+  color: #067647;
+}
+.feishu-console-notifications {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.feishu-console-notifications small {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.feishu-console-command {
+  border: 1px solid #e4e7ec;
+  background: #f9fafb;
+}
+.feishu-console-command code {
+  overflow-x: auto;
+  white-space: nowrap;
 }
 .play-console-popover {
   position: absolute;
@@ -1500,6 +1630,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
 }
 .session-menu,
 .settings-popover,
+.feishu-console-popover,
 .weixin-console-popover,
 .play-console-popover,
 .observe-proxy-popover,
@@ -1510,6 +1641,13 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   border-radius: var(--surface-radius);
   background: var(--surface-bg);
   box-shadow: var(--shadow-popover);
+}
+.session-menu.feishu-open .feishu-console-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(calc(var(--app-viewport-height) - 96px), 720px);
 }
 .session-menu.weixin-open .weixin-console-popover {
   position: absolute;
@@ -1553,6 +1691,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   max-height: min(52vh, 560px);
   box-shadow: none;
 }
+.feishu-console-popover[hidden],
 .weixin-console-popover[hidden],
 .play-console-popover[hidden],
 .observe-proxy-popover[hidden],
@@ -2217,6 +2356,14 @@ button, input, select, textarea { font: inherit; }
   background: #1f6feb;
   color: #ffffff;
   font-weight: 650;
+}
+.login-panel .login-provider {
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid #1f6feb;
+  border-radius: 6px;
+  text-align: center;
+  text-decoration: none;
 }
 body.auth-required main,
 body.auth-required .session-control,
@@ -7980,6 +8127,12 @@ body.empty-run .panel {
     min-width: 24px;
     min-height: 24px;
   }
+  .session-menu.feishu-open .feishu-console-popover {
+    top: 0;
+    right: calc(100% + 10px);
+    width: clamp(560px, calc(100vw - 430px), 720px);
+    max-height: min(calc(var(--app-viewport-height) - 80px), 720px);
+  }
   .session-menu.weixin-open .weixin-console-popover {
     top: 0;
     right: calc(100% + 10px);
@@ -8192,6 +8345,16 @@ body.empty-run .panel {
     gap: 8px;
   }
   .agent-card { margin: 0; }
+  .session-menu.feishu-open .feishu-console-popover {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    z-index: 80;
+    width: auto;
+    max-height: none;
+  }
   .session-menu.weixin-open .weixin-console-popover {
     position: fixed;
     top: 72px;
@@ -8805,9 +8968,11 @@ body.empty-run .panel {
   .web-service-actions,
   .observe-proxy-status-grid,
   .observe-proxy-config-grid,
+  .feishu-console-grid,
   .weixin-console-grid {
     grid-template-columns: 1fr;
   }
+  .feishu-console-popover,
   .weixin-console-popover,
   .play-console-popover,
   .observe-proxy-popover,

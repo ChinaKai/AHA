@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import subprocess
 from pathlib import Path
 
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
+from aha_cli.services.feishu_runtime import feishu_status, update_feishu_notifications_enabled
 from aha_cli.services.proxy import apply_proxy_environment, core_proxy_config, proxy_configured
 from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
 from aha_cli.services.weixin import (
@@ -37,9 +39,18 @@ from aha_cli.web.status import (
     web_task_options_snapshot,
     web_tasks_snapshot,
 )
-from aha_cli.web.upgrade import publish_source_release, source_publish_preview, web_publish_status, web_upgrade_command, web_upgrade_status
+from aha_cli.web.upgrade import (
+    publish_source_release,
+    runtime_platform_status,
+    source_publish_preview,
+    web_publish_status,
+    web_upgrade_check_command,
+    web_upgrade_command,
+    web_upgrade_status,
+)
 
 WEB_RESTART_EXIT_CODE = 75
+WEB_UPGRADE_TIMEOUT_SECONDS = 180
 _web_restart_requested = False
 
 REALTIME_DEBUG_ALLOWED_KEYS = {
@@ -169,6 +180,7 @@ def _is_unspecified_hostname(hostname: str) -> bool:
 def access_control_payload(
     headers: dict[str, str] | None = None,
     auth_required: bool = False,
+    auth_mode: str | None = None,
     bind_host: str | None = None,
     bind_port: int | str | None = None,
 ) -> dict:
@@ -181,13 +193,17 @@ def access_control_payload(
     bind_hostname = _hostname_from_host_header(bind_host_text)
     bind_network_visible = bind_host_exposes_network(bind_host_text) if bind_host_text else False
     effective_network_visible = bind_network_visible or (not bind_host_text and bool(hostname) and not loopback)
+    resolved_auth_mode = str(auth_mode or ("token" if auth_required else "none"))
+    if resolved_auth_mode not in {"none", "token", "feishu", "token+feishu"}:
+        resolved_auth_mode = "token" if auth_required else "none"
     if effective_network_visible:
         risk_level = "high"
-        recommendation = (
-            "network-visible bind is protected by token auth; prefer 127.0.0.1 plus SSH/VPN/TLS proxy"
-            if auth_required
-            else "bind to 127.0.0.1 or enable token auth behind SSH/VPN/authenticated reverse proxy"
-        )
+        if resolved_auth_mode == "token":
+            recommendation = "network-visible bind is protected by token auth; prefer 127.0.0.1 plus SSH/VPN/TLS proxy"
+        elif auth_required:
+            recommendation = "network-visible access is authenticated; prefer a 127.0.0.1 bind behind a TLS proxy"
+        else:
+            recommendation = "bind to 127.0.0.1 or enable token auth behind SSH/VPN/authenticated reverse proxy"
     elif loopback or (bind_host_text and not bind_network_visible):
         risk_level = "low"
         recommendation = "local loopback access"
@@ -199,8 +215,8 @@ def access_control_payload(
         recommendation = "verify the UI is not exposed to an untrusted network"
     return {
         "ok": True,
-        "auth_mode": "token" if auth_required else "none",
-        "token_required": auth_required,
+        "auth_mode": resolved_auth_mode,
+        "token_required": resolved_auth_mode in {"token", "token+feishu"},
         "host_header": host_header,
         "hostname": hostname,
         "request_hostname": hostname,
@@ -231,6 +247,10 @@ def _web_upgrade_command() -> list[str]:
     return web_upgrade_command()
 
 
+def _web_upgrade_check_command() -> list[str]:
+    return web_upgrade_check_command()
+
+
 def _web_upgrade_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
     try:
@@ -254,28 +274,62 @@ def _web_upgrade_env(root: Path) -> dict[str, str]:
     return apply_proxy_environment(env, proxy_env)
 
 
+def _run_web_upgrade_command(root: Path, command: list[str]) -> tuple[dict, str, str]:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=Path.home(),
+            env=_web_upgrade_env(root),
+            capture_output=True,
+            text=True,
+            timeout=WEB_UPGRADE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"failed to run AHA upgrade command: {exc}") from exc
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    if result.returncode != 0:
+        detail = (stderr or stdout).strip()
+        raise RuntimeError(f"AHA upgrade command failed with exit code {result.returncode}{f': {detail}' if detail else ''}")
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("AHA upgrade command returned invalid JSON") from exc
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise RuntimeError(str(payload.get("error") if isinstance(payload, dict) else "AHA upgrade command failed"))
+    return payload, stdout, stderr
+
+
+def web_upgrade_check_payload(root: Path, run_id: str) -> dict:
+    payload, _stdout, _stderr = _run_web_upgrade_command(root, _web_upgrade_check_command())
+    return {
+        "run_id": run_id,
+        **payload,
+        "platform": runtime_platform_status(),
+    }
+
+
 def request_web_upgrade(root: Path, run_id: str) -> dict:
     command = _web_upgrade_command()
     log_dir = root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "web-upgrade.log"
-    with log_path.open("ab") as log_file:
-        log_file.write(f"\n--- AHA web upgrade requested for {run_id} ---\n".encode("utf-8"))
-        process = subprocess.Popen(  # noqa: S603 - fixed command, no shell.
-            command,
-            cwd=Path.home(),
-            env=_web_upgrade_env(root),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    result, stdout, stderr = _run_web_upgrade_command(root, command)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"\n--- AHA web upgrade requested for {run_id} ---\n")
+        log_file.write(stdout)
+        log_file.write(stderr)
+    restart = request_web_restart(root, run_id)
     payload = {
         "run_id": run_id,
-        "upgrade": "service-upgrade-user",
+        "upgrade": "onebin-replace-restart",
         "command": command,
         "cwd": str(Path.home()),
-        "pid": process.pid,
         "log_path": str(log_path),
+        "platform": runtime_platform_status(),
+        **result,
+        **restart,
     }
     append_event(root, run_id, "web_upgrade_requested", payload)
     return payload
@@ -482,6 +536,7 @@ def system_route_response(
     body: bytes = b"",
     headers: dict[str, str] | None = None,
     auth_required: bool = False,
+    auth_mode: str | None = None,
     bind_host: str | None = None,
     bind_port: int | str | None = None,
 ) -> bytes | None:
@@ -512,7 +567,13 @@ def system_route_response(
     if method in {"GET", "HEAD"} and path == "/api/access-control":
         return head_or_json(
             method,
-            access_control_payload(headers, auth_required=auth_required, bind_host=bind_host, bind_port=bind_port),
+            access_control_payload(
+                headers,
+                auth_required=auth_required,
+                auth_mode=auth_mode,
+                bind_host=bind_host,
+                bind_port=bind_port,
+            ),
             request_headers=headers,
         )
     if method in {"GET", "HEAD"} and path == "/api/status":
@@ -642,11 +703,24 @@ def system_route_response(
     if method == "POST" and path == "/api/web/upgrade":
         payload = parse_json_body(body) if body.strip() else {}
         run_id = require_api_run_id(root, default_run_id, query, payload)
+        if str(payload.get("confirm") or "").strip().lower() != "upgrade":
+            return json_response({"error": "confirm must be 'upgrade'"}, "400 Bad Request")
         try:
             upgrade = request_web_upgrade(root, run_id)
         except FileNotFoundError as exc:
             return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "409 Conflict")
+        except RuntimeError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "502 Bad Gateway")
         return json_response({"ok": True, **upgrade})
+    if method in {"GET", "HEAD"} and path == "/api/web/upgrade/status":
+        run_id = require_api_run_id(root, default_run_id, query)
+        try:
+            status = web_upgrade_check_payload(root, run_id)
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "409 Conflict")
+        except RuntimeError as exc:
+            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "502 Bad Gateway")
+        return head_or_json(method, {"ok": True, **status}, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/web/publish/status":
         run_id = require_api_run_id(root, default_run_id, query)
         try:
@@ -682,6 +756,17 @@ def system_route_response(
                 payload["receive_error"] = str(exc)
         payload["notifications"] = notification_status(root, run_id)
         return head_or_json(method, payload, request_headers=headers)
+    if method in {"GET", "HEAD"} and path == "/api/feishu":
+        return head_or_json(method, {"ok": True, "feishu": feishu_status(root)}, request_headers=headers)
+    if method == "POST" and path == "/api/feishu/notifications":
+        payload = parse_json_body(body) if body.strip() else {}
+        raw_enabled = payload.get("enabled")
+        enabled = raw_enabled if isinstance(raw_enabled, bool) else str(raw_enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            status = update_feishu_notifications_enabled(root, enabled)
+        except (OSError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
+        return json_response({"ok": True, "feishu": status})
     if method == "POST" and path == "/api/weixin/pair":
         run_id = require_api_run_id(root, default_run_id, query)
         try:

@@ -400,10 +400,21 @@ with `--skip-upgrade-validation` for onebin or `--skip-version-validation` for
 source, and the post-restart health poll can be disabled with
 `--no-health-check`.
 
-The Web upgrade action calls `aha service upgrade-user` from the installed
-onebin. That command downloads the configured release asset, validates it,
-atomically replaces `AHA_INSTALL_BIN`, and restarts the recorded user systemd
-service. Source checkouts are no longer part of the Web upgrade path.
+The Web upgrade panel first calls `GET /api/web/upgrade/status`. A check-only
+`aha service upgrade-user` subprocess downloads and validates the configured
+release without replacing the installed file, then reports the current and
+latest versions plus the runtime platform. Version ordering compares release
+semver first and build date second so a newer local build is not offered an
+older release as an update.
+
+Confirmed upgrades call `POST /api/web/upgrade` with `{"confirm":"upgrade"}`.
+The current Python interpreter launches the extensionless onebin on both Linux
+and Windows, atomically replaces `AHA_INSTALL_BIN` without invoking systemd,
+then requests the same process-level restart used by Restart Web. `cmd_ui`
+reloads the replaced zipapp with its original arguments. A Linux user systemd
+unit continues tracking the process, while a console-started Windows instance
+recovers without a platform-specific service manager. Source checkouts keep the
+separate publish flow and are not part of the onebin Web upgrade path.
 
 AHA Web UI is a local tool with optional token auth. `aha ui --auth-token` and
 `aha ui --auth-token-file` protect the UI, APIs, and WebSocket while leaving

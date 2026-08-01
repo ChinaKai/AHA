@@ -77,6 +77,7 @@ from aha_cli.services.service_upgrade import (
     DEFAULT_RELEASE_VERSION,
     DEFAULT_SERVICE_NAME,
     ServiceUpgradeError,
+    check_user_service_upgrade,
     upgrade_user_service,
 )
 from aha_cli.services.tasks import create_task_and_dispatch
@@ -1738,16 +1739,23 @@ def cmd_service(args: argparse.Namespace) -> int:
             print("--bin is required when $AHA_INSTALL_BIN is not set and the current executable is not a onebin", file=sys.stderr)
             return 2
         try:
-            result = upgrade_user_service(
-                bin_path=Path(bin_value),
-                service_name=args.service_name or os.environ.get("AHA_SERVICE_NAME") or DEFAULT_SERVICE_NAME,
-                repo=args.repo or os.environ.get("AHA_RELEASE_REPO") or DEFAULT_RELEASE_REPO,
-                version=args.version or os.environ.get("AHA_RELEASE_VERSION") or DEFAULT_RELEASE_VERSION,
-                asset_name=args.asset_name or os.environ.get("AHA_RELEASE_ASSET") or DEFAULT_RELEASE_ASSET,
-                download_url=args.download_url or os.environ.get("AHA_RELEASE_URL") or None,
-                artifact=Path(args.artifact) if args.artifact else None,
-                restart=not args.no_restart,
-                validate=not args.skip_upgrade_validation,
+            common = {
+                "bin_path": Path(bin_value),
+                "service_name": args.service_name or os.environ.get("AHA_SERVICE_NAME") or DEFAULT_SERVICE_NAME,
+                "repo": args.repo or os.environ.get("AHA_RELEASE_REPO") or DEFAULT_RELEASE_REPO,
+                "version": args.version or os.environ.get("AHA_RELEASE_VERSION") or DEFAULT_RELEASE_VERSION,
+                "asset_name": args.asset_name or os.environ.get("AHA_RELEASE_ASSET") or DEFAULT_RELEASE_ASSET,
+                "download_url": args.download_url or os.environ.get("AHA_RELEASE_URL") or None,
+                "artifact": Path(args.artifact) if args.artifact else None,
+            }
+            result = (
+                check_user_service_upgrade(**common)
+                if args.check_only
+                else upgrade_user_service(
+                    **common,
+                    restart=not args.no_restart,
+                    validate=not args.skip_upgrade_validation,
+                )
             )
         except ServiceUpgradeError as exc:
             print(str(exc), file=sys.stderr)
@@ -1755,13 +1763,19 @@ def cmd_service(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps({"ok": True, **result}, indent=2, ensure_ascii=False))
         else:
-            print(f"Upgraded AHA executable: {result['bin']}")
-            if result.get("previous_version"):
-                print(f"Previous AHA version: {result['previous_version']}")
-            if result.get("installed_version"):
-                print(f"Installed AHA version: {result['installed_version']}")
-            print(f"Service: {result['service']}")
-            print(f"Restarted: {1 if result['restarted'] else 0}")
+            if args.check_only:
+                print(f"Current AHA version: {result.get('current_version') or '-'}")
+                print(f"Latest AHA version: {result.get('latest_version') or '-'}")
+                available = result.get("update_available")
+                print(f"Update available: {'unknown' if available is None else (1 if available else 0)}")
+            else:
+                print(f"Upgraded AHA executable: {result['bin']}")
+                if result.get("previous_version"):
+                    print(f"Previous AHA version: {result['previous_version']}")
+                if result.get("installed_version"):
+                    print(f"Installed AHA version: {result['installed_version']}")
+                print(f"Service: {result['service']}")
+                print(f"Restarted: {1 if result['restarted'] else 0}")
         return 0
     raise SystemExit(f"Unknown service command: {args.service_cmd}")
 

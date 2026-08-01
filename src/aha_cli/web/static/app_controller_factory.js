@@ -395,6 +395,7 @@
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
       messageImageFileEl, messageImageUploadEl,
       observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
+      feishuConsoleEl, feishuConsolePopoverEl,
       closeTaskMemosEl, globalSearchCloseEl, globalSearchDialogEl, globalSearchFormEl,
       globalSearchHelpCloseEl, globalSearchHelpDialogEl, globalSearchHelpOpenEl,
       globalSearchInputEl, globalSearchResultsEl, globalSearchStateEl, globalSearchTypeEl,
@@ -542,6 +543,24 @@
       currentRunId: deps.currentRunId,
       escapeHtml: deps.escapeHtml,
       fetchJson: deps.fetchJson,
+      setObserveProxyOpen: deps.setObserveProxyOpen,
+      setPlayConsoleOpen: deps.setPlayConsoleOpen,
+      setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
+      setSkillsConsoleOpen: deps.setSkillsConsoleOpen,
+      setTokenUsageOpen: deps.setTokenUsageOpen,
+      setWeixinConsoleOpen: deps.setWeixinConsoleOpen,
+      windowRef: deps.windowRef
+    });
+
+    const feishuConsoleController = window.AHAFeishuConsole.createFeishuConsoleController({
+      feishuConsoleEl,
+      feishuConsolePopoverEl,
+      sessionMenuEl
+    }, {
+      apiUrl: deps.apiUrl,
+      escapeHtml: deps.escapeHtml,
+      fetchJson: deps.fetchJson,
+      setLocalTerminalOpen: deps.setLocalTerminalOpen,
       setObserveProxyOpen: deps.setObserveProxyOpen,
       setPlayConsoleOpen: deps.setPlayConsoleOpen,
       setRunMaintenanceConsoleOpen: deps.setRunMaintenanceConsoleOpen,
@@ -814,6 +833,7 @@
 
     return Object.freeze({
       agentConfigController,
+      feishuConsoleController,
       globalSearchController,
       localTerminalController,
       observeProxyController,

@@ -87,10 +87,33 @@ def default_observe_proxy_integration_config() -> dict:
     }
 
 
+def default_feishu_integration_config() -> dict:
+    return {
+        "enabled": False,
+        "app_id": "",
+        "app_secret": "",
+        "app_id_env": "AHA_FEISHU_APP_ID",
+        "app_secret_env": "AHA_FEISHU_APP_SECRET",
+        "allowed_open_ids": [],
+        "group_mentions_only": True,
+        "notifications_enabled": True,
+        "security_mode": "audit",
+    }
+
+
+def default_weixin_integration_config() -> dict:
+    return {
+        "enabled": False,
+        "visible": False,
+    }
+
+
 def default_integrations_config() -> dict:
     return {
         "headroom": default_headroom_integration_config(),
         "observe_proxy": default_observe_proxy_integration_config(),
+        "feishu": default_feishu_integration_config(),
+        "weixin": default_weixin_integration_config(),
     }
 
 
@@ -258,11 +281,41 @@ def normalize_observe_proxy_integration_config(value: object | None = None) -> d
     return config
 
 
+def normalize_feishu_integration_config(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_feishu_integration_config()
+    for key in ("enabled", "group_mentions_only", "notifications_enabled"):
+        if key in raw:
+            config[key] = normalize_bool(raw.get(key))
+    for key in ("app_id", "app_secret", "app_id_env", "app_secret_env"):
+        if key in raw:
+            config[key] = str(raw.get(key) or "").strip()
+    allowed = raw.get("allowed_open_ids")
+    if isinstance(allowed, str):
+        allowed = [item.strip() for item in allowed.split(",")]
+    if isinstance(allowed, list):
+        config["allowed_open_ids"] = list(dict.fromkeys(str(item or "").strip() for item in allowed if str(item or "").strip()))
+    security_mode = str(raw.get("security_mode") or config["security_mode"]).strip().lower()
+    config["security_mode"] = security_mode if security_mode in {"compat", "audit", "strict"} else "audit"
+    return config
+
+
+def normalize_weixin_integration_config(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_weixin_integration_config()
+    for key in ("enabled", "visible"):
+        if key in raw:
+            config[key] = normalize_bool(raw.get(key))
+    return config
+
+
 def normalize_integrations_config(value: object | None = None) -> dict:
     raw = value if isinstance(value, dict) else {}
     config = default_integrations_config()
     config["headroom"] = normalize_headroom_integration_config(raw.get("headroom"))
     config["observe_proxy"] = normalize_observe_proxy_integration_config(raw.get("observe_proxy"))
+    config["feishu"] = normalize_feishu_integration_config(raw.get("feishu"))
+    config["weixin"] = normalize_weixin_integration_config(raw.get("weixin"))
     return config
 
 

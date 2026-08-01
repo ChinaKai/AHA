@@ -564,6 +564,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     service_upgrade.add_argument("--asset-name", default=None, help="Release asset name")
     service_upgrade.add_argument("--download-url", default=None, help="Download executable from an explicit URL")
     service_upgrade.add_argument("--artifact", default=None, help="Install an existing local onebin artifact")
+    service_upgrade.add_argument("--check-only", action="store_true", help="Download and validate the candidate without replacing the installed onebin")
     service_upgrade.add_argument("--no-restart", action="store_true", help="Replace the executable without restarting systemd")
     service_upgrade.add_argument("--no-health-check", action="store_true", help="Accepted for installer parity; no health poll is run")
     service_upgrade.add_argument("--skip-upgrade-validation", action="store_true", help="Do not verify the downloaded executable with --version")

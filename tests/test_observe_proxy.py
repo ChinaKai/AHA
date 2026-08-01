@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 from urllib.request import Request, urlopen
 
-from aha_cli.domain.models import default_config, normalize_integrations_config
+from aha_cli.domain.models import default_config, normalize_feishu_integration_config, normalize_integrations_config
 from aha_cli.services.observe_proxy import (
     CODEX_CHATGPT_DEFAULT_BASE_URL,
     ObserveProxyHandler,
@@ -29,6 +29,28 @@ from aha_cli.store.paths import event_path, run_dir
 
 
 class ObserveProxyTests(unittest.TestCase):
+    def test_normalizes_feishu_and_hides_weixin_by_default(self) -> None:
+        defaults = default_config()["integrations"]
+        self.assertFalse(defaults["feishu"]["enabled"])
+        self.assertNotIn("default_run_id", defaults["feishu"])
+        self.assertFalse(defaults["weixin"]["enabled"])
+        self.assertFalse(defaults["weixin"]["visible"])
+
+        config = normalize_feishu_integration_config(
+            {
+                "enabled": "true",
+                "app_secret": " secret-from-settings ",
+                "allowed_open_ids": "ou_a, ou_b,ou_a",
+                "group_mentions_only": "false",
+                "security_mode": "invalid",
+            }
+        )
+        self.assertTrue(config["enabled"])
+        self.assertEqual(config["app_secret"], "secret-from-settings")
+        self.assertEqual(config["allowed_open_ids"], ["ou_a", "ou_b"])
+        self.assertFalse(config["group_mentions_only"])
+        self.assertEqual(config["security_mode"], "audit")
+
     def test_normalizes_observe_proxy_config(self) -> None:
         config = normalize_integrations_config({"observe_proxy": {"enabled": True, "port": "9999"}})
 

@@ -18,6 +18,7 @@ from aha_cli.store.filesystem import (
     status_snapshot,
 )
 from aha_cli.store.sessions import backend_session_usage_archive_fields, usage_token_summary
+from aha_cli.store.paths import event_path
 from tests.helpers import append_jsonl_records, write_plan_statuses
 
 
@@ -176,6 +177,9 @@ class StoreStateTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")
                 self.assertEqual(detail["task"]["started_at"], "2026-05-15T00:00:00+00:00")
+                events, _offset = iter_jsonl_from(event_path(root, run_id))
+                status_events = [event for event in events if event.get("type") == "task_status_changed"]
+                self.assertEqual(status_events[-1]["data"]["previous_status"], "running")
 
     def test_running_status_does_not_reopen_terminal_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

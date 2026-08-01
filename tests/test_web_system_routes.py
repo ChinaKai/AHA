@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -499,10 +500,27 @@ class WebSystemRoutesTests(unittest.TestCase):
                     "AHA_RELEASE_ASSET": "aha",
                     "AHA_RELEASE_URL": "",
                 }
-                with mock.patch.dict(os.environ, upgrade_env, clear=False), mock.patch("aha_cli.web.system_routes.subprocess.Popen") as popen:
-                    popen.return_value.pid = 12345
-                    upgrade = system_route_response(root, run_id, "POST", "/api/web/upgrade", {}, b"{}")
-                    upgrade_call = popen.call_args
+                upgrade_result = {
+                    "ok": True,
+                    "bin": str(install_bin),
+                    "previous_version": "v0.1.0.old",
+                    "installed_version": "v0.2.0.new",
+                    "restarted": False,
+                }
+                with mock.patch.dict(os.environ, upgrade_env, clear=False), mock.patch(
+                    "aha_cli.web.system_routes._run_web_upgrade_command",
+                    return_value=(upgrade_result, json.dumps(upgrade_result), ""),
+                ) as run_upgrade:
+                    upgrade = system_route_response(
+                        root,
+                        run_id,
+                        "POST",
+                        "/api/web/upgrade",
+                        {},
+                        json.dumps({"confirm": "upgrade"}).encode("utf-8"),
+                    )
+                    upgrade_call = run_upgrade.call_args
+                upgrade_restart_requested = consume_web_restart_requested()
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 log_text = (root / ".aha" / "runs" / run_id / "logs" / "realtime-debug.log").read_text(encoding="utf-8")
 
@@ -515,8 +533,11 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(upgrade and upgrade.startswith(b"HTTP/1.1 200 OK"))
         upgrade_body = json_response_body(upgrade)
         self.assertTrue(upgrade_body["ok"])
-        self.assertEqual(upgrade_body["upgrade"], "service-upgrade-user")
+        self.assertEqual(upgrade_body["upgrade"], "onebin-replace-restart")
+        self.assertEqual(upgrade_body["installed_version"], "v0.2.0.new")
+        self.assertTrue(upgrade_restart_requested)
         expected_upgrade_command = [
+            sys.executable,
             str(install_bin),
             "service",
             "upgrade-user",
@@ -524,6 +545,7 @@ class WebSystemRoutesTests(unittest.TestCase):
             str(install_bin),
             "--no-health-check",
             "--json",
+            "--no-restart",
             "--service-name",
             "aha.service",
             "--repo",
@@ -534,9 +556,8 @@ class WebSystemRoutesTests(unittest.TestCase):
             "aha",
         ]
         self.assertEqual(upgrade_body["command"], expected_upgrade_command)
-        self.assertEqual(upgrade_body["pid"], 12345)
-        self.assertEqual(upgrade_call.args[0], expected_upgrade_command)
-        self.assertEqual(Path(upgrade_call.kwargs["cwd"]), Path.home())
+        self.assertEqual(upgrade_call.args[0], root)
+        self.assertEqual(upgrade_call.args[1], expected_upgrade_command)
         self.assertIn('"source": "client"', log_text)
         self.assertIn('"seq": 7', log_text)
         self.assertNotIn("ignored", log_text)
@@ -558,8 +579,61 @@ class WebSystemRoutesTests(unittest.TestCase):
             ):
                 command = system_routes._web_upgrade_command()
 
-        self.assertEqual(command[:5], [str(install_bin), "service", "upgrade-user", "--bin", str(install_bin)])
+        self.assertEqual(command[:6], [sys.executable, str(install_bin), "service", "upgrade-user", "--bin", str(install_bin)])
+        self.assertIn("--no-restart", command)
         self.assertNotIn(str(workspace), " ".join(command))
+
+    def test_web_upgrade_status_checks_without_installing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Upgrade status", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+            install_bin = root / "bin" / "aha"
+            install_bin.parent.mkdir(parents=True)
+            install_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            checked = {
+                "ok": True,
+                "current_version": "v0.1.0.old",
+                "latest_version": "v0.2.0.new",
+                "update_available": True,
+            }
+            with (
+                mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": "", "AHA_INSTALL_BIN": str(install_bin)}, clear=False),
+                mock.patch(
+                    "aha_cli.web.system_routes._run_web_upgrade_command",
+                    return_value=(checked, json.dumps(checked), ""),
+                ) as run_upgrade,
+                mock.patch(
+                    "aha_cli.web.system_routes.runtime_platform_status",
+                    return_value={"system": "Windows", "release": "11", "machine": "AMD64", "python_version": "3.12.4", "label": "Windows 11 (AMD64)"},
+                ),
+            ):
+                response = system_route_response(root, run_id, "GET", "/api/web/upgrade/status", {})
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 200 OK"))
+        body = json_response_body(response)
+        self.assertTrue(body["update_available"])
+        self.assertEqual(body["current_version"], "v0.1.0.old")
+        self.assertEqual(body["latest_version"], "v0.2.0.new")
+        self.assertEqual(body["platform"]["label"], "Windows 11 (AMD64)")
+        self.assertIn("--check-only", run_upgrade.call_args.args[1] if len(run_upgrade.call_args.args) > 1 else run_upgrade.call_args.args[0])
+
+    def test_web_upgrade_requires_explicit_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Upgrade confirmation", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+            with mock.patch("aha_cli.web.system_routes._run_web_upgrade_command") as run_upgrade:
+                response = system_route_response(root, run_id, "POST", "/api/web/upgrade", {}, b"{}")
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 400 Bad Request"))
+        run_upgrade.assert_not_called()
 
     def test_web_upgrade_command_requires_installed_onebin_for_source_runtime(self) -> None:
         with (
@@ -584,7 +658,14 @@ class WebSystemRoutesTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": str(root), "AHA_INSTALL_BIN": str(install_bin)}, clear=False),
                 mock.patch("aha_cli.web.system_routes.subprocess.Popen") as popen,
             ):
-                response = system_route_response(root, run_id, "POST", "/api/web/upgrade", {}, b"{}")
+                response = system_route_response(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/web/upgrade",
+                    {},
+                    json.dumps({"confirm": "upgrade"}).encode("utf-8"),
+                )
 
         self.assertTrue(response and response.startswith(b"HTTP/1.1 409 Conflict"))
         body = json_response_body(response)

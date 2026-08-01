@@ -316,10 +316,16 @@
     const codex = cfg.codex || {};
     const claude = cfg.claude || {};
     const proxy = cfg.proxy || {};
+    const integrations = cfg.integrations || {};
+    const feishu = integrations.feishu || {};
     const codexProxy = codex.proxy || proxy;
     const claudeProxy = claude.proxy || proxy;
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
+    const feishuSecretValue = maskSecrets ? "" : configString(feishu.app_secret);
+    const feishuSecretPlaceholder = maskSecrets && configString(feishu.app_secret)
+      ? "Configured; leave blank to keep"
+      : "";
     const codexDetailsOpen = mode === "settings" ? "" : " open";
     const codexModel = selectedBackendModel("codex", codex.model || envModelValue(codex.env_active), options);
     const claudeModel = selectedBackendModel("claude", claude.model || envModelValue(claude.env_active), options);
@@ -417,6 +423,55 @@
             </div>
             <div class="field-help">Each group becomes a custom Claude model option.</div>
           </label>
+        </details>
+        <details class="bootstrap-config-section">
+          <summary>Feishu assistant</summary>
+          <div class="bootstrap-config-grid">
+            <label class="field-label">
+              <span>Enable Feishu</span>
+              <input data-bootstrap-config-field="integrations.feishu.enabled" type="checkbox" ${feishu.enabled ? "checked" : ""}>
+              <div class="field-help">Starts the enterprise self-built app WebSocket channel with the AHA Web service.</div>
+            </label>
+            <label class="field-label">
+              <span>App ID</span>
+              <input data-bootstrap-config-field="integrations.feishu.app_id" placeholder="cli_xxx" value="${escapeHtml(configString(feishu.app_id))}">
+              <div class="field-help">May also be supplied through the App ID environment variable below.</div>
+            </label>
+            <label class="field-label">
+              <span>App Secret</span>
+              <input data-bootstrap-config-field="integrations.feishu.app_secret" type="password" placeholder="${escapeHtml(feishuSecretPlaceholder)}" value="${escapeHtml(feishuSecretValue)}">
+              <div class="field-help">Saved in AHA settings like provider API keys. Leave blank to keep the existing value.</div>
+            </label>
+            <label class="field-label">
+              <span>App ID environment variable</span>
+              <input data-bootstrap-config-field="integrations.feishu.app_id_env" value="${escapeHtml(configString(feishu.app_id_env, "AHA_FEISHU_APP_ID"))}">
+              <div class="field-help">Optional fallback when App ID above is empty.</div>
+            </label>
+            <label class="field-label">
+              <span>App Secret fallback environment variable</span>
+              <input data-bootstrap-config-field="integrations.feishu.app_secret_env" value="${escapeHtml(configString(feishu.app_secret_env, "AHA_FEISHU_APP_SECRET"))}">
+              <div class="field-help">Used only when App Secret above is empty.</div>
+            </label>
+            <label class="field-label">
+              <span>Allowed open_id values</span>
+              <input data-bootstrap-config-field="integrations.feishu.allowed_open_ids" placeholder="ou_xxx, ou_yyy" value="${escapeHtml((Array.isArray(feishu.allowed_open_ids) ? feishu.allowed_open_ids : []).join(", "))}">
+              <div class="field-help">Empty means nobody can access AHA through Feishu.</div>
+            </label>
+            <label class="field-label">
+              <span>Security mode</span>
+              <select data-bootstrap-config-field="integrations.feishu.security_mode">${selectOptions(["audit", "strict", "compat"], configString(feishu.security_mode, "audit"))}</select>
+            </label>
+            <label class="field-label">
+              <span>Group messages</span>
+              <span><input data-bootstrap-config-field="integrations.feishu.group_mentions_only" type="checkbox" ${feishu.group_mentions_only !== false ? "checked" : ""}> Require @bot in groups</span>
+            </label>
+            <label class="field-label">
+              <span>Task status notifications</span>
+              <span><input data-bootstrap-config-field="integrations.feishu.notifications_enabled" type="checkbox" ${feishu.notifications_enabled !== false ? "checked" : ""}> Push task status changes to Feishu</span>
+              <div class="field-help">Includes the run, task, status transition, and latest agent reply. Direct chat replies remain enabled when this is off.</div>
+            </label>
+          </div>
+          <div class="field-help">Install the optional runtime with <code>python3 -m pip install -e ".[feishu]"</code>, save settings, then restart the AHA Web service.</div>
         </details>
         <div class="bootstrap-form-actions">
           <button type="submit">${escapeHtml(submitLabel)}</button>
@@ -543,6 +598,11 @@
 
   function bootstrapConfigPayload(form, context = {}) {
     const config = context.config || {};
+    const configuredFeishu = config.integrations?.feishu || {};
+    const enteredFeishuSecret = bootstrapConfigText(form, "integrations.feishu.app_secret");
+    const feishuSecret = enteredFeishuSecret || (
+      bootstrapConfigMode(form) === "settings" ? configString(configuredFeishu.app_secret) : ""
+    );
     const body = {
       backend: bootstrapConfigText(form, "backend") || "codex",
       default_parallel: Number(bootstrapConfigText(form, "default_parallel") || 10),
@@ -583,6 +643,24 @@
         }
       },
       integrations: config.integrations || {}
+    };
+    body.integrations = {
+      ...body.integrations,
+      feishu: {
+        enabled: Boolean(bootstrapConfigField(form, "integrations.feishu.enabled")?.checked),
+        app_id: bootstrapConfigText(form, "integrations.feishu.app_id"),
+        app_secret: feishuSecret,
+        app_id_env: bootstrapConfigText(form, "integrations.feishu.app_id_env") || "AHA_FEISHU_APP_ID",
+        app_secret_env: bootstrapConfigText(form, "integrations.feishu.app_secret_env") || "AHA_FEISHU_APP_SECRET",
+        allowed_open_ids: bootstrapConfigText(form, "integrations.feishu.allowed_open_ids")
+          .split(",")
+          .map(item => item.trim())
+          .filter(Boolean),
+        group_mentions_only: Boolean(bootstrapConfigField(form, "integrations.feishu.group_mentions_only")?.checked),
+        notifications_enabled: Boolean(bootstrapConfigField(form, "integrations.feishu.notifications_enabled")?.checked),
+        security_mode: bootstrapConfigText(form, "integrations.feishu.security_mode") || "audit"
+      },
+      weixin: { enabled: false, visible: false }
     };
     if (bootstrapConfigMode(form) === "settings") body.force = true;
     return body;

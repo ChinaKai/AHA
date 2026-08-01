@@ -135,14 +135,14 @@ def _model_value(value: object) -> str | None:
 def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
     event = _append_event(root, run_id, event_type, data, ts=utc_now())
     try:
-        from aha_cli.services.weixin_notifications import notify_event
+        from aha_cli.services.channel_notifications import enqueue_notification_event
 
-        notify_event(root, run_id, event)
-    except Exception as exc:  # pragma: no cover - notification failures must not break core state writes.
+        enqueue_notification_event(root, run_id, event)
+    except Exception as exc:  # pragma: no cover - notification queue failures must not break core state writes.
         _append_event(
             root,
             run_id,
-            "weixin_notification_failed",
+            "channel_notification_failed",
             {
                 "source_event_type": event_type,
                 "source_event_id": event.get("event_id"),

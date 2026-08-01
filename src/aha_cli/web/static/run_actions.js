@@ -354,15 +354,17 @@
       deps.setWebRestartState?.(schedulingText);
       deps.renderSessionMenu?.();
       try {
-        const body = publish && options.tag ? { tag: String(options.tag || "").trim() } : {};
+        const body = publish
+          ? (options.tag ? { tag: String(options.tag || "").trim() } : {})
+          : { confirm: "upgrade" };
         const request = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
         };
         let payload = null;
-        if (publish && deps.fetchWithTimeout && deps.readJsonResponse) {
-          const response = await deps.fetchWithTimeout(deps.apiUrl(endpoint), request, 300000);
+        if (deps.fetchWithTimeout && deps.readJsonResponse) {
+          const response = await deps.fetchWithTimeout(deps.apiUrl(endpoint), request, publish ? 300000 : 180000);
           payload = await deps.readJsonResponse(response, failedText);
         } else {
           payload = await deps.fetchJson(deps.apiUrl(endpoint), request, failedText);

@@ -2,6 +2,7 @@ const domRefs = window.AHAControllerRegistry.collectDomRefs(document);
 const {
   agentTargetEl, agentsEl, appVersionEl, authLogoutEl, conversationFiltersEl, headerRunConsoleEl, headerRunTitleEl, headerWorkspaceDirEl,
   observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
+  feishuConsoleEl, feishuConsolePopoverEl,
   mobileTaskStatusEl, mobileTaskSummaryEl, mobileTaskTitleEl, newRunGoalEl, openRunCreateEl, panelEl, pendingMessagesEl,
   playConsoleEl, playConsolePopoverEl, renameRunNameEl, runArchiveStateEl, runCreateFormEl, runExportEl,
   runCreateDialogEl, closeRunCreateEl, cancelRunCreateEl, runExportLogsEl, runIdEl, runImportEl, runImportFileEl, runLifecycleActionsEl, runLifecycleEl,
@@ -742,6 +743,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   selectedTask,
   selectedTaskId: () => selectedTaskId,
   setCreateProxyDefaultsFromInputs,
+  setFeishuConsoleOpen: value => feishuConsoleController?.setFeishuConsoleOpen(value),
   setObserveProxyOpen: value => observeProxyController?.setObserveProxyOpen(value),
   setLocalTerminalOpen: value => localTerminalController?.setLocalTerminalOpen(value),
   setPlayConsoleOpen,
@@ -779,6 +781,7 @@ const {
 } = featureControllers;
 observeProxyController = featureControllers.observeProxyController;
 localTerminalController = featureControllers.localTerminalController;
+feishuConsoleController = featureControllers.feishuConsoleController;
 playConsoleController = featureControllers.playConsoleController;
 skillsConsoleController = featureControllers.skillsConsoleController;
 tokenUsageController = featureControllers.tokenUsageController;
@@ -899,6 +902,8 @@ const runController = window.AHARunController.createRunController({
   appVersionEl,
   authLogoutEl,
   documentRef: document,
+  feishuConsoleEl,
+  feishuConsolePopoverEl,
   observeProxyEl,
   observeProxyPopoverEl,
   localTerminalEl,
@@ -971,6 +976,7 @@ const runController = window.AHARunController.createRunController({
   loadAccessControlStatus,
   loadRuns,
   logoutAuthSession,
+  feishuConsoleOpen: () => feishuConsoleController.isOpen(),
   observeProxyOpen: () => observeProxyController.isOpen(),
   localTerminalOpen: () => localTerminalController.isOpen(),
   playConsoleOpen: () => playConsoleController.isOpen(),
@@ -981,6 +987,7 @@ const runController = window.AHARunController.createRunController({
   fetchJson,
   formatMetricBytes,
   renderAccessControlStatus,
+  renderFeishuConsolePopover: () => feishuConsoleController.renderFeishuConsolePopover(),
   renderObserveProxyPopover: () => observeProxyController.renderObserveProxyPopover(),
   renderLocalTerminalPopover: () => localTerminalController.renderLocalTerminalPopover(),
   renderPlayConsolePopover,
@@ -1001,6 +1008,7 @@ const runController = window.AHARunController.createRunController({
   runsError: () => runsError,
   runTitleOf,
   sessionOptionLabel,
+  setFeishuConsoleOpen: value => feishuConsoleController.setFeishuConsoleOpen(value),
   setPlayConsoleOpen,
   setObserveProxyOpen: value => observeProxyController.setObserveProxyOpen(value),
   setLocalTerminalOpen: value => localTerminalController.setLocalTerminalOpen(value),

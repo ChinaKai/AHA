@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import platform
 import re
 import subprocess
 import sys
@@ -65,7 +66,21 @@ def web_upgrade_status() -> dict:
     }
 
 
-def web_upgrade_command() -> list[str]:
+def runtime_platform_status() -> dict:
+    system = platform.system() or sys.platform
+    release = platform.release()
+    machine = platform.machine()
+    label = " ".join(part for part in (system, release, f"({machine})" if machine else "") if part)
+    return {
+        "system": system,
+        "release": release,
+        "machine": machine,
+        "python_version": platform.python_version(),
+        "label": label,
+    }
+
+
+def _web_upgrade_command(*, check_only: bool) -> list[str]:
     status = web_upgrade_status()
     if not status.get("available") or status.get("action") != "upgrade":
         raise FileNotFoundError(str(status.get("reason") or SOURCE_UPGRADE_UNAVAILABLE_REASON))
@@ -73,7 +88,10 @@ def web_upgrade_command() -> list[str]:
     executable = str(status.get("bin") or "").strip()
     installed_bin = os.environ.get("AHA_INSTALL_BIN", "").strip()
     target_bin = _path_text(Path(installed_bin)) if installed_bin else executable
-    command = [executable, "service", "upgrade-user", "--bin", target_bin, "--no-health-check", "--json"]
+    # The release is an extensionless Python zipapp. Always invoke it through
+    # this runtime's interpreter so the same command works on Linux and Windows.
+    command = [sys.executable, executable, "service", "upgrade-user", "--bin", target_bin, "--no-health-check", "--json"]
+    command.append("--check-only" if check_only else "--no-restart")
     service_name = os.environ.get("AHA_SERVICE_NAME", "").strip()
     if service_name:
         command.extend(["--service-name", service_name])
@@ -90,6 +108,14 @@ def web_upgrade_command() -> list[str]:
             if value:
                 command.extend([flag, value])
     return command
+
+
+def web_upgrade_command() -> list[str]:
+    return _web_upgrade_command(check_only=False)
+
+
+def web_upgrade_check_command() -> list[str]:
+    return _web_upgrade_command(check_only=True)
 
 
 def web_publish_status() -> dict:

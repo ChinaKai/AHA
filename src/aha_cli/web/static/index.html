@@ -6,7 +6,7 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=terminal-shell-v10">
+  <link rel="stylesheet" href="/static/styles.css?v=feishu-push-v2">
 </head>
 <body>
   <header>
@@ -133,13 +133,15 @@
                   <button id="observe-proxy" class="button-ghost" type="button" aria-controls="observe-proxy-popover" aria-expanded="false" data-i18n="observe_proxy.title">Observe Proxy</button>
                   <button id="local-terminal" class="button-ghost" type="button" aria-controls="local-terminal-popover" aria-expanded="false" data-i18n="local_terminal.title">Local terminal</button>
                   <button id="token-usage" class="button-ghost" type="button" aria-controls="token-usage-popover" aria-expanded="false" data-i18n="run.token_usage">Daily usage</button>
-                  <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin">Weixin console</button>
+                  <button id="feishu-console" class="button-ghost" type="button" aria-controls="feishu-console-popover" aria-expanded="false" data-i18n="feishu.title">Feishu assistant</button>
+                  <button id="weixin-console" class="button-ghost" type="button" aria-controls="weixin-console-popover" aria-expanded="false" data-i18n="run.tools_weixin" hidden>Weixin console</button>
                   <button id="play-console" class="button-ghost" type="button" aria-controls="play-console-popover" aria-expanded="false" data-i18n="run.more_play">Play console</button>
                 </div>
                 <div id="skills-console-popover" class="skills-console-popover" hidden></div>
                 <div id="observe-proxy-popover" class="observe-proxy-popover" hidden></div>
                 <div id="local-terminal-popover" class="local-terminal-popover" hidden></div>
                 <div id="token-usage-popover" class="token-usage-popover" hidden></div>
+                <div id="feishu-console-popover" class="feishu-console-popover" hidden></div>
                 <div id="weixin-console-popover" class="weixin-console-popover" hidden></div>
                 <div id="play-console-popover" class="play-console-popover" hidden></div>
               </div>
@@ -1014,10 +1016,10 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=terminal-shell-v10"></script>
+  <script src="/static/i18n.js?v=feishu-push-v4"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
-  <script src="/static/bootstrap_config.js?v=model-default-v1"></script>
+  <script src="/static/bootstrap_config.js?v=feishu-push-v1"></script>
   <script src="/static/bootstrap_controller.js"></script>
   <script src="/static/task_form.js?v=hardware-terminal-v1"></script>
   <script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>
@@ -1051,6 +1053,7 @@
   <script src="/static/browser_session.js?v=browser-bookmarks-safe-v46"></script>
   <script src="/static/access_control.js"></script>
   <script src="/static/play_console.js"></script>
+  <script src="/static/feishu_console.js?v=feishu-push-v4"></script>
   <script src="/static/weixin_console.js"></script>
   <script src="/static/skills_console.js"></script>
   <script src="/static/knowledge_entry.js"></script>
@@ -1068,7 +1071,7 @@
   <script src="/static/render_orchestrator.js"></script>
   <script src="/static/status_store.js"></script>
   <script src="/static/status_controller.js"></script>
-  <script src="/static/run_actions.js"></script>
+  <script src="/static/run_actions.js?v=web-upgrade-v11"></script>
   <script src="/static/app_actions.js"></script>
   <script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
@@ -1077,13 +1080,13 @@
   <script src="/static/task_memo_controller.js?v=memo-weekdays-v1"></script>
   <script src="/static/global_search_controller.js?v=global-search-v6"></script>
   <script src="/static/settings_controller.js?v=token-saving-v8"></script>
-  <script src="/static/run_controller.js?v=token-saving-v8"></script>
+  <script src="/static/run_controller.js?v=exclusive-panels-v12"></script>
   <script src="/static/message_flow.js?v=hardware-terminal-v1"></script>
   <script src="/static/render_scheduler.js"></script>
   <script src="/static/confirm_dialog.js"></script>
-  <script src="/static/controller_registry.js?v=global-search-v5"></script>
+  <script src="/static/controller_registry.js?v=feishu-agent-v1"></script>
   <script src="/static/app_bridge.js?v=token-saving-v8"></script>
-  <script src="/static/app_controller_factory.js?v=global-search-v5"></script>
+  <script src="/static/app_controller_factory.js?v=feishu-agent-v1"></script>
   <script src="/static/app_runtime_setup.js?v=global-search-v4"></script>
   <script src="/static/app_runtime_wiring.js?v=global-search-v4"></script>
   <script src="/static/browser_options.js?v=browser-options-v1"></script>

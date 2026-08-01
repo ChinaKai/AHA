@@ -352,6 +352,32 @@ class WebRunApiTests(unittest.TestCase):
         self.assertNotIn("no_proxy", cfg["integrations"]["headroom"])
         self.assertTrue(cfg["integrations"]["headroom"]["ccr_enabled"])
 
+    def test_api_bootstrap_persists_feishu_settings_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "cli_test",
+                                "app_secret": "settings-secret",
+                            }
+                        },
+                    },
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(cfg["integrations"]["feishu"]["app_secret"], "settings-secret")
+
     def test_api_observe_proxy_status_reports_runtime_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.services.observe_proxy._health", return_value=True):
             root = Path(tmp) / ".aha"

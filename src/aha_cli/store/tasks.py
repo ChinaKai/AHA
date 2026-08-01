@@ -104,9 +104,11 @@ def set_task_status(
 ) -> dict:
     now = now_func()
     should_append = True
+    previous_status = ""
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = _find_task(plan, task_id)
+        previous_status = str(task.get("status") or "")
         if task.get("status") in TERMINAL_TASK_STATUSES and not allow_terminal_transition:
             should_append = False
         else:
@@ -131,7 +133,17 @@ def set_task_status(
         save_plan(root, plan)
         _write_task(root, run_id, task)
     if should_append:
-        append_event_func(root, run_id, "task_status_changed", {"task_id": task_id, "status": status, "exit_code": exit_code})
+        append_event_func(
+            root,
+            run_id,
+            "task_status_changed",
+            {
+                "task_id": task_id,
+                "previous_status": previous_status,
+                "status": status,
+                "exit_code": exit_code,
+            },
+        )
         if render_overview_func and status in {"awaiting_user", *TERMINAL_TASK_STATUSES}:
             render_overview_func(root, run_id, task_id, policy="journal")
     return task

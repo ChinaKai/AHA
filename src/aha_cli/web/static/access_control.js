@@ -61,8 +61,8 @@
 
     function renderAuthSessionControls(payload = deps.accessControlData?.() || {}) {
       if (!elements.authLogoutEl) return;
-      const tokenAuth = Boolean(payload?.token_required) || String(payload?.auth_mode || "") === "token";
-      elements.authLogoutEl.classList.toggle("hidden", !tokenAuth);
+      const authenticated = String(payload?.auth_mode || "none") !== "none";
+      elements.authLogoutEl.classList.toggle("hidden", !authenticated);
       elements.authLogoutEl.disabled = Boolean(deps.loginInFlight?.());
     }
 

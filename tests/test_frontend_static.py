@@ -375,6 +375,44 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_feishu_settings_secret_is_masked_and_preserved_when_blank(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+const existing = { integrations: { feishu: { app_secret: "stored-secret" } } };
+const html = config.bootstrapConfigFormHtml({ mode: "settings", config: existing });
+if (html.includes("stored-secret")) process.exit(1);
+if (!html.includes("Configured; leave blank to keep")) process.exit(1);
+function form(secret) {
+  return {
+    dataset: { bootstrapConfigMode: "settings" },
+    querySelector(selector) {
+      const match = /data-bootstrap-config-field="([^"]+)"/.exec(selector);
+      return { value: match?.[1] === "integrations.feishu.app_secret" ? secret : "", checked: false };
+    },
+    querySelectorAll() { return []; }
+  };
+}
+if (config.bootstrapConfigPayload(form(""), { config: existing }).integrations.feishu.app_secret !== "stored-secret") process.exit(1);
+if (config.bootstrapConfigPayload(form("new-secret"), { config: existing }).integrations.feishu.app_secret !== "new-secret") process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_web_upgrade_button_sits_next_to_restart(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
@@ -389,6 +427,10 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("header > div:first-child #web-restart-state.meta", (root / "styles.css").read_text(encoding="utf-8"))
         self.assertIn('"run.upgrade_web": "Upgrade"', i18n)
         self.assertIn('"run.upgrade_web": "升级"', i18n)
+        self.assertIn('"run.upgrade_current_version": "Current version"', i18n)
+        self.assertIn('"run.upgrade_current_version": "当前版本"', i18n)
+        self.assertIn('"run.upgrade_platform": "Platform"', i18n)
+        self.assertIn('"run.upgrade_platform": "运行平台"', i18n)
         self.assertIn('"run.publish_web": "Publish"', i18n)
         self.assertIn('"run.publish_web": "发布"', i18n)
         self.assertIn('"run.publish_confirm_message"', i18n)
@@ -409,8 +451,10 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn("webUpgradeAvailable,", wiring)
         self.assertIn("webPublishConsoleEl: \"web-publish-console\"", registry)
         self.assertIn('upgradeAction === "publish" ? t("run.publish_web", "Publish") : t("run.upgrade_web", "Upgrade")', controller)
-        self.assertIn('deps.apiUrl?.("/api/web/publish/status")', controller)
+        self.assertIn('const endpoint = publish ? "/api/web/publish/status" : "/api/web/upgrade/status";', controller)
         self.assertIn("submitWebPublish(form)", controller)
+        self.assertIn("submitWebUpgrade()", controller)
+        self.assertIn('data-web-upgrade-action="install"', controller)
         self.assertIn("confirmDialogAction", controller)
         self.assertIn('deps.upgradeWebService?.({ tag })', controller)
         self.assertIn(".web-publish-status-grid", styles)
@@ -488,6 +532,57 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         self.assertIn('"knowledge.project_identity_unbind": "解绑"', i18n)
         self.assertIn('"knowledge.project_relations": "Related knowledge projects"', i18n)
         self.assertIn('"knowledge.project_relations": "关联知识库"', i18n)
+
+    def test_feishu_replaces_visible_weixin_integration_entry(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        bootstrap = (root / "bootstrap_config.js").read_text(encoding="utf-8")
+        console = (root / "feishu_console.js").read_text(encoding="utf-8")
+        registry = (root / "controller_registry.js").read_text(encoding="utf-8")
+        factory = (root / "app_controller_factory.js").read_text(encoding="utf-8")
+        wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
+        run_controller = (root / "run_controller.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('button id="feishu-console" class="button-ghost"', html)
+        self.assertIn('aria-controls="feishu-console-popover"', html)
+        self.assertNotIn('id="feishu-console" class="button-ghost" href=', html)
+        self.assertIn('id="feishu-console-popover" class="feishu-console-popover" hidden', html)
+        self.assertIn('/static/feishu_console.js?v=feishu-push-v4', html)
+        self.assertIn('id="weixin-console"', html)
+        self.assertIn('data-i18n="run.tools_weixin" hidden', html)
+        self.assertIn('feishuConsoleEl: "feishu-console"', registry)
+        self.assertIn('feishuConsolePopoverEl: "feishu-console-popover"', registry)
+        self.assertIn("createFeishuConsoleController", factory)
+        self.assertIn("feishuConsoleController = featureControllers.feishuConsoleController", wiring)
+        self.assertIn('closeExclusiveSettingsPanels("feishu")', run_controller)
+        self.assertIn('deps.apiUrl?.("/api/feishu", {}, { runScoped: false })', console)
+        self.assertIn('data-feishu-action="refresh"', console)
+        self.assertIn('data-feishu-action="close"', console)
+        self.assertIn('data-feishu-notifications-toggle', console)
+        self.assertIn('deps.apiUrl?.("/api/feishu/notifications", {}, { runScoped: false })', console)
+        self.assertIn('t("feishu.notifications_toggle", "Push task status changes to Feishu")', console)
+        self.assertIn(".feishu-console-popover", styles)
+        self.assertIn(".feishu-console-notifications", styles)
+        self.assertIn(".session-menu.feishu-open .feishu-console-popover", styles)
+        self.assertIn('data-bootstrap-config-field="integrations.feishu.enabled"', bootstrap)
+        self.assertIn('data-bootstrap-config-field="integrations.feishu.allowed_open_ids"', bootstrap)
+        self.assertIn('data-bootstrap-config-field="integrations.feishu.app_secret" type="password"', bootstrap)
+        self.assertIn('data-bootstrap-config-field="integrations.feishu.app_secret_env"', bootstrap)
+        self.assertIn("Task status notifications", bootstrap)
+        self.assertIn("Push task status changes to Feishu", bootstrap)
+        self.assertIn("Direct chat replies remain enabled when this is off.", bootstrap)
+        self.assertIn('"feishu.notifications": "Task status push"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertIn('"feishu.notifications": "任务状态推送"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertIn('"feishu.notifications_toggle": "Push task status changes to Feishu"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertIn('"feishu.notifications_toggle": "向飞书推送 Task 状态变化"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertNotIn('integrations.feishu.web.', bootstrap)
+        self.assertIn('Configured; leave blank to keep', bootstrap)
+        self.assertIn('app_secret: feishuSecret', bootstrap)
+        self.assertNotIn('id="feishu-web-login"', html)
+        self.assertNotIn('integrations.feishu.default_run_id', bootstrap)
+        self.assertNotIn('feishu.default_run', console)
+        self.assertIn('weixin: { enabled: false, visible: false }', bootstrap)
 
     def test_integrations_include_local_terminal(self) -> None:
         root = static_root()
@@ -739,8 +834,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=terminal-shell-v10">', html)
-        self.assertIn('<script src="/static/i18n.js?v=terminal-shell-v10"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=feishu-push-v2">', html)
+        self.assertIn('<script src="/static/i18n.js?v=feishu-push-v4"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -4566,8 +4661,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("if (!deps.webUpgradeAvailable?.()) return;", run_actions_script)
         self.assertIn('const endpoint = publish ? "/api/web/publish" : "/api/web/upgrade";', run_actions_script)
         self.assertIn("deps.webUpgradeAction?.()", run_actions_script)
-        self.assertIn('const body = publish && options.tag ? { tag: String(options.tag || "").trim() } : {};', run_actions_script)
-        self.assertIn("deps.fetchWithTimeout(deps.apiUrl(endpoint), request, 300000)", run_actions_script)
+        self.assertIn(': { confirm: "upgrade" };', run_actions_script)
+        self.assertIn("deps.fetchWithTimeout(deps.apiUrl(endpoint), request, publish ? 300000 : 180000)", run_actions_script)
         self.assertIn('t("run.publish_complete", "Publish complete. Release tag pushed to remote.")', run_actions_script)
         self.assertIn('t("run.upgrade_scheduling", "Starting upgrade...")', run_actions_script)
         self.assertIn('t("run.upgrade_waiting", "Upgrade started. Waiting for recovery...")', run_actions_script)
@@ -5095,10 +5190,10 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=terminal-shell-v10"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=feishu-push-v4"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=model-default-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=feishu-push-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
@@ -5141,17 +5236,17 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/render_orchestrator.js"></script>', html)
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
-        self.assertIn('<script src="/static/run_actions.js"></script>', html)
+        self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v11"></script>', html)
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
         self.assertIn('<script src="/static/settings_controller.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/run_controller.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/run_controller.js?v=exclusive-panels-v12"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
-        self.assertIn('<script src="/static/controller_registry.js?v=global-search-v5"></script>', html)
+        self.assertIn('<script src="/static/controller_registry.js?v=feishu-agent-v1"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=global-search-v5"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=feishu-agent-v1"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/app_runtime_wiring.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
@@ -5553,6 +5648,13 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertNotIn("deps.setSessionMenu?.(false);", settings_controller_script)
         self.assertIn("function createRunController", run_controller_script)
         self.assertIn("function closeSystemSettingsPanel", run_controller_script)
+        self.assertIn("function closeIntegrationPanels", run_controller_script)
+        self.assertIn("function closeExclusiveSettingsPanels", run_controller_script)
+        self.assertIn('closeExclusiveSettingsPanels("upgrade")', run_controller_script)
+        self.assertIn('closeExclusiveSettingsPanels("settings")', run_controller_script)
+        self.assertIn('closeExclusiveSettingsPanels("observe-proxy")', run_controller_script)
+        self.assertIn('closeExclusiveSettingsPanels("local-terminal")', run_controller_script)
+        self.assertIn('closeExclusiveSettingsPanels("usage")', run_controller_script)
         self.assertIn('const SETTINGS_TAB_STORAGE_KEY = "aha.settingsTab";', run_controller_script)
         self.assertIn("function setSettingsTab", run_controller_script)
         self.assertIn('querySelectorAll?.("button.settings-home-tab[data-settings-tab]")', run_controller_script)
@@ -5561,7 +5663,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('dispatchAction?.("run-maintenance-refresh"', run_controller_script)
         self.assertIn('dispatchAction?.("run-maintenance-action"', run_controller_script)
         self.assertIn('dispatchAction?.("web-restart"', run_controller_script)
-        self.assertIn('dispatchAction?.("web-upgrade"', run_controller_script)
+        self.assertIn("setWebPublishConsoleOpen(nextOpen)", run_controller_script)
+        self.assertIn("void submitWebUpgrade();", run_controller_script)
         self.assertIn("function createMessageFlow", message_flow_script)
         self.assertIn("async function sendBackendMessage", message_flow_script)
         self.assertIn("async function handleComposerSubmit", message_flow_script)

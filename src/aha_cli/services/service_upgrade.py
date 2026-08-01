@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
+import zipfile
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -14,10 +17,39 @@ DEFAULT_RELEASE_REPO = "ChinaKai/AHA"
 DEFAULT_RELEASE_VERSION = "latest"
 DEFAULT_RELEASE_ASSET = "aha"
 DEFAULT_SERVICE_NAME = "aha.service"
+BUILD_VERSION_RE = re.compile(r"^(?:v(\d+)\.(\d+)\.(\d+)\.)?(\d{8})\.([A-Za-z0-9_-]+)$")
+BUILD_VERSION_ASSIGNMENT_RE = re.compile(r"BUILD_VERSION\s*=\s*['\"]([^'\"]+)['\"]")
 
 
 class ServiceUpgradeError(RuntimeError):
     pass
+
+
+def version_update_available(current_version: str, latest_version: str) -> bool | None:
+    """Compare AHA build versions without treating an older release as an update."""
+    current = str(current_version or "").strip()
+    latest = str(latest_version or "").strip()
+    if not current or not latest:
+        return None
+    if current == latest:
+        return False
+    current_match = BUILD_VERSION_RE.fullmatch(current)
+    latest_match = BUILD_VERSION_RE.fullmatch(latest)
+    if not current_match or not latest_match:
+        return None
+    current_parts = current_match.groups()
+    latest_parts = latest_match.groups()
+    current_semver = tuple(int(value) for value in current_parts[:3]) if current_parts[0] is not None else None
+    latest_semver = tuple(int(value) for value in latest_parts[:3]) if latest_parts[0] is not None else None
+    if current_semver is not None and latest_semver is not None and current_semver != latest_semver:
+        return latest_semver > current_semver
+    current_date = int(current_parts[3])
+    latest_date = int(latest_parts[3])
+    if current_date != latest_date:
+        return latest_date > current_date
+    # Different commits built on the same day cannot be ordered safely. A new
+    # release tag should be used to make that update unambiguous.
+    return None
 
 
 def normalize_service_name(service_name: str | None) -> str:
@@ -35,12 +67,40 @@ def release_asset_url(repo: str, version: str, asset_name: str) -> str:
     return f"https://github.com/{repo_value}/releases/download/{quote(version_value, safe='')}/{asset_path}"
 
 
-def executable_version(path: Path) -> str:
+def executable_command(path: Path, *args: str) -> list[str]:
+    """Build a command that can run either a native executable or an AHA zipapp.
+
+    Windows cannot execute the extensionless release zipapp directly, so zip
+    artifacts must always be launched through the current Python interpreter.
+    """
+    try:
+        is_zipapp = path.is_file() and zipfile.is_zipfile(path)
+    except OSError:
+        is_zipapp = False
+    prefix = [sys.executable, str(path)] if is_zipapp else [str(path)]
+    return [*prefix, *args]
+
+
+def zipapp_build_version(path: Path) -> str:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            source = archive.read("aha_cli/_build_version.py").decode("utf-8", errors="replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return ""
+    match = BUILD_VERSION_ASSIGNMENT_RE.search(source)
+    return match.group(1).strip() if match else ""
+
+
+def executable_version(path: Path, *, require_runnable: bool = False) -> str:
     if not path.is_file():
         return ""
+    if not require_runnable:
+        metadata_version = zipapp_build_version(path)
+        if metadata_version:
+            return metadata_version
     try:
         result = subprocess.run(
-            [str(path), "--version"],
+            executable_command(path, "--version"),
             check=False,
             capture_output=True,
             text=True,
@@ -113,6 +173,47 @@ def _run_systemctl_restart(service_name: str) -> None:
         raise ServiceUpgradeError(f"failed to restart {service_name}{suffix}")
 
 
+def check_user_service_upgrade(
+    *,
+    bin_path: Path,
+    service_name: str = DEFAULT_SERVICE_NAME,
+    repo: str = DEFAULT_RELEASE_REPO,
+    version: str = DEFAULT_RELEASE_VERSION,
+    asset_name: str = DEFAULT_RELEASE_ASSET,
+    download_url: str | None = None,
+    artifact: Path | None = None,
+) -> dict:
+    """Download and validate the candidate artifact without changing the install."""
+    target = bin_path.expanduser().resolve()
+    normalized_service_name = normalize_service_name(service_name)
+    if artifact is not None and download_url:
+        raise ServiceUpgradeError("choose only one of artifact or download_url")
+    resolved_url = str(download_url or release_asset_url(repo, version, asset_name)).strip()
+    if artifact is None and not resolved_url:
+        raise ServiceUpgradeError("download URL is empty")
+
+    current_version = executable_version(target)
+    with tempfile.TemporaryDirectory(prefix="aha-service-upgrade-check-") as tmp:
+        staged = _stage_artifact(
+            Path(tmp),
+            artifact=artifact.expanduser().resolve() if artifact else None,
+            download_url=resolved_url,
+        )
+        latest_version = executable_version(staged)
+    if not latest_version:
+        raise ServiceUpgradeError("downloaded AHA executable did not report a version with --version")
+
+    return {
+        "bin": str(target),
+        "service": normalized_service_name,
+        "source": "artifact" if artifact is not None else "download",
+        "download_url": "" if artifact is not None else resolved_url,
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "update_available": version_update_available(current_version, latest_version),
+    }
+
+
 def upgrade_user_service(
     *,
     bin_path: Path,
@@ -136,7 +237,7 @@ def upgrade_user_service(
     previous_version = executable_version(target)
     with tempfile.TemporaryDirectory(prefix="aha-service-upgrade-") as tmp:
         staged = _stage_artifact(Path(tmp), artifact=artifact.expanduser().resolve() if artifact else None, download_url=resolved_url)
-        installed_version = executable_version(staged) if validate else ""
+        installed_version = executable_version(staged, require_runnable=True) if validate else ""
         if validate and not installed_version:
             raise ServiceUpgradeError("downloaded AHA executable did not report a version with --version")
         _replace_executable(staged, target)

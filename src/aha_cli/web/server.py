@@ -12,6 +12,7 @@ from aha_cli.services.run_retention_policy import (
     retention_policy_schedule_config,
     scheduled_retention_policy_report,
 )
+from aha_cli.services.feishu_runtime import run_feishu_channel
 from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import config_path
@@ -101,23 +102,30 @@ async def handle_ui_client(
         path = parsed.path
         query = parse_qs(parsed.query)
         set_auth_cookie = False
+        token_authorized = False
+        auth_required = bool(auth_token)
+        auth_mode = "token" if auth_token else "none"
         public_ui_shell = method in {"GET", "HEAD"} and (path == "/" or path.startswith("/static/"))
         public_auth_route = path in {"/api/login", "/api/logout"}
         public_health = method in {"GET", "HEAD"} and path == "/api/health"
         # Browser detection is not sensitive and is needed before login to render
         # the picker, so serve it publicly (like /api/health).
         public_browser_options = method == "GET" and path == "/api/browser/options"
+        public_route = public_ui_shell or public_health or public_auth_route or public_browser_options
         if auth_token and public_ui_shell:
-            authorized, set_auth_cookie = optional_authorized_request(auth_token, target, headers)
-            if not authorized:
+            token_authorized, set_auth_cookie = optional_authorized_request(auth_token, target, headers)
+            if not token_authorized:
                 set_auth_cookie = False
-        elif auth_token and not (public_health or public_auth_route or public_browser_options):
-            authorized, set_auth_cookie = is_authorized_request(auth_token, target, headers)
-            if not authorized:
+        elif auth_token and not public_route:
+            token_authorized, set_auth_cookie = is_authorized_request(auth_token, target, headers)
+        elif auth_token:
+            token_authorized, _ = is_authorized_request(auth_token, target, headers)
+
+        if auth_required and not public_route:
+            if not token_authorized:
                 writer.write(unauthorized_response(method))
                 await writer.drain()
                 return
-
         if method == "GET" and path == "/ws/hardware-terminal" and headers.get("upgrade", "").lower() == "websocket":
             selected_run_id = require_api_run_id(root, run_id, query)
             ok = await ws_accept_from_headers(headers, writer)
@@ -126,7 +134,10 @@ async def handle_ui_client(
             return
 
         if method == "GET" and path == "/ws/terminal" and headers.get("upgrade", "").lower() == "websocket":
-            terminal_peer_allowed = local_terminal_peer_allowed(writer.get_extra_info("peername")) or bool(auth_token)
+            terminal_peer_allowed = (
+                local_terminal_peer_allowed(writer.get_extra_info("peername"))
+                or token_authorized
+            )
             if not terminal_peer_allowed:
                 writer.write(
                     http_response(
@@ -144,7 +155,10 @@ async def handle_ui_client(
             return
 
         if method == "GET" and path == "/ws/browser-session" and headers.get("upgrade", "").lower() == "websocket":
-            browser_peer_allowed = local_terminal_peer_allowed(writer.get_extra_info("peername")) or bool(auth_token)
+            browser_peer_allowed = (
+                local_terminal_peer_allowed(writer.get_extra_info("peername"))
+                or token_authorized
+            )
             if not browser_peer_allowed:
                 writer.write(
                     http_response(
@@ -213,7 +227,8 @@ async def handle_ui_client(
                     query,
                     body,
                     headers,
-                    auth_required=bool(auth_token),
+                    auth_required=auth_required,
+                    auth_mode=auth_mode,
                     bind_host=bind_host,
                     bind_port=bind_port,
                 )
@@ -274,6 +289,12 @@ async def weixin_keepalive_loop(root: Path, interval_seconds: int = WEIXIN_KEEPA
         await asyncio.sleep(max(1, interval_seconds))
 
 
+def weixin_integration_enabled(root: Path) -> bool:
+    integrations = load_config(root).get("integrations")
+    weixin = integrations.get("weixin") if isinstance(integrations, dict) else None
+    return bool(isinstance(weixin, dict) and weixin.get("enabled"))
+
+
 async def retention_policy_report_loop(root: Path, current_run_id: str) -> None:
     while True:
         sleep_seconds = RETENTION_POLICY_REPORT_MIN_SLEEP_SECONDS
@@ -303,7 +324,8 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
     if run_id:
         recover_stale_running_agents(root, run_id)
     server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w, auth_token, host, port), host, port)
-    weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root))
+    weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root)) if weixin_integration_enabled(root) else None
+    feishu_channel = asyncio.create_task(run_feishu_channel(root, run_id))
     retention_policy_reporter = asyncio.create_task(retention_policy_report_loop(root, run_id))
     addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
     if run_id:
@@ -317,10 +339,15 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
         async with server:
             await server.serve_forever()
     finally:
-        weixin_keepalive.cancel()
+        if weixin_keepalive is not None:
+            weixin_keepalive.cancel()
+        feishu_channel.cancel()
         retention_policy_reporter.cancel()
-        for task in (weixin_keepalive, retention_policy_reporter):
+        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter):
+            if task is None:
+                continue
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        with contextlib.suppress(WeixinError, RuntimeError):
-            await asyncio.to_thread(notify_channel_stop, root)
+        if weixin_keepalive is not None:
+            with contextlib.suppress(WeixinError, RuntimeError):
+                await asyncio.to_thread(notify_channel_stop, root)

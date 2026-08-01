@@ -51,6 +51,8 @@
     observeProxyPopoverEl: "observe-proxy-popover",
     localTerminalEl: "local-terminal",
     localTerminalPopoverEl: "local-terminal-popover",
+    feishuConsoleEl: "feishu-console",
+    feishuConsolePopoverEl: "feishu-console-popover",
     weixinConsoleEl: "weixin-console",
     weixinConsolePopoverEl: "weixin-console-popover",
     skillsConsoleEl: "skills-console",
