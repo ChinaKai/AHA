@@ -83,17 +83,42 @@ a user systemd service.
 
 ## Windows Installation and Startup
 
-Run the following commands in PowerShell.
-
-Install Python and create an isolated runtime environment:
+Run the following commands in PowerShell. Install Python first; skip this step
+if Python 3.10 or newer is already installed:
 
 ```powershell
 winget install --id Python.Python.3.12 -e
 # Reopen PowerShell
-py -3.12 -m venv "$env:USERPROFILE\.venvs\aha"
-$AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
-& $AhaPython -m pip install --upgrade pip
 ```
+
+Download the official installer. It creates an isolated Python environment,
+installs the onebin, and starts the AHA system tray application without a
+console window:
+
+```powershell
+$Installer = Join-Path $env:TEMP "install_aha.ps1"
+Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/install_windows.ps1" -OutFile $Installer
+powershell.exe -ExecutionPolicy Bypass -File $Installer
+```
+
+The tray uses the AHA logo. Double-click it to open AHA. Its context menu can
+open the dashboard, restart the service, toggle "Start at login", or exit. The
+"Settings..." dialog lets you change `AHA_HOME`, the bind address, port, and
+Web token. Saving restarts the Web service and updates an enabled startup
+command. To enable startup during installation:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File $Installer -EnableStartup
+```
+
+The default installation path is `%LOCALAPPDATA%\AHA\aha`, the data directory
+is `%USERPROFILE%\.aha`, and the Web UI is <http://127.0.0.1:8788>. Tray
+settings are stored in `%LOCALAPPDATA%\AHA\tray.json`; the plaintext Web token
+is stored only in the selected `AHA_HOME\web-token`. Startup uses the current
+user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key and does not
+require administrator privileges. In tray mode, Git checks, backend discovery,
+and other helper processes started by Web requests run without flashing console
+windows.
 
 Install at least one of Codex and Claude:
 
@@ -124,21 +149,23 @@ $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
 & $AhaPython -m pip install pyserial
 ```
 
-Download and start AHA. The onebin is a Python zipapp, not a native Windows
-`.exe`:
+You can also skip the installer, download the onebin manually, and start the
+tray. The onebin is a Python zipapp, not a native Windows `.exe`:
 
 ```powershell
 $AhaDir = "$env:LOCALAPPDATA\AHA"
+py -3.12 -m venv "$env:USERPROFILE\.venvs\aha"
 $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
+$AhaPythonw = "$env:USERPROFILE\.venvs\aha\Scripts\pythonw.exe"
 New-Item -ItemType Directory -Force $AhaDir | Out-Null
 Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/aha" -OutFile "$AhaDir\aha"
-& $AhaPython "$AhaDir\aha" --home "$env:USERPROFILE\.aha" ui --host 127.0.0.1 --port 8788
+& $AhaPython "$AhaDir\aha" --version
+& $AhaPythonw "$AhaDir\aha" --home "$env:USERPROFILE\.aha" tray --host 127.0.0.1 --port 8788 --open-browser
 ```
 
-Open <http://127.0.0.1:8788>. Complete initialization when prompted and press
-`Ctrl+C` to stop. With Node.js installed, Daily Usage can use `npx` directly.
-Local Terminal automatically lists available Windows PowerShell, CMD,
-PowerShell 7, and WSL environments.
+With Node.js installed, Daily Usage can use `npx` directly. Local Terminal
+automatically lists available Windows PowerShell, CMD, PowerShell 7, and WSL
+environments.
 
 ## Development From Source
 
