@@ -254,6 +254,49 @@ class FeishuNotificationTests(unittest.TestCase):
             self.assertEqual(notification_message_for_event(root, run_id, event), "agent reply")
             self.assertEqual(notification_message_for_event(root, run_id, status_event), "")
 
+    def test_service_confirmation_reply_sends_interactive_card(self) -> None:
+        card = {
+            "schema": "2.0",
+            "body": {
+                "elements": [
+                    {
+                        "tag": "button",
+                        "behaviors": [{"type": "callback", "value": {"decision": "confirm"}}],
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-card"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=False)
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-chat",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            event = {
+                "event_id": 11,
+                "type": "message",
+                "data": {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "feishu",
+                    "message": "请确认操作",
+                    "feishu_card": card,
+                },
+            }
+
+            result = notify_event(root, run_id, event)
+
+        self.assertTrue(result["sent"])
+        send.assert_called_once_with(root, "oc-chat", "请确认操作", card=card)
+
     def test_status_push_is_run_wide_not_limited_to_assistant_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",

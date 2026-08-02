@@ -13,6 +13,7 @@ from aha_cli.services.run_retention_policy import (
     scheduled_retention_policy_report,
 )
 from aha_cli.services.feishu_runtime import run_feishu_channel
+from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import config_path
@@ -323,26 +324,35 @@ async def retention_policy_report_loop(root: Path, current_run_id: str) -> None:
 async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_interval_ms: int, auth_token: str = "") -> None:
     if run_id:
         recover_stale_running_agents(root, run_id)
-    server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w, auth_token, host, port), host, port)
-    weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root)) if weixin_integration_enabled(root) else None
-    feishu_channel = asyncio.create_task(run_feishu_channel(root, run_id))
-    retention_policy_reporter = asyncio.create_task(retention_policy_report_loop(root, run_id))
-    addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
-    if run_id:
-        print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
-    else:
-        print(f"AHA dashboard for {root}: http://{host}:{port}")
-    if auth_token:
-        print("Authentication: enabled; open with ?token=<token> once or send Authorization: Bearer <token>")
-    print(f"Listening on {addresses}")
+    write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="starting")
+    server = None
+    weixin_keepalive = None
+    feishu_channel = None
+    retention_policy_reporter = None
     try:
+        server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w, auth_token, host, port), host, port)
+        write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="running")
+        weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root)) if weixin_integration_enabled(root) else None
+        feishu_channel = asyncio.create_task(run_feishu_channel(root, run_id))
+        retention_policy_reporter = asyncio.create_task(retention_policy_report_loop(root, run_id))
+        addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
+        if run_id:
+            print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
+        else:
+            print(f"AHA dashboard for {root}: http://{host}:{port}")
+        if auth_token:
+            print("Authentication: enabled; open with ?token=<token> once or send Authorization: Bearer <token>")
+        print(f"Listening on {addresses}")
         async with server:
             await server.serve_forever()
     finally:
+        write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="stopped")
         if weixin_keepalive is not None:
             weixin_keepalive.cancel()
-        feishu_channel.cancel()
-        retention_policy_reporter.cancel()
+        if feishu_channel is not None:
+            feishu_channel.cancel()
+        if retention_policy_reporter is not None:
+            retention_policy_reporter.cancel()
         for task in (weixin_keepalive, feishu_channel, retention_policy_reporter):
             if task is None:
                 continue

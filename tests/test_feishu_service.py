@@ -236,6 +236,53 @@ class FeishuServiceTests(unittest.TestCase):
                     now=105,
                 )
 
+    def test_plain_confirmation_consumes_only_pending_action_and_new_preview_replaces_old(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = feishu.issue_action_token(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                action="service_assistant_change",
+                context={"version": 1},
+                now=100,
+            )
+            feishu.issue_action_token(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                action="service_assistant_change",
+                context={"version": 2},
+                now=101,
+            )
+
+            context = feishu.consume_pending_action_token(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                action="service_assistant_change",
+                now=102,
+            )
+
+            self.assertEqual(context, {"version": 2})
+            with self.assertRaisesRegex(feishu.FeishuError, "无效或已使用"):
+                feishu.consume_action_token(
+                    root,
+                    first,
+                    open_id="ou_user",
+                    session_key="tenant:p2p:ou_user",
+                    action="service_assistant_change",
+                    now=103,
+                )
+            with self.assertRaisesRegex(feishu.FeishuError, "没有待确认"):
+                feishu.consume_pending_action_token(
+                    root,
+                    open_id="ou_user",
+                    session_key="tenant:p2p:ou_user",
+                    action="service_assistant_change",
+                    now=104,
+                )
+
     def test_tenant_token_is_cached_until_refresh_window(self) -> None:
         opener = QueueOpener(
             FakeResponse({"code": 0, "tenant_access_token": "t-one", "expire": 3600}),

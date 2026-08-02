@@ -7,6 +7,8 @@ from aha_cli.services.prompt_templates import render_prompt_template
 from typing import NamedTuple
 
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
+SERVICE_ACTION_TYPES = {"service_assistant"}
+SUPPORTED_ACTION_TYPES = AHA_ACTION_TYPES | SERVICE_ACTION_TYPES
 
 
 class ActionPayloadExtraction(NamedTuple):
@@ -37,7 +39,7 @@ def _loads_payload(candidate: str) -> dict | None:
 
 
 def _action_like_payload(payload: dict) -> bool:
-    return "actions" in payload or "action" in payload or payload.get("type") in AHA_ACTION_TYPES
+    return "actions" in payload or "action" in payload or payload.get("type") in SUPPORTED_ACTION_TYPES
 
 
 def _clean_agent_update(text: str) -> str:
@@ -124,25 +126,36 @@ def extract_action_payload(text: str) -> dict | None:
 def invalid_action_schema_reason(payload: dict) -> str | None:
     if "action" in payload:
         return "top-level action is not supported; use actions array"
-    if payload.get("type") in AHA_ACTION_TYPES:
+    if payload.get("type") in SUPPORTED_ACTION_TYPES:
         return "top-level type is not supported; use actions array"
     if "actions" not in payload:
         return None
     actions = payload.get("actions")
     if not isinstance(actions, list):
         return "actions must be a list"
+    service_action_count = sum(
+        1 for action in actions if isinstance(action, dict) and action.get("type") == "service_assistant"
+    )
+    if service_action_count and (service_action_count != 1 or len(actions) != 1):
+        return "service_assistant payload must contain exactly one action"
     for action in actions:
         if not isinstance(action, dict):
             return "actions must contain objects"
         action_type = action.get("type")
         if not action_type:
             return "each action must include type"
-        if action_type not in AHA_ACTION_TYPES:
+        if action_type not in SUPPORTED_ACTION_TYPES:
             return f"unknown action type: {action_type}"
         if action_type == "spawn_sub" and "assignment" in action:
             assignment = action.get("assignment")
             if not isinstance(assignment, str) or not assignment.strip():
                 return "spawn_sub assignment must be a non-empty string"
+        if action_type == "service_assistant":
+            operation = action.get("operation")
+            if not isinstance(operation, str) or not operation.strip():
+                return "service_assistant operation must be a non-empty string"
+            if "arguments" in action and not isinstance(action.get("arguments"), dict):
+                return "service_assistant arguments must be an object"
     return None
 
 

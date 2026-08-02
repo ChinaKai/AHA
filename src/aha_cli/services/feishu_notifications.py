@@ -6,10 +6,12 @@ from pathlib import Path
 import threading
 
 from aha_cli.domain.models import utc_now
-from aha_cli.services.feishu import FeishuError, send_text_message
+from aha_cli.domain.models import is_service_assistant_task
+from aha_cli.services.feishu import FeishuError, send_card_message, send_text_message
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials, send_via_active_channel
 from aha_cli.store.io import iter_jsonl_reverse, read_json, write_json
 from aha_cli.store.paths import aha_home_path, event_path
+from aha_cli.store.snapshots import task_snapshot
 
 DIRECT_REPLY_ROUTES = {("main", "feishu"), ("host", "feishu")}
 USER_REPLY_ROUTES = DIRECT_REPLY_ROUTES | {("main", "browser"), ("host", "browser")}
@@ -153,21 +155,29 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     event_type = str(event.get("type") or "")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     config = feishu_config(root)
+    task_id = str(data.get("task_id") or "")
+    system_assistant = False
+    if task_id:
+        try:
+            system_assistant = is_service_assistant_task(task_snapshot(root, run_id, task_id)["task"])
+        except (KeyError, SystemExit):
+            system_assistant = False
     if event_type == "message":
         if _message_route(data) not in DIRECT_REPLY_ROUTES:
             return ""
         # When status push is enabled, the following task status event carries
         # this reply together with the transition to avoid two Feishu messages.
-        if config.get("notifications_enabled"):
+        if config.get("notifications_enabled") and not system_assistant:
             return ""
         return _trim_notification(_message_text(data))
     if event_type != "task_status_changed" or not config.get("notifications_enabled"):
+        return ""
+    if system_assistant:
         return ""
     previous = _display_status(data.get("previous_status"))
     current = _display_status(data.get("status"))
     if previous == current:
         return ""
-    task_id = str(data.get("task_id") or "")
     if not task_id:
         return ""
     reason = _status_event_reason(data)
@@ -187,24 +197,29 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     return _trim_notification(message)
 
 
-def _send(root: Path, chat_id: str, text: str) -> dict:
+def _send(root: Path, chat_id: str, text: str, *, card: dict | None = None) -> dict:
     try:
-        return send_via_active_channel(root, chat_id, {"text": text})
+        message = {"card": card} if isinstance(card, dict) and card else {"text": text}
+        return send_via_active_channel(root, chat_id, message)
     except (RuntimeError, TimeoutError):
         config = feishu_config(root)
         app_id, app_secret = feishu_credentials(config)
         if not app_id or not app_secret:
             raise FeishuError("飞书 App ID 或 App Secret 未配置")
-        payload = send_text_message(root, app_id, app_secret, chat_id, text, receive_id_type="chat_id")
+        if isinstance(card, dict) and card:
+            payload = send_card_message(root, app_id, app_secret, chat_id, card, receive_id_type="chat_id")
+        else:
+            payload = send_text_message(root, app_id, app_secret, chat_id, text, receive_id_type="chat_id")
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         return {"ok": True, "sent": True, "message_id": data.get("message_id"), "target": chat_id}
 
 
 def notify_event(root: Path, run_id: str, event: dict) -> dict:
     message = notification_message_for_event(root, run_id, event)
-    if not message:
-        return {"ok": True, "sent": False, "reason": "ignored_event"}
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    card = data.get("feishu_card") if isinstance(data.get("feishu_card"), dict) else None
+    if not message and not card:
+        return {"ok": True, "sent": False, "reason": "ignored_event"}
     task_id = str(data.get("task_id") or "")
     event_key = _event_key(run_id, event)
     is_status_event = str(event.get("type") or "") == "task_status_changed"
@@ -233,7 +248,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             sent_key = f"{recipient_key}:{event_key}"
             if sent_key in state["sent"]:
                 continue
-            result = _send(root, chat_id, message)
+            result = _send(root, chat_id, message, card=card)
             state["sent"][sent_key] = {
                 "sent_at": utc_now(),
                 "message_id": result.get("message_id"),

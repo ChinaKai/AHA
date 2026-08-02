@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 import queue
 import sys
@@ -14,29 +13,30 @@ from aha_cli.services.feishu import (
     make_session_key,
     set_session_binding,
 )
-from aha_cli.services.feishu_notifications import set_subscription
+from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
-from aha_cli.services.tasks import create_task_and_dispatch
+from aha_cli.services.service_assistant import (
+    LEGACY_ASSISTANT_RUN_TITLE,
+    ensure_service_assistant_run,
+    ensure_service_assistant_task,
+    session_task_title,
+)
+from aha_cli.services.service_assistant_actions import ServiceAssistantActionError, resolve_confirmation
 from aha_cli.store.config import load_config
-from aha_cli.store.filesystem import create_plan
-from aha_cli.store.runs import list_run_summaries, require_plan, run_exists
+from aha_cli.store.paths import aha_home_path
+from aha_cli.store.runs import run_exists
 from aha_cli.store.snapshots import task_snapshot
+from aha_cli.domain.models import is_service_assistant_task
 from aha_cli.web.status import TERMINAL_TASK_STATUSES
 from aha_cli.web.task_messaging import handle_send_payload
 
 ASSISTANT_QUEUE_LIMIT = 128
-ASSISTANT_RUN_TITLE = "Feishu Assistant"
-ASSISTANT_TASK_TITLE = "Feishu Assistant"
-ASSISTANT_TASK_DESCRIPTION = """
-你是与用户在飞书中持续对话的真实 AHA 助手。请直接理解自然语言，并使用 AHA 现有能力帮助查看或管理 run、task、memo、KB 和 Settings。
-不要使用关键词匹配或预制菜单回答。用中文简洁回复；遇到需要用户选择或高风险的写操作时先说明影响并请求确认。
-这是持久的飞书助手会话，不要主动结束或完成该 task。
-""".strip()
+ASSISTANT_RUN_TITLE = LEGACY_ASSISTANT_RUN_TITLE
+ASSISTANT_TASK_TITLE = "AHA Assistant"
 
 _assistant_queue: queue.Queue[tuple[Path, str, Any, dict] | None] = queue.Queue(maxsize=ASSISTANT_QUEUE_LIMIT)
 _worker_lock = threading.Lock()
 _worker: threading.Thread | None = None
-_run_lock = threading.Lock()
 
 
 def _plain_message(root: Path, message: Any) -> dict:
@@ -75,9 +75,28 @@ def _ensure_worker() -> None:
 def enqueue_message(root: Path, default_run_id: str, channel: Any, message: Any) -> None:
     _ensure_worker()
     try:
-        _assistant_queue.put_nowait((root, default_run_id, channel, _plain_message(root, message)))
+        payload = _plain_message(root, message)
+        payload["kind"] = "message"
+        _assistant_queue.put_nowait((root, default_run_id, channel, payload))
     except queue.Full:
         _send_text_background(channel, str(getattr(message, "chat_id", "") or ""), "AHA 助手当前繁忙，请稍后重试。")
+
+
+def enqueue_card_action(root: Path, default_run_id: str, channel: Any, event: Any) -> None:
+    _ensure_worker()
+    action = getattr(event, "action", None)
+    operator = getattr(event, "operator", None)
+    payload = {
+        "kind": "card_action",
+        "chat_id": str(getattr(event, "chat_id", "") or ""),
+        "message_id": str(getattr(event, "message_id", "") or ""),
+        "open_id": str(getattr(operator, "open_id", "") or ""),
+        "action": getattr(action, "value", None),
+    }
+    try:
+        _assistant_queue.put_nowait((root, default_run_id, channel, payload))
+    except queue.Full:
+        _send_text_background(channel, payload["chat_id"], "AHA 助手当前繁忙，请稍后重试。")
 
 
 def _worker_loop() -> None:
@@ -87,7 +106,10 @@ def _worker_loop() -> None:
             if item is None:
                 return
             root, default_run_id, channel, payload = item
-            _handle_message(root, default_run_id, channel, payload)
+            if payload.get("kind") == "card_action":
+                _handle_card_action(root, channel, payload)
+            else:
+                _handle_message(root, default_run_id, channel, payload)
         except Exception as exc:  # noqa: BLE001 - one bad event must not stop the assistant worker.
             print(f"[aha feishu] assistant message failed: {exc!r}", file=sys.stderr, flush=True)
             try:
@@ -146,35 +168,7 @@ def _session_key(payload: dict) -> str:
 
 
 def _dedicated_run(root: Path) -> str:
-    with _run_lock:
-        for summary in list_run_summaries(root):
-            lifecycle = summary.get("lifecycle") if isinstance(summary.get("lifecycle"), dict) else {}
-            if str(summary.get("goal") or "") == ASSISTANT_RUN_TITLE and str(lifecycle.get("status") or "active") == "active":
-                return str(summary.get("id") or "")
-        config = load_config(root)
-        defaults = _assistant_agent_defaults(root, config)
-        backend = str(defaults["backend"])
-        model = defaults["model"]
-        backend_config = config.get(backend) if isinstance(config.get(backend), dict) else {}
-        plan = create_plan(
-            root,
-            ASSISTANT_RUN_TITLE,
-            1,
-            "sequential",
-            [],
-            [],
-            backend=backend,
-            model=model,
-            reasoning_effort=defaults["reasoning_effort"],
-            workspace_path=str(Path.cwd().resolve()),
-            sandbox=str(backend_config.get("sandbox") or "") or None,
-            approval=str(backend_config.get("approval") or "") or None,
-            proxy_enabled=bool(defaults["proxy_enabled"]),
-            collaboration_mode="auto",
-            workflow_template="auto",
-            create_default_tasks=False,
-        )
-        return str(plan.get("id") or "")
+    return ensure_service_assistant_run(root, _assistant_agent_defaults(root))
 
 
 def _assistant_backend(root: Path, config: dict | None = None) -> tuple[str, str | None]:
@@ -220,34 +214,12 @@ def _binding(root: Path, session_key: str, open_id: str, server_default_run_id: 
 
 
 def _task_workspace(root: Path, run_id: str) -> str:
-    plan = require_plan(root, run_id)
-    for task in reversed(plan.get("tasks", [])):
-        workspace = str(task.get("workspace_path") or "").strip()
-        if workspace and not task.get("deleted_at") and Path(workspace).is_dir():
-            return workspace
-    current = Path.cwd().resolve()
-    return str(current if current.is_dir() else root.resolve())
+    del run_id
+    return str(aha_home_path(root).resolve())
 
 
 def _assistant_task_title(session_key: str) -> str:
-    kind = "Group" if ":group:" in str(session_key or "").lower() else "DM"
-    short_id = hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:6]
-    return f"{ASSISTANT_TASK_TITLE} · {kind} · {short_id}"
-
-
-def _next_assistant_task_title(root: Path, run_id: str, session_key: str) -> str:
-    base = _assistant_task_title(session_key)
-    titles = {
-        str(task.get("title") or "")
-        for task in require_plan(root, run_id).get("tasks", [])
-        if isinstance(task, dict)
-    }
-    if base not in titles:
-        return base
-    generation = 2
-    while f"{base} #{generation}" in titles:
-        generation += 1
-    return f"{base} #{generation}"
+    return session_task_title(session_key)
 
 
 def _active_task(root: Path, run_id: str, task_id: str) -> dict | None:
@@ -260,6 +232,8 @@ def _active_task(root: Path, run_id: str, task_id: str) -> dict | None:
     workspace = str(task.get("workspace_path") or "").strip()
     if workspace and not Path(workspace).is_dir():
         return None
+    if not is_service_assistant_task(task) or Path(workspace).resolve() != aha_home_path(root).resolve():
+        return None
     return None if str(task.get("status") or "") in TERMINAL_TASK_STATUSES else task
 
 
@@ -267,19 +241,7 @@ def _ensure_agent_task(root: Path, run_id: str, session_key: str, open_id: str, 
     active = _active_task(root, run_id, str(binding.get("active_task_id") or ""))
     if active is not None:
         return active
-    config = load_config(root)
-    defaults = _assistant_agent_defaults(root, config)
-    task = create_task_and_dispatch(
-        root,
-        run_id,
-        _next_assistant_task_title(root, run_id, session_key),
-        backend=str(defaults["backend"]),
-        model=defaults["model"],
-        reasoning_effort=defaults["reasoning_effort"],
-        proxy_enabled=bool(defaults["proxy_enabled"]),
-        workspace_path=_task_workspace(root, run_id),
-        description=ASSISTANT_TASK_DESCRIPTION,
-    )
+    task = ensure_service_assistant_task(root, run_id, session_key, _assistant_agent_defaults(root))
     set_session_binding(
         root,
         session_key,
@@ -293,6 +255,90 @@ def _ensure_agent_task(root: Path, run_id: str, session_key: str, open_id: str, 
 def _never_handle_command(_root: Path, _run_id: str, _payload: dict, _message: str, _task_id: str | None) -> tuple[bool, None, dict]:
     """Keep Feishu text as agent input, including text that starts with '/'."""
     return False, None, {}
+
+
+def _confirmation_subscription(root: Path, chat_id: str, open_id: str) -> tuple[str, dict]:
+    state = load_subscription_state(root)
+    candidates = [
+        (str(session_key), subscription)
+        for session_key, subscription in state.get("subscriptions", {}).items()
+        if isinstance(subscription, dict)
+        and subscription.get("enabled")
+        and str(subscription.get("chat_id") or "") == chat_id
+    ]
+    exact = [item for item in candidates if str(item[1].get("open_id") or "") == open_id]
+    selected = exact if exact else candidates
+    if len(selected) != 1:
+        raise ServiceAssistantActionError("无法唯一定位该卡片对应的 AHA 会话")
+    return selected[0]
+
+
+def _finish_confirmation(
+    root: Path,
+    channel: Any,
+    *,
+    chat_id: str,
+    message_id: str,
+    run_id: str,
+    task_id: str,
+    confirmation: dict,
+) -> None:
+    if confirmation.get("cancelled"):
+        _send_text(channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
+        return
+    handle_send_payload(
+        root,
+        run_id,
+        {
+            "task_id": task_id,
+            "target": "main",
+            "sender": "aha",
+            "reply_target": "feishu",
+            "message": str(confirmation.get("tool_message") or ""),
+            "service_action_depth": 1,
+        },
+        command_handler=_never_handle_command,
+        background_backend_start=True,
+    )
+    _send_text(channel, chat_id, "操作已确认并执行，AHA 助手正在整理结果。", reply_to=message_id)
+
+
+def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
+    value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+    if str(value.get("kind") or "") != "aha_service_confirmation":
+        return
+    chat_id = str(payload.get("chat_id") or "")
+    message_id = str(payload.get("message_id") or "")
+    open_id = str(payload.get("open_id") or "")
+    config = feishu_config(root)
+    if not _allowed(config, open_id):
+        _send_text(channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
+        return
+    decision = {"confirm": "确认", "cancel": "取消"}.get(str(value.get("decision") or "").lower())
+    if not decision:
+        _send_text(channel, chat_id, "无法处理卡片操作：确认数据不完整。", reply_to=message_id)
+        return
+    try:
+        session_key, subscription = _confirmation_subscription(root, chat_id, open_id)
+        confirmation = resolve_confirmation(
+            root,
+            open_id=open_id,
+            session_key=session_key,
+            text=decision,
+        )
+        if confirmation is None:
+            raise ServiceAssistantActionError("卡片确认数据无效")
+        _finish_confirmation(
+            root,
+            channel,
+            chat_id=chat_id,
+            message_id=message_id,
+            run_id=str(subscription.get("run_id") or ""),
+            task_id=str(subscription.get("task_id") or ""),
+            confirmation=confirmation,
+        )
+    except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        _send_text(channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
 
 
 def _handle_message(root: Path, server_default_run_id: str, channel: Any, payload: dict) -> None:
@@ -322,6 +368,23 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         return
     task = _ensure_agent_task(root, run_id, session_key, open_id, binding)
     task_id = str(task.get("id") or "")
+    set_subscription(root, session_key, chat_id=chat_id, open_id=open_id, run_id=run_id, task_id=task_id)
+    try:
+        confirmation = resolve_confirmation(root, open_id=open_id, session_key=session_key, text=text)
+    except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        _send_text(channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
+        return
+    if confirmation is not None:
+        _finish_confirmation(
+            root,
+            channel,
+            chat_id=chat_id,
+            message_id=message_id,
+            run_id=run_id,
+            task_id=task_id,
+            confirmation=confirmation,
+        )
+        return
     handle_send_payload(
         root,
         run_id,
@@ -329,8 +392,7 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         command_handler=_never_handle_command,
         background_backend_start=True,
     )
-    set_subscription(root, session_key, chat_id=chat_id, open_id=open_id, run_id=run_id, task_id=task_id)
     _send_text(channel, chat_id, "已交给 AHA agent，回复会推送到本会话。", reply_to=message_id)
 
 
-__all__ = ["enqueue_message"]
+__all__ = ["enqueue_card_action", "enqueue_message"]

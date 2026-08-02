@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 import re
 
-from aha_cli.domain.models import normalize_task_token_saving
+from aha_cli.domain.models import is_service_assistant_task, normalize_task_token_saving
 from aha_cli.services.chat_supervision import (
     agents_visible_to_prompt,
     is_task_supervision_host_agent,
@@ -21,6 +21,7 @@ from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.browser_control import browser_control_context_for_prompt
 from aha_cli.services.task_skills import task_skills_context_for_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
+from aha_cli.services.service_runtime import service_runtime_prompt_payload
 from aha_cli.store.event_views import event_agent_refs
 from aha_cli.store.filesystem import (
     event_path,
@@ -330,6 +331,35 @@ def _knowledge_context_delta_for_prompt(root: Path, run_id: str, task: dict) -> 
     return render_prompt_template("backend_knowledge_enabled_empty.md").rstrip()
 
 
+def _service_assistant_context_for_prompt(root: Path, task: dict | None) -> str:
+    if not is_service_assistant_task(task):
+        return ""
+    runtime = service_runtime_prompt_payload(root)
+    runtime_context = render_prompt_template(
+        "service_assistant_runtime.md",
+        service=str(runtime.get("service") or "aha-web"),
+        status=str(runtime.get("status") or "unknown"),
+        aha_version=str(runtime.get("aha_version") or "unknown"),
+        platform=str(runtime.get("platform") or "unknown"),
+        platform_release=str(runtime.get("platform_release") or ""),
+        architecture=str(runtime.get("architecture") or ""),
+        install_mode=str(runtime.get("install_mode") or "unknown"),
+        bind_host=str(runtime.get("bind_host") or "-"),
+        bind_port=str(runtime.get("bind_port") or "-"),
+        auth_required=str(bool(runtime.get("auth_required"))).lower(),
+        aha_home=str(runtime.get("aha_home") or "-"),
+        service_working_directory=str(runtime.get("service_working_directory") or "-"),
+        source_root=str(runtime.get("source_root") or "-"),
+    ).rstrip()
+    return "\n\n".join(
+        [
+            render_prompt_template("service_assistant_identity.md").rstrip(),
+            runtime_context,
+            render_prompt_template("service_assistant_action_contract.md").rstrip(),
+        ]
+    )
+
+
 def _attachment_output_guidance_for_prompt(root: Path, run_id: str) -> str:
     return render_prompt_template(
         "backend_attachment_output_guidance.md",
@@ -436,6 +466,7 @@ def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, 
         "browser_control": _context_fingerprint(browser_context),
         "task_skills": _context_fingerprint(skills_context),
         "knowledge_enabled": "enabled" if _knowledge_enabled_for_prompt(root) else "disabled",
+        "service_assistant": _context_fingerprint(_service_assistant_context_for_prompt(root, task)),
     }
     if include_attachment_output:
         fingerprints["attachment_output_guidance"] = _context_fingerprint(_attachment_output_guidance_for_prompt(root, run_id))
@@ -474,6 +505,12 @@ def _sticky_context_delta_for_prompt(
     skills_context = task_skills_context_for_prompt(task).rstrip()
     if current_fingerprints.get("task_skills") and delivered.get("task_skills") != current_fingerprints.get("task_skills"):
         sections.append(skills_context)
+    service_assistant_context = _service_assistant_context_for_prompt(root, task)
+    if (
+        current_fingerprints.get("service_assistant")
+        and delivered.get("service_assistant") != current_fingerprints.get("service_assistant")
+    ):
+        sections.append(service_assistant_context)
     if (
         not _token_saving_nav_enabled(task)
         and current_fingerprints.get("knowledge_enabled") == "enabled"
@@ -1161,6 +1198,18 @@ def chat_prompt(
                 )
             elif sticky_delta:
                 task_context = ""
+            elif is_service_assistant_task(detail["task"]):
+                service_context = _service_assistant_context_for_prompt(root, detail["task"])
+                task_context = render_prompt_template(
+                    "backend_task_context_minimal.md",
+                    task_id=task_id,
+                    title=detail["task"].get("title", ""),
+                    status=detail["task"].get("status", ""),
+                    role=item.get("role", ""),
+                    workspace=detail["task"].get("workspace_path", ""),
+                ).rstrip()
+                task_context = f"{task_context}\n\n{service_context}\n"
+                components["service_assistant_context"] = service_context
             else:
                 task_context = render_prompt_template(
                     "backend_task_context.md",

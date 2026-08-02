@@ -485,7 +485,7 @@ def global_search_snapshot(
             if normalized_type in {"all", "task"}:
                 tasks_by_id: dict[str, dict] = {}
                 for task in plan.get("tasks", []):
-                    if not isinstance(task, dict) or task.get("deleted_at"):
+                    if not isinstance(task, dict) or task.get("deleted_at") or task.get("assistant_legacy"):
                         continue
                     task_id = _text(task.get("id"))
                     if chat_only and task_id != normalized_scope_task_id:

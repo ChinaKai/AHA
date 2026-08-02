@@ -204,6 +204,8 @@ def append_message(
     memo_report_context: dict | None = None,
     recovery_context: str | None = None,
     plain_sticky: bool = False,
+    service_action_depth: int | None = None,
+    feishu_card: dict | None = None,
     image: object | None = None,
     images: object | None = None,
 ) -> dict:
@@ -246,6 +248,10 @@ def append_message(
         payload["recovery_context"] = recovery_context
     if plain_sticky:
         payload["plain_sticky"] = True
+    if service_action_depth is not None:
+        payload["service_action_depth"] = max(0, int(service_action_depth))
+    if isinstance(feishu_card, dict) and feishu_card:
+        payload["feishu_card"] = feishu_card
     if image:
         payload["image"] = image
     if images:

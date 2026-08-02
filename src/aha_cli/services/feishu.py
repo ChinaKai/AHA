@@ -359,6 +359,16 @@ def issue_action_token(
     }
     with _state_lock:
         tokens = _valid_action_tokens(_read_json(action_tokens_path(root)), current)
+        tokens = {
+            key: value
+            for key, value in tokens.items()
+            if (
+                str(value.get("open_id") or ""),
+                str(value.get("session_key") or ""),
+                str(value.get("action") or ""),
+            )
+            != (identity, session, action_name)
+        }
         tokens[digest] = record
         if len(tokens) > max_entries:
             tokens = dict(
@@ -408,6 +418,47 @@ def consume_action_token(
             raise FeishuError("action token 身份、会话或操作不匹配", code="action_token_mismatch")
         raw_tokens.pop(digest, None)
         tokens = _valid_action_tokens({"tokens": raw_tokens}, current)
+        _write_secret_json(action_tokens_path(root), {"version": 1, "tokens": tokens})
+    context = record.get("context")
+    return dict(context) if isinstance(context, dict) else {}
+
+
+def consume_pending_action_token(
+    root: Path,
+    *,
+    open_id: str,
+    session_key: str,
+    action: str,
+    now: float | None = None,
+) -> dict:
+    """Consume the single pending action for an actor without exposing its raw token."""
+    current = time.time() if now is None else float(now)
+    expected = (
+        str(open_id or "").strip(),
+        str(session_key or "").strip(),
+        str(action or "").strip(),
+    )
+    if not all(expected):
+        raise FeishuError("待确认操作必须绑定 open_id、session_key 和 action")
+    with _state_lock:
+        tokens = _valid_action_tokens(_read_json(action_tokens_path(root)), current)
+        matches = [
+            (digest, record)
+            for digest, record in tokens.items()
+            if (
+                str(record.get("open_id") or ""),
+                str(record.get("session_key") or ""),
+                str(record.get("action") or ""),
+            )
+            == expected
+        ]
+        if not matches:
+            _write_secret_json(action_tokens_path(root), {"version": 1, "tokens": tokens})
+            raise FeishuError("当前会话没有待确认操作，或操作已过期", code="pending_action_not_found")
+        if len(matches) != 1:
+            raise FeishuError("当前会话存在多个待确认操作，请重新发起", code="ambiguous_pending_action")
+        digest, record = matches[0]
+        tokens.pop(digest, None)
         _write_secret_json(action_tokens_path(root), {"version": 1, "tokens": tokens})
     context = record.get("context")
     return dict(context) if isinstance(context, dict) else {}
@@ -619,6 +670,7 @@ __all__ = [
     "action_tokens_path",
     "claim_inbound_message",
     "consume_action_token",
+    "consume_pending_action_token",
     "feishu_dir",
     "get_session_binding",
     "get_tenant_access_token",

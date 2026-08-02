@@ -8,9 +8,11 @@ import tarfile
 import time
 
 from aha_cli.constants import PLAN_FILE
+from aha_cli.domain.models import is_service_assistant_run
 from aha_cli.services.run_cleanup import DEFAULT_ACTIVE_HEARTBEAT_SECONDS, run_has_active_heartbeat
 from aha_cli.services.run_retention_policy import DEFAULT_POLICY_LIMIT, policy_automation_report
 from aha_cli.store.paths import run_dir
+from aha_cli.store.io import read_json
 
 RETENTION_MANIFEST = "aha-run-retention-manifest.json"
 RETENTION_ARCHIVE_DIR = "run"
@@ -727,6 +729,16 @@ def apply_run_retention(
 ) -> dict:
     now = time.time() if now is None else now
     selected_run_id, run_path = _run_path(root, run_id)
+    try:
+        plan = read_json(run_path / PLAN_FILE)
+    except (FileNotFoundError, OSError, ValueError):
+        plan = {}
+    if is_service_assistant_run(plan):
+        raise RunRetentionError(
+            "Cannot apply retention to the system-managed AHA service assistant run",
+            reason="system_managed_run",
+            status_code="409 Conflict",
+        )
     if current_run_id and selected_run_id == current_run_id:
         raise RunRetentionError(
             "Cannot apply retention to the current run",

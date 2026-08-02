@@ -5,9 +5,9 @@ from pathlib import Path
 import time
 
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
-from aha_cli.domain.models import default_retention_policy_config, utc_now
+from aha_cli.domain.models import default_retention_policy_config, is_service_assistant_run, utc_now
 from aha_cli.services.run_cleanup import DEFAULT_ACTIVE_HEARTBEAT_SECONDS, run_has_active_heartbeat
-from aha_cli.store.io import write_json
+from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, run_dir
 
 DEFAULT_POLICY_LIMIT = 0
@@ -46,6 +46,12 @@ def _apply_guard(
     active_heartbeat_seconds: int,
     now: float,
 ) -> dict:
+    try:
+        plan = read_json(run_path / PLAN_FILE)
+    except (FileNotFoundError, OSError, ValueError):
+        plan = {}
+    if is_service_assistant_run(plan):
+        return {"action": "protect", "reason": "system_managed_run"}
     if current_run_id and run_id == current_run_id:
         return {"action": "protect", "reason": "current_run"}
     if run_has_active_heartbeat(run_path, now=now, active_heartbeat_seconds=active_heartbeat_seconds):

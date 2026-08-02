@@ -11,7 +11,7 @@ from aha_cli import platform
 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
 from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort, resolve_model
-from aha_cli.domain.models import utc_now
+from aha_cli.domain.models import is_service_assistant_task, utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import (
     detect_runtime_context_compaction,
@@ -189,14 +189,16 @@ def _mark_force_full_for_runtime_context_compaction(
     return marker
 
 
-def action_retry_schema() -> str:
-    return render_prompt_template("chat_action_retry_schema.md").strip()
+def action_retry_schema(*, service_assistant: bool = False) -> str:
+    template = "chat_service_action_retry_schema.md" if service_assistant else "chat_action_retry_schema.md"
+    return render_prompt_template(template).strip()
 
 
-def action_schema_retry_message(reason: str) -> str:
+def action_schema_retry_message(reason: str, *, service_assistant: bool = False) -> str:
     return render_prompt_template(
         "chat_action_schema_retry.md",
-        action_retry_schema=action_retry_schema(),
+        action_retry_schema=action_retry_schema(service_assistant=service_assistant),
+        allowed_action_types="`service_assistant`" if service_assistant else "`route_to_agent`, `spawn_sub`, and `record_task_update`",
         reason=reason,
     )
 
@@ -1136,7 +1138,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             task_id=item_task_id,
                             agent_id=agent_id,
                             item=item,
-                            message=action_schema_retry_message(schema_error),
+                            message=action_schema_retry_message(
+                                schema_error,
+                                service_assistant=is_service_assistant_task(task),
+                            ),
                             gate="action_schema_retry",
                             reason=schema_error,
                             manages_task_status=manages_task_status,
@@ -1336,7 +1341,13 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 supervision_routed_to_main = False
                 supervision_waiting_for_host = False
                 if exit_code == 0 and reply.strip():
-                    executed = execute_actions(root, run_id, item_task_id, reply)
+                    executed = execute_actions(
+                        root,
+                        run_id,
+                        item_task_id,
+                        reply,
+                        service_action_depth=int(item.get("service_action_depth") or 0),
+                    )
                     if is_kb_command or is_nav_command:
                         display_source, sidecar_candidates, sidecar_error = split_knowledge_sidecar(reply)
                         if sidecar_error:
@@ -1348,18 +1359,38 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             _distill_nav_command_safe(root, run_id, item_task_id, task, display_source, sidecar_candidates)
                     else:
                         display_source = split_knowledge_sidecar(reply)[0] if writes_task_final else reply
-                    display_reply = action_response_text(display_source)
-                    append_message(
-                        root,
-                        run_id,
-                        reply_target,
-                        display_reply,
-                        sender=args.sender,
-                        task_id=item_task_id,
-                        role=item.get("role") or "main",
-                        from_agent=args.sender,
-                        to_agent=reply_target,
+                    service_actions = [action for action in executed if action.get("type") == "service_assistant"]
+                    service_continuation = any(action.get("continuation") for action in service_actions)
+                    service_user_response = next(
+                        (
+                            str(action.get("user_response") or "").strip()
+                            for action in reversed(service_actions)
+                            if str(action.get("user_response") or "").strip()
+                        ),
+                        "",
                     )
+                    service_confirmation_card = next(
+                        (
+                            action.get("confirmation_card")
+                            for action in reversed(service_actions)
+                            if isinstance(action.get("confirmation_card"), dict)
+                        ),
+                        None,
+                    )
+                    display_reply = "" if service_continuation else (service_user_response or action_response_text(display_source))
+                    if display_reply:
+                        append_message(
+                            root,
+                            run_id,
+                            reply_target,
+                            display_reply,
+                            sender=args.sender,
+                            task_id=item_task_id,
+                            role=item.get("role") or "main",
+                            from_agent=args.sender,
+                            to_agent=reply_target,
+                            feishu_card=service_confirmation_card if reply_target == "feishu" else None,
+                        )
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
                     main_followup_after_delegation = bool(
                         agent_id == "main" and any(action.get("main_followup") for action in delegating_actions)
@@ -1474,7 +1505,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             exit_after_message = bool(worker_task_id)
                         else:
                             detail = task_snapshot(root, run_id, item_task_id)
-                            if delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
+                            if service_continuation:
+                                set_agent_status(root, run_id, item_task_id, agent_id, "pending")
+                                set_task_status(root, run_id, item_task_id, "running")
+                            elif delegating_actions or task_has_incomplete_sub_agents(detail["task"]):
                                 if main_followup_after_delegation:
                                     set_agent_status(root, run_id, item_task_id, agent_id, "pending")
                                 else:

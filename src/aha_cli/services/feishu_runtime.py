@@ -7,10 +7,11 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from aha_cli.domain.models import normalize_feishu_integration_config, utc_now
+from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task, normalize_feishu_integration_config, utc_now
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, config_path
+from aha_cli.store.runs import list_run_summaries, require_plan
 
 _channels: dict[str, Any] = {}
 _channels_lock = threading.Lock()
@@ -87,6 +88,45 @@ def _feishu_backend_defaults(config: dict) -> dict[str, dict[str, object]]:
     return result
 
 
+def _service_assistant_status(root: Path) -> dict:
+    run_id = ""
+    plan: dict = {}
+    for summary in list_run_summaries(root):
+        candidate = str(summary.get("id") or "")
+        if not candidate:
+            continue
+        try:
+            candidate_plan = require_plan(root, candidate)
+        except SystemExit:
+            continue
+        if is_service_assistant_run(candidate_plan):
+            run_id = candidate
+            plan = candidate_plan
+            break
+    tasks = [
+        task
+        for task in plan.get("tasks", [])
+        if isinstance(task, dict) and is_service_assistant_task(task) and not task.get("deleted_at")
+    ]
+    active = [task for task in tasks if str(task.get("status") or "") not in {"completed", "failed", "blocked"}]
+    return {
+        "identity": "aha_service_steward",
+        "system_managed": True,
+        "workspace_path": str(aha_home_path(root).resolve()),
+        "sandbox": "read-only",
+        "approval": "never",
+        "run_id": run_id,
+        "provisioned": bool(run_id),
+        "conversation_count": len(tasks),
+        "active_conversation_count": len(active),
+        "prompt_templates": [
+            "service_assistant_identity.md",
+            "service_assistant_runtime.md",
+            "service_assistant_action_contract.md",
+        ],
+    }
+
+
 def _create_feishu_channel(app_id: str, app_secret: str, security_mode: str) -> Any:
     """Import and construct the SDK outside the web server's event-loop thread.
 
@@ -149,6 +189,7 @@ def feishu_status(root: Path) -> dict:
         "security_mode": config.get("security_mode"),
         "sdk_installed": feishu_sdk_available(),
         "runtime": runtime,
+        "assistant": _service_assistant_status(root),
     }
 
 
@@ -253,7 +294,7 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         _write_runtime(root, status="sdk_missing", connected=False, error="Feishu Channel SDK is unavailable")
         return
 
-    from aha_cli.services.feishu_assistant import enqueue_message
+    from aha_cli.services.feishu_assistant import enqueue_card_action, enqueue_message
 
     try:
         channel = await asyncio.to_thread(
@@ -266,6 +307,7 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         _write_runtime(root, status="sdk_missing", connected=False, error="Feishu Channel SDK is unavailable")
         return
     channel.on("message", lambda message: enqueue_message(root, default_run_id, channel, message))
+    channel.on("cardAction", lambda event: enqueue_card_action(root, default_run_id, channel, event))
     channel.on("error", lambda error: _write_runtime(root, status="error", connected=False, error=str(error)))
     key = str(aha_home_path(root).resolve())
     try:

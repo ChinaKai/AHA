@@ -31,6 +31,10 @@ class ApiRunNotFound(Exception):
         super().__init__(run_id)
 
 
+def public_run_summaries(root: Path, runs: list[dict] | None = None) -> list[dict]:
+    return list(runs if runs is not None else list_run_summaries(root))
+
+
 def safe_download_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value)
 
@@ -52,7 +56,7 @@ def request_run_id(default_run_id: str, query: dict[str, list[str]], payload: di
 def default_api_run_id(root: Path, default_run_id: str, runs: list[dict] | None = None) -> str:
     if default_run_id and run_exists(root, default_run_id):
         return default_run_id
-    summaries = runs if runs is not None else list_run_summaries(root)
+    summaries = public_run_summaries(root, runs)
     return str(summaries[0]["id"]) if summaries else ""
 
 
@@ -124,7 +128,7 @@ def workspace_options(roots: list[Path] | None = None, aha_home: Path | None = N
 
 
 def runs_payload(root: Path, default_run_id: str) -> dict:
-    runs = list_run_summaries(root)
+    runs = public_run_summaries(root)
     return {
         "default_run_id": default_api_run_id(root, default_run_id, runs),
         "ui_state": read_global_ui_state(root),
@@ -163,7 +167,7 @@ def task_memo_summary(root: Path, run_id: str) -> dict:
 
 def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) -> dict:
     cfg = load_config(root)
-    runs = list_run_summaries(root)
+    runs = public_run_summaries(root)
     selected_run_id = default_api_run_id(root, default_run_id, runs)
     return {
         "aha_home": str(root),
@@ -207,5 +211,5 @@ def run_import_success_payload(root: Path, source_run_id: str, imported_run_id: 
         "source_run_id": source_run_id,
         "imported_run_id": imported_run_id,
         "run": run_summary(root, imported_run_id),
-        "runs": list_run_summaries(root),
+        "runs": public_run_summaries(root),
     }

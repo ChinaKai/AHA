@@ -151,6 +151,7 @@
       const popover = elements.feishuConsolePopoverEl;
       if (!popover) return;
       const runtime = status.runtime && typeof status.runtime === "object" ? status.runtime : {};
+      const assistant = status.assistant && typeof status.assistant === "object" ? status.assistant : {};
       const runtimeState = connectionState();
       const runtimeError = String(runtime.error || "");
       const allowedOpenIds = Array.isArray(status.allowed_open_ids) ? status.allowed_open_ids : [];
@@ -180,6 +181,10 @@
             ${metric(t("feishu.sdk_installed", "Channel SDK installed"), yesNo(Boolean(status.sdk_installed)))}
             ${metric(t("feishu.allowed_users", "Allowed users"), String(status.allowed_open_id_count ?? 0))}
             ${metric(t("feishu.agent_runtime", "Agent default"), `${status.effective_backend || "codex"} / ${status.effective_model || "default"} / ${status.effective_reasoning_effort || "default"} / proxy ${status.effective_proxy_enabled ? "on" : "off"}`, { code: true })}
+            ${metric(t("feishu.assistant_identity", "Assistant identity"), t("feishu.assistant_identity_value", "AHA service steward"))}
+            ${metric(t("feishu.assistant_workspace", "Assistant workspace"), assistant.workspace_path || "-", { code: true })}
+            ${metric(t("feishu.assistant_conversations", "Assistant conversations"), `${assistant.active_conversation_count ?? 0} / ${assistant.conversation_count ?? 0}`)}
+            ${metric(t("feishu.assistant_guard", "Assistant guard"), `${assistant.sandbox || "read-only"} / ${assistant.approval || "never"}`, { code: true })}
           </div>
           ${runtimeError ? `<div class="feishu-console-message error"><strong>${escapeHtml(t("feishu.runtime_error", "Runtime error"))}</strong><span>${escapeHtml(runtimeError)}</span></div>` : ""}
           <form class="feishu-console-settings" data-feishu-settings-form>
@@ -242,7 +247,7 @@
                   </span>
                 </label>
               </div>
-              <p class="feishu-console-section-help">${escapeHtml(t("feishu.agent_defaults_hint", "Used when AHA creates the dedicated Feishu Assistant run or a new conversation task. The proxy switch uses the selected backend proxy configuration. Existing tasks are unchanged."))}</p>
+              <p class="feishu-console-section-help">${escapeHtml(t("feishu.agent_defaults_hint", "Used for new system-managed AHA service-steward conversations. Its workspace is AHA Home, not a project; existing conversations are unchanged."))}</p>
             </fieldset>
             <fieldset class="feishu-console-section">
               <legend>${escapeHtml(t("feishu.access_section", "Access and delivery"))}</legend>

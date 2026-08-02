@@ -16,6 +16,30 @@ DEFAULT_RETENTION_POLICY_REPORT_INTERVAL_SECONDS = 6 * 60 * 60
 HEADROOM_INTEGRATION_MODES = {"token", "cache"}
 TOKEN_SAVING_PROVIDERS = {"nav"}
 MAX_TASK_RELATED_PROJECTS = 5
+SYSTEM_RUN_KIND = "system"
+SERVICE_ASSISTANT_TASK_KIND = "service_assistant"
+SERVICE_ASSISTANT_PURPOSE = "service_assistant"
+
+
+def is_system_managed(value: object) -> bool:
+    return bool(isinstance(value, dict) and value.get("system_managed"))
+
+
+def is_service_assistant_run(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("system_managed")
+        and str(value.get("kind") or "") == SYSTEM_RUN_KIND
+        and str(value.get("system_purpose") or "") == SERVICE_ASSISTANT_PURPOSE
+    )
+
+
+def is_service_assistant_task(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("system_managed")
+        and str(value.get("kind") or "") == SERVICE_ASSISTANT_TASK_KIND
+    )
 
 
 def utc_now() -> str:

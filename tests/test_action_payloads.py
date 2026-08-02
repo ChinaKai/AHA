@@ -106,6 +106,28 @@ class ActionPayloadTests(unittest.TestCase):
                 }
             )
         )
+        self.assertIsNone(
+            invalid_action_schema_reason(
+                {"actions": [{"type": "service_assistant", "operation": "list_runs", "arguments": {}}]}
+            )
+        )
+        self.assertEqual(
+            invalid_action_schema_reason(
+                {"actions": [{"type": "service_assistant", "operation": "", "arguments": {}}]}
+            ),
+            "service_assistant operation must be a non-empty string",
+        )
+        self.assertEqual(
+            invalid_action_schema_reason(
+                {
+                    "actions": [
+                        {"type": "service_assistant", "operation": "list_runs", "arguments": {}},
+                        {"type": "service_assistant", "operation": "list_workspaces", "arguments": {}},
+                    ]
+                }
+            ),
+            "service_assistant payload must contain exactly one action",
+        )
 
     def test_action_response_text_keeps_orchestrator_re_export_compatible(self) -> None:
         reply = json.dumps({"actions": [], "response": "  done  "})

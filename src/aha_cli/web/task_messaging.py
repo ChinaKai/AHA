@@ -90,6 +90,7 @@ def message_backend_autostart_config(root: Path, run_id: str, task_id: str | Non
         "target": target_id,
         "task_id": task_id,
         "model": agent.get("model") or task.get("preferred_model"),
+        "reasoning_effort": agent.get("reasoning_effort") or task.get("preferred_reasoning_effort"),
         "sandbox": agent.get("sandbox") or task.get("preferred_sandbox") or "workspace-write",
         "approval": agent.get("approval") or task.get("preferred_approval") or "never",
     }
@@ -328,8 +329,10 @@ def handle_send_payload(
         command_namespace=str(command_payload.get("command_namespace", "") or "") or None,
         original_command=str(command_payload.get("original_command", "") or "") or None,
         result_policy=str(command_payload.get("result_policy", "") or "") or None,
+        reply_target=str(payload.get("reply_target", "") or "") or None,
         recovery_context=recovery_context or None,
         plain_sticky=plain_sticky,
+        service_action_depth=int(payload.get("service_action_depth") or 0) if "service_action_depth" in payload else None,
         image=payload.get("image"),
         images=payload.get("images"),
     )

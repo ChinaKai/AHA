@@ -21,6 +21,10 @@ SAMPLE_VALUES = {
     "agent_metadata": "- agent_id: main",
     "agents": '[{"id":"main"}]',
     "approval": "never",
+    "aha_home": "/tmp/.aha",
+    "aha_version": "0.1.0",
+    "architecture": "x86_64",
+    "auth_required": "false",
     "ask_user_gate_policy": "- scope_change: host may decide",
     "assigned_prompt": "Do the task.",
     "asset_dir": "task_memo_assets",
@@ -28,12 +32,15 @@ SAMPLE_VALUES = {
     "attachment_output_guidance": "AHA conversation image output.",
     "backend": "codex",
     "backend_session_id": "session-1",
+    "bind_host": "127.0.0.1",
+    "bind_port": "8766",
     "body": "note body",
     "browser_latest_request": "Please check this.",
     "browser_control_context": "Shared browser context.",
     "browser_to_host_notes": "(none)",
     "agent_access": "read_only",
     "allowed_hosts": "example.com",
+    "allowed_action_types": "`record_task_update`",
     "downloads": "deny",
     "display": "native",
     "profile": "ephemeral",
@@ -79,6 +86,7 @@ SAMPLE_VALUES = {
     "index": "1",
     "inbox_file": "inbox.jsonl",
     "inbox_preview": "(empty)",
+    "install_mode": "source",
     "instruction": "Save the Bluetooth provisioning flow to the knowledge base.",
     "items": "1. Round summary",
     "jsonl_exists": "True",
@@ -111,6 +119,8 @@ SAMPLE_VALUES = {
     "original_command": "/status",
     "original_request": "Original request.",
     "output_file": "output.md",
+    "platform": "Linux",
+    "platform_release": "6.8.0",
     "preferred_sub_backend": "codex",
     "preferred_sub_model": "default",
     "prefix": "AHA prompt prefix.",
@@ -140,7 +150,10 @@ SAMPLE_VALUES = {
     "session_policy": "sticky",
     "size_bytes": "10",
     "scope_hint": "personal",
+    "service": "aha-web",
+    "service_working_directory": "/workspace/AHA",
     "source": "browser_main_reply",
+    "source_root": "/workspace/AHA",
     "status": "running",
     "summary": "Round summary.",
     "steward_handoffs": "(none)",
@@ -259,6 +272,15 @@ class PromptTemplateTests(unittest.TestCase):
                 text = (REPO_ROOT / relpath).read_text(encoding="utf-8")
                 for phrase in forbidden_phrases:
                     self.assertNotIn(phrase, text)
+
+    def test_service_assistant_prompt_forbids_adding_push_to_a_commit_request(self) -> None:
+        contract = resources.files("aha_cli.prompts").joinpath(
+            "service_assistant_action_contract.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Treat the user's current message as the authorization boundary", contract)
+        self.assertIn("请让 task-006 提交", contract)
+        self.assertIn("Do not mention or request push anywhere in that action", contract)
 
 
 if __name__ == "__main__":

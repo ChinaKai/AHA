@@ -24,6 +24,7 @@ from aha_cli.services.routing import (
     route_to_agent_routed_event,
     route_to_agent_skip_event,
 )
+from aha_cli.services.service_assistant_actions import prepare_service_assistant_action
 from aha_cli.services.subagent_state import (
     TERMINAL_AGENT_STATUSES,
     active_sub_agent_count,
@@ -689,7 +690,14 @@ def apply_supervision_stub(
     return result
 
 
-def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> list[dict]:
+def execute_actions(
+    root: Path,
+    run_id: str,
+    task_id: str | None,
+    text: str,
+    *,
+    service_action_depth: int = 0,
+) -> list[dict]:
     if not task_id:
         return []
     try:
@@ -746,6 +754,45 @@ def execute_actions(root: Path, run_id: str, task_id: str | None, text: str) -> 
         max_sub_agents = int(task.get("max_sub_agents", 0) or 0)
         current_active_sub_agents = active_sub_agent_count(task)
         action_type = action.get("type")
+        if action_type == "service_assistant":
+            result = prepare_service_assistant_action(
+                root,
+                run_id,
+                task,
+                action,
+                action_depth=service_action_depth,
+            )
+            result["task_id"] = task_id
+            append_event(
+                root,
+                run_id,
+                "service_assistant_action",
+                {
+                    "task_id": task_id,
+                    "operation": result.get("operation"),
+                    "ok": bool(result.get("ok")),
+                    "continuation": bool(result.get("continuation")),
+                    "confirmation_required": bool(result.get("confirmation_required")),
+                },
+            )
+            tool_message = str(result.pop("tool_message", "") or "")
+            if tool_message:
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    tool_message,
+                    sender="aha",
+                    task_id=task_id,
+                    role="main",
+                    from_agent="aha",
+                    to_agent="main",
+                    reply_target="feishu",
+                    coordination="service_assistant_action_result",
+                    service_action_depth=int(result.get("action_depth") or service_action_depth + 1),
+                )
+            executed.append(result)
+            continue
         if action_type == "record_task_update":
             result = handle_record_task_update_action(root, run_id, task_id, action)
             if result:
