@@ -155,10 +155,13 @@ def _load_codex_catalog_model_options(codex_bin: str) -> list[dict]:
     )
     for command in commands:
         try:
+            command = platform.spawn_command(command)
             completed = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=timeout,
                 env=env,

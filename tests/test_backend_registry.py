@@ -88,6 +88,37 @@ class BackendRegistryTests(unittest.TestCase):
         )
         run.assert_called_once()
         self.assertEqual(run.call_args.args[0], ["test-codex", "debug", "models"])
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+
+    def test_codex_model_catalog_wraps_windows_npm_command_shim(self) -> None:
+        registry._CODEX_MODEL_OPTIONS_CACHE.clear()
+        catalog = {
+            "models": [
+                {"slug": "gpt-new", "display_name": "GPT New — Windows", "visibility": "list"},
+            ],
+        }
+        completed = subprocess.CompletedProcess(
+            ["cmd.exe", "/c", r"C:\npm\codex.cmd", "debug", "models"],
+            0,
+            stdout=json.dumps(catalog, ensure_ascii=False),
+            stderr="",
+        )
+
+        with (
+            mock.patch.object(registry.platform, "WIN", True),
+            mock.patch("aha_cli.platform.shutil.which", return_value=r"C:\npm\codex.cmd"),
+            mock.patch("aha_cli.backends.registry.subprocess.run", return_value=completed) as run,
+        ):
+            options = model_options("codex", {"codex": {"bin": "codex"}})
+
+        self.assertIn({"name": "gpt-new", "label": "GPT New — Windows"}, options)
+        self.assertEqual(
+            run.call_args.args[0],
+            ["cmd.exe", "/c", r"C:\npm\codex.cmd", "debug", "models"],
+        )
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
 
     def test_codex_model_catalog_uses_user_backend_paths(self) -> None:
         registry._CODEX_MODEL_OPTIONS_CACHE.clear()
