@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import textwrap
 
+from aha_cli import platform
 from aha_cli.constants import EVENTS_FILE
 from aha_cli.store.filesystem import (
     append_event,
@@ -119,6 +120,7 @@ def run_one_task(root: Path, plan: dict, task_id: str, command_template: str | N
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
+            **platform.hidden_subprocess_kwargs(),
         )
         with log_file.open("w", encoding="utf-8") as log:
             assert process.stdout is not None

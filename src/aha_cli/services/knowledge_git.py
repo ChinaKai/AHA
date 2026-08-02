@@ -26,6 +26,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from aha_cli import platform
 from aha_cli.store.knowledge import PROJECTS_DIR, init_knowledge_base, knowledge_config, knowledge_root
 
 _GIT_TIMEOUT = 120
@@ -62,6 +63,7 @@ def _run_git(repo: Path, args: list[str], *, author: dict | None = None) -> dict
             encoding="utf-8",
             errors="replace",
             timeout=_GIT_TIMEOUT,
+            **platform.hidden_subprocess_kwargs(),
         )
     except FileNotFoundError:
         return {"ok": False, "rc": 127, "stdout": "", "stderr": "git not found", "args": args}

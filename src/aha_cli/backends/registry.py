@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 
+from aha_cli import platform
 from aha_cli.services.backend_paths import add_user_backend_paths
 
 CODEX_DEFAULT_MODEL = "gpt-5.5"
@@ -154,7 +155,15 @@ def _load_codex_catalog_model_options(codex_bin: str) -> list[dict]:
     )
     for command in commands:
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout, env=env)
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+                **platform.hidden_subprocess_kwargs(),
+            )
         except Exception:
             continue
         if completed.returncode != 0:

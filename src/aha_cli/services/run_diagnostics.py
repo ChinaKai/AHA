@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 
+from aha_cli import platform
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
 from aha_cli.services.backend_runtime import backend_status
 from aha_cli.services.run_cleanup import (
@@ -35,6 +36,7 @@ def _default_command_runner(argv: list[str]) -> str:
             check=False,
             text=True,
             timeout=2,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (FileNotFoundError, OSError, subprocess.SubprocessError):
         return ""

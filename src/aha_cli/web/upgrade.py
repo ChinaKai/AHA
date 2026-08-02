@@ -8,6 +8,7 @@ import subprocess
 import sys
 import zipfile
 
+from aha_cli import platform as aha_platform
 
 SOURCE_UPGRADE_UNAVAILABLE_REASON = "Web upgrade is unavailable for source-started AHA services"
 SOURCE_PUBLISH_UNAVAILABLE_REASON = "Web publish is unavailable because AHA_SOURCE_ROOT is not a source checkout"
@@ -166,6 +167,7 @@ def _run_git(source_root: Path, args: list[str], *, timeout: int = GIT_COMMAND_T
             capture_output=True,
             text=True,
             timeout=timeout,
+            **aha_platform.hidden_subprocess_kwargs(),
         )
     except subprocess.CalledProcessError as exc:
         output = (exc.stderr or exc.stdout or "").strip()
@@ -194,6 +196,7 @@ def _git_ref_exists(source_root: Path, ref: str) -> bool:
             capture_output=True,
             text=True,
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+            **aha_platform.hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"git rev-parse --quiet --verify {ref} timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s") from exc

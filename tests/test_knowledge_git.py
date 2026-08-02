@@ -42,6 +42,22 @@ def _git(repo: Path, *args: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+def test_run_git_hides_helper_console_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    def fake_run(command: list[str], **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(kg.platform, "hidden_subprocess_kwargs", lambda: {"creationflags": 0x08000000})
+    monkeypatch.setattr(kg.subprocess, "run", fake_run)
+
+    result = kg._run_git(tmp_path, ["status", "--porcelain"])
+
+    assert result["ok"] is True
+    assert captured["creationflags"] == 0x08000000
+
+
 def test_ensure_repo_inits_branch_and_remote(tmp_path: Path):
     root = tmp_path / ".aha"
     remote = _bare_remote(tmp_path / "remote.git")

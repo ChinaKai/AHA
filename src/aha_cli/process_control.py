@@ -27,6 +27,8 @@ import subprocess
 import sys
 import time
 
+from aha_cli import platform
+
 _WIN = sys.platform == "win32"
 
 # Win32 access rights and exit codes (used only on Windows).
@@ -222,6 +224,7 @@ def _windows_tree_terminate(pid: int, *, force: bool) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            **platform.hidden_subprocess_kwargs(),
         )
     except OSError:
         return

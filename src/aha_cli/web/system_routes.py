@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.feishu_runtime import feishu_status, update_feishu_notifications_enabled
@@ -284,6 +285,7 @@ def _run_web_upgrade_command(root: Path, command: list[str]) -> tuple[dict, str,
             text=True,
             timeout=WEB_UPGRADE_TIMEOUT_SECONDS,
             check=False,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"failed to run AHA upgrade command: {exc}") from exc

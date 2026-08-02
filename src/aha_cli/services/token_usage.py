@@ -286,6 +286,7 @@ def _run_ccusage_json_with_job(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **_platform.hidden_subprocess_kwargs(),
         )
     except FileNotFoundError as exc:
         executable = command[0] if command else "ccusage"
@@ -330,6 +331,7 @@ def _run_ccusage_json(args: list[str], *, root: Path | None = None, refresh_job:
             text=True,
             timeout=CCUSAGE_TIMEOUT_SECONDS,
             check=False,
+            **_platform.hidden_subprocess_kwargs(),
         )
     except FileNotFoundError as exc:
         executable = command[0] if command else "ccusage"

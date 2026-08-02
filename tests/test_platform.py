@@ -13,6 +13,23 @@ class PlatformTests(unittest.TestCase):
     def test_is_windows_matches_sys_platform(self) -> None:
         self.assertEqual(platform.is_windows(), sys.platform == "win32")
 
+    def test_hidden_subprocess_kwargs_are_empty_off_windows(self) -> None:
+        import unittest.mock as mock
+
+        with mock.patch.object(platform, "WIN", False):
+            self.assertEqual(platform.hidden_subprocess_kwargs(), {})
+
+    def test_hidden_subprocess_kwargs_suppress_windows_console(self) -> None:
+        import unittest.mock as mock
+
+        with mock.patch.object(platform, "WIN", True), mock.patch.object(
+            platform.subprocess,
+            "CREATE_NO_WINDOW",
+            0x08000000,
+            create=True,
+        ):
+            self.assertEqual(platform.hidden_subprocess_kwargs(), {"creationflags": 0x08000000})
+
     def test_temp_root_is_real_temp_dir(self) -> None:
         self.assertEqual(platform.temp_root(), Path(tempfile.gettempdir()))
 

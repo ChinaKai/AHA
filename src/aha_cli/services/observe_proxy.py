@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import zlib
 
-from aha_cli import process_control
+from aha_cli import platform, process_control
 from aha_cli.backends.claude import claude_config_env
 from aha_cli.backends.codex import (
     codex_config_env,
@@ -643,6 +643,7 @@ def ensure_observe_proxy(
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                **platform.hidden_subprocess_kwargs(),
             )
         finally:
             log_handle.close()

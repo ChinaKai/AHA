@@ -7,6 +7,7 @@ import time
 import traceback
 import uuid
 
+from aha_cli import platform
 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
 from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort, resolve_model
@@ -248,6 +249,7 @@ def _git_workspace_snapshot(workspace: Path) -> dict | None:
             capture_output=True,
             text=True,
             timeout=5,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -260,6 +262,7 @@ def _git_workspace_snapshot(workspace: Path) -> dict | None:
             capture_output=True,
             text=True,
             timeout=5,
+            **platform.hidden_subprocess_kwargs(),
         )
         status_result = subprocess.run(
             [
@@ -275,9 +278,10 @@ def _git_workspace_snapshot(workspace: Path) -> dict | None:
             ],
             check=False,
             capture_output=True,
-            text=True,
-            timeout=5,
-        )
+                text=True,
+                timeout=5,
+                **platform.hidden_subprocess_kwargs(),
+            )
     except (OSError, subprocess.SubprocessError):
         return None
     if status_result.returncode != 0:
@@ -310,6 +314,7 @@ def _git_commit_messages(workspace: Path, before: dict | None, after: dict | Non
             capture_output=True,
             text=True,
             timeout=5,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return []

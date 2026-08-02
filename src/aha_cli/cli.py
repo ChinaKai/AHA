@@ -81,6 +81,12 @@ from aha_cli.services.service_upgrade import (
     upgrade_user_service,
 )
 from aha_cli.services.tasks import create_task_and_dispatch
+from aha_cli.services.windows_tray import (
+    WindowsTrayError,
+    default_tray_config_path,
+    load_tray_settings,
+    run_windows_tray,
+)
 from aha_cli.web.auth import bind_host_exposes_network, resolve_auth_token
 from aha_cli.store.filesystem import (
     add_agent,
@@ -1705,6 +1711,40 @@ def cmd_ui(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_tray(args: argparse.Namespace) -> int:
+    tray_config_path = default_tray_config_path()
+    stored = load_tray_settings(tray_config_path)
+    explicit_home = getattr(args, "home", None) or os.environ.get(AHA_HOME_ENV)
+    root = command_aha_home(args) if explicit_home or stored is None else stored.aha_home
+    run_id = args.run_id or latest_run_id(root) or ""
+    if run_id:
+        require_plan(root, run_id)
+    try:
+        explicit_auth_token = getattr(args, "auth_token", None) or os.environ.get("AHA_WEB_TOKEN") or ""
+        auth_token_file = getattr(args, "auth_token_file", None) or os.environ.get("AHA_WEB_TOKEN_FILE") or ""
+        resolved_auth_token = (
+            resolve_auth_token(explicit_auth_token, auth_token_file)
+            if explicit_auth_token or auth_token_file or stored is None
+            else stored.web_token
+        )
+        run_windows_tray(
+            root,
+            run_id,
+            args.host or (stored.bind if stored is not None else "127.0.0.1"),
+            args.port if args.port is not None else (stored.port if stored is not None else 8766),
+            args.poll_interval,
+            auth_token=resolved_auth_token if not auth_token_file else "",
+            auth_token_file=auth_token_file,
+            open_browser=args.open_browser,
+            enable_startup=args.enable_startup,
+            config_path=tray_config_path,
+        )
+    except (OSError, ValueError, WindowsTrayError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_package(args: argparse.Namespace) -> int:
     if args.package_cmd == "onebin":
         try:
@@ -1942,6 +1982,7 @@ def command_handlers() -> dict[str, object]:
         "agent": cmd_agent,
         "session": cmd_session,
         "serve": cmd_serve,
+        "tray": cmd_tray,
         "ui": cmd_ui,
     }
 

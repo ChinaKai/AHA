@@ -16,7 +16,7 @@ from aha_cli.backends.codex import (
     tail_text,
 )
 from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort
-from aha_cli.platform import spawn_command
+from aha_cli.platform import hidden_subprocess_kwargs, spawn_command
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.native_subagents import (
@@ -396,6 +396,7 @@ def run_claude_exec(
             stderr=subprocess.STDOUT,
             bufsize=1,
             start_new_session=start_new_session,
+            **hidden_subprocess_kwargs(),
         )
     except OSError as exc:
         exit_code = 127 if isinstance(exc, FileNotFoundError) else 1

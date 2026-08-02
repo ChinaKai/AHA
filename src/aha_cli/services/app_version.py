@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 
+from aha_cli import platform
 from aha_cli._build_version import BUILD_VERSION
 
 
@@ -15,6 +16,7 @@ def _git_output(root: Path, args: list[str], *, timeout: int = 1) -> str:
         capture_output=True,
         text=True,
         timeout=timeout,
+        **platform.hidden_subprocess_kwargs(),
     )
     return result.stdout.strip()
 

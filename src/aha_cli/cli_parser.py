@@ -54,6 +54,7 @@ COMMANDS = {
     "agent",
     "session",
     "serve",
+    "tray",
     "ui",
 }
 
@@ -760,6 +761,17 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     serve_p.add_argument("--port", type=int, default=8765)
     serve_p.add_argument("--interval", type=float, default=1.0)
     serve_p.set_defaults(func=handlers["serve"])
+
+    tray_p = sub.add_parser("tray", help="Run the AHA Web UI from the Windows notification area")
+    tray_p.add_argument("run_id", nargs="?")
+    tray_p.add_argument("--host", default=None, help="Bind address; defaults to the saved tray setting or 127.0.0.1")
+    tray_p.add_argument("--port", type=int, default=None, help="Web UI port; defaults to the saved tray setting or 8766")
+    tray_p.add_argument("--poll-interval", type=int, default=1000)
+    tray_p.add_argument("--auth-token", default=None, help="Require this token for the Web UI and APIs except /api/health")
+    tray_p.add_argument("--auth-token-file", default=None, help="Read the Web UI auth token from a file")
+    tray_p.add_argument("--open-browser", action="store_true", help="Open the dashboard after starting the tray process")
+    tray_p.add_argument("--enable-startup", action="store_true", help="Enable current-user startup while launching the tray")
+    tray_p.set_defaults(func=handlers["tray"])
 
     ui_p = sub.add_parser("ui")
     ui_p.add_argument("run_id", nargs="?")

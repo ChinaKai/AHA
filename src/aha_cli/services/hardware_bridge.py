@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-from aha_cli import process_control
+from aha_cli import platform, process_control
 from aha_cli.constants import PLAN_FILE, RUNS_DIR
 from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
@@ -261,6 +261,7 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
                 preexec_fn=process_control.parent_death_preexec(),
                 start_new_session=False,
                 env=child_env,
+                **platform.hidden_subprocess_kwargs(),
             )
         finally:
             log_handle.close()

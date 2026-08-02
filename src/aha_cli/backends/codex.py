@@ -13,7 +13,7 @@ import sys
 from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort, resolve_model
 from aha_cli.backends.codex_litellm_bridge import start_litellm_responses_bridge
 from aha_cli.domain.models import utc_now
-from aha_cli.platform import spawn_command
+from aha_cli.platform import hidden_subprocess_kwargs, spawn_command
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
@@ -686,6 +686,7 @@ def run_codex_exec(
             stderr=subprocess.STDOUT,
             bufsize=1,
             start_new_session=start_new_session,
+            **hidden_subprocess_kwargs(),
         )
         if event_callback:
             event_callback(

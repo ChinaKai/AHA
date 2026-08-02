@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aha_cli import platform
 from aha_cli.domain.models import normalize_task_token_saving, utc_now
 from aha_cli.services.context_evidence_maintenance import (
     crud_actions_for_signals,
@@ -452,6 +453,7 @@ def _git_dirty_paths(workspace: Path) -> list[str]:
             capture_output=True,
             text=True,
             timeout=5,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return []

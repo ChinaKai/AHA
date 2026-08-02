@@ -12,6 +12,7 @@ import zipfile
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from aha_cli import platform
 
 DEFAULT_RELEASE_REPO = "ChinaKai/AHA"
 DEFAULT_RELEASE_VERSION = "latest"
@@ -105,6 +106,7 @@ def executable_version(path: Path, *, require_runnable: bool = False) -> str:
             capture_output=True,
             text=True,
             timeout=10,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -164,6 +166,7 @@ def _run_systemctl_restart(service_name: str) -> None:
             capture_output=True,
             text=True,
             timeout=30,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ServiceUpgradeError(f"failed to restart {service_name}: {exc}") from exc

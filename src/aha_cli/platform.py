@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -19,6 +20,18 @@ WIN = sys.platform == "win32"
 def is_windows() -> bool:
     """True on Windows."""
     return WIN
+
+
+def hidden_subprocess_kwargs() -> dict[str, int]:
+    """Return subprocess options that suppress background consoles on Windows.
+
+    The Web service invokes helper CLIs such as ``git`` and ``npx``. When AHA
+    itself was launched from the tray, those helpers would otherwise create a
+    transient black console window. POSIX callers receive an empty mapping.
+    """
+    if not WIN:
+        return {}
+    return {"creationflags": int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))}
 
 
 def temp_root() -> Path:

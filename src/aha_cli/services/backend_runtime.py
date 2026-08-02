@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from aha_cli import locking, process_control
+from aha_cli import locking, platform, process_control
 import hashlib
 import os
 from pathlib import Path
@@ -800,6 +800,7 @@ def start_backend(
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
+                **platform.hidden_subprocess_kwargs(),
             )
         finally:
             log_file.close()

@@ -21,7 +21,7 @@ import time
 from urllib.parse import unquote, urlparse
 import uuid
 
-from aha_cli import process_control
+from aha_cli import platform, process_control
 from aha_cli.services import loopback_ipc
 from aha_cli.domain.models import normalize_browser_profile_name, normalize_task_browser_control, utc_now
 from aha_cli.services.hardware_bridge import bridge_launcher, pid_alive
@@ -552,6 +552,7 @@ def ensure_browser_bridge(
                 preexec_fn=process_control.parent_death_preexec() if parent_bound else None,
                 start_new_session=not parent_bound,
                 env=child_env,
+                **platform.hidden_subprocess_kwargs(),
             )
             process_control.assign_parent_death(proc)
         state_path = browser_bridge_state_path(root, run_id, task_id)

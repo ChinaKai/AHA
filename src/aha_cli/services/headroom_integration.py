@@ -11,7 +11,7 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from aha_cli import process_control
+from aha_cli import platform, process_control
 from aha_cli.backends.codex import (
     codex_config_env,
     codex_config_for_model,
@@ -452,6 +452,7 @@ def ensure_headroom_proxy(
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                **platform.hidden_subprocess_kwargs(),
             )
         finally:
             log_handle.close()
