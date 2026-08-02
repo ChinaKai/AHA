@@ -100,7 +100,7 @@ powershell.exe -ExecutionPolicy Bypass -File $Installer
 powershell.exe -ExecutionPolicy Bypass -File $Installer -EnableStartup
 ```
 
-默认安装位置是 `%LOCALAPPDATA%\AHA\aha`，数据目录是 `%USERPROFILE%\.aha`，Web UI 是 <http://127.0.0.1:8788>。托盘设置保存在 `%LOCALAPPDATA%\AHA\tray.json`；Web Token 明文只写入所选 `AHA_HOME\web-token`。开机启动项写入当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限。托盘模式下，Web 请求触发的 Git、后端探测和其他辅助进程会以无控制台窗口方式运行。
+默认安装位置是 `%LOCALAPPDATA%\AHA\aha`，数据目录是 `%USERPROFILE%\.aha`，Web UI 是 <http://127.0.0.1:8788>。安装脚本会在当前用户的开始菜单创建带 AHA Logo 的 `AHA` 快捷方式；退出托盘后可按 Win 键搜索 `AHA` 重新启动，也可将其固定到任务栏。若不需要快捷方式，安装时传入 `-NoShortcut`。托盘设置保存在 `%LOCALAPPDATA%\AHA\tray.json`；Web Token 明文只写入所选 `AHA_HOME\web-token`。开机启动项写入当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限。托盘模式下，Web 请求触发的 Git、后端探测和其他辅助进程会以无控制台窗口方式运行。
 
 Codex 和 Claude 至少安装一个：
 

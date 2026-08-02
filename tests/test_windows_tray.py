@@ -246,6 +246,12 @@ class WindowsTrayTests(unittest.TestCase):
         self.assertIn("[ValidateNotNullOrEmpty()][string]$Bind", installer)
         self.assertIn('"--host"', installer)
         self.assertIn("-AllowUnsafeBind", installer)
+        self.assertIn("[switch]$NoShortcut", installer)
+        self.assertIn("Install-AhaStartMenuShortcut", installer)
+        self.assertIn("[Environment+SpecialFolder]::Programs", installer)
+        self.assertIn('Join-Path $shortcutDirectory "AHA.lnk"', installer)
+        self.assertIn('" tray --open-browser"', installer)
+        self.assertIn("System.Text.UTF8Encoding($false)", installer)
         self.assertIn("pythonw.exe", installer)
         self.assertIn("install_windows.ps1", workflow)
 

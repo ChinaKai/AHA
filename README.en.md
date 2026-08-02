@@ -112,12 +112,15 @@ powershell.exe -ExecutionPolicy Bypass -File $Installer -EnableStartup
 ```
 
 The default installation path is `%LOCALAPPDATA%\AHA\aha`, the data directory
-is `%USERPROFILE%\.aha`, and the Web UI is <http://127.0.0.1:8788>. Tray
-settings are stored in `%LOCALAPPDATA%\AHA\tray.json`; the plaintext Web token
-is stored only in the selected `AHA_HOME\web-token`. Startup uses the current
-user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key and does not
-require administrator privileges. In tray mode, Git checks, backend discovery,
-and other helper processes started by Web requests run without flashing console
+is `%USERPROFILE%\.aha`, and the Web UI is <http://127.0.0.1:8788>. The installer
+creates an `AHA` shortcut with the AHA logo in the current user's Start Menu;
+after exiting the tray, search for `AHA` from Start to launch it again or pin it
+to the taskbar. Pass `-NoShortcut` during installation to omit it. Tray settings
+are stored in `%LOCALAPPDATA%\AHA\tray.json`; the plaintext Web token is stored
+only in the selected `AHA_HOME\web-token`. Startup uses the current user's
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key and does not require
+administrator privileges. In tray mode, Git checks, backend discovery, and
+other helper processes started by Web requests run without flashing console
 windows.
 
 Install at least one of Codex and Claude:

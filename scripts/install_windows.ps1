@@ -8,6 +8,7 @@ param(
     [string]$DownloadUrl = "https://github.com/ChinaKai/AHA/releases/latest/download/aha",
     [string]$Artifact = "",
     [switch]$EnableStartup,
+    [switch]$NoShortcut,
     [switch]$NoStart,
     [switch]$NoAuth,
     [switch]$AllowUnsafeBind
@@ -65,6 +66,93 @@ function Quote-StartProcessArgument {
     return '"' + ($Value -replace '"', '\"') + '"'
 }
 
+function Write-AhaTrayConfig {
+    param(
+        [string]$Path,
+        [string]$HomePath,
+        [string]$BindAddress,
+        [int]$WebPort,
+        [string]$WebTokenFile
+    )
+
+    $settings = [ordered]@{
+        aha_home = $HomePath
+        bind = $BindAddress
+        port = $WebPort
+        web_token_file = $WebTokenFile
+    }
+    $json = $settings | ConvertTo-Json
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8NoBom)
+}
+
+function Install-AhaIcon {
+    param(
+        [string]$ArtifactPath,
+        [string]$Destination
+    )
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($ArtifactPath)
+        try {
+            $entry = $archive.GetEntry("aha_cli/assets/aha.ico")
+            if ($null -eq $entry) {
+                return $false
+            }
+            $inputStream = $entry.Open()
+            try {
+                $outputStream = [System.IO.File]::Create($Destination)
+                try {
+                    $inputStream.CopyTo($outputStream)
+                }
+                finally {
+                    $outputStream.Dispose()
+                }
+            }
+            finally {
+                $inputStream.Dispose()
+            }
+        }
+        finally {
+            $archive.Dispose()
+        }
+        return $true
+    }
+    catch {
+        Write-Warning "Failed to install the AHA shortcut icon: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Install-AhaStartMenuShortcut {
+    param(
+        [string]$PythonwPath,
+        [string]$ArtifactPath,
+        [string]$WorkingDirectory,
+        [string]$IconPath
+    )
+
+    $programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+    if ([string]::IsNullOrWhiteSpace($programs)) {
+        throw "Unable to resolve the current user's Start Menu directory"
+    }
+    $shortcutDirectory = Join-Path $programs "AHA"
+    New-Item -ItemType Directory -Force -Path $shortcutDirectory | Out-Null
+    $shortcutPath = Join-Path $shortcutDirectory "AHA.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $PythonwPath
+    $shortcut.Arguments = (Quote-StartProcessArgument $ArtifactPath) + " tray --open-browser"
+    $shortcut.WorkingDirectory = $WorkingDirectory
+    $shortcut.Description = "Start AHA in the Windows notification area"
+    if (Test-Path -LiteralPath $IconPath -PathType Leaf) {
+        $shortcut.IconLocation = $IconPath + ",0"
+    }
+    $shortcut.Save()
+    return $shortcutPath
+}
+
 $PythonExe = Resolve-AhaPython -Requested $Python
 $PythonVersion = (& $PythonExe -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or [Version]$PythonVersion -lt [Version]"3.10") {
@@ -77,6 +165,8 @@ if (-not (Test-Path -LiteralPath $PythonwExe -PathType Leaf)) {
 
 New-Item -ItemType Directory -Force -Path $AhaDir | Out-Null
 New-Item -ItemType Directory -Force -Path $AhaHome | Out-Null
+$AhaDir = (Resolve-Path -LiteralPath $AhaDir).Path
+$AhaHome = (Resolve-Path -LiteralPath $AhaHome).Path
 $InstallBin = Join-Path $AhaDir "aha"
 $Candidate = Join-Path ([System.IO.Path]::GetTempPath()) ("aha-" + [Guid]::NewGuid().ToString("N"))
 try {
@@ -115,6 +205,21 @@ if ($EnableStartup -and $NoStart) {
     throw "-EnableStartup requires the tray to start; remove -NoStart"
 }
 
+$TrayConfig = Join-Path $AhaDir "tray.json"
+$ConfiguredTokenFile = if ($NoAuth) { "" } else { $TokenFile }
+Write-AhaTrayConfig -Path $TrayConfig -HomePath $AhaHome -BindAddress $Bind -WebPort $Port -WebTokenFile $ConfiguredTokenFile
+
+$ShortcutPath = ""
+if (-not $NoShortcut) {
+    $IconPath = Join-Path $AhaDir "aha.ico"
+    Install-AhaIcon -ArtifactPath $InstallBin -Destination $IconPath | Out-Null
+    $ShortcutPath = Install-AhaStartMenuShortcut `
+        -PythonwPath $PythonwExe `
+        -ArtifactPath $InstallBin `
+        -WorkingDirectory $AhaDir `
+        -IconPath $IconPath
+}
+
 if (-not $NoStart) {
     $TrayArguments = @(
         (Quote-StartProcessArgument $InstallBin),
@@ -142,3 +247,4 @@ Write-Host "Bind: $Bind"
 Write-Host "Port: $Port"
 Write-Host "Tray started: $(-not $NoStart)"
 Write-Host "Startup enabled: $EnableStartup"
+Write-Host "Start Menu shortcut: $ShortcutPath"
