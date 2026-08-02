@@ -29,9 +29,14 @@ class _SendResult:
 class FakeChannel:
     def __init__(self) -> None:
         self.sent: list[tuple[str, object, object]] = []
+        self.updated: list[tuple[str, dict]] = []
 
     async def send(self, target: str, message: object, opts: object = None) -> _SendResult:
         self.sent.append((target, message, opts))
+        return _SendResult()
+
+    async def update_card(self, message_id: str, card: dict) -> _SendResult:
+        self.updated.append((message_id, card))
         return _SendResult()
 
     def schedule(self, coroutine) -> _CompletedFuture:
@@ -346,11 +351,38 @@ class FeishuAssistantTests(unittest.TestCase):
             open_id="ou_user",
             session_key="tenant-1:p2p:ou_user",
             text="确认",
+            message_id="om_card",
         )
         self.assertEqual(send.call_args.args[1], "run-001")
         self.assertEqual(send.call_args.args[2]["task_id"], "task-006")
         self.assertEqual(send.call_args.args[2]["message"], "trusted result")
         self.assertIn("操作已确认并执行", channel.sent[-1][1]["text"])
+
+    def test_resolved_confirmation_updates_original_card_before_reply(self) -> None:
+        channel = FakeChannel()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.mark_confirmation_card_updated",
+        ) as marked:
+            feishu_assistant._finish_confirmation(
+                Path(tmp),
+                channel,
+                chat_id="oc_chat",
+                message_id="om_user_reply",
+                run_id="run-001",
+                task_id="task-006",
+                confirmation={
+                    "cancelled": True,
+                    "confirmation_id": "confirmation-1",
+                    "confirmation_message_id": "om_card",
+                    "confirmation_card": {"schema": "2.0", "header": {"template": "grey"}},
+                    "user_response": "已取消。",
+                },
+            )
+
+        self.assertEqual(channel.updated[0][0], "om_card")
+        self.assertEqual(channel.updated[0][1]["header"]["template"], "grey")
+        marked.assert_called_once_with(Path(tmp), "confirmation-1")
+        self.assertIn("已取消", channel.sent[-1][1]["text"])
 
     def test_task_workspace_skips_missing_previous_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

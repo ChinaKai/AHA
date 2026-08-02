@@ -9,8 +9,10 @@ from typing import Any
 from aha_cli.services.feishu import (
     FeishuError,
     claim_inbound_message,
+    confirmation_card_for_message,
     get_session_binding,
     make_session_key,
+    mark_confirmation_card_updated,
     set_session_binding,
 )
 from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
@@ -141,6 +143,17 @@ def _send_text_background(channel: Any, chat_id: str, text: str) -> None:
         channel.schedule(channel.send(chat_id, {"text": str(text)}, None))
     except Exception:  # noqa: BLE001 - the SDK callback must return without blocking.
         pass
+
+
+def _update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> None:
+    message_id = str(confirmation.get("confirmation_message_id") or confirmation.get("message_id") or "")
+    card = confirmation.get("confirmation_card") or confirmation.get("terminal_card")
+    if not message_id or not isinstance(card, dict):
+        return
+    result = channel.schedule(channel.update_card(message_id, card)).result(timeout=20)
+    if hasattr(result, "success") and not result.success:
+        raise FeishuError(str(getattr(result, "error", None) or "飞书卡片更新失败"))
+    mark_confirmation_card_updated(root, str(confirmation.get("confirmation_id") or ""))
 
 
 def _allowed(config: dict, open_id: str) -> bool:
@@ -283,6 +296,12 @@ def _finish_confirmation(
     task_id: str,
     confirmation: dict,
 ) -> None:
+    try:
+        _update_confirmation_card(root, channel, confirmation)
+    except (FeishuError, RuntimeError, TimeoutError):
+        # Runtime sweep retries terminal card updates; execution state must not
+        # be rolled back merely because the visual update failed.
+        pass
     if confirmation.get("cancelled"):
         _send_text(channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
         return
@@ -325,6 +344,7 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
             open_id=open_id,
             session_key=session_key,
             text=decision,
+            message_id=message_id,
         )
         if confirmation is None:
             raise ServiceAssistantActionError("卡片确认数据无效")
@@ -338,6 +358,12 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
             confirmation=confirmation,
         )
     except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        record = confirmation_card_for_message(root, message_id)
+        if record is not None and isinstance(record.get("terminal_card"), dict):
+            try:
+                _update_confirmation_card(root, channel, record)
+            except (FeishuError, RuntimeError, TimeoutError):
+                pass
         _send_text(channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
 
 

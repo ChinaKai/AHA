@@ -281,6 +281,8 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Treat the user's current message as the authorization boundary", contract)
         self.assertIn("请让 task-006 提交", contract)
         self.assertIn("Do not mention or request push anywhere in that action", contract)
+        self.assertIn("automatically return its eventual result", contract)
+        self.assertIn("Do not say “需要的话我再帮你跟进”", contract)
 
 
 if __name__ == "__main__":

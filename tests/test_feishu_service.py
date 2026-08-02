@@ -213,6 +213,14 @@ class FeishuServiceTests(unittest.TestCase):
                     action="create_task",
                     now=103,
                 )
+            with self.assertRaisesRegex(feishu.FeishuError, "没有待确认"):
+                feishu.consume_pending_action_token(
+                    root,
+                    open_id="ou_user",
+                    session_key="tenant:p2p:ou_user",
+                    action="service_assistant_change",
+                    now=104,
+                )
 
     def test_action_token_expires(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -274,14 +282,82 @@ class FeishuServiceTests(unittest.TestCase):
                     action="service_assistant_change",
                     now=103,
                 )
-            with self.assertRaisesRegex(feishu.FeishuError, "没有待确认"):
-                feishu.consume_pending_action_token(
+
+    def test_card_confirmation_is_bound_to_exact_message_and_old_card_cannot_consume_new_action(self) -> None:
+        card = {"schema": "2.0", "header": {"title": {"tag": "plain_text", "content": "确认"}}, "body": {"elements": []}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in (1, 2):
+                confirmation_id = f"confirmation-{index}"
+                feishu.issue_action_token(
                     root,
                     open_id="ou_user",
                     session_key="tenant:p2p:ou_user",
                     action="service_assistant_change",
-                    now=104,
+                    context={"version": index, "confirmation_id": confirmation_id},
+                    now=100 + index,
                 )
+                feishu.register_confirmation_card(
+                    root,
+                    confirmation_id,
+                    open_id="ou_user",
+                    session_key="tenant:p2p:ou_user",
+                    action="service_assistant_change",
+                    card=card,
+                    expires_at=500,
+                    now=100 + index,
+                )
+                feishu.bind_confirmation_card(root, confirmation_id, message_id=f"om-{index}", chat_id="oc-chat")
+
+            with self.assertRaisesRegex(feishu.FeishuError, "已处理或失效"):
+                feishu.consume_confirmation_card(
+                    root,
+                    message_id="om-1",
+                    open_id="ou_user",
+                    session_key="tenant:p2p:ou_user",
+                    action="service_assistant_change",
+                    decision="确认",
+                    now=103,
+                )
+            context = feishu.consume_confirmation_card(
+                root,
+                message_id="om-2",
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                action="service_assistant_change",
+                decision="确认",
+                now=104,
+            )
+
+        self.assertEqual(context["version"], 2)
+        self.assertEqual(context["confirmation_message_id"], "om-2")
+
+    def test_expired_confirmation_card_becomes_grey_and_has_no_buttons(self) -> None:
+        card = {
+            "schema": "2.0",
+            "header": {"title": {"tag": "plain_text", "content": "请确认"}, "template": "orange"},
+            "body": {"elements": [{"tag": "column_set", "columns": []}]},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            feishu.register_confirmation_card(
+                root,
+                "confirmation-expired",
+                open_id="ou_user",
+                session_key="session",
+                action="change",
+                card=card,
+                expires_at=105,
+                now=100,
+            )
+            feishu.bind_confirmation_card(root, "confirmation-expired", message_id="om-expired", chat_id="oc-chat")
+            updates = feishu.pending_confirmation_card_updates(root, now=106)
+
+        self.assertEqual(len(updates), 1)
+        terminal = updates[0]["terminal_card"]
+        self.assertEqual(terminal["header"]["template"], "grey")
+        self.assertIn("失效", terminal["header"]["title"]["content"])
+        self.assertFalse(any(item.get("tag") == "column_set" for item in terminal["body"]["elements"]))
 
     def test_tenant_token_is_cached_until_refresh_window(self) -> None:
         opener = QueueOpener(
@@ -337,6 +413,25 @@ class FeishuServiceTests(unittest.TestCase):
         card_body = json.loads(card_request.data)
         self.assertEqual(card_body["msg_type"], "interactive")
         self.assertEqual(json.loads(card_body["content"])["elements"][0]["content"], "card")
+
+    def test_update_card_uses_message_patch_endpoint(self) -> None:
+        opener = QueueOpener(FakeResponse({"code": 0}))
+        card = {"schema": "2.0", "body": {"elements": []}}
+        with tempfile.TemporaryDirectory() as tmp:
+            feishu.update_card_message(
+                Path(tmp),
+                "",
+                "",
+                "om-card",
+                card,
+                tenant_access_token="tenant-token",
+                opener=opener,
+            )
+
+        request = opener.requests[0][0]
+        self.assertEqual(request.method, "PATCH")
+        self.assertTrue(request.full_url.endswith("/open-apis/im/v1/messages/om-card"))
+        self.assertEqual(json.loads(json.loads(request.data)["content"]), card)
 
     def test_api_payload_error_is_wrapped_as_feishu_error(self) -> None:
         opener = QueueOpener(FakeResponse({"code": 99991400, "msg": "rate limited"}))

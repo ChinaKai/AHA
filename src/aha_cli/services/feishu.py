@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import secrets
 import threading
@@ -12,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
+from aha_cli.locking import exclusive_lock
 from aha_cli.store.paths import aha_home_path
 
 
@@ -58,6 +60,14 @@ def action_tokens_path(root: Path) -> Path:
     return feishu_dir(root) / "action_tokens.json"
 
 
+def confirmation_cards_path(root: Path) -> Path:
+    return feishu_dir(root) / "confirmation_cards.json"
+
+
+def feishu_state_lock_path(root: Path) -> Path:
+    return feishu_dir(root) / ".state.lock"
+
+
 def token_cache_path(root: Path) -> Path:
     return feishu_dir(root) / "tenant_tokens.json"
 
@@ -94,6 +104,15 @@ def _write_secret_json(path: Path, payload: dict) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+@contextmanager
+def _locked_state(root: Path):
+    """Serialize Feishu security-state mutations across Web/backend processes."""
+    lock_path = feishu_state_lock_path(root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _state_lock, lock_path.open("a+b") as handle, exclusive_lock(handle):
+        yield
 
 
 def _object(value: object) -> dict:
@@ -328,6 +347,227 @@ def _valid_action_tokens(payload: dict, now: float) -> dict[str, dict]:
     }
 
 
+def _confirmation_records(payload: dict) -> dict[str, dict]:
+    raw = payload.get("confirmations")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): value for key, value in raw.items() if isinstance(value, dict)}
+
+
+def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict:
+    """Return a Schema 2.0 card with actions removed and a terminal status."""
+    result = json.loads(json.dumps(card, ensure_ascii=False)) if isinstance(card, dict) else {}
+    labels = {
+        "confirmed": ("操作已确认", "green", "已确认并提交 AHA 执行。"),
+        "cancelled": ("操作已取消", "grey", "已取消，本操作不会执行。"),
+        "expired": ("确认已失效", "grey", "已超过 5 分钟有效期，请重新发起操作。"),
+        "stale": ("确认已失效", "grey", "目标状态已变化，请重新发起操作。"),
+        "failed": ("操作执行失败", "red", "执行失败，请检查结果后重试。"),
+    }
+    title, template, description = labels.get(state, ("操作已处理", "grey", "本操作已处理。"))
+    header = result.get("header") if isinstance(result.get("header"), dict) else {}
+    header["title"] = {"tag": "plain_text", "content": title}
+    header["template"] = template
+    result["header"] = header
+    body = result.get("body") if isinstance(result.get("body"), dict) else {}
+    elements = [
+        item
+        for item in (body.get("elements") if isinstance(body.get("elements"), list) else [])
+        if not (isinstance(item, dict) and item.get("tag") == "column_set")
+    ]
+    if elements and isinstance(elements[-1], dict) and elements[-1].get("tag") == "markdown":
+        elements.pop()
+    suffix = f"\n{detail.strip()}" if detail.strip() else ""
+    elements.append({"tag": "markdown", "content": f"<font color='grey'>{description}{suffix}</font>"})
+    body["elements"] = elements
+    result["body"] = body
+    return result
+
+
+def register_confirmation_card(
+    root: Path,
+    confirmation_id: str,
+    *,
+    open_id: str,
+    session_key: str,
+    action: str,
+    card: dict,
+    expires_at: float,
+    now: float | None = None,
+) -> dict:
+    identity = str(confirmation_id or "").strip()
+    if not identity or not isinstance(card, dict):
+        raise FeishuError("confirmation_id 和 card 不能为空")
+    current = time.time() if now is None else float(now)
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        for record in records.values():
+            if (
+                str(record.get("state") or "pending") == "pending"
+                and str(record.get("open_id") or "") == str(open_id or "").strip()
+                and str(record.get("session_key") or "") == str(session_key or "").strip()
+                and str(record.get("action") or "") == str(action or "").strip()
+            ):
+                record["state"] = "stale"
+                record["resolved_at"] = current
+                record["terminal_card"] = terminal_confirmation_card(
+                    record.get("card") if isinstance(record.get("card"), dict) else {},
+                    "stale",
+                    "新的确认请求已替代本卡片。",
+                )
+                record["card_updated"] = False
+        record = {
+            "confirmation_id": identity,
+            "open_id": str(open_id or "").strip(),
+            "session_key": str(session_key or "").strip(),
+            "action": str(action or "").strip(),
+            "card": card,
+            "state": "pending",
+            "message_id": "",
+            "chat_id": "",
+            "issued_at": current,
+            "expires_at": float(expires_at),
+            "card_updated": False,
+        }
+        records[identity] = record
+        if len(records) > ACTION_TOKEN_MAX_ENTRIES:
+            records = dict(
+                sorted(records.items(), key=lambda item: (float(item[1].get("issued_at") or 0), item[0]))[
+                    -ACTION_TOKEN_MAX_ENTRIES:
+                ]
+            )
+        _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+    return dict(record)
+
+
+def bind_confirmation_card(root: Path, confirmation_id: str, *, message_id: str, chat_id: str) -> dict:
+    identity = str(confirmation_id or "").strip()
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        record = records.get(identity)
+        if not isinstance(record, dict):
+            raise FeishuError("confirmation card 不存在", code="confirmation_not_found")
+        record["message_id"] = str(message_id or "").strip()
+        record["chat_id"] = str(chat_id or "").strip()
+        _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+    return dict(record)
+
+
+def _remove_confirmation_token(tokens: dict[str, dict], confirmation_id: str) -> tuple[dict, dict[str, dict]]:
+    for digest, record in list(tokens.items()):
+        context = record.get("context") if isinstance(record.get("context"), dict) else {}
+        if str(context.get("confirmation_id") or "") == confirmation_id:
+            tokens.pop(digest, None)
+            return record, tokens
+    return {}, tokens
+
+
+def consume_confirmation_card(
+    root: Path,
+    *,
+    message_id: str,
+    open_id: str,
+    session_key: str,
+    action: str,
+    decision: str,
+    now: float | None = None,
+) -> dict:
+    """Consume the exact confirmation bound to a clicked Feishu message."""
+    current = time.time() if now is None else float(now)
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        match = next((item for item in records.values() if str(item.get("message_id") or "") == str(message_id or "")), None)
+        if not isinstance(match, dict):
+            raise FeishuError("该确认卡片不存在或尚未绑定", code="confirmation_not_found")
+        confirmation_id = str(match.get("confirmation_id") or "")
+        if str(match.get("state") or "pending") != "pending":
+            raise FeishuError("该确认卡片已处理或失效", code="confirmation_already_resolved")
+        expected = (str(open_id or "").strip(), str(session_key or "").strip(), str(action or "").strip())
+        actual = (
+            str(match.get("open_id") or ""),
+            str(match.get("session_key") or ""),
+            str(match.get("action") or ""),
+        )
+        if actual != expected:
+            raise FeishuError("确认卡片身份、会话或操作不匹配", code="action_token_mismatch")
+        tokens = _valid_action_tokens(_read_json(action_tokens_path(root)), current)
+        token_record, tokens = _remove_confirmation_token(tokens, confirmation_id)
+        if float(match.get("expires_at") or 0) <= current or not token_record:
+            match["state"] = "expired"
+            match["resolved_at"] = current
+            match["terminal_card"] = terminal_confirmation_card(match.get("card") or {}, "expired")
+            match["card_updated"] = False
+            _write_secret_json(action_tokens_path(root), {"version": 1, "tokens": tokens})
+            _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+            raise FeishuError("该确认卡片已过期", code="expired_action_token")
+        match["state"] = "processing"
+        match["decision"] = str(decision or "")
+        match["resolved_at"] = current
+        _write_secret_json(action_tokens_path(root), {"version": 1, "tokens": tokens})
+        _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+    context = token_record.get("context") if isinstance(token_record.get("context"), dict) else {}
+    return {**context, "confirmation_id": confirmation_id, "confirmation_message_id": str(message_id or "")}
+
+
+def finalize_confirmation_card(root: Path, confirmation_id: str, state: str, detail: str = "") -> dict | None:
+    identity = str(confirmation_id or "").strip()
+    if not identity:
+        return None
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        record = records.get(identity)
+        if not isinstance(record, dict):
+            return None
+        record["state"] = str(state or "processed")
+        record["resolved_at"] = time.time()
+        record["terminal_card"] = terminal_confirmation_card(record.get("card") or {}, record["state"], detail)
+        record["card_updated"] = False
+        _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+    return dict(record)
+
+
+def confirmation_card_for_message(root: Path, message_id: str) -> dict | None:
+    records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+    record = next((item for item in records.values() if str(item.get("message_id") or "") == str(message_id or "")), None)
+    return dict(record) if isinstance(record, dict) else None
+
+
+def pending_confirmation_card_updates(root: Path, *, now: float | None = None) -> list[dict]:
+    """Mark overdue records expired and return terminal cards still needing PATCH."""
+    current = time.time() if now is None else float(now)
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        changed = False
+        for record in records.values():
+            if str(record.get("state") or "pending") == "pending" and float(record.get("expires_at") or 0) <= current:
+                record["state"] = "expired"
+                record["resolved_at"] = current
+                record["terminal_card"] = terminal_confirmation_card(record.get("card") or {}, "expired")
+                record["card_updated"] = False
+                changed = True
+        if changed:
+            _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+        return [
+            dict(record)
+            for record in records.values()
+            if str(record.get("state") or "pending") not in {"pending", "processing"}
+            and str(record.get("message_id") or "")
+            and isinstance(record.get("terminal_card"), dict)
+            and not record.get("card_updated")
+        ]
+
+
+def mark_confirmation_card_updated(root: Path, confirmation_id: str) -> None:
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        record = records.get(str(confirmation_id or ""))
+        if not isinstance(record, dict):
+            return
+        record["card_updated"] = True
+        record["card_updated_at"] = time.time()
+        _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+
+
 def issue_action_token(
     root: Path,
     *,
@@ -357,7 +597,7 @@ def issue_action_token(
         "issued_at": current,
         "expires_at": current + ttl_seconds,
     }
-    with _state_lock:
+    with _locked_state(root):
         tokens = _valid_action_tokens(_read_json(action_tokens_path(root)), current)
         tokens = {
             key: value
@@ -392,7 +632,7 @@ def consume_action_token(
         raise FeishuError("action token 不能为空")
     current = time.time() if now is None else float(now)
     digest = _action_token_digest(raw_token)
-    with _state_lock:
+    with _locked_state(root):
         payload = _read_json(action_tokens_path(root))
         raw_tokens = payload.get("tokens")
         raw_tokens = raw_tokens if isinstance(raw_tokens, dict) else {}
@@ -440,7 +680,7 @@ def consume_pending_action_token(
     )
     if not all(expected):
         raise FeishuError("待确认操作必须绑定 open_id、session_key 和 action")
-    with _state_lock:
+    with _locked_state(root):
         tokens = _valid_action_tokens(_read_json(action_tokens_path(root)), current)
         matches = [
             (digest, record)
@@ -460,6 +700,16 @@ def consume_pending_action_token(
         digest, record = matches[0]
         tokens.pop(digest, None)
         _write_secret_json(action_tokens_path(root), {"version": 1, "tokens": tokens})
+        context = record.get("context") if isinstance(record.get("context"), dict) else {}
+        confirmation_id = str(context.get("confirmation_id") or "")
+        if confirmation_id:
+            records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+            confirmation = records.get(confirmation_id)
+            if isinstance(confirmation, dict) and str(confirmation.get("state") or "pending") == "pending":
+                confirmation["state"] = "processing"
+                confirmation["decision"] = "text"
+                confirmation["resolved_at"] = current
+                _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
     context = record.get("context")
     return dict(context) if isinstance(context, dict) else {}
 
@@ -661,6 +911,39 @@ def send_card_message(
     )
 
 
+def update_card_message(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    message_id: str,
+    card: dict,
+    *,
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = API_TIMEOUT_SECONDS,
+) -> dict:
+    identity = str(message_id or "").strip()
+    if not identity or not isinstance(card, dict):
+        raise FeishuError("message_id 和 card 不能为空")
+    access_token = str(tenant_access_token or "").strip() or get_tenant_access_token(
+        root,
+        app_id,
+        app_secret,
+        base_url=base_url,
+        opener=opener,
+        timeout=timeout,
+    )
+    return _request_json(
+        _api_url(base_url, f"/open-apis/im/v1/messages/{identity}"),
+        method="PATCH",
+        token=access_token,
+        body={"content": json.dumps(card, ensure_ascii=False)},
+        opener=opener,
+        timeout=timeout,
+    )
+
+
 __all__ = [
     "ACTION_TOKEN_MAX_ENTRIES",
     "ACTION_TOKEN_TTL_SECONDS",
@@ -668,17 +951,25 @@ __all__ = [
     "DEFAULT_BASE_URL",
     "FeishuError",
     "action_tokens_path",
+    "bind_confirmation_card",
     "claim_inbound_message",
+    "confirmation_card_for_message",
+    "confirmation_cards_path",
+    "consume_confirmation_card",
     "consume_action_token",
     "consume_pending_action_token",
     "feishu_dir",
+    "finalize_confirmation_card",
     "get_session_binding",
     "get_tenant_access_token",
     "inbound_dedupe_path",
     "issue_action_token",
     "load_session_bindings",
+    "mark_confirmation_card_updated",
     "make_session_key",
     "normalize_message_event",
+    "pending_confirmation_card_updates",
+    "register_confirmation_card",
     "send_card_message",
     "send_text_message",
     "session_bindings_path",
@@ -686,4 +977,6 @@ __all__ = [
     "set_session_binding",
     "should_handle_message",
     "token_cache_path",
+    "terminal_confirmation_card",
+    "update_card_message",
 ]

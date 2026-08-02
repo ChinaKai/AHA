@@ -115,10 +115,13 @@ class ServiceAssistantTests(unittest.TestCase):
             )
 
             self.assertEqual(prepared["confirmation_card"]["schema"], "2.0")
+            self.assertTrue(prepared["confirmation_id"])
             self.assertEqual(columns[0]["elements"][0]["behaviors"][0]["type"], "callback")
             self.assertEqual(columns[1]["elements"][0]["behaviors"][0]["value"]["decision"], "cancel")
             self.assertNotIn("token", json.dumps(prepared["confirmation_card"], ensure_ascii=False).lower())
             self.assertTrue(confirmed["result"]["ok"])
+            self.assertEqual(confirmed["confirmation_id"], prepared["confirmation_id"])
+            self.assertEqual(confirmed["confirmation_card"]["header"]["template"], "green")
             self.assertEqual(read_task_memos(root, target["id"])[0]["title"], "Check release")
             with self.assertRaises(FeishuError):
                 resolve_confirmation(

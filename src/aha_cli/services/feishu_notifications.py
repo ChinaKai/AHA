@@ -7,17 +7,27 @@ import threading
 
 from aha_cli.domain.models import utc_now
 from aha_cli.domain.models import is_service_assistant_task
-from aha_cli.services.feishu import FeishuError, send_card_message, send_text_message
+from aha_cli.services.feishu import FeishuError, bind_confirmation_card, send_card_message, send_text_message
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials, send_via_active_channel
+from aha_cli.services.service_assistant_handoffs import (
+    consume_status_suppressions,
+    mark_service_handoff,
+    pending_handoff_for_reply,
+)
 from aha_cli.store.io import iter_jsonl_reverse, read_json, write_json
 from aha_cli.store.paths import aha_home_path, event_path
 from aha_cli.store.snapshots import task_snapshot
 
 DIRECT_REPLY_ROUTES = {("main", "feishu"), ("host", "feishu")}
-USER_REPLY_ROUTES = DIRECT_REPLY_ROUTES | {("main", "browser"), ("host", "browser")}
+USER_REPLY_ROUTES = DIRECT_REPLY_ROUTES | {
+    ("main", "browser"),
+    ("host", "browser"),
+    ("main", "feishu-assistant"),
+    ("host", "feishu-assistant"),
+}
 USER_TRIGGER_ROUTES = {
     (sender, target)
-    for sender in ("browser", "feishu", "weixin", "user")
+    for sender in ("browser", "feishu", "feishu-assistant", "weixin", "user")
     for target in ("main", "host")
 }
 MAX_NOTIFICATION_CHARS = 1800
@@ -214,15 +224,65 @@ def _send(root: Path, chat_id: str, text: str, *, card: dict | None = None) -> d
         return {"ok": True, "sent": True, "message_id": data.get("message_id"), "target": chat_id}
 
 
-def notify_event(root: Path, run_id: str, event: dict) -> dict:
-    message = notification_message_for_event(root, run_id, event)
+def _handoff_closure(root: Path, run_id: str, event: dict) -> tuple[dict, str] | None:
+    if str(event.get("type") or "") != "message":
+        return None
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if _message_route(data) not in {("main", "feishu-assistant"), ("host", "feishu-assistant")}:
+        return None
+    task_id = str(data.get("task_id") or "")
+    reply = _message_text(data)
+    if not task_id or not reply:
+        return None
+    handoff = pending_handoff_for_reply(root, run_id, task_id)
+    if handoff is None:
+        return None
+    message = "\n".join(
+        [
+            "AHA 跟进已完成",
+            f"目标：{run_id} / {task_id}",
+            "结果：",
+            reply,
+        ]
+    )
+    return handoff, _trim_notification(message)
+
+
+def notify_event(root: Path, run_id: str, event: dict) -> dict:
+    closure = _handoff_closure(root, run_id, event)
+    if closure is not None:
+        handoff, closure_message = closure
+        chat_id = str(handoff.get("chat_id") or "")
+        if not chat_id:
+            mark_service_handoff(root, str(handoff.get("id") or ""), "failed", error="originating chat is missing")
+            return {"ok": False, "sent": False, "reason": "handoff_chat_missing"}
+        try:
+            result = _send(root, chat_id, closure_message)
+        except Exception as exc:
+            mark_service_handoff(root, str(handoff.get("id") or ""), "pending", error=str(exc))
+            raise
+        mark_service_handoff(root, str(handoff.get("id") or ""), "delivered")
+        return {
+            "ok": True,
+            "sent": True,
+            "sent_count": 1,
+            "message_id": result.get("message_id"),
+            "reason": "service_handoff_closed",
+        }
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    is_status_event = str(event.get("type") or "") == "task_status_changed"
+    suppressed_chats = (
+        consume_status_suppressions(root, run_id, str(data.get("task_id") or ""))
+        if is_status_event
+        else set()
+    )
+    message = notification_message_for_event(root, run_id, event)
     card = data.get("feishu_card") if isinstance(data.get("feishu_card"), dict) else None
+    confirmation_id = str(data.get("feishu_confirmation_id") or "")
     if not message and not card:
         return {"ok": True, "sent": False, "reason": "ignored_event"}
     task_id = str(data.get("task_id") or "")
     event_key = _event_key(run_id, event)
-    is_status_event = str(event.get("type") or "") == "task_status_changed"
     sent_count = 0
     visited_recipients: set[str] = set()
     with _state_lock:
@@ -241,6 +301,8 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             chat_id = str(subscription.get("chat_id") or "")
             if not chat_id:
                 continue
+            if is_status_event and chat_id in suppressed_chats:
+                continue
             recipient_key = _status_recipient_key(chat_id) if is_status_event else session_key
             if recipient_key in visited_recipients:
                 continue
@@ -249,6 +311,13 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             if sent_key in state["sent"]:
                 continue
             result = _send(root, chat_id, message, card=card)
+            if confirmation_id and result.get("message_id"):
+                bind_confirmation_card(
+                    root,
+                    confirmation_id,
+                    message_id=str(result.get("message_id") or ""),
+                    chat_id=chat_id,
+                )
             state["sent"][sent_key] = {
                 "sent_at": utc_now(),
                 "message_id": result.get("message_id"),

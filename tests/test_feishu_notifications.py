@@ -8,6 +8,7 @@ from unittest import mock
 
 from aha_cli.services import feishu_notifications
 from aha_cli.services.feishu_notifications import notification_message_for_event, notify_event, set_subscription
+from aha_cli.services.service_assistant_handoffs import register_service_handoff, service_handoffs_path
 from aha_cli.store.io import append_jsonl
 from aha_cli.store.paths import event_path, plan_path
 
@@ -179,6 +180,56 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertIn("status: awaiting->busy", message)
         self.assertIn("message: 请继续修复 这个问题", message)
 
+    def test_service_assistant_routed_status_uses_request_and_target_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = _setup(root)
+            append_jsonl(
+                event_path(root, run_id),
+                {
+                    "type": "message",
+                    "ts": "2026-08-01T00:00:01+00:00",
+                    "data": {
+                        "task_id": "task-001",
+                        "sender": "feishu-assistant",
+                        "target": "main",
+                        "message": "请调研卡片置灰",
+                    },
+                },
+            )
+            busy = {
+                "type": "task_status_changed",
+                "ts": "2026-08-01T00:00:02+00:00",
+                "data": {"task_id": "task-001", "previous_status": "awaiting_user", "status": "running"},
+            }
+            append_jsonl(event_path(root, run_id), busy)
+            self.assertIn("message: 请调研卡片置灰", notification_message_for_event(root, run_id, busy))
+
+            append_jsonl(
+                event_path(root, run_id),
+                {
+                    "type": "message",
+                    "ts": "2026-08-01T00:00:03+00:00",
+                    "data": {
+                        "task_id": "task-001",
+                        "sender": "main",
+                        "target": "feishu-assistant",
+                        "message": "调研完成，方案可行",
+                    },
+                },
+            )
+            awaiting = {
+                "type": "task_status_changed",
+                "ts": "2026-08-01T00:00:04+00:00",
+                "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+            }
+            append_jsonl(event_path(root, run_id), awaiting)
+
+            message = notification_message_for_event(root, run_id, awaiting)
+
+        self.assertIn("message: 调研完成，方案可行", message)
+        self.assertNotIn("message: -", message)
+
     def test_system_status_uses_event_reason_when_no_chat_message_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -289,13 +340,79 @@ class FeishuNotificationTests(unittest.TestCase):
                     "target": "feishu",
                     "message": "请确认操作",
                     "feishu_card": card,
+                    "feishu_confirmation_id": "confirmation-1",
                 },
             }
 
-            result = notify_event(root, run_id, event)
+            with mock.patch("aha_cli.services.feishu_notifications.bind_confirmation_card") as bind:
+                result = notify_event(root, run_id, event)
 
         self.assertTrue(result["sent"])
         send.assert_called_once_with(root, "oc-chat", "请确认操作", card=card)
+        bind.assert_called_once_with(
+            root,
+            "confirmation-1",
+            message_id="om-card",
+            chat_id="oc-chat",
+        )
+
+    def test_target_task_reply_automatically_closes_service_assistant_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-closed"},
+        ) as send:
+            root = Path(tmp)
+            _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-origin",
+                open_id="ou-user",
+                run_id="run-assistant",
+                task_id="task-assistant",
+            )
+            register_service_handoff(
+                root,
+                assistant_run_id="run-assistant",
+                assistant_task_id="task-assistant",
+                session_key="tenant:p2p:user",
+                chat_id="oc-origin",
+                open_id="ou-user",
+                target_run_id="run-a",
+                target_task_id="task-001",
+                request_message="请调研卡片置灰",
+            )
+            event = {
+                "event_id": 20,
+                "type": "message",
+                "data": {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "feishu-assistant",
+                    "message": "调研完成：飞书支持更新原卡片。",
+                },
+            }
+
+            result = notify_event(root, "run-a", event)
+            status_result = notify_event(
+                root,
+                "run-a",
+                {
+                    "event_id": 21,
+                    "type": "task_status_changed",
+                    "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+                },
+            )
+            stored = json.loads(service_handoffs_path(root).read_text(encoding="utf-8"))["handoffs"]
+
+        self.assertEqual(result["reason"], "service_handoff_closed")
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[1], "oc-origin")
+        self.assertIn("AHA 跟进已完成", send.call_args.args[2])
+        self.assertIn("调研完成", send.call_args.args[2])
+        self.assertEqual(next(iter(stored.values()))["status"], "delivered")
+        self.assertFalse(status_result["sent"])
+        self.assertEqual(send.call_count, 1)
 
     def test_status_push_is_run_wide_not_limited_to_assistant_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

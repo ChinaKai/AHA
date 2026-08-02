@@ -1377,6 +1377,14 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         ),
                         None,
                     )
+                    service_confirmation_id = next(
+                        (
+                            str(action.get("confirmation_id") or "")
+                            for action in reversed(service_actions)
+                            if str(action.get("confirmation_id") or "")
+                        ),
+                        "",
+                    )
                     display_reply = "" if service_continuation else (service_user_response or action_response_text(display_source))
                     if display_reply:
                         append_message(
@@ -1390,6 +1398,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             from_agent=args.sender,
                             to_agent=reply_target,
                             feishu_card=service_confirmation_card if reply_target == "feishu" else None,
+                            feishu_confirmation_id=service_confirmation_id if reply_target == "feishu" else None,
                         )
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
                     main_followup_after_delegation = bool(

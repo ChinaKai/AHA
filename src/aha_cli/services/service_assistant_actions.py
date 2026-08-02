@@ -4,10 +4,21 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
+import time
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task
-from aha_cli.services.feishu import consume_action_token, consume_pending_action_token, issue_action_token
+from aha_cli.services.feishu import (
+    ACTION_TOKEN_TTL_SECONDS,
+    consume_action_token,
+    consume_confirmation_card,
+    consume_pending_action_token,
+    finalize_confirmation_card,
+    issue_action_token,
+    register_confirmation_card,
+)
 from aha_cli.services.feishu_notifications import load_subscription_state
 from aha_cli.services.feishu_runtime import feishu_config, feishu_status, update_feishu_settings
+from aha_cli.services.service_assistant_handoffs import mark_service_handoff, register_service_handoff
 from aha_cli.services.service_runtime import service_runtime_prompt_payload
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_event, create_plan
@@ -620,12 +631,16 @@ def prepare_service_assistant_action(root: Path, run_id: str, task: dict, action
                 source_request=source_request,
             )
             actor = _actor_for_task(root, run_id, str(task.get("id") or ""))
+            confirmation_id = secrets.token_urlsafe(18)
+            card = _confirmation_card(_preview(operation, normalized))
             context = {
                 "operation": operation,
                 "arguments": normalized,
                 "precondition": _precondition(root, operation, normalized),
                 "assistant_run_id": run_id,
                 "assistant_task_id": str(task.get("id") or ""),
+                "confirmation_id": confirmation_id,
+                "chat_id": actor["chat_id"],
             }
             issue_action_token(
                 root,
@@ -634,6 +649,15 @@ def prepare_service_assistant_action(root: Path, run_id: str, task: dict, action
                 action=SERVICE_ASSISTANT_ACTION,
                 context=context,
             )
+            register_confirmation_card(
+                root,
+                confirmation_id,
+                open_id=actor["open_id"],
+                session_key=actor["session_key"],
+                action=SERVICE_ASSISTANT_ACTION,
+                card=card,
+                expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+            )
         except (KeyError, SystemExit, ValueError) as exc:
             return {"type": "service_assistant", "operation": operation, "ok": False, "user_response": f"无法准备该操作：{exc}"}
         return {
@@ -641,7 +665,8 @@ def prepare_service_assistant_action(root: Path, run_id: str, task: dict, action
             "operation": operation,
             "ok": True,
             "confirmation_required": True,
-            "confirmation_card": _confirmation_card(_preview(operation, normalized)),
+            "confirmation_id": confirmation_id,
+            "confirmation_card": card,
             "user_response": "\n".join(
                 [
                     "请确认以下 AHA 操作：",
@@ -767,12 +792,28 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
     raise ServiceAssistantActionError(f"unknown write operation: {operation}")
 
 
-def resolve_confirmation(root: Path, *, open_id: str, session_key: str, text: str) -> dict | None:
+def resolve_confirmation(
+    root: Path,
+    *,
+    open_id: str,
+    session_key: str,
+    text: str,
+    message_id: str = "",
+) -> dict | None:
     parsed = parse_confirmation_text(text)
     if parsed is None:
         return None
     decision, token = parsed
-    if token:
+    if message_id:
+        context = consume_confirmation_card(
+            root,
+            message_id=message_id,
+            open_id=open_id,
+            session_key=session_key,
+            action=SERVICE_ASSISTANT_ACTION,
+            decision=decision,
+        )
+    elif token:
         context = consume_action_token(
             root,
             token,
@@ -791,6 +832,8 @@ def resolve_confirmation(root: Path, *, open_id: str, session_key: str, text: st
     arguments = context.get("arguments") if isinstance(context.get("arguments"), dict) else {}
     assistant_run_id = str(context.get("assistant_run_id") or "")
     assistant_task_id = str(context.get("assistant_task_id") or "")
+    confirmation_id = str(context.get("confirmation_id") or "")
+    confirmation_message_id = str(context.get("confirmation_message_id") or "")
     if decision == "取消":
         if assistant_run_id:
             append_event(
@@ -799,16 +842,21 @@ def resolve_confirmation(root: Path, *, open_id: str, session_key: str, text: st
                 "service_assistant_confirmation",
                 {"task_id": assistant_task_id, "operation": operation, "decision": "cancelled"},
             )
+        confirmation_record = finalize_confirmation_card(root, confirmation_id, "cancelled")
         return {
             "cancelled": True,
             "operation": operation,
             "assistant_run_id": context.get("assistant_run_id"),
             "assistant_task_id": context.get("assistant_task_id"),
+            "confirmation_id": confirmation_id,
+            "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+            "confirmation_card": (confirmation_record or {}).get("terminal_card"),
             "user_response": f"已取消 AHA 操作：{operation}",
         }
     expected = str(context.get("precondition") or "")
     current = _precondition(root, operation, arguments)
     if expected != current:
+        finalize_confirmation_card(root, confirmation_id, "stale")
         if assistant_run_id:
             append_event(
                 root,
@@ -817,10 +865,28 @@ def resolve_confirmation(root: Path, *, open_id: str, session_key: str, text: st
                 {"task_id": assistant_task_id, "operation": operation, "decision": "rejected", "reason": "stale_precondition"},
             )
         raise ServiceAssistantActionError("目标状态已在预览后变化，本次确认已失效，请重新发起操作")
+    handoff: dict | None = None
+    if operation == "send_task_message":
+        handoff = register_service_handoff(
+            root,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+            session_key=session_key,
+            chat_id=str(context.get("chat_id") or ""),
+            open_id=open_id,
+            target_run_id=str(arguments.get("run_id") or ""),
+            target_task_id=str(arguments.get("task_id") or ""),
+            request_message=str(arguments.get("message") or ""),
+        )
     try:
         result = _execute_write(root, operation, arguments)
     except (KeyError, SystemExit, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}
+    result_ok = bool(result.get("ok")) if isinstance(result, dict) else True
+    if handoff is not None and not result_ok:
+        mark_service_handoff(root, str(handoff.get("id") or ""), "failed", error=str(result))
+    confirmation_state = "confirmed" if result_ok else "failed"
+    confirmation_record = finalize_confirmation_card(root, confirmation_id, confirmation_state)
     if assistant_run_id:
         append_event(
             root,
@@ -830,7 +896,7 @@ def resolve_confirmation(root: Path, *, open_id: str, session_key: str, text: st
                 "task_id": assistant_task_id,
                 "operation": operation,
                 "decision": "confirmed",
-                "ok": bool(result.get("ok")) if isinstance(result, dict) else True,
+                "ok": result_ok,
             },
         )
     return {
@@ -838,8 +904,12 @@ def resolve_confirmation(root: Path, *, open_id: str, session_key: str, text: st
         "operation": operation,
         "assistant_run_id": context.get("assistant_run_id"),
         "assistant_task_id": context.get("assistant_task_id"),
+        "confirmation_id": confirmation_id,
+        "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+        "confirmation_card": (confirmation_record or {}).get("terminal_card"),
         "tool_message": _trusted_result(operation, result, confirmed=True),
         "result": result,
+        "handoff_id": str((handoff or {}).get("id") or ""),
     }
 
 

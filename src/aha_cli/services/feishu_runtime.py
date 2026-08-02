@@ -8,6 +8,7 @@ import threading
 from typing import Any
 
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task, normalize_feishu_integration_config, utc_now
+from aha_cli.services.feishu import mark_confirmation_card_updated, pending_confirmation_card_updates
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, config_path
@@ -281,6 +282,35 @@ def send_via_active_channel(root: Path, target: str, message: object, opts: dict
     }
 
 
+def update_card_via_active_channel(root: Path, message_id: str, card: dict, *, timeout: float = 20.0) -> dict:
+    channel = active_feishu_channel(root)
+    if channel is None:
+        raise RuntimeError("Feishu channel is not connected in this process")
+    future = channel.schedule(channel.update_card(str(message_id), card))
+    result = future.result(timeout=timeout)
+    if hasattr(result, "success") and not result.success:
+        raise RuntimeError(str(getattr(result, "error", None) or "Feishu card update failed"))
+    return {"ok": True, "updated": True, "message_id": str(message_id)}
+
+
+def refresh_confirmation_cards(root: Path) -> dict:
+    updated = 0
+    failed = 0
+    for record in pending_confirmation_card_updates(root):
+        try:
+            update_card_via_active_channel(
+                root,
+                str(record.get("message_id") or ""),
+                record.get("terminal_card") if isinstance(record.get("terminal_card"), dict) else {},
+            )
+        except (RuntimeError, TimeoutError):
+            failed += 1
+            continue
+        mark_confirmation_card_updated(root, str(record.get("confirmation_id") or ""))
+        updated += 1
+    return {"updated": updated, "failed": failed}
+
+
 async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
     config = feishu_config(root)
     if not config.get("enabled"):
@@ -316,8 +346,10 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         with _channels_lock:
             _channels[key] = channel
         _write_runtime(root, status="connected", connected=True, error="", connected_at=utc_now())
+        await asyncio.to_thread(refresh_confirmation_cards, root)
         while True:
             await asyncio.sleep(30)
+            await asyncio.to_thread(refresh_confirmation_cards, root)
             _write_runtime(root, status="connected", connected=bool(channel.is_ready), error="")
     except asyncio.CancelledError:
         raise
@@ -341,7 +373,9 @@ __all__ = [
     "feishu_sdk_available",
     "feishu_status",
     "run_feishu_channel",
+    "refresh_confirmation_cards",
     "send_via_active_channel",
+    "update_card_via_active_channel",
     "update_feishu_settings",
     "update_feishu_notifications_enabled",
 ]
