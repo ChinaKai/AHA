@@ -375,7 +375,7 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_feishu_settings_secret_is_masked_and_preserved_when_blank(self) -> None:
+    def test_global_settings_omit_feishu_and_preserve_existing_integration(self) -> None:
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not available")
@@ -390,19 +390,17 @@ const config = context.window.AHABootstrapConfig;
 const existing = { integrations: { feishu: { app_secret: "stored-secret" } } };
 const html = config.bootstrapConfigFormHtml({ mode: "settings", config: existing });
 if (html.includes("stored-secret")) process.exit(1);
-if (!html.includes("Configured; leave blank to keep")) process.exit(1);
-function form(secret) {
+if (html.includes("Feishu assistant")) process.exit(1);
+function form() {
   return {
     dataset: { bootstrapConfigMode: "settings" },
     querySelector(selector) {
-      const match = /data-bootstrap-config-field="([^"]+)"/.exec(selector);
-      return { value: match?.[1] === "integrations.feishu.app_secret" ? secret : "", checked: false };
+      return { value: "", checked: false };
     },
     querySelectorAll() { return []; }
   };
 }
-if (config.bootstrapConfigPayload(form(""), { config: existing }).integrations.feishu.app_secret !== "stored-secret") process.exit(1);
-if (config.bootstrapConfigPayload(form("new-secret"), { config: existing }).integrations.feishu.app_secret !== "new-secret") process.exit(1);
+if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.feishu.app_secret !== "stored-secret") process.exit(1);
 '''
         result = subprocess.run(
             [node, "-e", assertion],
@@ -548,7 +546,7 @@ if (config.bootstrapConfigPayload(form("new-secret"), { config: existing }).inte
         self.assertIn('aria-controls="feishu-console-popover"', html)
         self.assertNotIn('id="feishu-console" class="button-ghost" href=', html)
         self.assertIn('id="feishu-console-popover" class="feishu-console-popover" hidden', html)
-        self.assertIn('/static/feishu_console.js?v=feishu-push-v4', html)
+        self.assertIn('/static/feishu_console.js?v=feishu-settings-v5', html)
         self.assertIn('id="weixin-console"', html)
         self.assertIn('data-i18n="run.tools_weixin" hidden', html)
         self.assertIn('feishuConsoleEl: "feishu-console"', registry)
@@ -559,26 +557,31 @@ if (config.bootstrapConfigPayload(form("new-secret"), { config: existing }).inte
         self.assertIn('deps.apiUrl?.("/api/feishu", {}, { runScoped: false })', console)
         self.assertIn('data-feishu-action="refresh"', console)
         self.assertIn('data-feishu-action="close"', console)
-        self.assertIn('data-feishu-notifications-toggle', console)
-        self.assertIn('deps.apiUrl?.("/api/feishu/notifications", {}, { runScoped: false })', console)
+        self.assertIn('data-feishu-settings-form', console)
+        self.assertIn('deps.apiUrl?.("/api/backends", {}, { runScoped: false })', console)
+        self.assertIn('name="backend"', console)
+        self.assertIn('name="model"', console)
+        self.assertIn('name="reasoning_effort"', console)
+        self.assertIn('name="proxy_enabled"', console)
+        self.assertIn('name="notifications_enabled"', console)
+        self.assertIn('deps.apiUrl?.("/api/feishu/settings", {}, { runScoped: false })', console)
         self.assertIn('t("feishu.notifications_toggle", "Push task status changes to Feishu")', console)
+        self.assertNotIn("Install command", console)
+        self.assertNotIn('pip install -e ".[feishu]"', console)
         self.assertIn(".feishu-console-popover", styles)
-        self.assertIn(".feishu-console-notifications", styles)
+        self.assertIn(".feishu-console-section", styles)
+        self.assertIn(".feishu-console-settings-grid", styles)
+        self.assertIn(".feishu-console-toggle-list", styles)
         self.assertIn(".session-menu.feishu-open .feishu-console-popover", styles)
-        self.assertIn('data-bootstrap-config-field="integrations.feishu.enabled"', bootstrap)
-        self.assertIn('data-bootstrap-config-field="integrations.feishu.allowed_open_ids"', bootstrap)
-        self.assertIn('data-bootstrap-config-field="integrations.feishu.app_secret" type="password"', bootstrap)
-        self.assertIn('data-bootstrap-config-field="integrations.feishu.app_secret_env"', bootstrap)
-        self.assertIn("Task status notifications", bootstrap)
-        self.assertIn("Push task status changes to Feishu", bootstrap)
-        self.assertIn("Direct chat replies remain enabled when this is off.", bootstrap)
+        self.assertNotIn('data-bootstrap-config-field="integrations.feishu.', bootstrap)
+        self.assertIn('name="app_secret" type="password"', console)
+        self.assertIn('name="allowed_open_ids"', console)
         self.assertIn('"feishu.notifications": "Task status push"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications": "任务状态推送"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications_toggle": "Push task status changes to Feishu"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications_toggle": "向飞书推送 Task 状态变化"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertNotIn('integrations.feishu.web.', bootstrap)
-        self.assertIn('Configured; leave blank to keep', bootstrap)
-        self.assertIn('app_secret: feishuSecret', bootstrap)
+        self.assertIn('Configured; leave blank to keep', console)
         self.assertNotIn('id="feishu-web-login"', html)
         self.assertNotIn('integrations.feishu.default_run_id', bootstrap)
         self.assertNotIn('feishu.default_run', console)
@@ -834,8 +837,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=feishu-push-v2">', html)
-        self.assertIn('<script src="/static/i18n.js?v=feishu-push-v4"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=feishu-settings-v2">', html)
+        self.assertIn('<script src="/static/i18n.js?v=feishu-settings-v4"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -5190,10 +5193,10 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=feishu-push-v4"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=feishu-settings-v4"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=feishu-push-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=feishu-settings-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)

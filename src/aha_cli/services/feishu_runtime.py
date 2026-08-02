@@ -12,8 +12,6 @@ from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, config_path
 
-FEISHU_INSTALL_COMMAND = 'python3 -m pip install -e ".[feishu]"'
-
 _channels: dict[str, Any] = {}
 _channels_lock = threading.Lock()
 _config_lock = threading.Lock()
@@ -56,6 +54,39 @@ def feishu_sdk_available() -> bool:
     return importlib.util.find_spec("lark_channel") is not None
 
 
+def _feishu_env_groups(config: dict) -> dict[str, list[dict[str, str]]]:
+    """Return model selectors for configured backend env groups, without secrets."""
+    result: dict[str, list[dict[str, str]]] = {}
+    for backend, model_key in (("codex", "OPENAI_MODEL"), ("claude", "ANTHROPIC_MODEL")):
+        backend_config = config.get(backend)
+        raw_groups = backend_config.get("env") if isinstance(backend_config, dict) else []
+        if isinstance(raw_groups, dict):
+            raw_groups = [raw_groups]
+        groups: list[dict[str, str]] = []
+        for index, raw_group in enumerate(raw_groups if isinstance(raw_groups, list) else []):
+            if not isinstance(raw_group, dict):
+                continue
+            name = str(raw_group.get("name") or f"env-{index + 1}").strip()
+            if not name:
+                continue
+            groups.append({"name": name, "model": str(raw_group.get(model_key) or "").strip()})
+        result[backend] = groups
+    return result
+
+
+def _feishu_backend_defaults(config: dict) -> dict[str, dict[str, object]]:
+    """Expose non-secret backend defaults used by the Feishu Agent controls."""
+    result: dict[str, dict[str, object]] = {}
+    for backend in ("codex", "claude", "stub"):
+        backend_config = config.get(backend) if isinstance(config.get(backend), dict) else {}
+        proxy = backend_config.get("proxy") if isinstance(backend_config.get("proxy"), dict) else {}
+        result[backend] = {
+            "reasoning_effort": str(backend_config.get("reasoning_effort") or ""),
+            "proxy_enabled": bool(proxy.get("enabled")),
+        }
+    return result
+
+
 def _create_feishu_channel(app_id: str, app_secret: str, security_mode: str) -> Any:
     """Import and construct the SDK outside the web server's event-loop thread.
 
@@ -76,6 +107,18 @@ def _create_feishu_channel(app_id: str, app_secret: str, security_mode: str) -> 
 
 def feishu_status(root: Path) -> dict:
     config = feishu_config(root)
+    global_config = load_config(root)
+    effective_backend = str(config.get("backend") or global_config.get("backend") or "codex")
+    backend_config = global_config.get(effective_backend) if isinstance(global_config.get(effective_backend), dict) else {}
+    effective_model = str(config.get("model") or backend_config.get("model") or "")
+    effective_reasoning_effort = str(config.get("reasoning_effort") or backend_config.get("reasoning_effort") or "")
+    backend_proxy = backend_config.get("proxy") if isinstance(backend_config.get("proxy"), dict) else {}
+    configured_proxy_enabled = config.get("proxy_enabled")
+    effective_proxy_enabled = (
+        bool(configured_proxy_enabled)
+        if isinstance(configured_proxy_enabled, bool)
+        else bool(backend_proxy.get("enabled"))
+    )
     app_id, app_secret = feishu_credentials(config)
     try:
         runtime = read_json(feishu_runtime_path(root))
@@ -84,18 +127,69 @@ def feishu_status(root: Path) -> dict:
     return {
         "enabled": bool(config.get("enabled")),
         "configured": bool(app_id and app_secret),
-        "app_id": app_id,
+        "app_id": str(config.get("app_id") or ""),
+        "effective_app_id": app_id,
         "app_secret_configured": bool(app_secret),
         "app_id_env": config.get("app_id_env"),
         "app_secret_env": config.get("app_secret_env"),
+        "backend": str(config.get("backend") or ""),
+        "model": str(config.get("model") or ""),
+        "reasoning_effort": str(config.get("reasoning_effort") or ""),
+        "proxy_enabled": configured_proxy_enabled if isinstance(configured_proxy_enabled, bool) else None,
+        "effective_backend": effective_backend,
+        "effective_model": effective_model,
+        "effective_reasoning_effort": effective_reasoning_effort,
+        "effective_proxy_enabled": effective_proxy_enabled,
+        "backend_defaults": _feishu_backend_defaults(global_config),
+        "env_groups": _feishu_env_groups(global_config),
+        "allowed_open_ids": list(config.get("allowed_open_ids") or []),
         "allowed_open_id_count": len(config.get("allowed_open_ids") or []),
         "group_mentions_only": bool(config.get("group_mentions_only")),
         "notifications_enabled": bool(config.get("notifications_enabled")),
         "security_mode": config.get("security_mode"),
         "sdk_installed": feishu_sdk_available(),
-        "install_command": FEISHU_INSTALL_COMMAND,
         "runtime": runtime,
     }
+
+
+def update_feishu_settings(root: Path, payload: dict) -> dict:
+    """Persist the Feishu integration without exposing or clearing its secret."""
+    if not isinstance(payload, dict):
+        raise ValueError("Feishu settings must be a JSON object")
+    path = config_path(root)
+    with _config_lock:
+        try:
+            config = read_json(path)
+        except FileNotFoundError:
+            config = {}
+        if not isinstance(config, dict):
+            raise ValueError("AHA config must be a JSON object")
+        integrations = config.get("integrations")
+        integrations = dict(integrations) if isinstance(integrations, dict) else {}
+        current = integrations.get("feishu")
+        current = dict(current) if isinstance(current, dict) else {}
+        accepted = {
+            "enabled",
+            "app_id",
+            "app_secret",
+            "app_id_env",
+            "app_secret_env",
+            "backend",
+            "model",
+            "reasoning_effort",
+            "proxy_enabled",
+            "allowed_open_ids",
+            "group_mentions_only",
+            "notifications_enabled",
+            "security_mode",
+        }
+        updated = {**current, **{key: value for key, value in payload.items() if key in accepted}}
+        if not str(payload.get("app_secret") or "").strip():
+            updated["app_secret"] = str(current.get("app_secret") or "")
+        integrations["feishu"] = normalize_feishu_integration_config(updated)
+        config["integrations"] = integrations
+        write_json(path, config)
+    return feishu_status(root)
 
 
 def update_feishu_notifications_enabled(root: Path, enabled: bool) -> dict:
@@ -156,7 +250,7 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         _write_runtime(root, status="not_configured", connected=False, error="missing app id or app secret")
         return
     if not feishu_sdk_available():
-        _write_runtime(root, status="sdk_missing", connected=False, error=f"Install with: {FEISHU_INSTALL_COMMAND}")
+        _write_runtime(root, status="sdk_missing", connected=False, error="Feishu Channel SDK is unavailable")
         return
 
     from aha_cli.services.feishu_assistant import enqueue_message
@@ -169,7 +263,7 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
             str(config.get("security_mode") or "audit"),
         )
     except ImportError:
-        _write_runtime(root, status="sdk_missing", connected=False, error=f"Install with: {FEISHU_INSTALL_COMMAND}")
+        _write_runtime(root, status="sdk_missing", connected=False, error="Feishu Channel SDK is unavailable")
         return
     channel.on("message", lambda message: enqueue_message(root, default_run_id, channel, message))
     channel.on("error", lambda error: _write_runtime(root, status="error", connected=False, error=str(error)))
@@ -198,7 +292,6 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
 
 
 __all__ = [
-    "FEISHU_INSTALL_COMMAND",
     "active_feishu_channel",
     "feishu_config",
     "feishu_credentials",
@@ -207,5 +300,6 @@ __all__ = [
     "feishu_status",
     "run_feishu_channel",
     "send_via_active_channel",
+    "update_feishu_settings",
     "update_feishu_notifications_enabled",
 ]

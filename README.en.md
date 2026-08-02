@@ -19,6 +19,7 @@ authenticated on your machine. Data is stored in `~/.aha` by default; use
 | [Codex CLI](https://help.openai.com/en/articles/11096431) or [Claude Code](https://code.claude.com/docs/en/installation) | At least one | Run AI tasks; sign in after installation |
 | [Node.js](https://nodejs.org/en/download) + npm/npx | Optional | Install Codex; enable Daily Usage |
 | [Playwright Python](https://playwright.dev/python/docs/intro) + Chromium | Optional | Enable the shared browser |
+| [lark-channel-sdk](https://pypi.org/project/lark-channel-sdk/) | Optional | Enable the Feishu assistant |
 | [pyserial](https://pyserial.readthedocs.io/) | Optional | Enable serial / Windows COM debugging |
 
 PowerShell 7, WSL, Chrome, and Edge are optional. AHA detects them automatically
@@ -62,7 +63,15 @@ Optional features:
 
 # Hardware Debug
 ~/.venvs/aha/bin/python -m pip install pyserial
+
+# Feishu assistant
+~/.venvs/aha/bin/python -m pip install 'lark-channel-sdk>=1.2,<2'
 ```
+
+After installing the Feishu SDK, follow the
+[Feishu assistant setup guide](docs/feishu-assistant.md) to configure an
+enterprise custom app, `Allowed open IDs`, long-connection events, and task
+status notifications.
 
 Download the single cross-platform Release onebin and start AHA:
 
@@ -152,7 +161,15 @@ $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
 
 # Hardware Debug
 & $AhaPython -m pip install pyserial
+
+# Feishu assistant
+& $AhaPython -m pip install "lark-channel-sdk>=1.2,<2"
 ```
+
+After installing the Feishu SDK, follow the
+[Feishu assistant setup guide](docs/feishu-assistant.md) to configure an
+enterprise custom app, `Allowed open IDs`, long-connection events, and task
+status notifications.
 
 You can also skip the installer, download the onebin manually, and start the
 tray. The onebin is a Python zipapp, not a native Windows `.exe`:
@@ -178,6 +195,7 @@ environments.
 git clone https://github.com/ChinaKai/AHA.git
 cd AHA
 python3 -m pip install -e .
+# For Feishu, replace the previous command with: python3 -m pip install -e ".[feishu]"
 PYTHONPATH=src python3 -m aha_cli ui --host 127.0.0.1 --port 8788
 ```
 

@@ -107,20 +107,58 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertNotIn("ou_user", channel.sent[0][1]["text"])
         self.assertIn("请私聊机器人", channel.sent[0][1]["text"])
 
-    def test_message_without_run_explains_required_setup(self) -> None:
+    def test_dedicated_run_is_created_with_english_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_assistant.list_run_summaries",
             return_value=[],
-        ):
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.create_plan",
+            return_value={"id": "run-feishu"},
+        ) as create:
             root = Path(tmp)
             _write_config(root, ["ou_user"])
-            channel = FakeChannel()
-            feishu_assistant._handle_message(root, "", channel, _payload())
+            run_id = feishu_assistant._dedicated_run(root)
 
-        self.assertIn("尚无可用 Run", channel.sent[-1][1]["text"])
+        self.assertEqual(run_id, "run-feishu")
+        self.assertEqual(create.call_args.args[:3], (root, "Feishu Assistant", 1))
+        self.assertFalse(create.call_args.kwargs["create_default_tasks"])
+
+    def test_dedicated_run_reuses_exact_active_english_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.list_run_summaries",
+            return_value=[
+                {"id": "run-other", "goal": "飞书助手", "lifecycle": {"status": "active"}},
+                {"id": "run-feishu", "goal": "Feishu Assistant", "lifecycle": {"status": "active"}},
+            ],
+        ), mock.patch("aha_cli.services.feishu_assistant.create_plan") as create:
+            run_id = feishu_assistant._dedicated_run(Path(tmp))
+
+        self.assertEqual(run_id, "run-feishu")
+        create.assert_not_called()
+
+    def test_old_session_binding_is_migrated_to_dedicated_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._dedicated_run",
+            return_value="run-feishu",
+        ):
+            root = Path(tmp)
+            set_session_binding(
+                root,
+                "tenant-1:p2p:ou_user",
+                active_run_id="run-old",
+                active_task_id="task-old",
+                acl_subject="ou_user",
+            )
+            binding = feishu_assistant._binding(root, "tenant-1:p2p:ou_user", "ou_user", "run-default")
+
+        self.assertEqual(binding["active_run_id"], "run-feishu")
+        self.assertIsNone(binding["active_task_id"])
 
     def test_natural_language_routes_to_bound_real_agent_without_fixed_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._dedicated_run",
+            return_value="run-001",
+        ), mock.patch(
             "aha_cli.services.feishu_assistant.run_exists",
             return_value=True,
         ), mock.patch(
@@ -163,9 +201,60 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertIsNone(agent_message)
         self.assertEqual(payload, {})
 
+    def test_assistant_task_title_is_stable_and_session_specific(self) -> None:
+        dm = feishu_assistant._assistant_task_title("tenant-1:p2p:ou_user")
+        group = feishu_assistant._assistant_task_title("tenant-1:group:oc_chat")
+
+        self.assertRegex(dm, r"^Feishu Assistant · DM · [0-9a-f]{6}$")
+        self.assertRegex(group, r"^Feishu Assistant · Group · [0-9a-f]{6}$")
+        self.assertNotEqual(dm, group)
+        self.assertEqual(dm, feishu_assistant._assistant_task_title("tenant-1:p2p:ou_user"))
+
+    def test_recreated_session_task_gets_incrementing_suffix(self) -> None:
+        session_key = "tenant-1:p2p:ou_user"
+        base = feishu_assistant._assistant_task_title(session_key)
+        with mock.patch(
+            "aha_cli.services.feishu_assistant.require_plan",
+            return_value={"tasks": [{"title": base}, {"title": f"{base} #2"}]},
+        ):
+            title = feishu_assistant._next_assistant_task_title(Path("/tmp"), "run-001", session_key)
+
+        self.assertEqual(title, f"{base} #3")
+
+    def test_assistant_backend_and_model_override_global_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "codex",
+                        "codex": {"model": "gpt-global"},
+                        "integrations": {
+                            "feishu": {
+                                "backend": "claude",
+                                "model": "claude-sonnet-4-6",
+                                "reasoning_effort": "high",
+                                "proxy_enabled": True,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            backend, model = feishu_assistant._assistant_backend(root)
+            defaults = feishu_assistant._assistant_agent_defaults(root)
+
+        self.assertEqual((backend, model), ("claude", "claude-sonnet-4-6"))
+        self.assertEqual(defaults["reasoning_effort"], "high")
+        self.assertTrue(defaults["proxy_enabled"])
+
     def test_first_message_creates_persistent_assistant_task(self) -> None:
-        task = {"id": "task-007", "title": "AHA 飞书助手", "status": "pending"}
+        task = {"id": "task-007", "title": "Feishu Assistant · DM · abc123", "status": "pending"}
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._dedicated_run",
+            return_value="run-001",
+        ), mock.patch(
             "aha_cli.services.feishu_assistant.run_exists",
             return_value=True,
         ), mock.patch(
@@ -174,6 +263,9 @@ class FeishuAssistantTests(unittest.TestCase):
         ) as create, mock.patch(
             "aha_cli.services.feishu_assistant._task_workspace",
             return_value="/workspace",
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant._next_assistant_task_title",
+            return_value="Feishu Assistant · DM · abc123",
         ), mock.patch(
             "aha_cli.services.feishu_assistant.handle_send_payload",
             return_value={"ok": True},
@@ -193,14 +285,20 @@ class FeishuAssistantTests(unittest.TestCase):
             feishu_assistant._handle_message(root, "", channel, _payload())
             binding = get_session_binding(root, "tenant-1:p2p:ou_user")
 
-        self.assertEqual(create.call_args.args[:3], (root, "run-001", "AHA 飞书助手"))
+        self.assertEqual(create.call_args.args[:3], (root, "run-001", "Feishu Assistant · DM · abc123"))
         self.assertEqual(create.call_args.kwargs["backend"], "codex")
+        self.assertIsNone(create.call_args.kwargs["model"])
+        self.assertIsNone(create.call_args.kwargs["reasoning_effort"])
+        self.assertFalse(create.call_args.kwargs["proxy_enabled"])
         self.assertIn("持续对话的真实 AHA 助手", create.call_args.kwargs["description"])
         self.assertEqual(binding["active_task_id"], "task-007")
         self.assertEqual(send.call_args.args[2]["task_id"], "task-007")
 
     def test_duplicate_message_is_not_sent_twice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._dedicated_run",
+            return_value="run-001",
+        ), mock.patch(
             "aha_cli.services.feishu_assistant.run_exists",
             return_value=True,
         ), mock.patch(

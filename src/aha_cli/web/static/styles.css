@@ -854,8 +854,8 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   top: calc(100% + 8px);
   right: 0;
   z-index: 40;
-  width: min(720px, calc(100vw - 32px));
-  max-height: min(78dvh, 720px);
+  width: min(820px, calc(100vw - 32px));
+  max-height: min(82dvh, 820px);
   overflow: auto;
   border: 1px solid #d0d5dd;
   border-radius: 8px;
@@ -911,7 +911,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
 .feishu-console-badge.error { background: #fee4e2; color: #b42318; }
 .feishu-console-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 .feishu-console-metric {
@@ -923,8 +923,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   border-radius: 8px;
   background: #fff;
 }
-.feishu-console-metric span,
-.feishu-console-command span {
+.feishu-console-metric span {
   color: #667085;
   font-size: 11px;
 }
@@ -936,8 +935,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.feishu-console-message,
-.feishu-console-command {
+.feishu-console-message {
   display: grid;
   gap: 5px;
   padding: 10px 12px;
@@ -955,26 +953,87 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   background: #ecfdf3;
   color: #067647;
 }
-.feishu-console-notifications {
+.feishu-console-settings {
   display: grid;
-  gap: 5px;
-  padding: 10px 12px;
-  border: 1px solid #e4e7ec;
-  border-radius: 8px;
-  background: #ffffff;
+  gap: 14px;
 }
-.feishu-console-notifications small {
+.feishu-console-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #e4e7ec;
+  border-radius: 10px;
+  background: #fcfcfd;
+}
+.feishu-console-section legend {
+  padding: 0 6px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+.feishu-console-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.feishu-console-primary-toggle {
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f2f4f7;
+}
+.feishu-console-primary-toggle > span {
+  display: grid;
+  gap: 3px;
+}
+.feishu-console-primary-toggle small,
+.feishu-console-section-help {
   color: #667085;
   font-size: 12px;
   line-height: 1.5;
 }
-.feishu-console-command {
-  border: 1px solid #e4e7ec;
-  background: #f9fafb;
+.feishu-console-section-help {
+  margin: 0;
 }
-.feishu-console-command code {
-  overflow-x: auto;
-  white-space: nowrap;
+.feishu-console-advanced {
+  border-top: 1px solid #eaecf0;
+  padding-top: 10px;
+}
+.feishu-console-advanced summary {
+  cursor: pointer;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+}
+.feishu-console-advanced[open] summary {
+  margin-bottom: 12px;
+}
+.feishu-console-toggle-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.feishu-console-toggle-list .checkbox-line {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fff;
+}
+.feishu-console-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.feishu-console-settings-actions small {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .play-console-popover {
   position: absolute;
@@ -8969,6 +9028,8 @@ body.empty-run .panel {
   .observe-proxy-status-grid,
   .observe-proxy-config-grid,
   .feishu-console-grid,
+  .feishu-console-settings-grid,
+  .feishu-console-toggle-list,
   .weixin-console-grid {
     grid-template-columns: 1fr;
   }

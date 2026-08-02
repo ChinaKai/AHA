@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import queue
 import sys
@@ -17,13 +18,15 @@ from aha_cli.services.feishu_notifications import set_subscription
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.store.config import load_config
+from aha_cli.store.filesystem import create_plan
 from aha_cli.store.runs import list_run_summaries, require_plan, run_exists
 from aha_cli.store.snapshots import task_snapshot
 from aha_cli.web.status import TERMINAL_TASK_STATUSES
 from aha_cli.web.task_messaging import handle_send_payload
 
 ASSISTANT_QUEUE_LIMIT = 128
-ASSISTANT_TASK_TITLE = "AHA 飞书助手"
+ASSISTANT_RUN_TITLE = "Feishu Assistant"
+ASSISTANT_TASK_TITLE = "Feishu Assistant"
 ASSISTANT_TASK_DESCRIPTION = """
 你是与用户在飞书中持续对话的真实 AHA 助手。请直接理解自然语言，并使用 AHA 现有能力帮助查看或管理 run、task、memo、KB 和 Settings。
 不要使用关键词匹配或预制菜单回答。用中文简洁回复；遇到需要用户选择或高风险的写操作时先说明影响并请求确认。
@@ -33,6 +36,7 @@ ASSISTANT_TASK_DESCRIPTION = """
 _assistant_queue: queue.Queue[tuple[Path, str, Any, dict] | None] = queue.Queue(maxsize=ASSISTANT_QUEUE_LIMIT)
 _worker_lock = threading.Lock()
 _worker: threading.Thread | None = None
+_run_lock = threading.Lock()
 
 
 def _plain_message(root: Path, message: Any) -> dict:
@@ -141,24 +145,75 @@ def _session_key(payload: dict) -> str:
     )
 
 
-def _default_run(root: Path, server_default_run_id: str) -> str:
-    if server_default_run_id and run_exists(root, server_default_run_id):
-        return server_default_run_id
-    for summary in list_run_summaries(root):
-        lifecycle = summary.get("lifecycle") if isinstance(summary.get("lifecycle"), dict) else {}
-        if str(lifecycle.get("status") or "active") == "active":
-            return str(summary.get("id") or "")
-    return ""
+def _dedicated_run(root: Path) -> str:
+    with _run_lock:
+        for summary in list_run_summaries(root):
+            lifecycle = summary.get("lifecycle") if isinstance(summary.get("lifecycle"), dict) else {}
+            if str(summary.get("goal") or "") == ASSISTANT_RUN_TITLE and str(lifecycle.get("status") or "active") == "active":
+                return str(summary.get("id") or "")
+        config = load_config(root)
+        defaults = _assistant_agent_defaults(root, config)
+        backend = str(defaults["backend"])
+        model = defaults["model"]
+        backend_config = config.get(backend) if isinstance(config.get(backend), dict) else {}
+        plan = create_plan(
+            root,
+            ASSISTANT_RUN_TITLE,
+            1,
+            "sequential",
+            [],
+            [],
+            backend=backend,
+            model=model,
+            reasoning_effort=defaults["reasoning_effort"],
+            workspace_path=str(Path.cwd().resolve()),
+            sandbox=str(backend_config.get("sandbox") or "") or None,
+            approval=str(backend_config.get("approval") or "") or None,
+            proxy_enabled=bool(defaults["proxy_enabled"]),
+            collaboration_mode="auto",
+            workflow_template="auto",
+            create_default_tasks=False,
+        )
+        return str(plan.get("id") or "")
+
+
+def _assistant_backend(root: Path, config: dict | None = None) -> tuple[str, str | None]:
+    defaults = _assistant_agent_defaults(root, config)
+    return str(defaults["backend"]), defaults["model"]
+
+
+def _assistant_agent_defaults(root: Path, config: dict | None = None) -> dict[str, object]:
+    global_config = config if isinstance(config, dict) else load_config(root)
+    integration = feishu_config(root)
+    backend = str(integration.get("backend") or global_config.get("backend") or "codex")
+    backend_config = global_config.get(backend) if isinstance(global_config.get(backend), dict) else {}
+    model = str(integration.get("model") or backend_config.get("model") or "").strip() or None
+    reasoning_effort = str(integration.get("reasoning_effort") or backend_config.get("reasoning_effort") or "").strip() or None
+    backend_proxy = backend_config.get("proxy") if isinstance(backend_config.get("proxy"), dict) else {}
+    configured_proxy_enabled = integration.get("proxy_enabled")
+    proxy_enabled = (
+        bool(configured_proxy_enabled)
+        if isinstance(configured_proxy_enabled, bool)
+        else bool(backend_proxy.get("enabled"))
+    )
+    return {
+        "backend": backend,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "proxy_enabled": proxy_enabled,
+    }
 
 
 def _binding(root: Path, session_key: str, open_id: str, server_default_run_id: str) -> dict:
+    del server_default_run_id  # Kept in the callback signature for SDK compatibility.
+    run_id = _dedicated_run(root)
     current = get_session_binding(root, session_key)
-    if current is not None:
+    if current is not None and str(current.get("active_run_id") or "") == run_id:
         return current
     return set_session_binding(
         root,
         session_key,
-        active_run_id=_default_run(root, server_default_run_id) or None,
+        active_run_id=run_id or None,
         active_task_id=None,
         acl_subject=open_id,
     )
@@ -172,6 +227,27 @@ def _task_workspace(root: Path, run_id: str) -> str:
             return workspace
     current = Path.cwd().resolve()
     return str(current if current.is_dir() else root.resolve())
+
+
+def _assistant_task_title(session_key: str) -> str:
+    kind = "Group" if ":group:" in str(session_key or "").lower() else "DM"
+    short_id = hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:6]
+    return f"{ASSISTANT_TASK_TITLE} · {kind} · {short_id}"
+
+
+def _next_assistant_task_title(root: Path, run_id: str, session_key: str) -> str:
+    base = _assistant_task_title(session_key)
+    titles = {
+        str(task.get("title") or "")
+        for task in require_plan(root, run_id).get("tasks", [])
+        if isinstance(task, dict)
+    }
+    if base not in titles:
+        return base
+    generation = 2
+    while f"{base} #{generation}" in titles:
+        generation += 1
+    return f"{base} #{generation}"
 
 
 def _active_task(root: Path, run_id: str, task_id: str) -> dict | None:
@@ -192,11 +268,15 @@ def _ensure_agent_task(root: Path, run_id: str, session_key: str, open_id: str, 
     if active is not None:
         return active
     config = load_config(root)
+    defaults = _assistant_agent_defaults(root, config)
     task = create_task_and_dispatch(
         root,
         run_id,
-        ASSISTANT_TASK_TITLE,
-        backend=str(config.get("backend") or "codex"),
+        _next_assistant_task_title(root, run_id, session_key),
+        backend=str(defaults["backend"]),
+        model=defaults["model"],
+        reasoning_effort=defaults["reasoning_effort"],
+        proxy_enabled=bool(defaults["proxy_enabled"]),
         workspace_path=_task_workspace(root, run_id),
         description=ASSISTANT_TASK_DESCRIPTION,
     )

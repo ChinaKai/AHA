@@ -40,6 +40,10 @@ class ObserveProxyTests(unittest.TestCase):
             {
                 "enabled": "true",
                 "app_secret": " secret-from-settings ",
+                "backend": " claude ",
+                "model": " claude-sonnet-4-6 ",
+                "reasoning_effort": " high ",
+                "proxy_enabled": "true",
                 "allowed_open_ids": "ou_a, ou_b,ou_a",
                 "group_mentions_only": "false",
                 "security_mode": "invalid",
@@ -47,6 +51,10 @@ class ObserveProxyTests(unittest.TestCase):
         )
         self.assertTrue(config["enabled"])
         self.assertEqual(config["app_secret"], "secret-from-settings")
+        self.assertEqual(config["backend"], "claude")
+        self.assertEqual(config["model"], "claude-sonnet-4-6")
+        self.assertEqual(config["reasoning_effort"], "high")
+        self.assertTrue(config["proxy_enabled"])
         self.assertEqual(config["allowed_open_ids"], ["ou_a", "ou_b"])
         self.assertFalse(config["group_mentions_only"])
         self.assertEqual(config["security_mode"], "audit")

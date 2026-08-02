@@ -94,6 +94,10 @@ def default_feishu_integration_config() -> dict:
         "app_secret": "",
         "app_id_env": "AHA_FEISHU_APP_ID",
         "app_secret_env": "AHA_FEISHU_APP_SECRET",
+        "backend": "",
+        "model": "",
+        "reasoning_effort": "",
+        "proxy_enabled": None,
         "allowed_open_ids": [],
         "group_mentions_only": True,
         "notifications_enabled": True,
@@ -287,9 +291,11 @@ def normalize_feishu_integration_config(value: object | None = None) -> dict:
     for key in ("enabled", "group_mentions_only", "notifications_enabled"):
         if key in raw:
             config[key] = normalize_bool(raw.get(key))
-    for key in ("app_id", "app_secret", "app_id_env", "app_secret_env"):
+    for key in ("app_id", "app_secret", "app_id_env", "app_secret_env", "backend", "model", "reasoning_effort"):
         if key in raw:
             config[key] = str(raw.get(key) or "").strip()
+    if "proxy_enabled" in raw and raw.get("proxy_enabled") is not None:
+        config["proxy_enabled"] = normalize_bool(raw.get("proxy_enabled"))
     allowed = raw.get("allowed_open_ids")
     if isinstance(allowed, str):
         allowed = [item.strip() for item in allowed.split(",")]

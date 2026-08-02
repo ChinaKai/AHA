@@ -17,6 +17,7 @@ AHA 不提供模型或模型账号，而是调用本机已安装并登录的 age
 | [Codex CLI](https://help.openai.com/en/articles/11096431) 或 [Claude Code](https://code.claude.com/docs/en/installation) | 至少一个 | 执行 AI task，安装后需登录 |
 | [Node.js](https://nodejs.org/en/download) + npm/npx | 按需 | 安装 Codex；启用 Daily Usage |
 | [Playwright Python](https://playwright.dev/python/docs/intro) + Chromium | 按需 | 启用共享浏览器 |
+| [lark-channel-sdk](https://pypi.org/project/lark-channel-sdk/) | 按需 | 启用飞书助手 |
 | [pyserial](https://pyserial.readthedocs.io/) | 按需 | 启用串口 / Windows COM 调试 |
 
 PowerShell 7、WSL、Chrome 和 Edge 均为可选项；安装后 AHA 会自动检测。
@@ -59,7 +60,13 @@ claude
 
 # Hardware Debug
 ~/.venvs/aha/bin/python -m pip install pyserial
+
+# 飞书助手
+~/.venvs/aha/bin/python -m pip install 'lark-channel-sdk>=1.2,<2'
 ```
+
+启用飞书助手后，按[飞书助手接入说明](docs/feishu-assistant.md)配置企业自建应用、
+`Allowed open IDs`、长连接事件和 task 状态推送。
 
 下载同一份跨平台 Release onebin 并启动：
 
@@ -129,7 +136,13 @@ $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
 
 # Hardware Debug
 & $AhaPython -m pip install pyserial
+
+# 飞书助手
+& $AhaPython -m pip install "lark-channel-sdk>=1.2,<2"
 ```
+
+启用飞书助手后，按[飞书助手接入说明](docs/feishu-assistant.md)配置企业自建应用、
+`Allowed open IDs`、长连接事件和 task 状态推送。
 
 也可以跳过安装脚本，手动下载 onebin 并运行托盘。onebin 是 Python zipapp，不是 Windows 原生 `.exe`：
 
@@ -153,14 +166,12 @@ Node.js 安装后 Daily Usage 可直接使用 `npx`；Local Terminal 会自动�
 git clone https://github.com/ChinaKai/AHA.git
 cd AHA
 python3 -m pip install -e .
+# 启用飞书助手时，将上一条改为：python3 -m pip install -e ".[feishu]"
 PYTHONPATH=src python3 -m aha_cli ui --host 127.0.0.1 --port 8788
 ```
 
 运行测试：`python3 -m pytest`；构建 onebin：
 `python3 scripts/build_onebin.py --output dist/aha`。更多说明见 [`docs/`](docs/)。
-
-通过飞书与 AHA 助手对话、查询/创建任务和接收任务推送，参见
-[`docs/feishu-assistant.md`](docs/feishu-assistant.md)。
 
 > AHA 默认只监听 `127.0.0.1`。跨设备访问时请启用 Web auth token，并优先使用
 > SSH、VPN 或受保护的反向代理，不要把无认证端口直接暴露到公网。

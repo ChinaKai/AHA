@@ -9,7 +9,7 @@ from pathlib import Path
 from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
-from aha_cli.services.feishu_runtime import feishu_status, update_feishu_notifications_enabled
+from aha_cli.services.feishu_runtime import feishu_status, update_feishu_notifications_enabled, update_feishu_settings
 from aha_cli.services.proxy import apply_proxy_environment, core_proxy_config, proxy_configured
 from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
 from aha_cli.services.weixin import (
@@ -760,6 +760,15 @@ def system_route_response(
         return head_or_json(method, payload, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/feishu":
         return head_or_json(method, {"ok": True, "feishu": feishu_status(root)}, request_headers=headers)
+    if method == "POST" and path == "/api/feishu/settings":
+        payload = parse_json_body(body) if body.strip() else {}
+        try:
+            status = update_feishu_settings(root, payload)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        except OSError as exc:
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
+        return json_response({"ok": True, "feishu": status})
     if method == "POST" and path == "/api/feishu/notifications":
         payload = parse_json_body(body) if body.strip() else {}
         raw_enabled = payload.get("enabled")
