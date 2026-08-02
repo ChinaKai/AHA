@@ -219,11 +219,13 @@ def _current_message_sender_label(item: dict) -> str:
 
 
 def _intent_text_for_prompt(item: dict) -> str:
+    request_policy = item.get("request_policy") if isinstance(item.get("request_policy"), dict) else {}
     values = [
         item.get("message"),
         item.get("original_command"),
         item.get("command_namespace"),
         item.get("result_policy"),
+        " ".join(f"{key}={value}" for key, value in sorted(request_policy.items())),
     ]
     return " ".join(str(value or "") for value in values).lower()
 
@@ -299,6 +301,15 @@ def _commit_policy_for_prompt(
         "backend_commit_policy_full.md",
         commit_message_policy=commit_message_policy_prompt(task_id, target, backend=backend, model=model).rstrip(),
     ).rstrip()
+
+
+def _request_policy_for_prompt(item: dict) -> str:
+    policy = item.get("request_policy") if isinstance(item.get("request_policy"), dict) else {}
+    if policy.get("source") != "feishu_service_assistant":
+        return ""
+    if policy.get("authorization") != "local_commit_only":
+        return ""
+    return render_prompt_template("backend_request_policy.md").rstrip()
 
 
 def _recovery_context_for_prompt(item: dict) -> str:
@@ -1014,6 +1025,7 @@ def chat_prompt(
         "user_message": item.get("message", ""),
         "recovery_context": _recovery_context_for_prompt(item),
         "attachment_output_guidance": attachment_output_guidance,
+        "request_policy": _request_policy_for_prompt(item),
     }
     if input_image_guidance:
         components["input_image_guidance"] = input_image_guidance
@@ -1068,6 +1080,7 @@ def chat_prompt(
                 and not components["recovery_context"].strip()
                 and not input_image_guidance
                 and not context_pack
+                and not components["request_policy"]
             ):
                 prompt = str(item.get("message") or "")
                 _fill_prompt_metrics(
@@ -1347,6 +1360,7 @@ def chat_prompt(
         sticky_commit_policy = str(components.get("commit_policy") or "").strip()
         sticky_coordination_policy = str(components.get("coordination_policy") or "").strip()
         sticky_recovery_context = str(components.get("recovery_context") or "").strip()
+        sticky_request_policy = str(components.get("request_policy") or "").strip()
         for stale_component in (
             "task_context",
             "task_journal",
@@ -1372,6 +1386,11 @@ def chat_prompt(
             components["commit_policy"] = sticky_commit_policy
         else:
             components.pop("commit_policy", None)
+        if sticky_request_policy:
+            sticky_context_parts.append(sticky_request_policy)
+            components["request_policy"] = sticky_request_policy
+        else:
+            components.pop("request_policy", None)
         if not sticky_context_parts and not sticky_recovery_context:
             prompt = str(item.get("message") or "")
             raw_components = {"user_message": prompt}
@@ -1426,6 +1445,7 @@ def chat_prompt(
             attachment_output_guidance="",
             recent_conversation=recent_conversation,
             recovery_context=components["recovery_context"],
+            request_policy="",
             sender=_current_message_sender_label(item),
             ts=item.get("ts", ""),
             message=item.get("message", ""),
@@ -1475,6 +1495,7 @@ def chat_prompt(
         attachment_output_guidance=components["attachment_output_guidance"],
         recent_conversation=recent_conversation,
         recovery_context=components["recovery_context"],
+        request_policy=components["request_policy"],
         sender=_current_message_sender_label(item),
         ts=item.get("ts", ""),
         message=item.get("message", ""),

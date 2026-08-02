@@ -9,6 +9,7 @@ from typing import Any
 
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task, normalize_feishu_integration_config, utc_now
 from aha_cli.services.feishu import mark_confirmation_card_updated, pending_confirmation_card_updates
+from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, config_path
@@ -270,14 +271,39 @@ def send_via_active_channel(root: Path, target: str, message: object, opts: dict
     channel = active_feishu_channel(root)
     if channel is None:
         raise RuntimeError("Feishu channel is not connected in this process")
-    future = channel.schedule(channel.send(target, message, opts))
-    result = future.result(timeout=timeout)
-    if hasattr(result, "success") and not result.success:
-        raise RuntimeError(str(getattr(result, "error", None) or "Feishu send failed"))
+    kind = "card" if isinstance(message, dict) and isinstance(message.get("card"), dict) else "message"
+    try:
+        future = channel.schedule(channel.send(target, message, opts))
+        result = future.result(timeout=timeout)
+        if hasattr(result, "success") and not result.success:
+            raise RuntimeError(str(getattr(result, "error", None) or "Feishu send failed"))
+    except Exception as exc:  # noqa: BLE001 - SDK futures may raise transport-specific exceptions.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind=kind,
+            status="failed",
+            transport="channel_ws",
+            chat_id=target,
+            content=message,
+            error=exc,
+        )
+        raise
+    message_id = getattr(result, "message_id", None)
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind=kind,
+        status="sent",
+        transport="channel_ws",
+        message_id=str(message_id or ""),
+        chat_id=target,
+        content=message,
+    )
     return {
         "ok": True,
         "sent": True,
-        "message_id": getattr(result, "message_id", None),
+        "message_id": message_id,
         "target": target,
     }
 
@@ -286,10 +312,32 @@ def update_card_via_active_channel(root: Path, message_id: str, card: dict, *, t
     channel = active_feishu_channel(root)
     if channel is None:
         raise RuntimeError("Feishu channel is not connected in this process")
-    future = channel.schedule(channel.update_card(str(message_id), card))
-    result = future.result(timeout=timeout)
-    if hasattr(result, "success") and not result.success:
-        raise RuntimeError(str(getattr(result, "error", None) or "Feishu card update failed"))
+    try:
+        future = channel.schedule(channel.update_card(str(message_id), card))
+        result = future.result(timeout=timeout)
+        if hasattr(result, "success") and not result.success:
+            raise RuntimeError(str(getattr(result, "error", None) or "Feishu card update failed"))
+    except Exception as exc:  # noqa: BLE001 - SDK futures may raise transport-specific exceptions.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="card_update",
+            status="failed",
+            transport="channel_ws",
+            message_id=str(message_id),
+            content={"card": card},
+            error=exc,
+        )
+        raise
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind="card_update",
+        status="updated",
+        transport="channel_ws",
+        message_id=str(message_id),
+        content={"card": card},
+    )
     return {"ok": True, "updated": True, "message_id": str(message_id)}
 
 
@@ -338,14 +386,39 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         return
     channel.on("message", lambda message: enqueue_message(root, default_run_id, channel, message))
     channel.on("cardAction", lambda event: enqueue_card_action(root, default_run_id, channel, event))
-    channel.on("error", lambda error: _write_runtime(root, status="error", connected=False, error=str(error)))
+    def channel_error(error: object) -> None:
+        audit_feishu_channel(
+            root,
+            direction="system",
+            kind="connection",
+            status="error",
+            transport="channel_ws",
+            error=error,
+        )
+        _write_runtime(root, status="error", connected=False, error=str(error))
+
+    channel.on("error", channel_error)
     key = str(aha_home_path(root).resolve())
     try:
         _write_runtime(root, status="connecting", connected=False, error="", started_at=utc_now())
+        audit_feishu_channel(
+            root,
+            direction="system",
+            kind="connection",
+            status="connecting",
+            transport="channel_ws",
+        )
         await channel.start_background(timeout=30.0)
         with _channels_lock:
             _channels[key] = channel
         _write_runtime(root, status="connected", connected=True, error="", connected_at=utc_now())
+        audit_feishu_channel(
+            root,
+            direction="system",
+            kind="connection",
+            status="connected",
+            transport="channel_ws",
+        )
         await asyncio.to_thread(refresh_confirmation_cards, root)
         while True:
             await asyncio.sleep(30)
@@ -354,6 +427,14 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - runtime status must survive optional SDK failures.
+        audit_feishu_channel(
+            root,
+            direction="system",
+            kind="connection",
+            status="failed",
+            transport="channel_ws",
+            error=exc,
+        )
         _write_runtime(root, status="error", connected=False, error=str(exc))
     finally:
         with _channels_lock:
@@ -363,6 +444,13 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         except Exception:  # noqa: BLE001 - shutdown is best effort.
             pass
         _write_runtime(root, status="stopped", connected=False, stopped_at=utc_now())
+        audit_feishu_channel(
+            root,
+            direction="system",
+            kind="connection",
+            status="stopped",
+            transport="channel_ws",
+        )
 
 
 __all__ = [

@@ -368,13 +368,13 @@ def _latest_feishu_user_request(root: Path, run_id: str, task_id: str) -> str:
     return ""
 
 
-def _commit_only_routing_message(source_request: str) -> str:
-    return "\n\n".join(
-        [
-            source_request.strip(),
-            "仅执行本地提交；遵循目标 Task 当前运行时注入的 AHA commit policy。",
-        ]
-    )
+def _commit_only_request_policy() -> dict:
+    return {
+        "source": "feishu_service_assistant",
+        "authorization": "local_commit_only",
+        "remote_push": "forbidden",
+        "commit_policy": "inherit_target_runtime",
+    }
 
 
 def _normalized_write_arguments(
@@ -421,8 +421,10 @@ def _normalized_write_arguments(
         if source_has_commit and not source_has_push:
             # The original Feishu message is the authorization boundary. Rebuild
             # commit-only routing from it so model-added push/trailer instructions
-            # cannot expand the user's request or leak an internal validation error.
-            message = _commit_only_routing_message(source_request)
+            # cannot expand the user's request. Execution constraints are carried
+            # separately so the target still receives the user's exact wording.
+            message = source_request.strip()
+            normalized["request_policy"] = _commit_only_request_policy()
         if COMMIT_EXECUTION_RE.search(message) and PUSH_EXECUTION_RE.search(message):
             raise ServiceAssistantActionError(
                 "commit 与 push 必须拆成两个独立授权的 send_task_message 操作；"
@@ -510,8 +512,79 @@ def _preview(operation: str, arguments: dict) -> str:
         "update_memo": "修改 Memo",
         "update_safe_settings": "修改 AHA Settings",
     }
-    visible = {key: _text(value, 500) for key, value in arguments.items() if key not in {"app_secret", "token", "api_key"}}
-    return f"{labels.get(operation, operation)}\n" + json.dumps(visible, ensure_ascii=False, indent=2, sort_keys=True)
+    def inline(value: object, limit: int = 300) -> str:
+        return _text(value, limit).replace("`", "'").replace("\r", " ").replace("\n", " ").strip() or "-"
+
+    def block(value: object, limit: int = 1200) -> str:
+        lines = _text(value, limit).replace("\r", "").replace("```", "''' ").splitlines() or ["-"]
+        return "\n".join(f"> {line or ' '}" for line in lines)
+
+    def row(label: str, value: object) -> str:
+        return f"**{label}**：`{inline(value)}`"
+
+    lines = [f"**操作**：{labels.get(operation, operation)}"]
+    if operation == "create_run":
+        lines.extend([f"**目标**：{inline(arguments.get('goal'))}", row("Workspace", arguments.get("workspace_path"))])
+        if arguments.get("backend"):
+            lines.append(row("Backend", arguments.get("backend")))
+        if arguments.get("model"):
+            lines.append(row("Model", arguments.get("model")))
+    elif operation == "create_task":
+        lines.extend(
+            [
+                row("Run / Task", f"{arguments.get('run_id', '-')} / 新建"),
+                f"**标题**：{inline(arguments.get('title'))}",
+                row("Workspace", arguments.get("workspace_path")),
+            ]
+        )
+        if arguments.get("description"):
+            lines.extend(["**说明**：", block(arguments.get("description"))])
+        agent_values = [arguments.get(key) for key in ("backend", "model", "reasoning_effort") if arguments.get(key)]
+        if agent_values:
+            lines.append(row("Agent", " / ".join(str(value) for value in agent_values)))
+    elif operation == "send_task_message":
+        lines.extend(
+            [
+                row("目标", f"{arguments.get('run_id', '-')} / {arguments.get('task_id', '-')}"),
+                "**消息**：",
+                block(arguments.get("message")),
+            ]
+        )
+        policy = arguments.get("request_policy") if isinstance(arguments.get("request_policy"), dict) else {}
+        if policy.get("authorization") == "local_commit_only":
+            lines.append("**执行边界**：仅执行本地提交，不推送远端；提交格式和生成者身份由目标 Task 当前运行时策略决定。")
+    elif operation in {"complete_task", "reopen_task"}:
+        lines.append(row("目标", f"{arguments.get('run_id', '-')} / {arguments.get('task_id', '-')}"))
+    elif operation in {"create_memo", "update_memo"}:
+        memo_id = arguments.get("memo_id") or "新建"
+        lines.append(row("Run / Memo", f"{arguments.get('run_id', '-')} / {memo_id}"))
+        for key, label in (
+            ("title", "标题"),
+            ("description", "说明"),
+            ("status", "状态"),
+            ("scheduled_date", "计划日期"),
+            ("end_date", "结束日期"),
+        ):
+            if key not in arguments:
+                continue
+            if key == "description":
+                lines.extend(["**说明**：", block(arguments.get(key))])
+            else:
+                lines.append(row(label, arguments.get(key)))
+    elif operation == "update_safe_settings":
+        setting_labels = {
+            "notifications_enabled": "状态推送",
+            "group_mentions_only": "群聊仅响应 @",
+            "backend": "默认后端",
+            "model": "默认模型",
+            "reasoning_effort": "思考深度",
+            "proxy_enabled": "使用代理",
+        }
+        for key in sorted(arguments):
+            if key in setting_labels:
+                value = arguments[key]
+                lines.append(row(setting_labels[key], "开启" if value is True else "关闭" if value is False else value))
+    return "\n".join(lines)
 
 
 def _confirmation_card(preview: str) -> dict:
@@ -542,7 +615,7 @@ def _confirmation_card(preview: str) -> dict:
         },
         "body": {
             "elements": [
-                {"tag": "markdown", "content": f"```json\n{safe_preview}\n```"},
+                {"tag": "markdown", "content": safe_preview},
                 {
                     "tag": "column_set",
                     "columns": [
@@ -750,6 +823,9 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
                 "message": str(arguments["message"]),
             },
             background_backend_start=True,
+            trusted_request_policy=(
+                arguments.get("request_policy") if isinstance(arguments.get("request_policy"), dict) else None
+            ),
         )
         return {"ok": True, "result": result}
     if operation == "complete_task":

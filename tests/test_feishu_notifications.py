@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 from pathlib import Path
+import queue
 import tempfile
 import unittest
 from unittest import mock
 
 from aha_cli.services import feishu_notifications
 from aha_cli.services.feishu_notifications import notification_message_for_event, notify_event, set_subscription
+from aha_cli.locking import exclusive_lock
 from aha_cli.services.service_assistant_handoffs import register_service_handoff, service_handoffs_path
 from aha_cli.store.io import append_jsonl
 from aha_cli.store.paths import event_path, plan_path
@@ -37,7 +40,40 @@ def _setup(root: Path, *, notifications_enabled: bool = True) -> str:
     return run_id
 
 
+def _set_subscription_in_process(root: str, messages) -> None:
+    messages.put("started")
+    set_subscription(
+        Path(root),
+        "tenant:p2p:process-user",
+        chat_id="oc-process",
+        open_id="ou-process",
+        run_id="run-a",
+        task_id="task-001",
+    )
+    messages.put("done")
+
+
 class FeishuNotificationTests(unittest.TestCase):
+    def test_subscription_mutation_waits_for_cross_process_lock(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = feishu_notifications.subscription_state_lock_path(root)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            messages = context.Queue()
+            with lock_path.open("a+b") as handle, exclusive_lock(handle):
+                process = context.Process(target=_set_subscription_in_process, args=(str(root), messages))
+                process.start()
+                self.assertEqual(messages.get(timeout=2), "started")
+                with self.assertRaises(queue.Empty):
+                    messages.get(timeout=0.2)
+            self.assertEqual(messages.get(timeout=2), "done")
+            process.join(timeout=2)
+            state = feishu_notifications.load_subscription_state(root)
+
+        self.assertEqual(process.exitcode, 0)
+        self.assertIn("tenant:p2p:process-user", state["subscriptions"])
+
     def test_status_change_contains_transition_and_latest_agent_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

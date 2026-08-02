@@ -14,6 +14,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from aha_cli.locking import exclusive_lock
+from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.store.paths import aha_home_path
 
 
@@ -839,18 +840,45 @@ def _send_message(
         timeout=timeout,
     )
     query = urlencode({"receive_id_type": receive_id_type})
-    return _request_json(
-        f"{_api_url(base_url, '/open-apis/im/v1/messages')}?{query}",
-        method="POST",
-        token=access_token,
-        body={
-            "receive_id": recipient,
-            "msg_type": message_type,
-            "content": json.dumps(content, ensure_ascii=False),
-        },
-        opener=opener,
-        timeout=timeout,
+    try:
+        result = _request_json(
+            f"{_api_url(base_url, '/open-apis/im/v1/messages')}?{query}",
+            method="POST",
+            token=access_token,
+            body={
+                "receive_id": recipient,
+                "msg_type": message_type,
+                "content": json.dumps(content, ensure_ascii=False),
+            },
+            opener=opener,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - audit the transport failure, then preserve its original type.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="card" if message_type == "interactive" else "message",
+            status="failed",
+            transport="rest",
+            chat_id=recipient if receive_id_type == "chat_id" else "",
+            open_id=recipient if receive_id_type == "open_id" else "",
+            content={"card": content} if message_type == "interactive" else content,
+            error=exc,
+        )
+        raise
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind="card" if message_type == "interactive" else "message",
+        status="sent",
+        transport="rest",
+        message_id=str(data.get("message_id") or ""),
+        chat_id=recipient if receive_id_type == "chat_id" else "",
+        open_id=recipient if receive_id_type == "open_id" else "",
+        content={"card": content} if message_type == "interactive" else content,
     )
+    return result
 
 
 def send_text_message(
@@ -934,14 +962,37 @@ def update_card_message(
         opener=opener,
         timeout=timeout,
     )
-    return _request_json(
-        _api_url(base_url, f"/open-apis/im/v1/messages/{identity}"),
-        method="PATCH",
-        token=access_token,
-        body={"content": json.dumps(card, ensure_ascii=False)},
-        opener=opener,
-        timeout=timeout,
+    try:
+        result = _request_json(
+            _api_url(base_url, f"/open-apis/im/v1/messages/{identity}"),
+            method="PATCH",
+            token=access_token,
+            body={"content": json.dumps(card, ensure_ascii=False)},
+            opener=opener,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - audit the transport failure, then preserve its original type.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="card_update",
+            status="failed",
+            transport="rest",
+            message_id=identity,
+            content={"card": card},
+            error=exc,
+        )
+        raise
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind="card_update",
+        status="updated",
+        transport="rest",
+        message_id=identity,
+        content={"card": card},
     )
+    return result
 
 
 __all__ = [

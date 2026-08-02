@@ -1597,6 +1597,7 @@ class CliCoreTests(unittest.TestCase):
             sticky_context="context",
             attachment_output_guidance="AHA conversation image output.",
             recovery_context="",
+            request_policy="",
             recent_conversation="conversation",
             sender="browser",
             ts="2026-01-01T00:00:00+00:00",

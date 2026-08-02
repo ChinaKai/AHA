@@ -68,18 +68,24 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
   `AHA_HOME/runtime/service.json`，提示词按当前快照渲染。
 - 管家只能通过服务端 `service_assistant` 动作读写 AHA 状态，不能直接改 `config.json`、plan、事件、
   session 或飞书状态文件。查询操作立即执行；创建 Run/Task、给 Task 发消息、完成/重开 Task、
-  创建/修改 Memo 及安全 Settings 修改会先生成预览卡片，由用户点击“确认 / 取消”。
+  创建/修改 Memo 及安全 Settings 修改会先生成自然语言预览卡片，隐藏内部 JSON 动作体，由用户点击“确认 / 取消”。
   文本兼容模式也可直接回复“确认”或“取消”，无需复制 token。
 - 管家路由提交、推送、合并或回滚请求时，只转发用户意图和仓库约束，不指定 backend、model
   或 `Generated-by`。提交身份由目标 Task 当前执行 Agent 的 AHA commit policy 生成；服务端不会让
   显式 `Generated-by:` 进入目标 Task，避免飞书助手自身模型污染提交尾注。
-  当前飞书用户消息是授权边界：只要求 `commit` 时，管家不得补充 `push`，服务端也会清除模型擅自加入的
-  push 或提交身份指令并正常生成提交确认；用户明确同时要求两者时，必须拆为先提交、后推送的两次独立确认。
+  当前飞书用户消息是授权边界：只要求 `commit` 时，管家不得补充 `push`，服务端会保留用户原话，并把
+  “仅本地提交、禁止 push、继承目标 Task 当前提交策略”作为独立可信元数据注入目标 Agent；用户明确同时
+  要求两者时，必须拆为先提交、后推送的两次独立确认。
   一次性待确认凭证只保存在服务端安全状态中，不出现在文本或卡片 payload；仅原飞书用户和原会话可用一次，
   五分钟过期；确认前目标状态变化时拒绝执行。同一会话产生新预览时，旧卡片自动失效。卡片发送后会把
   飞书 `message_id` 与具体服务端确认记录绑定，旧卡片不能消费新操作；确认成功显示绿色已处理态，取消、
   超时或被新预览替代时显示灰色失效态，按钮会被移除。在线超时卡片最多约 30 秒完成视觉更新，服务离线
   期间凭证仍严格按五分钟失效，重连后补更新卡片。
+- Channel 进站、出站、卡片回调/更新、REST fallback、连接状态和失败会写入
+  `AHA_HOME/logs/feishu/YYYY-MM-DD.jsonl`。日志文件权限为 `0600`，只保存消息内容摘要、状态、transport、
+  `message_id`、run/task 和哈希后的 chat/open_id/session，不保存原始事件报文、动作 JSON、App Secret、
+  token、Authorization 或 Cookie。`feishu/subscriptions.json` 的读取、订阅变更和发送去重状态使用跨进程
+  advisory lock，避免 Web 长连接和 backend 通知进程互相覆盖。
 - 服务重启/升级、凭据/ACL/认证、sandbox/approval、原始文件写入、KB 审批/同步以及删除类操作不向
   飞书管家开放。需要项目分析或代码修改时，管家应创建普通项目 Task 或向已有 Task 发消息，
   不在 AHA Home 中直接完成项目工作。

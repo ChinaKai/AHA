@@ -14,6 +14,7 @@ from aha_cli.services.run_delete import RunDeleteError, delete_run
 from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_run_lifecycle_status
 from aha_cli.services.run_retention import RunRetentionError, apply_run_retention
 from aha_cli.services.orchestrator import execute_actions
+from aha_cli.services import service_assistant_actions
 from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task
 from aha_cli.services.service_assistant_actions import prepare_service_assistant_action, resolve_confirmation
 from aha_cli.services.service_runtime import write_service_runtime
@@ -119,6 +120,7 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(columns[0]["elements"][0]["behaviors"][0]["type"], "callback")
             self.assertEqual(columns[1]["elements"][0]["behaviors"][0]["value"]["decision"], "cancel")
             self.assertNotIn("token", json.dumps(prepared["confirmation_card"], ensure_ascii=False).lower())
+            self.assertNotIn("```json", json.dumps(prepared["confirmation_card"], ensure_ascii=False))
             self.assertTrue(confirmed["result"]["ok"])
             self.assertEqual(confirmed["confirmation_id"], prepared["confirmation_id"])
             self.assertEqual(confirmed["confirmation_card"]["header"]["template"], "green")
@@ -254,21 +256,56 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertNotIn("git push", repaired["user_response"])
             self.assertNotIn("同步远程", repaired["user_response"])
             self.assertNotIn("Generated-by:", repaired["user_response"])
+            card_text = json.dumps(repaired["confirmation_card"], ensure_ascii=False)
+            self.assertNotIn("```json", card_text)
+            self.assertNotIn('"request_policy"', card_text)
             self.assertFalse(combined["ok"])
             self.assertIn("commit 与 push 必须拆成", combined["user_response"])
+
+            with mock.patch(
+                "aha_cli.services.service_assistant_actions._execute_write",
+                return_value={"ok": True},
+            ) as execute_write:
+                resolve_confirmation(
+                    root,
+                    open_id="ou_user",
+                    session_key="tenant:p2p:ou_user",
+                    text="确认",
+                )
+            routed_arguments = execute_write.call_args.args[2]
+            self.assertEqual(routed_arguments["message"], "请让 task-006 提交")
+            self.assertEqual(routed_arguments["request_policy"]["authorization"], "local_commit_only")
+            self.assertEqual(routed_arguments["request_policy"]["remote_push"], "forbidden")
+            with mock.patch(
+                "aha_cli.web.task_messaging.handle_send_payload",
+                return_value={"ok": True},
+            ) as routed_send:
+                service_assistant_actions._execute_write(root, "send_task_message", routed_arguments)
+            routed_payload = routed_send.call_args.args[2]
+            self.assertEqual(routed_payload["message"], "请让 task-006 提交")
+            self.assertNotIn("request_policy", routed_payload)
+            self.assertEqual(
+                routed_send.call_args.kwargs["trusted_request_policy"]["authorization"],
+                "local_commit_only",
+            )
 
             target_item = append_message(
                 root,
                 target["id"],
                 "main",
-                "请提交，按当前 AHA commit policy 执行。",
+                routed_arguments["message"],
                 sender="feishu-assistant",
                 task_id=target_task_id,
                 role="main",
+                request_policy=routed_arguments["request_policy"],
             )
             target_prompt = chat_prompt(root, target["id"], "main", target_item, "")
             self.assertIn("Generated-by: AHA Codex GPT-5.6-sol", target_prompt)
             self.assertNotIn("Generated-by: AHA Claude glm-5.2", target_prompt)
+            self.assertIn("AHA request policy metadata", target_prompt)
+            user_section = target_prompt.split("User message from feishu-assistant", 1)[1]
+            self.assertIn("请让 task-006 提交", user_section)
+            self.assertNotIn("仅执行本地提交", user_section)
 
     def test_runtime_snapshot_is_sanitized_for_prompt_use(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

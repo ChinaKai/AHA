@@ -10,6 +10,8 @@ $attachment_output_guidance
 
 $recovery_context
 
+$request_policy
+
 Recent conversation:
 $recent_conversation
 

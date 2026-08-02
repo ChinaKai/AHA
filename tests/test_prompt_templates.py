@@ -134,6 +134,7 @@ SAMPLE_VALUES = {
     "recent_messages": "- message",
     "recipient": "main",
     "recovery_context": "",
+    "request_policy": "Trusted request policy metadata.",
     "relpath": "tasks/task-001/compacts/main.md",
     "request": "Where is foo_probe?",
     "requested_at": "2026-01-01T00:00:00+00:00",

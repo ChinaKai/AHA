@@ -226,6 +226,7 @@ def handle_send_payload(
     queued_backend_starter: QueuedBackendStarter | None = None,
     background_backend_start: bool = False,
     debug_logger: DebugLogger = realtime_debug_log,
+    trusted_request_policy: dict | None = None,
 ) -> dict:
     message = str(payload.get("message", "")).strip()
     task_id = str(payload.get("task_id", "")).strip() or None
@@ -333,6 +334,7 @@ def handle_send_payload(
         recovery_context=recovery_context or None,
         plain_sticky=plain_sticky,
         service_action_depth=int(payload.get("service_action_depth") or 0) if "service_action_depth" in payload else None,
+        request_policy=trusted_request_policy if isinstance(trusted_request_policy, dict) else None,
         image=payload.get("image"),
         images=payload.get("images"),
     )

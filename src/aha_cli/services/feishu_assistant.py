@@ -15,6 +15,7 @@ from aha_cli.services.feishu import (
     mark_confirmation_card_updated,
     set_session_binding,
 )
+from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
 from aha_cli.services.service_assistant import (
@@ -80,8 +81,29 @@ def enqueue_message(root: Path, default_run_id: str, channel: Any, message: Any)
         payload = _plain_message(root, message)
         payload["kind"] = "message"
         _assistant_queue.put_nowait((root, default_run_id, channel, payload))
+        audit_feishu_channel(
+            root,
+            direction="inbound",
+            kind="message",
+            status="queued",
+            transport="channel_ws",
+            message_id=str(payload.get("message_id") or ""),
+            chat_id=str(payload.get("chat_id") or ""),
+            open_id=str(payload.get("open_id") or ""),
+            content=str(payload.get("text") or ""),
+        )
     except queue.Full:
-        _send_text_background(channel, str(getattr(message, "chat_id", "") or ""), "AHA 助手当前繁忙，请稍后重试。")
+        chat_id = str(getattr(message, "chat_id", "") or "")
+        audit_feishu_channel(
+            root,
+            direction="inbound",
+            kind="message",
+            status="dropped",
+            transport="channel_ws",
+            chat_id=chat_id,
+            reason="assistant_queue_full",
+        )
+        _send_text_background(root, channel, chat_id, "AHA 助手当前繁忙，请稍后重试。")
 
 
 def enqueue_card_action(root: Path, default_run_id: str, channel: Any, event: Any) -> None:
@@ -97,8 +119,31 @@ def enqueue_card_action(root: Path, default_run_id: str, channel: Any, event: An
     }
     try:
         _assistant_queue.put_nowait((root, default_run_id, channel, payload))
+        action_value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+        audit_feishu_channel(
+            root,
+            direction="inbound",
+            kind="card_action",
+            status="queued",
+            transport="channel_ws",
+            message_id=payload["message_id"],
+            chat_id=payload["chat_id"],
+            open_id=payload["open_id"],
+            decision=str(action_value.get("decision") or ""),
+        )
     except queue.Full:
-        _send_text_background(channel, payload["chat_id"], "AHA 助手当前繁忙，请稍后重试。")
+        audit_feishu_channel(
+            root,
+            direction="inbound",
+            kind="card_action",
+            status="dropped",
+            transport="channel_ws",
+            message_id=payload["message_id"],
+            chat_id=payload["chat_id"],
+            open_id=payload["open_id"],
+            reason="assistant_queue_full",
+        )
+        _send_text_background(root, channel, payload["chat_id"], "AHA 助手当前繁忙，请稍后重试。")
 
 
 def _worker_loop() -> None:
@@ -114,34 +159,89 @@ def _worker_loop() -> None:
                 _handle_message(root, default_run_id, channel, payload)
         except Exception as exc:  # noqa: BLE001 - one bad event must not stop the assistant worker.
             print(f"[aha feishu] assistant message failed: {exc!r}", file=sys.stderr, flush=True)
+            audit_feishu_channel(
+                item[0],
+                direction="inbound",
+                kind=str(item[3].get("kind") or "message"),
+                status="failed",
+                transport="channel_ws",
+                message_id=str(item[3].get("message_id") or ""),
+                chat_id=str(item[3].get("chat_id") or ""),
+                open_id=str(item[3].get("open_id") or ""),
+                error=exc,
+            )
             try:
-                _send_text(item[2], str(item[3].get("chat_id") or ""), "AHA 助手处理失败，请稍后重试。")
+                _send_text(item[0], item[2], str(item[3].get("chat_id") or ""), "AHA 助手处理失败，请稍后重试。")
             except Exception:  # noqa: BLE001
                 pass
         finally:
             _assistant_queue.task_done()
 
 
-def _send(channel: Any, chat_id: str, message: object, opts: dict | None = None) -> dict:
+def _send(root: Path, channel: Any, chat_id: str, message: object, opts: dict | None = None) -> dict:
     if not chat_id:
         raise FeishuError("飞书消息缺少 chat_id")
-    result = channel.schedule(channel.send(chat_id, message, opts)).result(timeout=20)
-    if hasattr(result, "success") and not result.success:
-        raise FeishuError(str(getattr(result, "error", None) or "飞书消息发送失败"))
-    return {"ok": True, "message_id": getattr(result, "message_id", None)}
+    kind = "card" if isinstance(message, dict) and isinstance(message.get("card"), dict) else "message"
+    try:
+        result = channel.schedule(channel.send(chat_id, message, opts)).result(timeout=20)
+        if hasattr(result, "success") and not result.success:
+            raise FeishuError(str(getattr(result, "error", None) or "飞书消息发送失败"))
+    except Exception as exc:  # noqa: BLE001 - SDK futures may raise transport-specific exceptions.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind=kind,
+            status="failed",
+            transport="channel_ws",
+            chat_id=chat_id,
+            content=message,
+            error=exc,
+        )
+        raise
+    message_id = getattr(result, "message_id", None)
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind=kind,
+        status="sent",
+        transport="channel_ws",
+        message_id=str(message_id or ""),
+        chat_id=chat_id,
+        content=message,
+    )
+    return {"ok": True, "message_id": message_id}
 
 
-def _send_text(channel: Any, chat_id: str, text: str, *, reply_to: str = "") -> dict:
+def _send_text(root: Path, channel: Any, chat_id: str, text: str, *, reply_to: str = "") -> dict:
     opts = {"reply_to": reply_to} if reply_to else None
-    return _send(channel, chat_id, {"text": str(text)}, opts)
+    return _send(root, channel, chat_id, {"text": str(text)}, opts)
 
 
-def _send_text_background(channel: Any, chat_id: str, text: str) -> None:
+def _send_text_background(root: Path, channel: Any, chat_id: str, text: str) -> None:
     if not chat_id:
         return
     try:
         channel.schedule(channel.send(chat_id, {"text": str(text)}, None))
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="message",
+            status="scheduled",
+            transport="channel_ws",
+            chat_id=chat_id,
+            content=text,
+        )
     except Exception:  # noqa: BLE001 - the SDK callback must return without blocking.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="message",
+            status="failed",
+            transport="channel_ws",
+            chat_id=chat_id,
+            content=text,
+            reason="background_schedule_failed",
+        )
         pass
 
 
@@ -150,9 +250,31 @@ def _update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> N
     card = confirmation.get("confirmation_card") or confirmation.get("terminal_card")
     if not message_id or not isinstance(card, dict):
         return
-    result = channel.schedule(channel.update_card(message_id, card)).result(timeout=20)
-    if hasattr(result, "success") and not result.success:
-        raise FeishuError(str(getattr(result, "error", None) or "飞书卡片更新失败"))
+    try:
+        result = channel.schedule(channel.update_card(message_id, card)).result(timeout=20)
+        if hasattr(result, "success") and not result.success:
+            raise FeishuError(str(getattr(result, "error", None) or "飞书卡片更新失败"))
+    except Exception as exc:  # noqa: BLE001 - preserve SDK exception after recording its sanitized summary.
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="card_update",
+            status="failed",
+            transport="channel_ws",
+            message_id=message_id,
+            content={"card": card},
+            error=exc,
+        )
+        raise
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind="card_update",
+        status="updated",
+        transport="channel_ws",
+        message_id=message_id,
+        content={"card": card},
+    )
     mark_confirmation_card_updated(root, str(confirmation.get("confirmation_id") or ""))
 
 
@@ -177,6 +299,38 @@ def _session_key(payload: dict) -> str:
         open_id=str(payload.get("open_id") or ""),
         chat_id=str(payload.get("chat_id") or ""),
         chat_type=str(payload.get("chat_type") or ""),
+    )
+
+
+def _audit_inbound_resolution(
+    root: Path,
+    payload: dict,
+    status: str,
+    *,
+    reason: str = "",
+    session_key: str = "",
+    run_id: str = "",
+    task_id: str = "",
+    error: object = None,
+) -> None:
+    kind = str(payload.get("kind") or "message")
+    action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+    audit_feishu_channel(
+        root,
+        direction="inbound",
+        kind=kind,
+        status=status,
+        transport="channel_ws",
+        message_id=str(payload.get("message_id") or ""),
+        chat_id=str(payload.get("chat_id") or ""),
+        open_id=str(payload.get("open_id") or ""),
+        session_key=session_key,
+        run_id=run_id,
+        task_id=task_id,
+        content=str(payload.get("text") or "") if kind == "message" else None,
+        error=error,
+        reason=reason,
+        decision=str(action.get("decision") or ""),
     )
 
 
@@ -303,7 +457,7 @@ def _finish_confirmation(
         # be rolled back merely because the visual update failed.
         pass
     if confirmation.get("cancelled"):
-        _send_text(channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
+        _send_text(root, channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
         return
     handle_send_payload(
         root,
@@ -319,23 +473,26 @@ def _finish_confirmation(
         command_handler=_never_handle_command,
         background_backend_start=True,
     )
-    _send_text(channel, chat_id, "操作已确认并执行，AHA 助手正在整理结果。", reply_to=message_id)
+    _send_text(root, channel, chat_id, "操作已确认并执行，AHA 助手正在整理结果。", reply_to=message_id)
 
 
 def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
     value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
     if str(value.get("kind") or "") != "aha_service_confirmation":
+        _audit_inbound_resolution(root, payload, "ignored", reason="unsupported_card_action")
         return
     chat_id = str(payload.get("chat_id") or "")
     message_id = str(payload.get("message_id") or "")
     open_id = str(payload.get("open_id") or "")
     config = feishu_config(root)
     if not _allowed(config, open_id):
-        _send_text(channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
+        _audit_inbound_resolution(root, payload, "rejected", reason="unauthorized")
+        _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
         return
     decision = {"confirm": "确认", "cancel": "取消"}.get(str(value.get("decision") or "").lower())
     if not decision:
-        _send_text(channel, chat_id, "无法处理卡片操作：确认数据不完整。", reply_to=message_id)
+        _audit_inbound_resolution(root, payload, "rejected", reason="invalid_decision")
+        _send_text(root, channel, chat_id, "无法处理卡片操作：确认数据不完整。", reply_to=message_id)
         return
     try:
         session_key, subscription = _confirmation_subscription(root, chat_id, open_id)
@@ -357,14 +514,23 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
             task_id=str(subscription.get("task_id") or ""),
             confirmation=confirmation,
         )
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "handled",
+            session_key=session_key,
+            run_id=str(subscription.get("run_id") or ""),
+            task_id=str(subscription.get("task_id") or ""),
+        )
     except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        _audit_inbound_resolution(root, payload, "failed", error=exc)
         record = confirmation_card_for_message(root, message_id)
         if record is not None and isinstance(record.get("terminal_card"), dict):
             try:
                 _update_confirmation_card(root, channel, record)
             except (FeishuError, RuntimeError, TimeoutError):
                 pass
-        _send_text(channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
+        _send_text(root, channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
 
 
 def _handle_message(root: Path, server_default_run_id: str, channel: Any, payload: dict) -> None:
@@ -373,24 +539,30 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
     message_id = str(payload.get("message_id") or "")
     open_id = str(payload.get("open_id") or "")
     if payload.get("sender_is_bot"):
+        _audit_inbound_resolution(root, payload, "ignored", reason="sender_is_bot")
         return
     if payload.get("chat_type") != "p2p" and config.get("group_mentions_only") and not payload.get("is_at_bot"):
+        _audit_inbound_resolution(root, payload, "ignored", reason="group_without_mention")
         return
     if not claim_inbound_message(root, message_id):
+        _audit_inbound_resolution(root, payload, "ignored", reason="duplicate_message")
         return
     if not _allowed(config, open_id):
-        _send_text(channel, chat_id, _unauthorized_message(str(payload.get("chat_type") or ""), open_id), reply_to=message_id)
+        _audit_inbound_resolution(root, payload, "rejected", reason="unauthorized")
+        _send_text(root, channel, chat_id, _unauthorized_message(str(payload.get("chat_type") or ""), open_id), reply_to=message_id)
         return
     text = str(payload.get("text") or "").strip()
     if not text:
-        _send_text(channel, chat_id, "请发送文本消息。", reply_to=message_id)
+        _audit_inbound_resolution(root, payload, "rejected", reason="empty_text")
+        _send_text(root, channel, chat_id, "请发送文本消息。", reply_to=message_id)
         return
 
     session_key = _session_key(payload)
     binding = _binding(root, session_key, open_id, server_default_run_id)
     run_id = str(binding.get("active_run_id") or "")
     if not run_id or not run_exists(root, run_id):
-        _send_text(channel, chat_id, "AHA 尚无可用 Run，请先在 Web 中创建一个 Run。", reply_to=message_id)
+        _audit_inbound_resolution(root, payload, "rejected", reason="run_unavailable", session_key=session_key)
+        _send_text(root, channel, chat_id, "AHA 尚无可用 Run，请先在 Web 中创建一个 Run。", reply_to=message_id)
         return
     task = _ensure_agent_task(root, run_id, session_key, open_id, binding)
     task_id = str(task.get("id") or "")
@@ -398,7 +570,16 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
     try:
         confirmation = resolve_confirmation(root, open_id=open_id, session_key=session_key, text=text)
     except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
-        _send_text(channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "failed",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+            error=exc,
+        )
+        _send_text(root, channel, chat_id, f"无法处理确认：{exc}", reply_to=message_id)
         return
     if confirmation is not None:
         _finish_confirmation(
@@ -410,6 +591,15 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
             task_id=task_id,
             confirmation=confirmation,
         )
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "handled",
+            reason="confirmation",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+        )
         return
     handle_send_payload(
         root,
@@ -418,7 +608,15 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         command_handler=_never_handle_command,
         background_backend_start=True,
     )
-    _send_text(channel, chat_id, "已交给 AHA agent，回复会推送到本会话。", reply_to=message_id)
+    _audit_inbound_resolution(
+        root,
+        payload,
+        "accepted",
+        session_key=session_key,
+        run_id=run_id,
+        task_id=task_id,
+    )
+    _send_text(root, channel, chat_id, "已交给 AHA agent，回复会推送到本会话。", reply_to=message_id)
 
 
 __all__ = ["enqueue_card_action", "enqueue_message"]

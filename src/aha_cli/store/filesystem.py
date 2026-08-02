@@ -205,6 +205,7 @@ def append_message(
     recovery_context: str | None = None,
     plain_sticky: bool = False,
     service_action_depth: int | None = None,
+    request_policy: dict | None = None,
     feishu_card: dict | None = None,
     feishu_confirmation_id: str | None = None,
     image: object | None = None,
@@ -251,6 +252,8 @@ def append_message(
         payload["plain_sticky"] = True
     if service_action_depth is not None:
         payload["service_action_depth"] = max(0, int(service_action_depth))
+    if isinstance(request_policy, dict) and request_policy:
+        payload["request_policy"] = dict(request_policy)
     if isinstance(feishu_card, dict) and feishu_card:
         payload["feishu_card"] = feishu_card
     if feishu_confirmation_id:

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import threading
 
+from aha_cli.locking import exclusive_lock
 from aha_cli.domain.models import utc_now
 from aha_cli.domain.models import is_service_assistant_task
 from aha_cli.services.feishu import FeishuError, bind_confirmation_card, send_card_message, send_text_message
+from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials, send_via_active_channel
 from aha_cli.services.service_assistant_handoffs import (
     consume_status_suppressions,
@@ -39,7 +42,33 @@ def subscription_state_path(root: Path) -> Path:
     return aha_home_path(root) / "feishu" / "subscriptions.json"
 
 
-def load_subscription_state(root: Path) -> dict:
+def subscription_state_lock_path(root: Path) -> Path:
+    return aha_home_path(root) / "feishu" / ".subscriptions.lock"
+
+
+@contextmanager
+def _locked_subscription_state(root: Path):
+    lock_path = subscription_state_lock_path(root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_path.parent.chmod(0o700)
+    except OSError:
+        pass
+    with _state_lock, lock_path.open("a+b") as handle, exclusive_lock(handle):
+        try:
+            lock_path.chmod(0o600)
+        except OSError:
+            pass
+        state_path = subscription_state_path(root)
+        if state_path.exists():
+            try:
+                state_path.chmod(0o600)
+            except OSError:
+                pass
+        yield
+
+
+def _load_subscription_state_unlocked(root: Path) -> dict:
     try:
         state = read_json(subscription_state_path(root))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
@@ -47,6 +76,20 @@ def load_subscription_state(root: Path) -> dict:
     subscriptions = state.get("subscriptions") if isinstance(state.get("subscriptions"), dict) else {}
     sent = state.get("sent") if isinstance(state.get("sent"), dict) else {}
     return {"subscriptions": subscriptions, "sent": sent, "updated_at": str(state.get("updated_at") or "")}
+
+
+def load_subscription_state(root: Path) -> dict:
+    with _locked_subscription_state(root):
+        return _load_subscription_state_unlocked(root)
+
+
+def _write_subscription_state_unlocked(root: Path, state: dict) -> None:
+    path = subscription_state_path(root)
+    write_json(path, state)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def set_subscription(
@@ -62,8 +105,8 @@ def set_subscription(
     key = str(session_key or "").strip()
     if not key or not chat_id or not run_id:
         raise FeishuError("飞书订阅需要 session_key、chat_id 和 run_id")
-    with _state_lock:
-        state = load_subscription_state(root)
+    with _locked_subscription_state(root):
+        state = _load_subscription_state_unlocked(root)
         if enabled:
             state["subscriptions"][key] = {
                 "session_key": key,
@@ -77,7 +120,7 @@ def set_subscription(
         else:
             state["subscriptions"].pop(key, None)
         state["updated_at"] = utc_now()
-        write_json(subscription_state_path(root), state)
+        _write_subscription_state_unlocked(root, state)
     return dict(state["subscriptions"].get(key) or {"session_key": key, "enabled": False})
 
 
@@ -210,7 +253,7 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
 def _send(root: Path, chat_id: str, text: str, *, card: dict | None = None) -> dict:
     try:
         message = {"card": card} if isinstance(card, dict) and card else {"text": text}
-        return send_via_active_channel(root, chat_id, message)
+        return {**send_via_active_channel(root, chat_id, message), "transport": "channel_ws"}
     except (RuntimeError, TimeoutError):
         config = feishu_config(root)
         app_id, app_secret = feishu_credentials(config)
@@ -221,7 +264,13 @@ def _send(root: Path, chat_id: str, text: str, *, card: dict | None = None) -> d
         else:
             payload = send_text_message(root, app_id, app_secret, chat_id, text, receive_id_type="chat_id")
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        return {"ok": True, "sent": True, "message_id": data.get("message_id"), "target": chat_id}
+        return {
+            "ok": True,
+            "sent": True,
+            "message_id": data.get("message_id"),
+            "target": chat_id,
+            "transport": "rest",
+        }
 
 
 def _handoff_closure(root: Path, run_id: str, event: dict) -> tuple[dict, str] | None:
@@ -262,6 +311,19 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             mark_service_handoff(root, str(handoff.get("id") or ""), "pending", error=str(exc))
             raise
         mark_service_handoff(root, str(handoff.get("id") or ""), "delivered")
+        audit_feishu_channel(
+            root,
+            direction="outbound",
+            kind="handoff_closure",
+            status="delivered",
+            transport=str(result.get("transport") or "unknown"),
+            message_id=str(result.get("message_id") or ""),
+            chat_id=chat_id,
+            session_key=str(handoff.get("session_key") or ""),
+            run_id=run_id,
+            task_id=str((event.get("data") or {}).get("task_id") or ""),
+            content=closure_message,
+        )
         return {
             "ok": True,
             "sent": True,
@@ -285,8 +347,8 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
     event_key = _event_key(run_id, event)
     sent_count = 0
     visited_recipients: set[str] = set()
-    with _state_lock:
-        state = load_subscription_state(root)
+    with _locked_subscription_state(root):
+        state = _load_subscription_state_unlocked(root)
         for session_key, subscription in list(state["subscriptions"].items()):
             if not isinstance(subscription, dict) or not subscription.get("enabled"):
                 continue
@@ -311,6 +373,20 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             if sent_key in state["sent"]:
                 continue
             result = _send(root, chat_id, message, card=card)
+            audit_feishu_channel(
+                root,
+                direction="outbound",
+                kind="confirmation_card" if card else "notification",
+                status="delivered",
+                transport=str(result.get("transport") or "unknown"),
+                message_id=str(result.get("message_id") or ""),
+                chat_id=chat_id,
+                session_key=str(session_key),
+                run_id=run_id,
+                task_id=task_id,
+                content={"card": card} if card else message,
+                reason=str(event.get("type") or ""),
+            )
             if confirmation_id and result.get("message_id"):
                 bind_confirmation_card(
                     root,
@@ -326,7 +402,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
         if len(state["sent"]) > 4096:
             state["sent"] = dict(list(state["sent"].items())[-4096:])
         state["updated_at"] = utc_now()
-        write_json(subscription_state_path(root), state)
+        _write_subscription_state_unlocked(root, state)
     return {"ok": True, "sent": sent_count > 0, "sent_count": sent_count, "reason": "sent" if sent_count else "no_subscription"}
 
 
@@ -335,5 +411,6 @@ __all__ = [
     "notification_message_for_event",
     "notify_event",
     "set_subscription",
+    "subscription_state_lock_path",
     "subscription_state_path",
 ]
