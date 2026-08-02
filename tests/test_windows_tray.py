@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import struct
 import tempfile
@@ -162,6 +163,32 @@ class WindowsTrayTests(unittest.TestCase):
         self.assertEqual(popen.call_count, 2)
         first.terminate.assert_called_once_with()
         second.terminate.assert_called_once_with()
+
+    def test_web_process_windows_stop_terminates_job_and_redirector_tree(self) -> None:
+        child = mock.Mock(pid=1234)
+        child.poll.return_value = None
+        with mock.patch.object(windows_tray.platform, "WIN", True), mock.patch.object(
+            subprocess,
+            "Popen",
+            return_value=child,
+        ), mock.patch.object(
+            windows_tray.process_control,
+            "assign_parent_death",
+        ) as assign_parent_death, mock.patch.object(
+            windows_tray.process_control,
+            "terminate_parent_death_children",
+        ) as terminate_children, mock.patch.object(
+            windows_tray.process_control,
+            "signal_process_group",
+        ) as signal_tree:
+            process = windows_tray.WebUiProcess(["pythonw", "aha", "ui"])
+            process.start()
+            process.stop()
+
+        assign_parent_death.assert_called_once_with(child)
+        terminate_children.assert_called_once_with()
+        signal_tree.assert_called_once_with(1234, signal.SIGTERM)
+        child.terminate.assert_not_called()
 
     def test_duplicate_tray_opens_existing_dashboard_without_second_web_process(self) -> None:
         mutex = mock.Mock()

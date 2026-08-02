@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from aha_cli import process_control
 
@@ -62,6 +63,15 @@ class ProcessControlTests(unittest.TestCase):
             if process_control.process_exists(proc.pid):
                 proc.kill()
             proc.wait(timeout=5)
+
+    def test_terminate_parent_death_children_routes_to_windows_job(self) -> None:
+        with mock.patch.object(process_control, "_WIN", True), mock.patch.object(
+            process_control,
+            "_windows_terminate_kill_job",
+        ) as terminate_job:
+            process_control.terminate_parent_death_children()
+
+        terminate_job.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -173,6 +173,18 @@ def assign_parent_death(proc) -> None:
     _windows_assign_kill_job(proc.pid)
 
 
+def terminate_parent_death_children() -> None:
+    """Terminate and detach all children bound by :func:`assign_parent_death`.
+
+    The Windows Job Object is process-local, so a supervisor can use this when
+    restarting its managed subtree and a fresh job will be created on the next
+    assignment. POSIX supervisors keep using their normal process-group logic.
+    """
+    if not _WIN:
+        return
+    _windows_terminate_kill_job()
+
+
 # --- Windows helpers -------------------------------------------------------
 
 def _windows_kernel32():
@@ -310,3 +322,23 @@ def _windows_assign_kill_job(pid: int) -> None:
         kernel32.AssignProcessToJobObject(job, handle)
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _windows_terminate_kill_job() -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    global _kill_job_handle
+    job = _kill_job_handle
+    _kill_job_handle = None
+    if job is None:
+        return
+    kernel32 = _windows_kernel32()
+    kernel32.TerminateJobObject.argtypes = [ctypes.c_void_p, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    try:
+        kernel32.TerminateJobObject(job, 1)
+    finally:
+        kernel32.CloseHandle(job)

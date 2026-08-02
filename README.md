@@ -94,7 +94,7 @@ Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/inst
 powershell.exe -ExecutionPolicy Bypass -File $Installer
 ```
 
-托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务、切换“开机自启动”，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。保存设置后 Web 服务会自动重启，已启用的开机启动命令也会同步更新。若希望安装时直接启用开机自启动：
+托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务、切换“开机自启动”，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。保存设置后 Web 服务会自动重启，已启用的开机启动命令也会同步更新；选择“退出 AHA”会结束完整 Web 进程树并释放监听端口，包括从 Web 页面重启过的进程。若希望安装时直接启用开机自启动：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File $Installer -EnableStartup

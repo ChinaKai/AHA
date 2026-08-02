@@ -105,7 +105,9 @@ The tray uses the AHA logo. Double-click it to open AHA. Its context menu can
 open the dashboard, restart the service, toggle "Start at login", or exit. The
 "Settings..." dialog lets you change `AHA_HOME`, the bind address, port, and
 Web token. Saving restarts the Web service and updates an enabled startup
-command. To enable startup during installation:
+command. "Exit AHA" terminates the complete supervised Web process tree and
+releases its listening port, including after a Web-triggered restart. To enable
+startup during installation:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File $Installer -EnableStartup

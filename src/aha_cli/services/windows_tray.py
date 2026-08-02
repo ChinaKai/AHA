@@ -8,6 +8,7 @@ import hashlib
 from importlib import resources
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -15,7 +16,7 @@ from urllib.parse import quote
 from urllib.request import urlopen
 import webbrowser
 
-from aha_cli import platform
+from aha_cli import platform, process_control
 from aha_cli.services.onebin import aha_cli_invocation, running_zipapp_path
 from aha_cli.store.io import read_json, write_json
 from aha_cli.web.auth import bind_host_exposes_network, normalize_auth_token
@@ -290,15 +291,26 @@ class WebUiProcess:
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
             )
+            process_control.assign_parent_death(self.process)
         except OSError as exc:
             raise WindowsTrayError(f"failed to start AHA Web UI: {exc}") from exc
 
     def stop(self) -> None:
         process = self.process
         self.process = None
-        if process is None or process.poll() is not None:
+        if process is None:
             return
-        process.terminate()
+        if platform.WIN:
+            # A venv pythonw.exe is a redirector that launches the base Python
+            # interpreter. Kill the Job Object first so a Web self-restart via
+            # os.execv and any redirector descendants cannot outlive the tray.
+            process_control.terminate_parent_death_children()
+            if process.poll() is None:
+                process_control.signal_process_group(process.pid, signal.SIGTERM)
+        elif process.poll() is None:
+            process.terminate()
+        if process.poll() is not None:
+            return
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
