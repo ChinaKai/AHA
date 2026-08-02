@@ -74,6 +74,18 @@ def message_event(
 
 
 class FeishuServiceTests(unittest.TestCase):
+    def test_recent_groups_are_deduplicated_sorted_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            feishu.record_recent_group(root, "oc_a", seen_at="2026-08-01T00:00:00Z")
+            feishu.record_recent_group(root, "oc_b", seen_at="2026-08-02T00:00:00Z")
+            feishu.record_recent_group(root, "oc_a", seen_at="2026-08-03T00:00:00Z")
+            groups = feishu.recent_groups(root)
+            mode = stat.S_IMODE(feishu.recent_groups_path(root).stat().st_mode)
+
+        self.assertEqual([item["chat_id"] for item in groups], ["oc_a", "oc_b"])
+        self.assertEqual(mode, 0o600)
+
     def test_normalize_message_event_extracts_identity_thread_and_text(self) -> None:
         normalized = feishu.normalize_message_event(message_event(root_id="om_root"))
 

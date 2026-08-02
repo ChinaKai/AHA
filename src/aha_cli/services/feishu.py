@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
+from aha_cli.domain.models import utc_now
 from aha_cli.locking import exclusive_lock
 from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.store.paths import aha_home_path
@@ -25,6 +26,7 @@ INBOUND_DEDUPE_TTL_SECONDS = 24 * 60 * 60
 INBOUND_DEDUPE_MAX_ENTRIES = 4096
 ACTION_TOKEN_TTL_SECONDS = 5 * 60
 ACTION_TOKEN_MAX_ENTRIES = 1024
+RECENT_GROUP_MAX_ENTRIES = 100
 
 UrlOpener = Callable[..., Any]
 _state_lock = threading.RLock()
@@ -63,6 +65,10 @@ def action_tokens_path(root: Path) -> Path:
 
 def confirmation_cards_path(root: Path) -> Path:
     return feishu_dir(root) / "confirmation_cards.json"
+
+
+def recent_groups_path(root: Path) -> Path:
+    return feishu_dir(root) / "recent_groups.json"
 
 
 def feishu_state_lock_path(root: Path) -> Path:
@@ -331,6 +337,51 @@ def claim_inbound_message(
             entries = dict(sorted(entries.items(), key=lambda item: (item[1], item[0]))[-max_entries:])
         _write_secret_json(inbound_dedupe_path(root), {"version": 1, "messages": entries})
     return True
+
+
+def record_recent_group(root: Path, chat_id: str, *, seen_at: str | None = None) -> dict:
+    """Remember a detected group as an admin-only authorization candidate."""
+    identity = str(chat_id or "").strip()
+    if not identity:
+        raise FeishuError("chat_id 不能为空")
+    timestamp = str(seen_at or utc_now())
+    with _locked_state(root):
+        payload = _read_json(recent_groups_path(root))
+        raw_groups = payload.get("groups")
+        groups = {
+            str(key): value
+            for key, value in (raw_groups.items() if isinstance(raw_groups, dict) else ())
+            if isinstance(value, dict) and str(key).strip()
+        }
+        groups[identity] = {"chat_id": identity, "last_seen_at": timestamp}
+        if len(groups) > RECENT_GROUP_MAX_ENTRIES:
+            ordered = sorted(
+                groups.items(),
+                key=lambda item: (str(item[1].get("last_seen_at") or ""), item[0]),
+                reverse=True,
+            )[:RECENT_GROUP_MAX_ENTRIES]
+            groups = dict(ordered)
+        _write_secret_json(recent_groups_path(root), {"version": 1, "groups": groups})
+    return dict(groups[identity])
+
+
+def recent_groups(root: Path, *, limit: int = 20) -> list[dict]:
+    """Return detected group IDs to the authenticated local settings UI."""
+    if limit <= 0:
+        return []
+    with _locked_state(root):
+        payload = _read_json(recent_groups_path(root))
+    raw_groups = payload.get("groups")
+    groups = [
+        dict(value)
+        for value in (raw_groups.values() if isinstance(raw_groups, dict) else ())
+        if isinstance(value, dict)
+    ]
+    groups.sort(
+        key=lambda item: (str(item.get("last_seen_at") or ""), str(item.get("chat_id") or "")),
+        reverse=True,
+    )
+    return groups[:limit]
 
 
 def _action_token_digest(token: str) -> str:
@@ -1020,6 +1071,9 @@ __all__ = [
     "make_session_key",
     "normalize_message_event",
     "pending_confirmation_card_updates",
+    "recent_groups",
+    "recent_groups_path",
+    "record_recent_group",
     "register_confirmation_card",
     "send_card_message",
     "send_text_message",

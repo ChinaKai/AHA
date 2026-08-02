@@ -100,6 +100,7 @@ def set_subscription(
     open_id: str,
     run_id: str,
     task_id: str | None,
+    chat_type: str | None = None,
     enabled: bool = True,
 ) -> dict:
     key = str(session_key or "").strip()
@@ -112,6 +113,7 @@ def set_subscription(
                 "session_key": key,
                 "chat_id": str(chat_id),
                 "open_id": str(open_id or ""),
+                "chat_type": str(chat_type or ("group" if ":group:" in key else "p2p")),
                 "run_id": str(run_id),
                 "task_id": str(task_id or "") or None,
                 "enabled": True,

@@ -43,7 +43,13 @@ class FakeChannel:
         return _CompletedFuture(asyncio.run(coroutine))
 
 
-def _write_config(root: Path, allowed: list[str]) -> None:
+def _write_config(
+    root: Path,
+    allowed: list[str],
+    *,
+    allowed_chat_ids: list[str] | None = None,
+    group_access_mode: str = "allowed_users",
+) -> None:
     (root / "config.json").write_text(
         json.dumps(
             {
@@ -53,6 +59,8 @@ def _write_config(root: Path, allowed: list[str]) -> None:
                         "enabled": True,
                         "app_id": "cli_test",
                         "allowed_open_ids": allowed,
+                        "allowed_chat_ids": allowed_chat_ids or [],
+                        "group_access_mode": group_access_mode,
                     }
                 },
             }
@@ -112,7 +120,64 @@ class FeishuAssistantTests(unittest.TestCase):
                 _payload(chat_type="group", message_id="om_denied_group", is_at_bot=True),
             )
         self.assertNotIn("ou_user", channel.sent[0][1]["text"])
-        self.assertIn("请私聊机器人", channel.sent[0][1]["text"])
+        self.assertIn("该群尚未被授权", channel.sent[0][1]["text"])
+
+    def test_group_acl_requires_allowed_chat_and_allowed_user_by_default(self) -> None:
+        config = {
+            "allowed_open_ids": ["ou_user"],
+            "allowed_chat_ids": ["oc_allowed"],
+            "group_access_mode": "allowed_users",
+        }
+        self.assertEqual(
+            feishu_assistant._authorization_error(
+                config, chat_type="group", chat_id="oc_other", open_id="ou_user"
+            ),
+            "chat_not_allowed",
+        )
+        self.assertEqual(
+            feishu_assistant._authorization_error(
+                config, chat_type="group", chat_id="oc_allowed", open_id="ou_other"
+            ),
+            "user_not_allowed",
+        )
+        self.assertEqual(
+            feishu_assistant._authorization_error(
+                config, chat_type="group", chat_id="oc_allowed", open_id="ou_user"
+            ),
+            "",
+        )
+
+    def test_group_acl_can_allow_all_members_without_affecting_private_chat(self) -> None:
+        config = {
+            "allowed_open_ids": ["ou_admin"],
+            "allowed_chat_ids": ["oc_allowed"],
+            "group_access_mode": "all_members",
+        }
+        self.assertEqual(
+            feishu_assistant._authorization_error(
+                config, chat_type="group", chat_id="oc_allowed", open_id="ou_member"
+            ),
+            "",
+        )
+        self.assertEqual(
+            feishu_assistant._authorization_error(
+                config, chat_type="p2p", chat_id="oc_private", open_id="ou_member"
+            ),
+            "user_not_allowed",
+        )
+
+    def test_group_message_is_recorded_as_recent_before_acl_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_config(root, [])
+            feishu_assistant._handle_message(
+                root,
+                "",
+                FakeChannel(),
+                _payload(chat_type="group", chat_id="oc_detected", message_id="om_detected", is_at_bot=True),
+            )
+            detected = json.loads((aha_home_path(root) / "feishu" / "recent_groups.json").read_text())
+        self.assertEqual(detected["groups"]["oc_detected"]["chat_id"], "oc_detected")
 
     def test_dedicated_run_is_created_with_english_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -279,6 +344,41 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(create.call_args.args[3]["backend"], "codex")
         self.assertEqual(binding["active_task_id"], "task-007")
         self.assertEqual(send.call_args.args[2]["task_id"], "task-007")
+
+    def test_allowed_group_all_members_routes_and_records_group_subscription(self) -> None:
+        task = {"id": "task-group", "status": "pending", "kind": "service_assistant"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._dedicated_run",
+            return_value="run-001",
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.run_exists",
+            return_value=True,
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.ensure_service_assistant_task",
+            return_value=task,
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send, mock.patch(
+            "aha_cli.services.feishu_assistant.set_subscription",
+        ) as subscribe:
+            root = Path(tmp)
+            _write_config(
+                root,
+                ["ou_admin"],
+                allowed_chat_ids=["oc_chat"],
+                group_access_mode="all_members",
+            )
+            channel = FakeChannel()
+            feishu_assistant._handle_message(
+                root,
+                "",
+                channel,
+                _payload(chat_type="group", open_id="ou_member", is_at_bot=True),
+            )
+
+        self.assertEqual(send.call_args.args[2]["task_id"], "task-group")
+        self.assertEqual(subscribe.call_args.kwargs["chat_type"], "group")
 
     def test_duplicate_message_is_not_sent_twice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

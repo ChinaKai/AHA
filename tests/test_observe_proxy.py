@@ -45,6 +45,8 @@ class ObserveProxyTests(unittest.TestCase):
                 "reasoning_effort": " high ",
                 "proxy_enabled": "true",
                 "allowed_open_ids": "ou_a, ou_b,ou_a",
+                "allowed_chat_ids": "oc_a\noc_b,oc_a",
+                "group_access_mode": "all_members",
                 "group_mentions_only": "false",
                 "security_mode": "invalid",
             }
@@ -56,6 +58,8 @@ class ObserveProxyTests(unittest.TestCase):
         self.assertEqual(config["reasoning_effort"], "high")
         self.assertTrue(config["proxy_enabled"])
         self.assertEqual(config["allowed_open_ids"], ["ou_a", "ou_b"])
+        self.assertEqual(config["allowed_chat_ids"], ["oc_a", "oc_b"])
+        self.assertEqual(config["group_access_mode"], "all_members")
         self.assertFalse(config["group_mentions_only"])
         self.assertEqual(config["security_mode"], "audit")
 

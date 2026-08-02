@@ -13,6 +13,7 @@ from aha_cli.services.feishu import (
     get_session_binding,
     make_session_key,
     mark_confirmation_card_updated,
+    record_recent_group,
     set_session_binding,
 )
 from aha_cli.services.feishu_audit import audit_feishu_channel
@@ -278,12 +279,27 @@ def _update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> N
     mark_confirmation_card_updated(root, str(confirmation.get("confirmation_id") or ""))
 
 
-def _allowed(config: dict, open_id: str) -> bool:
-    allowed = {str(item) for item in config.get("allowed_open_ids") or []}
-    return bool(open_id and open_id in allowed)
+def _authorization_error(config: dict, *, chat_type: str, chat_id: str, open_id: str) -> str:
+    allowed_users = {str(item) for item in config.get("allowed_open_ids") or []}
+    kind = str(chat_type or "").strip().lower()
+    if kind == "p2p":
+        return "" if open_id and open_id in allowed_users else "user_not_allowed"
+    if kind != "group":
+        return "unsupported_chat_type"
+    allowed_chats = {str(item) for item in config.get("allowed_chat_ids") or []}
+    if not chat_id or chat_id not in allowed_chats:
+        return "chat_not_allowed"
+    if str(config.get("group_access_mode") or "allowed_users") == "all_members":
+        return "" if open_id else "user_identity_missing"
+    return "" if open_id and open_id in allowed_users else "user_not_allowed"
 
 
-def _unauthorized_message(chat_type: str, open_id: str) -> str:
+def _unauthorized_message(chat_type: str, open_id: str, reason: str) -> str:
+    if str(chat_type or "").lower() != "p2p" and reason == "chat_not_allowed":
+        return (
+            "该群尚未被授权访问此 AHA。请管理员在 AHA 飞书助手页面的“最近检测群组”中加入该群，"
+            "或将 chat_id 添加到 allowed_chat_ids。"
+        )
     base = "你尚未被授权访问此 AHA。请管理员把你的 open_id 加入 integrations.feishu.allowed_open_ids。"
     if str(chat_type or "").lower() != "p2p":
         return f"{base}\n为避免在群聊公开用户标识，请私聊机器人发送任意消息获取你的 open_id。"
@@ -484,11 +500,6 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
     chat_id = str(payload.get("chat_id") or "")
     message_id = str(payload.get("message_id") or "")
     open_id = str(payload.get("open_id") or "")
-    config = feishu_config(root)
-    if not _allowed(config, open_id):
-        _audit_inbound_resolution(root, payload, "rejected", reason="unauthorized")
-        _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
-        return
     decision = {"confirm": "确认", "cancel": "取消"}.get(str(value.get("decision") or "").lower())
     if not decision:
         _audit_inbound_resolution(root, payload, "rejected", reason="invalid_decision")
@@ -496,6 +507,17 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
         return
     try:
         session_key, subscription = _confirmation_subscription(root, chat_id, open_id)
+        chat_type = str(subscription.get("chat_type") or ("group" if ":group:" in session_key else "p2p"))
+        authorization_error = _authorization_error(
+            feishu_config(root),
+            chat_type=chat_type,
+            chat_id=chat_id,
+            open_id=open_id,
+        )
+        if authorization_error:
+            _audit_inbound_resolution(root, payload, "rejected", reason=authorization_error, session_key=session_key)
+            _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
+            return
         confirmation = resolve_confirmation(
             root,
             open_id=open_id,
@@ -541,15 +563,25 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
     if payload.get("sender_is_bot"):
         _audit_inbound_resolution(root, payload, "ignored", reason="sender_is_bot")
         return
+    chat_type = str(payload.get("chat_type") or "").lower()
+    if chat_type == "group" and chat_id:
+        record_recent_group(root, chat_id)
     if payload.get("chat_type") != "p2p" and config.get("group_mentions_only") and not payload.get("is_at_bot"):
         _audit_inbound_resolution(root, payload, "ignored", reason="group_without_mention")
         return
     if not claim_inbound_message(root, message_id):
         _audit_inbound_resolution(root, payload, "ignored", reason="duplicate_message")
         return
-    if not _allowed(config, open_id):
-        _audit_inbound_resolution(root, payload, "rejected", reason="unauthorized")
-        _send_text(root, channel, chat_id, _unauthorized_message(str(payload.get("chat_type") or ""), open_id), reply_to=message_id)
+    authorization_error = _authorization_error(config, chat_type=chat_type, chat_id=chat_id, open_id=open_id)
+    if authorization_error:
+        _audit_inbound_resolution(root, payload, "rejected", reason=authorization_error)
+        _send_text(
+            root,
+            channel,
+            chat_id,
+            _unauthorized_message(chat_type, open_id, authorization_error),
+            reply_to=message_id,
+        )
         return
     text = str(payload.get("text") or "").strip()
     if not text:
@@ -566,7 +598,15 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         return
     task = _ensure_agent_task(root, run_id, session_key, open_id, binding)
     task_id = str(task.get("id") or "")
-    set_subscription(root, session_key, chat_id=chat_id, open_id=open_id, run_id=run_id, task_id=task_id)
+    set_subscription(
+        root,
+        session_key,
+        chat_id=chat_id,
+        open_id=open_id,
+        run_id=run_id,
+        task_id=task_id,
+        chat_type=chat_type,
+    )
     try:
         confirmation = resolve_confirmation(root, open_id=open_id, session_key=session_key, text=text)
     except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:

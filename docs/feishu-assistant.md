@@ -36,9 +36,14 @@ export AHA_FEISHU_APP_SECRET=xxx
 设置中的直接值优先于环境变量；直接值为空时才读取配置指定的环境变量名。打开
 Integrations → 飞书助手，启用接入并配置：
 
-- `Allowed open IDs`：允许访问 AHA 的飞书用户 `open_id`，逗号分隔；空列表拒绝所有用户。
-  未授权用户私聊机器人时，拒绝提示会回显本次检测到的 `open_id`，可直接复制到此字段；
-  群聊中不会公开该标识。
+- `Allowed open IDs`：允许访问 AHA 的飞书用户 `open_id`，逗号分隔。私聊始终校验此列表；
+  群聊采用“仅授权用户”策略时也会校验。未授权用户私聊机器人时，拒绝提示会回显本次检测到的
+  `open_id`，可直接复制到此字段；群聊中不会公开该标识。
+- `Allowed group chat IDs`：允许使用机器人的群 `chat_id`。群聊必须先命中此列表；空列表表示不开放群聊。
+  将机器人加入群并 `@` 一次后，群会出现在“最近检测群组”，点击“加入”并保存即可，不需要逐个添加
+  全部群成员的 `open_id`。
+- `Group member access`：默认“仅授权用户”，即群 `chat_id` 和发送者 `open_id` 都必须获授权；选择
+  “授权群内全部成员”后，该群任何成员均可使用助手，但私聊仍只接受 `Allowed open IDs` 中的用户。
 - `Only handle group @mentions`：建议保持开启，群聊只响应 `@机器人`。
 - `Push task status changes`：在任意 run 的 task 状态改变时，向已建立的飞书会话推送 run/task、新旧状态和变更来源。进入 `busy` 显示用户触发消息，离开 `busy` 显示 agent 最后回复，系统迁移显示事件原因。关闭后仍会送达飞书助手对话的直接回复。
 
@@ -90,7 +95,8 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
   飞书管家开放。需要项目分析或代码修改时，管家应创建普通项目 Task 或向已有 Task 发消息，
   不在 AHA Home 中直接完成项目工作。
 - 入站 `message_id` 做 24 小时幂等；单聊按企业与用户隔离，群聊按企业与群隔离，并默认只处理
-  `@机器人` 的消息。
+  `@机器人` 的消息。最近检测到的群只作为本地管理页候选，不会自动获得访问权限；记录保存在
+  `AHA_HOME/feishu/recent_groups.json`（`0600`），Channel 审计仍只保存 chat ID 哈希。
 - 会话绑定与回复订阅保存在 AHA home 的 `feishu/` 私有目录。消息送达 agent 后，AHA 自动订阅该
   task，把 agent 回复推回原飞书会话。
 - 管家通过 `send_task_message` 把需求派发给普通 Task 后，会持久记录原飞书会话与目标 run/task 的 handoff。
@@ -130,7 +136,8 @@ Tailscale Funnel，也不要把 `8766` 直接监听到公网网卡。
 新配置默认隐藏并停用微信入口、keepalive 和微信通知，但不会删除旧微信登录状态。
 首版飞书接入采用单进程本地队列；AHA 重启期间不会接收长连接消息，发送失败会记录为
 run event，但暂不提供持久化重试队列。生产使用时还应在飞书后台限制应用可用范围，
-定期轮换 App Secret，并保持 `allowed_open_ids` 为最小授权集合。
+定期轮换 App Secret，并保持 `allowed_open_ids`、`allowed_chat_ids` 为最小授权集合。若无明确需求，群成员
+策略保持 `allowed_users`，避免授权群中的任意成员获得 AHA 管理能力。
 
 飞书官方资料：
 

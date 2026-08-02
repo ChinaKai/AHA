@@ -7,8 +7,17 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task, normalize_feishu_integration_config, utc_now
-from aha_cli.services.feishu import mark_confirmation_card_updated, pending_confirmation_card_updates
+from aha_cli.domain.models import (
+    is_service_assistant_run,
+    is_service_assistant_task,
+    normalize_feishu_integration_config,
+    utc_now,
+)
+from aha_cli.services.feishu import (
+    mark_confirmation_card_updated,
+    pending_confirmation_card_updates,
+    recent_groups,
+)
 from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
@@ -186,6 +195,10 @@ def feishu_status(root: Path) -> dict:
         "env_groups": _feishu_env_groups(global_config),
         "allowed_open_ids": list(config.get("allowed_open_ids") or []),
         "allowed_open_id_count": len(config.get("allowed_open_ids") or []),
+        "allowed_chat_ids": list(config.get("allowed_chat_ids") or []),
+        "allowed_chat_id_count": len(config.get("allowed_chat_ids") or []),
+        "group_access_mode": str(config.get("group_access_mode") or "allowed_users"),
+        "recent_groups": recent_groups(root),
         "group_mentions_only": bool(config.get("group_mentions_only")),
         "notifications_enabled": bool(config.get("notifications_enabled")),
         "security_mode": config.get("security_mode"),
@@ -222,6 +235,8 @@ def update_feishu_settings(root: Path, payload: dict) -> dict:
             "reasoning_effort",
             "proxy_enabled",
             "allowed_open_ids",
+            "allowed_chat_ids",
+            "group_access_mode",
             "group_mentions_only",
             "notifications_enabled",
             "security_mode",

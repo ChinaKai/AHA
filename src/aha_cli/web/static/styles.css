@@ -1025,6 +1025,37 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   border-radius: 8px;
   background: #fff;
 }
+.feishu-recent-groups {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+.feishu-recent-groups > strong {
+  color: #344054;
+  font-size: 12px;
+}
+.feishu-recent-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fff;
+}
+.feishu-recent-group > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.feishu-recent-group code {
+  overflow-wrap: anywhere;
+}
+.feishu-recent-group small {
+  color: #667085;
+  font-size: 11px;
+}
 .feishu-console-settings-actions {
   display: flex;
   align-items: center;

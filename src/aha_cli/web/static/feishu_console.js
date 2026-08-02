@@ -155,6 +155,20 @@
       const runtimeState = connectionState();
       const runtimeError = String(runtime.error || "");
       const allowedOpenIds = Array.isArray(status.allowed_open_ids) ? status.allowed_open_ids : [];
+      const allowedChatIds = Array.isArray(status.allowed_chat_ids) ? status.allowed_chat_ids : [];
+      const allowedChatSet = new Set(allowedChatIds.map(value => String(value)));
+      const recentGroups = Array.isArray(status.recent_groups) ? status.recent_groups : [];
+      const recentGroupsHtml = recentGroups.length
+        ? recentGroups.map(group => {
+            const chatId = String(group?.chat_id || "");
+            const added = allowedChatSet.has(chatId);
+            return `
+              <div class="feishu-recent-group">
+                <div><code>${escapeHtml(chatId)}</code><small>${escapeHtml(String(group?.last_seen_at || ""))}</small></div>
+                <button type="button" data-feishu-action="add-group" data-feishu-chat-id="${escapeHtml(chatId)}" ${added ? "disabled" : ""}>${escapeHtml(added ? t("feishu.group_added", "Added") : t("feishu.add_group", "Add"))}</button>
+              </div>`;
+          }).join("")
+        : `<p class="feishu-console-section-help">${escapeHtml(t("feishu.recent_groups_empty", "No groups detected yet. Add the bot to a group, @ it once, then refresh."))}</p>`;
       const secretPlaceholder = status.app_secret_configured
         ? t("feishu.secret_configured", "Configured; leave blank to keep")
         : "";
@@ -180,6 +194,7 @@
             ${metric(t("feishu.configured", "Credentials configured"), yesNo(Boolean(status.configured)))}
             ${metric(t("feishu.sdk_installed", "Channel SDK installed"), yesNo(Boolean(status.sdk_installed)))}
             ${metric(t("feishu.allowed_users", "Allowed users"), String(status.allowed_open_id_count ?? 0))}
+            ${metric(t("feishu.allowed_groups", "Allowed groups"), String(status.allowed_chat_id_count ?? 0))}
             ${metric(t("feishu.agent_runtime", "Agent default"), `${status.effective_backend || "codex"} / ${status.effective_model || "default"} / ${status.effective_reasoning_effort || "default"} / proxy ${status.effective_proxy_enabled ? "on" : "off"}`, { code: true })}
             ${metric(t("feishu.assistant_identity", "Assistant identity"), t("feishu.assistant_identity_value", "AHA service steward"))}
             ${metric(t("feishu.assistant_workspace", "Assistant workspace"), assistant.workspace_path || "-", { code: true })}
@@ -254,8 +269,28 @@
               <label class="field-label">
                 <span>${escapeHtml(t("feishu.allowed_open_ids", "Allowed open_id values"))}</span>
                 <input name="allowed_open_ids" placeholder="ou_xxx, ou_yyy" value="${escapeHtml(allowedOpenIds.join(", "))}">
-                <div class="field-help">${escapeHtml(t("feishu.allowed_open_ids_hint", "Empty means nobody can use the Feishu assistant."))}</div>
+                <div class="field-help">${escapeHtml(t("feishu.allowed_open_ids_hint", "Required for private chats and for groups using the allowed-users policy."))}</div>
               </label>
+              <div class="feishu-console-settings-grid">
+                <label class="field-label">
+                  <span>${escapeHtml(t("feishu.allowed_chat_ids", "Allowed group chat_id values"))}</span>
+                  <textarea name="allowed_chat_ids" rows="3" placeholder="oc_xxx, oc_yyy">${escapeHtml(allowedChatIds.join(", "))}</textarea>
+                  <div class="field-help">${escapeHtml(t("feishu.allowed_chat_ids_hint", "A group must be listed here before the assistant responds in it."))}</div>
+                </label>
+                <label class="field-label">
+                  <span>${escapeHtml(t("feishu.group_access_mode", "Group member access"))}</span>
+                  <select name="group_access_mode">
+                    <option value="allowed_users" ${status.group_access_mode !== "all_members" ? "selected" : ""}>${escapeHtml(t("feishu.group_access_allowed_users", "Allowed users only (recommended)"))}</option>
+                    <option value="all_members" ${status.group_access_mode === "all_members" ? "selected" : ""}>${escapeHtml(t("feishu.group_access_all_members", "All members of allowed groups"))}</option>
+                  </select>
+                  <div class="field-help">${escapeHtml(t("feishu.group_access_mode_hint", "All members lets anyone in an allowed group use the AHA assistant; private chats still require an allowed open_id."))}</div>
+                </label>
+              </div>
+              <div class="feishu-recent-groups">
+                <strong>${escapeHtml(t("feishu.recent_groups", "Recently detected groups"))}</strong>
+                <p class="feishu-console-section-help">${escapeHtml(t("feishu.recent_groups_hint", "Detection does not grant access. Add a group here, then save settings."))}</p>
+                ${recentGroupsHtml}
+              </div>
               <div class="feishu-console-toggle-list">
                 <label class="checkbox-line">
                   <input name="group_mentions_only" type="checkbox" ${status.group_mentions_only ? "checked" : ""}>
@@ -270,7 +305,7 @@
             </fieldset>
             <div class="feishu-console-settings-actions">
               <button type="submit" ${loading || savingSettings ? "disabled" : ""}>${escapeHtml(savingSettings ? t("feishu.saving", "Saving...") : t("common.save", "Save"))}</button>
-              <small>${escapeHtml(t("feishu.restart_hint", "Credential, connection, or access changes take effect after restarting the AHA Web service."))}</small>
+              <small>${escapeHtml(t("feishu.restart_hint", "Restart for credential or connection changes; access and delivery changes apply to subsequent messages."))}</small>
             </div>
           </form>
         </section>
@@ -323,6 +358,8 @@
         reasoning_effort: String(field("reasoning_effort")?.value || "").trim(),
         proxy_enabled: Boolean(field("proxy_enabled")?.checked),
         allowed_open_ids: String(field("allowed_open_ids")?.value || "").split(",").map(item => item.trim()).filter(Boolean),
+        allowed_chat_ids: String(field("allowed_chat_ids")?.value || "").replaceAll("\n", ",").split(",").map(item => item.trim()).filter(Boolean),
+        group_access_mode: String(field("group_access_mode")?.value || "allowed_users"),
         group_mentions_only: Boolean(field("group_mentions_only")?.checked),
         notifications_enabled: Boolean(field("notifications_enabled")?.checked),
         security_mode: String(field("security_mode")?.value || "audit")
@@ -380,6 +417,18 @@
       const action = target?.closest("[data-feishu-action]")?.getAttribute("data-feishu-action") || "";
       if (action === "close") setOpen(false);
       if (action === "refresh") void loadStatus();
+      if (action === "add-group") {
+        const button = target?.closest('[data-feishu-action="add-group"]');
+        const chatId = String(button?.getAttribute("data-feishu-chat-id") || "").trim();
+        const input = button?.closest("form")?.querySelector('[name="allowed_chat_ids"]');
+        if (chatId && input instanceof HTMLTextAreaElement) {
+          const values = input.value.replaceAll("\n", ",").split(",").map(item => item.trim()).filter(Boolean);
+          if (!values.includes(chatId)) values.push(chatId);
+          input.value = values.join(", ");
+          button.disabled = true;
+          button.textContent = t("feishu.group_added", "Added");
+        }
+      }
     });
     elements.feishuConsolePopoverEl?.addEventListener("submit", event => {
       const form = event.target instanceof HTMLFormElement ? event.target : null;

@@ -209,6 +209,8 @@ def _settings_summary(root: Path) -> dict:
             "group_mentions_only": status.get("group_mentions_only"),
             "security_mode": status.get("security_mode"),
             "allowed_open_id_count": status.get("allowed_open_id_count"),
+            "allowed_chat_id_count": status.get("allowed_chat_id_count"),
+            "group_access_mode": status.get("group_access_mode"),
         },
     }
 

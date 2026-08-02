@@ -123,6 +123,8 @@ def default_feishu_integration_config() -> dict:
         "reasoning_effort": "",
         "proxy_enabled": None,
         "allowed_open_ids": [],
+        "allowed_chat_ids": [],
+        "group_access_mode": "allowed_users",
         "group_mentions_only": True,
         "notifications_enabled": True,
         "security_mode": "audit",
@@ -320,11 +322,18 @@ def normalize_feishu_integration_config(value: object | None = None) -> dict:
             config[key] = str(raw.get(key) or "").strip()
     if "proxy_enabled" in raw and raw.get("proxy_enabled") is not None:
         config["proxy_enabled"] = normalize_bool(raw.get("proxy_enabled"))
-    allowed = raw.get("allowed_open_ids")
-    if isinstance(allowed, str):
-        allowed = [item.strip() for item in allowed.split(",")]
-    if isinstance(allowed, list):
-        config["allowed_open_ids"] = list(dict.fromkeys(str(item or "").strip() for item in allowed if str(item or "").strip()))
+    for key in ("allowed_open_ids", "allowed_chat_ids"):
+        allowed = raw.get(key)
+        if isinstance(allowed, str):
+            allowed = [item.strip() for item in allowed.replace("\n", ",").split(",")]
+        if isinstance(allowed, list):
+            config[key] = list(
+                dict.fromkeys(str(item or "").strip() for item in allowed if str(item or "").strip())
+            )
+    group_access_mode = str(raw.get("group_access_mode") or config["group_access_mode"]).strip().lower()
+    config["group_access_mode"] = (
+        group_access_mode if group_access_mode in {"allowed_users", "all_members"} else "allowed_users"
+    )
     security_mode = str(raw.get("security_mode") or config["security_mode"]).strip().lower()
     config["security_mode"] = security_mode if security_mode in {"compat", "audit", "strict"} else "audit"
     return config

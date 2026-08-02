@@ -167,6 +167,8 @@ class FeishuRuntimeTests(unittest.TestCase):
                     "reasoning_effort": "high",
                     "proxy_enabled": True,
                     "allowed_open_ids": "ou_a, ou_b, ou_a",
+                    "allowed_chat_ids": "oc_a, oc_b, oc_a",
+                    "group_access_mode": "all_members",
                     "group_mentions_only": False,
                     "notifications_enabled": False,
                     "security_mode": "strict",
@@ -177,6 +179,9 @@ class FeishuRuntimeTests(unittest.TestCase):
 
         self.assertTrue(status["enabled"])
         self.assertEqual(status["allowed_open_ids"], ["ou_a", "ou_b"])
+        self.assertEqual(status["allowed_chat_ids"], ["oc_a", "oc_b"])
+        self.assertEqual(status["allowed_chat_id_count"], 2)
+        self.assertEqual(status["group_access_mode"], "all_members")
         self.assertEqual(saved["integrations"]["feishu"]["app_secret"], "stored-secret")
         self.assertEqual(saved["integrations"]["feishu"]["app_id"], "cli_new")
         self.assertEqual(status["effective_backend"], "claude")
@@ -189,6 +194,17 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertTrue(saved["integrations"]["feishu"]["proxy_enabled"])
         self.assertNotIn("ignored", saved["integrations"]["feishu"])
         self.assertEqual(saved["integrations"]["custom"], {"keep": True})
+
+    def test_status_exposes_recent_groups_for_authenticated_settings_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            from aha_cli.services.feishu import record_recent_group
+
+            record_recent_group(root, "oc_old", seen_at="2026-08-01T00:00:00Z")
+            record_recent_group(root, "oc_new", seen_at="2026-08-02T00:00:00Z")
+            status = feishu_status(root)
+
+        self.assertEqual([item["chat_id"] for item in status["recent_groups"]], ["oc_new", "oc_old"])
 
     def test_system_route_updates_all_feishu_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
