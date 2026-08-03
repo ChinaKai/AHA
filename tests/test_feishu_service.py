@@ -259,6 +259,28 @@ class FeishuServiceTests(unittest.TestCase):
                     now=104,
                 )
 
+    def test_action_token_default_ttl_is_24_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token = feishu.issue_action_token(
+                root,
+                open_id="ou_user",
+                session_key="session",
+                action="select_task",
+                now=100,
+            )
+
+            context = feishu.consume_action_token(
+                root,
+                token,
+                open_id="ou_user",
+                session_key="session",
+                action="select_task",
+                now=100 + (24 * 60 * 60) - 1,
+            )
+
+        self.assertEqual(context, {})
+
     def test_action_token_expires(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

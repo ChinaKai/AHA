@@ -24,7 +24,7 @@ API_TIMEOUT_SECONDS = 15
 TOKEN_REFRESH_SKEW_SECONDS = 60
 INBOUND_DEDUPE_TTL_SECONDS = 24 * 60 * 60
 INBOUND_DEDUPE_MAX_ENTRIES = 4096
-ACTION_TOKEN_TTL_SECONDS = 5 * 60
+ACTION_TOKEN_TTL_SECONDS = 24 * 60 * 60
 ACTION_TOKEN_MAX_ENTRIES = 1024
 RECENT_GROUP_MAX_ENTRIES = 100
 
@@ -479,7 +479,7 @@ def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict
         "confirmed": ("操作已确认", "green", "已确认并提交 AHA 执行。"),
         "selected": ("已选择方案", "green", "已收到选择，AHA 助手将继续处理。"),
         "cancelled": ("操作已取消", "grey", "已取消，本操作不会执行。"),
-        "expired": ("确认已失效", "grey", "已超过 5 分钟有效期，请重新发起操作。"),
+        "expired": ("确认已失效", "grey", "已超过 24 小时有效期，请重新发起操作。"),
         "stale": ("确认已失效", "grey", "目标状态已变化，请重新发起操作。"),
         "failed": ("操作执行失败", "red", "执行失败，请检查结果后重试。"),
     }

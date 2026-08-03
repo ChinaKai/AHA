@@ -875,7 +875,7 @@ def _confirmation_card(preview: str) -> dict:
                         },
                     ],
                 },
-                {"tag": "markdown", "content": "<font color='grey'>5 分钟内有效，仅原用户在当前会话可操作一次。</font>"},
+                {"tag": "markdown", "content": "<font color='grey'>24 小时内有效，仅原用户在当前会话可操作一次。</font>"},
             ]
         },
     }
@@ -936,7 +936,7 @@ def _choice_card(prompt: str, options: list[dict]) -> dict:
             ],
         }
     )
-    elements.append({"tag": "markdown", "content": "<font color='grey'>5 分钟内有效，仅原用户在当前会话可选择一次。</font>"})
+    elements.append({"tag": "markdown", "content": "<font color='grey'>24 小时内有效，仅原用户在当前会话可选择一次。</font>"})
     return {
         "schema": "2.0",
         "header": {
@@ -1050,7 +1050,7 @@ def prepare_service_assistant_action(root: Path, run_id: str, task: dict, action
                     str(normalized.get("prompt") or "请选择："),
                     "",
                     "请点击飞书卡片中的选项。裸文本选择不会绑定到这张卡片，避免误选其他上下文。",
-                    "该选择 5 分钟内有效，仅原用户在当前会话可使用一次。",
+                    "该选择 24 小时内有效，仅原用户在当前会话可使用一次。",
                 ]
             ),
         }
@@ -1126,7 +1126,7 @@ def prepare_service_assistant_action(root: Path, run_id: str, task: dict, action
                     _preview(operation, normalized),
                     "",
                     "请点击飞书卡片中的“确认”或“取消”。裸文本“确认/取消”不会执行操作，避免误确认其他上下文。",
-                    "该确认 5 分钟内有效，仅原用户在当前会话可使用一次。",
+                    "该确认 24 小时内有效，仅原用户在当前会话可使用一次。",
                 ]
             ),
         }
