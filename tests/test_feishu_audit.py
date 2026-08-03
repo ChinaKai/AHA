@@ -5,11 +5,31 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 from aha_cli.services.feishu_audit import audit_feishu_channel, feishu_audit_path
 
 
 class FeishuAuditTests(unittest.TestCase):
+    def test_audit_log_succeeds_when_fchmod_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_audit.os.fchmod",
+            None,
+        ):
+            root = Path(tmp)
+            written = audit_feishu_channel(
+                root,
+                direction="system",
+                kind="connection",
+                status="connecting",
+                transport="channel_ws",
+            )
+            records = feishu_audit_path(root).read_text(encoding="utf-8").splitlines()
+
+        self.assertTrue(written)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(json.loads(records[0])["status"], "connecting")
+
     def test_audit_log_is_private_hashed_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

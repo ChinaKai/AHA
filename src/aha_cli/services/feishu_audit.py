@@ -66,10 +66,12 @@ def _append_private_jsonl(path: Path, payload: dict[str, Any]) -> None:
         pass
     descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
     try:
-        try:
-            os.fchmod(descriptor, 0o600)
-        except OSError:
-            pass
+        fchmod = getattr(os, "fchmod", None)
+        if callable(fchmod):
+            try:
+                fchmod(descriptor, 0o600)
+            except OSError:
+                pass
         with os.fdopen(descriptor, "ab", closefd=False) as output, exclusive_lock(output):
             raw = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
             output.write(raw)
