@@ -18,6 +18,7 @@ from aha_cli.services.chat_supervision import (
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.context_planner import context_pack_payload_for_turn
 from aha_cli.services.feishu_group_handoffs import active_group_handoffs_for_digital_task
+from aha_cli.services.feishu_group_sources import feishu_group_source_index_context
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.browser_control import browser_control_context_for_prompt
 from aha_cli.services.task_skills import task_skills_context_for_prompt
@@ -410,6 +411,7 @@ def _feishu_group_context_for_prompt(root: Path, run_id: str, task: dict | None)
         [
             render_prompt_template("feishu_group_digital_human_identity.md").rstrip(),
             render_prompt_template("feishu_group_digital_human_action_contract.md").rstrip(),
+            feishu_group_source_index_context(root, run_id, task),
             _feishu_group_active_handoffs_context(root, run_id, task),
         ]
     )

@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.domain.models import is_feishu_group_run, is_feishu_group_task
+from aha_cli.services.chat import chat_prompt
 from aha_cli.services.feishu_group import (
     FEISHU_GROUP_HANDOFF_ACK,
     archive_inactive_feishu_group_tasks,
@@ -25,7 +26,9 @@ from aha_cli.services.feishu_group_handoffs import (
 from aha_cli.services.feishu_notifications import load_subscription_state
 from aha_cli.services.feishu_owner import remember_owner_private_chat
 from aha_cli.services.orchestrator import execute_actions
+from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_message
+from aha_cli.store.knowledge import write_entry
 from aha_cli.store.paths import aha_home_path
 from aha_cli.store.runs import require_plan
 
@@ -47,6 +50,81 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertEqual(task["preferred_approval"], "never")
         self.assertEqual(task["collaboration_mode"], "solo")
         self.assertEqual(task["max_sub_agents"], 0)
+
+    def test_group_digital_human_prompt_includes_source_index_without_file_bodies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace-roots"
+            project = workspace_root / "demo-project"
+            (project / "docs").mkdir(parents=True)
+            (project / "README.md").write_text("README BODY SHOULD NOT BE IN PROMPT\n", encoding="utf-8")
+            (project / "docs" / "guide.md").write_text("GUIDE BODY SHOULD NOT BE IN PROMPT\n", encoding="utf-8")
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "workspace_roots": [str(workspace_root)],
+                        "knowledge": {"enabled": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(root)
+            write_entry(
+                root,
+                config=config,
+                scope="general",
+                kind="wiki",
+                title="Digital Human FAQ",
+                body="KB BODY SHOULD NOT BE IN PROMPT",
+            )
+            run_id = ensure_feishu_group_run(root, {"backend": "stub"})
+            session_key = "tenant-1:feishu-group-user:ou_requester"
+            task = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
+            append_message(
+                root,
+                run_id,
+                "main",
+                "飞书群聊 @ 数字人请求\n\n当前 @ 消息：\n上一轮问过 pipeline",
+                sender="feishu",
+                task_id=task["id"],
+                role="main",
+                feishu_channel="group_digital_human",
+                feishu_chat_id="oc_group",
+                feishu_reply_to="om_group_1",
+                feishu_mention_open_id="ou_requester",
+                feishu_tenant_key="tenant-1",
+                feishu_chat_type="group",
+                feishu_message_id="om_group_1",
+                feishu_session_key=session_key,
+                feishu_original_text="上一轮问过 pipeline",
+            )
+
+            prompt = chat_prompt(
+                root,
+                run_id,
+                "main",
+                {
+                    "sender": "feishu",
+                    "message": "飞书群聊 @ 数字人请求\n\n当前 @ 消息：\n现在能回答吗",
+                    "task_id": task["id"],
+                    "role": "main",
+                },
+                "",
+            )
+
+        self.assertIn("Digital-human information source index", prompt)
+        self.assertIn("AHA Knowledge Base index", prompt)
+        self.assertIn("Digital Human FAQ", prompt)
+        self.assertIn("Workspace source index", prompt)
+        self.assertIn(str(project), prompt)
+        self.assertIn("README.md", prompt)
+        self.assertIn("docs/", prompt)
+        self.assertIn("Recent group @ context", prompt)
+        self.assertIn("上一轮问过 pipeline", prompt)
+        self.assertNotIn("KB BODY SHOULD NOT BE IN PROMPT", prompt)
+        self.assertNotIn("README BODY SHOULD NOT BE IN PROMPT", prompt)
+        self.assertNotIn("GUIDE BODY SHOULD NOT BE IN PROMPT", prompt)
 
     def test_group_handoff_action_forwards_to_service_steward_and_returns_fixed_ack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
