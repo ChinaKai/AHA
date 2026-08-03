@@ -12,11 +12,18 @@ from aha_cli.services import feishu_notifications
 from aha_cli.services.feishu_notifications import notification_message_for_event, notify_event, set_subscription
 from aha_cli.locking import exclusive_lock
 from aha_cli.services.service_assistant_handoffs import register_service_handoff, service_handoffs_path
+from aha_cli.services.feishu_group_handoffs import feishu_group_handoffs_path, register_group_handoff
 from aha_cli.store.io import append_jsonl
 from aha_cli.store.paths import event_path, plan_path
 
 
-def _setup(root: Path, *, notifications_enabled: bool = True) -> str:
+def _setup(
+    root: Path,
+    *,
+    notifications_enabled: bool = True,
+    app_id: str = "tenant",
+    owner_open_id: str = "ou-user",
+) -> str:
     run_id = "run-a"
     (root / "config.json").write_text(
         json.dumps(
@@ -24,6 +31,8 @@ def _setup(root: Path, *, notifications_enabled: bool = True) -> str:
                 "integrations": {
                     "feishu": {
                         "enabled": True,
+                        "app_id": app_id,
+                        "owner_open_id": owner_open_id,
                         "notifications_enabled": notifications_enabled,
                     }
                 }
@@ -287,6 +296,92 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertIn("status: pending->failed", message)
         self.assertIn("message: backend launch failed", message)
 
+    def test_system_managed_run_status_change_is_not_pushed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-1"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            plan_path(root, run_id).write_text(
+                json.dumps(
+                    {
+                        "goal": "Feishu Group",
+                        "kind": "system",
+                        "system_managed": True,
+                        "system_purpose": "feishu_group",
+                        "tasks": [{"id": "task-001", "title": "Digital human"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-chat",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            event = {
+                "event_id": 31,
+                "type": "task_status_changed",
+                "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+            }
+
+            message = notification_message_for_event(root, run_id, event)
+            result = notify_event(root, run_id, event)
+
+        self.assertEqual(message, "")
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "ignored_event")
+        send.assert_not_called()
+
+    def test_system_managed_task_status_change_is_not_pushed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-1"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            plan_path(root, run_id).write_text(
+                json.dumps(
+                    {
+                        "goal": "Run A",
+                        "tasks": [
+                            {
+                                "id": "task-001",
+                                "title": "Internal task",
+                                "kind": "internal_system",
+                                "system_managed": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-chat",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            event = {
+                "event_id": 32,
+                "type": "task_status_changed",
+                "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+            }
+
+            message = notification_message_for_event(root, run_id, event)
+            result = notify_event(root, run_id, event)
+
+        self.assertEqual(message, "")
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "ignored_event")
+        send.assert_not_called()
+
     def test_status_events_without_event_ids_use_distinct_delivery_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",
@@ -340,6 +435,39 @@ class FeishuNotificationTests(unittest.TestCase):
 
             self.assertEqual(notification_message_for_event(root, run_id, event), "agent reply")
             self.assertEqual(notification_message_for_event(root, run_id, status_event), "")
+
+    def test_direct_feishu_metadata_reply_targets_original_group_message_and_mentions_sender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-direct"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            event = {
+                "event_id": 10,
+                "type": "message",
+                "data": {
+                    "task_id": "task-001",
+                    "sender": "main",
+                    "target": "feishu",
+                    "message": "可以公开回答",
+                    "feishu_chat_id": "oc-group",
+                    "feishu_chat_type": "group",
+                    "feishu_reply_to": "om-question",
+                    "feishu_mention_open_id": "ou-user",
+                },
+            }
+
+            result = notify_event(root, run_id, event)
+
+        self.assertTrue(result["sent"])
+        send.assert_called_once_with(
+            root,
+            "oc-group",
+            '<at user_id="ou-user"></at> 可以公开回答',
+            card=None,
+            opts={"reply_to": "om-question"},
+        )
 
     def test_service_confirmation_reply_sends_interactive_card(self) -> None:
         card = {
@@ -450,7 +578,46 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertFalse(status_result["sent"])
         self.assertEqual(send.call_count, 1)
 
-    def test_status_push_is_run_wide_not_limited_to_assistant_task(self) -> None:
+    def test_steward_reply_to_digital_human_does_not_auto_reply_to_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-group-closed"},
+        ) as send:
+            root = Path(tmp)
+            _setup(root, notifications_enabled=True)
+            register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou-user",
+                group_chat_id="oc-origin",
+                group_message_id="om-question",
+                open_id="ou-user",
+                owner_open_id="ou-owner",
+                owner_chat_id="oc-owner",
+                steward_run_id="run-steward",
+                steward_task_id="task-steward",
+                request_message="请帮我安排发布",
+            )
+            event = {
+                "event_id": 22,
+                "type": "message",
+                "data": {
+                    "task_id": "task-steward",
+                    "sender": "main",
+                    "target": "feishu-digital-human",
+                    "message": "已收到，稍后同步发布安排。",
+                },
+            }
+
+            result = notify_event(root, "run-steward", event)
+            stored = json.loads(feishu_group_handoffs_path(root).read_text(encoding="utf-8"))["handoffs"]
+
+        self.assertEqual(result["reason"], "ignored_event")
+        send.assert_not_called()
+        self.assertEqual(next(iter(stored.values()))["status"], "pending")
+
+    def test_owner_status_push_is_run_wide_not_limited_to_assistant_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",
             return_value={"message_id": "om-1"},
@@ -477,7 +644,7 @@ class FeishuNotificationTests(unittest.TestCase):
         send.assert_called_once()
         self.assertIn("run-a task-001", send.call_args.args[2])
 
-    def test_status_push_reaches_subscriber_from_another_run(self) -> None:
+    def test_owner_status_push_reaches_subscriber_from_another_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",
             return_value={"message_id": "om-1"},
@@ -503,6 +670,90 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertTrue(result["sent"])
         send.assert_called_once()
         self.assertIn("run-b task-002", send.call_args.args[2])
+
+    def test_status_push_ignores_subscriptions_from_other_feishu_app(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-1"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, app_id="cli-current", owner_open_id="ou-current")
+            set_subscription(
+                root,
+                "cli-old:p2p:user",
+                chat_id="oc-old",
+                open_id="ou-old",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            set_subscription(
+                root,
+                "cli-current:p2p:user",
+                chat_id="oc-current",
+                open_id="ou-current",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            event = {
+                "event_id": 51,
+                "type": "task_status_changed",
+                "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+            }
+
+            result = notify_event(root, run_id, event)
+
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["sent_count"], 1)
+        self.assertEqual(result["skipped_tenant_count"], 1)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[1], "oc-current")
+
+    def test_status_push_skips_group_subscriptions_and_sends_only_to_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-owner"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, app_id="cli-current", owner_open_id="ou-owner")
+            set_subscription(
+                root,
+                "cli-current:group:oc-group",
+                chat_id="oc-group",
+                open_id="ou-member",
+                run_id=run_id,
+                task_id="task-group",
+                chat_type="group",
+            )
+            set_subscription(
+                root,
+                "cli-current:p2p:ou-other",
+                chat_id="oc-other",
+                open_id="ou-other",
+                run_id=run_id,
+                task_id="task-other",
+            )
+            set_subscription(
+                root,
+                "cli-current:p2p:ou-owner",
+                chat_id="oc-owner",
+                open_id="ou-owner",
+                run_id=run_id,
+                task_id="task-owner",
+            )
+            event = {
+                "event_id": 52,
+                "type": "task_status_changed",
+                "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+            }
+
+            result = notify_event(root, run_id, event)
+
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["sent_count"], 1)
+        self.assertEqual(result["skipped_group_count"], 1)
+        self.assertEqual(result["skipped_owner_count"], 1)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[1], "oc-owner")
 
     def test_global_status_push_deduplicates_same_chat_across_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

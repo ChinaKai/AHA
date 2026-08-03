@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 import re
 
-from aha_cli.domain.models import is_service_assistant_task, normalize_task_token_saving
+from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, normalize_task_token_saving
 from aha_cli.services.chat_supervision import (
     agents_visible_to_prompt,
     is_task_supervision_host_agent,
@@ -17,6 +17,7 @@ from aha_cli.services.chat_supervision import (
 )
 from aha_cli.services.commit_policy import commit_message_policy_prompt
 from aha_cli.services.context_planner import context_pack_payload_for_turn
+from aha_cli.services.feishu_group_handoffs import active_group_handoffs_for_digital_task
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.browser_control import browser_control_context_for_prompt
 from aha_cli.services.task_skills import task_skills_context_for_prompt
@@ -371,6 +372,49 @@ def _service_assistant_context_for_prompt(root: Path, task: dict | None) -> str:
     )
 
 
+def _feishu_group_active_handoffs_context(root: Path, run_id: str, task: dict | None) -> str:
+    if not is_feishu_group_task(task):
+        return ""
+    try:
+        handoffs = active_group_handoffs_for_digital_task(root, run_id, str(task.get("id") or ""), limit=8)
+    except (Exception, SystemExit):
+        handoffs = []
+    if not handoffs:
+        return "Active group handoff threads for this digital-human user: (none)"
+    lines = [
+        "Active group handoff threads for this digital-human user:",
+        "- These ids are internal. Use one only as `merge_handoff_id` in `feishu_group_handoff`; never reveal ids publicly.",
+        "- Reuse an active thread when the current @ message is a supplement, follow-up, reminder, continuation, or requested output for the same need.",
+        "- Set `new_handoff` to true only when the current @ message is clearly an independent new need.",
+    ]
+    for index, handoff in enumerate(handoffs, start=1):
+        preview = " ".join(str(handoff.get("request_preview") or "").split())
+        if len(preview) > 240:
+            preview = preview[:239].rstrip() + "..."
+        lines.append(
+            f"{index}. id={handoff.get('id') or '-'} "
+            f"group={handoff.get('group_chat_id') or '-'} "
+            f"created={handoff.get('created_at') or '-'} "
+            f"updated={handoff.get('updated_at') or handoff.get('created_at') or '-'} "
+            f"status={handoff.get('status') or '-'} "
+            f"merged_count={handoff.get('merged_count') or 0} "
+            f"request={preview or '-'}"
+        )
+    return "\n".join(lines)
+
+
+def _feishu_group_context_for_prompt(root: Path, run_id: str, task: dict | None) -> str:
+    if not is_feishu_group_task(task):
+        return ""
+    return "\n\n".join(
+        [
+            render_prompt_template("feishu_group_digital_human_identity.md").rstrip(),
+            render_prompt_template("feishu_group_digital_human_action_contract.md").rstrip(),
+            _feishu_group_active_handoffs_context(root, run_id, task),
+        ]
+    )
+
+
 def _attachment_output_guidance_for_prompt(root: Path, run_id: str) -> str:
     return render_prompt_template(
         "backend_attachment_output_guidance.md",
@@ -478,6 +522,7 @@ def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, 
         "task_skills": _context_fingerprint(skills_context),
         "knowledge_enabled": "enabled" if _knowledge_enabled_for_prompt(root) else "disabled",
         "service_assistant": _context_fingerprint(_service_assistant_context_for_prompt(root, task)),
+        "feishu_group": _context_fingerprint(_feishu_group_context_for_prompt(root, run_id, task)),
     }
     if include_attachment_output:
         fingerprints["attachment_output_guidance"] = _context_fingerprint(_attachment_output_guidance_for_prompt(root, run_id))
@@ -522,6 +567,12 @@ def _sticky_context_delta_for_prompt(
         and delivered.get("service_assistant") != current_fingerprints.get("service_assistant")
     ):
         sections.append(service_assistant_context)
+    feishu_group_context = _feishu_group_context_for_prompt(root, run_id, task)
+    if (
+        current_fingerprints.get("feishu_group")
+        and delivered.get("feishu_group") != current_fingerprints.get("feishu_group")
+    ):
+        sections.append(feishu_group_context)
     if (
         not _token_saving_nav_enabled(task)
         and current_fingerprints.get("knowledge_enabled") == "enabled"
@@ -1223,6 +1274,18 @@ def chat_prompt(
                 ).rstrip()
                 task_context = f"{task_context}\n\n{service_context}\n"
                 components["service_assistant_context"] = service_context
+            elif is_feishu_group_task(detail["task"]):
+                feishu_group_context = _feishu_group_context_for_prompt(root, run_id, detail["task"])
+                task_context = render_prompt_template(
+                    "backend_task_context_minimal.md",
+                    task_id=task_id,
+                    title=detail["task"].get("title", ""),
+                    status=detail["task"].get("status", ""),
+                    role=item.get("role", ""),
+                    workspace=detail["task"].get("workspace_path", ""),
+                ).rstrip()
+                task_context = f"{task_context}\n\n{feishu_group_context}\n"
+                components["feishu_group_context"] = feishu_group_context
             else:
                 task_context = render_prompt_template(
                     "backend_task_context.md",

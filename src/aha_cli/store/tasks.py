@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from aha_cli.domain.models import is_service_assistant_task, utc_now
+from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, utc_now
 from aha_cli.store.events import append_event as default_append_event
 from aha_cli.store.io import write_json
 from aha_cli.store.paths import run_dir
@@ -60,8 +60,8 @@ def set_task_hidden(
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = _find_task(plan, task_id)
-        if is_service_assistant_task(task):
-            raise ValueError("system-managed AHA service assistant tasks cannot be hidden")
+        if is_service_assistant_task(task) or is_feishu_group_task(task):
+            raise ValueError("system-managed AHA service tasks cannot be hidden")
         task["hidden"] = hidden
         task["hidden_at"] = now_func() if hidden else None
         plan["updated_at"] = now_func()
@@ -82,8 +82,8 @@ def delete_task(
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
         task = _find_task(plan, task_id, allow_deleted=True)
-        if is_service_assistant_task(task):
-            raise ValueError("system-managed AHA service assistant tasks cannot be deleted")
+        if is_service_assistant_task(task) or is_feishu_group_task(task):
+            raise ValueError("system-managed AHA service tasks cannot be deleted")
         task["hidden"] = True
         task["hidden_at"] = task.get("hidden_at") or now_func()
         task["deleted_at"] = task.get("deleted_at") or now_func()

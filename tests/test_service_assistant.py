@@ -7,8 +7,9 @@ import unittest
 from unittest import mock
 
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task
-from aha_cli.services.feishu import FeishuError
+from aha_cli.services.feishu import FeishuError, bind_confirmation_card
 from aha_cli.services.feishu_notifications import set_subscription
+from aha_cli.services.feishu_group_handoffs import get_group_handoff, register_group_handoff
 from aha_cli.services.chat import action_schema_retry_message, chat_prompt
 from aha_cli.services.run_delete import RunDeleteError, delete_run
 from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_run_lifecycle_status
@@ -16,7 +17,7 @@ from aha_cli.services.run_retention import RunRetentionError, apply_run_retentio
 from aha_cli.services.orchestrator import execute_actions
 from aha_cli.services import service_assistant_actions
 from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task
-from aha_cli.services.service_assistant_actions import prepare_service_assistant_action, resolve_confirmation
+from aha_cli.services.service_assistant_actions import prepare_service_assistant_action, resolve_choice, resolve_confirmation
 from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.store.filesystem import append_message, create_plan, delete_task, inbox_path, iter_jsonl_from
 from aha_cli.store.paths import aha_home_path
@@ -107,12 +108,14 @@ class ServiceAssistantTests(unittest.TestCase):
                     "arguments": {"run_id": target["id"], "title": "Check release"},
                 },
             )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_confirm", chat_id="oc_chat")
             columns = prepared["confirmation_card"]["body"]["elements"][1]["columns"]
             confirmed = resolve_confirmation(
                 root,
                 open_id="ou_user",
                 session_key="tenant:p2p:ou_user",
                 text="确认",
+                message_id="om_confirm",
             )
 
             self.assertEqual(prepared["confirmation_card"]["schema"], "2.0")
@@ -131,7 +134,242 @@ class ServiceAssistantTests(unittest.TestCase):
                     open_id="ou_user",
                     session_key="tenant:p2p:ou_user",
                     text="确认",
+                    message_id="om_confirm",
                 )
+
+    def test_bare_confirmation_text_does_not_consume_pending_card_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_user", {"backend": "stub"})
+            target = create_plan(root, "User run", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            set_subscription(
+                root,
+                "tenant:p2p:ou_user",
+                chat_id="oc_chat",
+                open_id="ou_user",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_memo",
+                    "arguments": {"run_id": target["id"], "title": "Needs card click"},
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_card", chat_id="oc_chat")
+
+            bare = resolve_confirmation(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                text="确认",
+            )
+            clicked = resolve_confirmation(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                text="确认",
+                message_id="om_card",
+            )
+
+            self.assertIsNone(bare)
+            self.assertTrue(clicked["result"]["ok"])
+            self.assertEqual(read_task_memos(root, target["id"])[0]["title"], "Needs card click")
+
+    def test_owner_choice_card_click_returns_selection_tool_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "ask_owner_choice",
+                    "arguments": {
+                        "prompt": "请选择群聊回复方案：",
+                        "options": [
+                            {"id": "brief", "label": "简短公开回复", "message": "采用简短公开回复"},
+                            {"id": "private", "label": "仅私聊回复", "message": "只在主人私聊回复"},
+                        ],
+                    },
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_choice", chat_id="oc_owner")
+            button_value = prepared["confirmation_card"]["body"]["elements"][2]["columns"][0]["elements"][0]["behaviors"][0]["value"]
+
+            selected = resolve_choice(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                message_id="om_choice",
+                choice_id="private",
+            )
+
+            self.assertTrue(prepared["choice_required"])
+            self.assertEqual(button_value["kind"], "aha_service_choice")
+            self.assertEqual(button_value["choice_id"], "private")
+            self.assertTrue(selected["choice"])
+            self.assertFalse(selected["cancelled"])
+            self.assertEqual(selected["confirmation_card"]["header"]["title"]["content"], "已选择方案")
+            self.assertIn("只在主人私聊回复", selected["tool_message"])
+            with self.assertRaises(FeishuError):
+                resolve_choice(
+                    root,
+                    open_id="ou_owner",
+                    session_key="tenant:p2p:ou_owner",
+                    message_id="om_choice",
+                    choice_id="private",
+                )
+
+    def test_group_reply_action_requires_card_and_sends_to_original_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.service_assistant_actions.send_direct_message",
+            return_value={"message_id": "om_public"},
+        ) as send:
+            root = Path(tmp)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="给我 vega pipeline",
+            )
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "send_feishu_group_reply",
+                    "arguments": {"message": "这是脱敏后的公开口径。"},
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_confirm_group", chat_id="oc_owner")
+
+            confirmed = resolve_confirmation(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                text="确认",
+                message_id="om_confirm_group",
+            )
+            stored = get_group_handoff(root, handoff["id"])
+
+        self.assertTrue(prepared["confirmation_required"])
+        self.assertIn("数字人代发群聊回复", prepared["user_response"])
+        send.assert_called_once_with(
+            root,
+            "oc_group",
+            '<at user_id="ou_requester"></at> 这是脱敏后的公开口径。',
+            opts={"reply_to": "om_group"},
+        )
+        self.assertTrue(confirmed["result"]["ok"])
+        self.assertEqual(confirmed["result"]["message_id"], "om_public")
+        self.assertEqual(stored["status"], "delivered")
+
+    def test_group_reply_action_asks_owner_to_choose_ambiguous_pending_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            handoffs = []
+            for index in (1, 2):
+                handoffs.append(
+                    register_group_handoff(
+                        root,
+                        digital_run_id=f"run-digital-{index}",
+                        digital_task_id=f"task-digital-{index}",
+                        digital_session_key=f"tenant:feishu-group-user:ou_requester_{index}",
+                        group_chat_id=f"oc_group_{index}",
+                        group_message_id=f"om_group_{index}",
+                        open_id=f"ou_requester_{index}",
+                        owner_open_id="ou_owner",
+                        owner_chat_id="oc_owner",
+                        steward_run_id=assistant_run,
+                        steward_task_id=assistant_task["id"],
+                        request_message=f"question {index}",
+                    )
+                )
+
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "send_feishu_group_reply",
+                    "arguments": {"message": "公开口径"},
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_choose_handoff", chat_id="oc_owner")
+            selected = resolve_choice(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                message_id="om_choose_handoff",
+                choice_id=handoffs[1]["id"],
+            )
+            followup = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "send_feishu_group_reply",
+                    "arguments": {"handoff_id": handoffs[1]["id"], "message": "公开口径"},
+                },
+            )
+
+        self.assertTrue(prepared["ok"])
+        self.assertTrue(prepared["choice_required"])
+        self.assertIn("无需填写内部 handoff_id", prepared["user_response"])
+        self.assertEqual(prepared["confirmation_card"]["header"]["title"]["content"], "请选择方案")
+        self.assertEqual(selected["operation"], "select_feishu_group_handoff_for_reply")
+        self.assertIn(handoffs[1]["id"], selected["tool_message"])
+        self.assertIn('"message": "公开口径"', selected["tool_message"])
+        self.assertTrue(followup["confirmation_required"])
+        self.assertIn(handoffs[1]["id"], followup["user_response"])
 
     def test_orchestrator_routes_read_result_back_to_the_same_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -266,11 +504,13 @@ class ServiceAssistantTests(unittest.TestCase):
                 "aha_cli.services.service_assistant_actions._execute_write",
                 return_value={"ok": True},
             ) as execute_write:
+                bind_confirmation_card(root, repaired["confirmation_id"], message_id="om_commit", chat_id="oc_chat")
                 resolve_confirmation(
                     root,
                     open_id="ou_user",
                     session_key="tenant:p2p:ou_user",
                     text="确认",
+                    message_id="om_commit",
                 )
             routed_arguments = execute_write.call_args.args[2]
             self.assertEqual(routed_arguments["message"], "请让 task-006 提交")
@@ -362,7 +602,8 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIn("five minutes", prompt)
             self.assertIn("Never choose or copy a backend, model, generator identity", prompt)
             self.assertIn("A commit request never implies `git push`", prompt)
-            self.assertIn("Text fallback accepts a direct reply", prompt)
+            self.assertIn("bare confirmation text is ordinary chat", prompt)
+            self.assertIn("ask_owner_choice", prompt)
 
 
 if __name__ == "__main__":

@@ -166,6 +166,8 @@ class FeishuRuntimeTests(unittest.TestCase):
                     "model": "claude-sonnet-4-6",
                     "reasoning_effort": "high",
                     "proxy_enabled": True,
+                    "owner_open_id": "ou_owner",
+                    "owner_chat_id": "oc_owner",
                     "allowed_open_ids": "ou_a, ou_b, ou_a",
                     "allowed_chat_ids": "oc_a, oc_b, oc_a",
                     "group_access_mode": "all_members",
@@ -179,6 +181,8 @@ class FeishuRuntimeTests(unittest.TestCase):
 
         self.assertTrue(status["enabled"])
         self.assertEqual(status["allowed_open_ids"], ["ou_a", "ou_b"])
+        self.assertEqual(status["owner_open_id"], "ou_owner")
+        self.assertEqual(status["owner_chat_id"], "oc_owner")
         self.assertEqual(status["allowed_chat_ids"], ["oc_a", "oc_b"])
         self.assertEqual(status["allowed_chat_id_count"], 2)
         self.assertEqual(status["group_access_mode"], "all_members")
@@ -192,6 +196,8 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertEqual(saved["integrations"]["feishu"]["model"], "claude-sonnet-4-6")
         self.assertEqual(saved["integrations"]["feishu"]["reasoning_effort"], "high")
         self.assertTrue(saved["integrations"]["feishu"]["proxy_enabled"])
+        self.assertEqual(saved["integrations"]["feishu"]["owner_open_id"], "ou_owner")
+        self.assertEqual(saved["integrations"]["feishu"]["owner_chat_id"], "oc_owner")
         self.assertNotIn("ignored", saved["integrations"]["feishu"])
         self.assertEqual(saved["integrations"]["custom"], {"keep": True})
 

@@ -128,6 +128,28 @@ class ActionPayloadTests(unittest.TestCase):
             ),
             "service_assistant payload must contain exactly one action",
         )
+        self.assertIsNone(
+            invalid_action_schema_reason(
+                {"actions": [{"type": "feishu_group_handoff", "arguments": {"reason": "needs owner"}}]}
+            )
+        )
+        self.assertEqual(
+            invalid_action_schema_reason(
+                {
+                    "actions": [
+                        {"type": "feishu_group_handoff", "arguments": {}},
+                        {"type": "record_task_update", "summary": "done"},
+                    ]
+                }
+            ),
+            "feishu_group_handoff payload must contain exactly one action",
+        )
+        self.assertEqual(
+            invalid_action_schema_reason(
+                {"actions": [{"type": "feishu_group_handoff", "arguments": "needs owner"}]}
+            ),
+            "feishu_group_handoff arguments must be an object",
+        )
 
     def test_action_response_text_keeps_orchestrator_re_export_compatible(self) -> None:
         reply = json.dumps({"actions": [], "response": "  done  "})

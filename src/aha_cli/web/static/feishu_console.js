@@ -266,6 +266,18 @@
             </fieldset>
             <fieldset class="feishu-console-section">
               <legend>${escapeHtml(t("feishu.access_section", "Access and delivery"))}</legend>
+              <div class="feishu-console-settings-grid">
+                <label class="field-label">
+                  <span>${escapeHtml(t("feishu.owner_open_id", "Owner open_id"))}</span>
+                  <input name="owner_open_id" placeholder="ou_owner" value="${escapeHtml(status.owner_open_id || "")}">
+                  <div class="field-help">${escapeHtml(t("feishu.owner_open_id_hint", "Group digital-human handoffs are forwarded to this private steward identity. Leave blank to use the first private steward chat, or the only allowed open_id."))}</div>
+                </label>
+                <label class="field-label">
+                  <span>${escapeHtml(t("feishu.owner_chat_id", "Owner private chat_id"))}</span>
+                  <input name="owner_chat_id" placeholder="oc_owner" value="${escapeHtml(status.owner_chat_id || "")}">
+                  <div class="field-help">${escapeHtml(t("feishu.owner_chat_id_hint", "Optional. Usually filled by the owner sending a private message to the bot once."))}</div>
+                </label>
+              </div>
               <label class="field-label">
                 <span>${escapeHtml(t("feishu.allowed_open_ids", "Allowed open_id values"))}</span>
                 <input name="allowed_open_ids" placeholder="ou_xxx, ou_yyy" value="${escapeHtml(allowedOpenIds.join(", "))}">
@@ -298,10 +310,10 @@
                 </label>
                 <label class="checkbox-line">
                   <input name="notifications_enabled" type="checkbox" ${status.notifications_enabled ? "checked" : ""}>
-                  <span>${escapeHtml(t("feishu.notifications_toggle", "Push task status changes to Feishu"))}</span>
+                  <span>${escapeHtml(t("feishu.notifications_toggle", "Push task status changes to owner"))}</span>
                 </label>
               </div>
-              <p class="feishu-console-section-help">${escapeHtml(t("feishu.notifications_hint", "Pushes task changes from every run with the triggering user message, agent reply, or system reason. Direct chat replies remain enabled when this is off."))}</p>
+              <p class="feishu-console-section-help">${escapeHtml(t("feishu.notifications_hint", "Pushes non-system project task changes only to the owner private chat. System runs, group chats, and other allowed users do not receive status pushes. Direct chat replies remain enabled when this is off."))}</p>
             </fieldset>
             <div class="feishu-console-settings-actions">
               <button type="submit" ${loading || savingSettings ? "disabled" : ""}>${escapeHtml(savingSettings ? t("feishu.saving", "Saving...") : t("common.save", "Save"))}</button>
@@ -357,6 +369,8 @@
         model: String(field("model")?.value || "").trim(),
         reasoning_effort: String(field("reasoning_effort")?.value || "").trim(),
         proxy_enabled: Boolean(field("proxy_enabled")?.checked),
+        owner_open_id: String(field("owner_open_id")?.value || "").trim(),
+        owner_chat_id: String(field("owner_chat_id")?.value || "").trim(),
         allowed_open_ids: String(field("allowed_open_ids")?.value || "").split(",").map(item => item.trim()).filter(Boolean),
         allowed_chat_ids: String(field("allowed_chat_ids")?.value || "").replaceAll("\n", ",").split(",").map(item => item.trim()).filter(Boolean),
         group_access_mode: String(field("group_access_mode")?.value || "allowed_users"),

@@ -17,6 +17,7 @@ _AUTH_RE = re.compile(r"(?i)authorization\s*[:=]\s*(?:bearer\s+)?[^\s,;]+")
 _SECRET_RE = re.compile(
     r"(?i)(app[_-]?secret|access[_-]?token|refresh[_-]?token|cookie|api[_-]?key)\s*[:=]\s*([^\s,;]+)"
 )
+_FEISHU_AT_RE = re.compile(r"<at\s+user_id=(['\"])[^'\"]+\1\s*></at>", re.IGNORECASE)
 
 
 def feishu_audit_dir(root: Path) -> Path:
@@ -37,6 +38,7 @@ def _safe_text(value: object, limit: int = MAX_AUDIT_TEXT_CHARS) -> str:
     text = " ".join(str(value or "").split())
     text = _AUTH_RE.sub("Authorization=[REDACTED]", text)
     text = _SECRET_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _FEISHU_AT_RE.sub("<at user_id=[REDACTED]></at>", text)
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 

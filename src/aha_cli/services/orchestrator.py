@@ -15,6 +15,7 @@ from aha_cli.services.action_payloads import (
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.commit_policy import commit_message_policy_prompt
+from aha_cli.services.feishu_group_actions import FEISHU_GROUP_HANDOFF_ACTION, prepare_feishu_group_handoff_action
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.knowledge_git import auto_commit_project_approved_entries_after_feedback
 from aha_cli.services.prompt_templates import render_prompt_template
@@ -791,6 +792,23 @@ def execute_actions(
                     coordination="service_assistant_action_result",
                     service_action_depth=int(result.get("action_depth") or service_action_depth + 1),
                 )
+            executed.append(result)
+            continue
+        if action_type == FEISHU_GROUP_HANDOFF_ACTION:
+            result = prepare_feishu_group_handoff_action(root, run_id, task, action)
+            result["task_id"] = task_id
+            append_event(
+                root,
+                run_id,
+                "feishu_group_handoff_action",
+                {
+                    "task_id": task_id,
+                    "ok": bool(result.get("ok")),
+                    "handoff_id": str(result.get("handoff_id") or ""),
+                    "steward_run_id": str(result.get("steward_run_id") or ""),
+                    "steward_task_id": str(result.get("steward_task_id") or ""),
+                },
+            )
             executed.append(result)
             continue
         if action_type == "record_task_update":

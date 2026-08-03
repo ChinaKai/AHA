@@ -10,6 +10,7 @@ from unittest import mock
 from aha_cli.services import feishu_assistant
 from aha_cli.services.feishu import get_session_binding, set_session_binding
 from aha_cli.services.feishu_notifications import set_subscription
+from aha_cli.services.feishu_owner import feishu_owner_state_path
 from aha_cli.store.paths import aha_home_path
 
 
@@ -96,6 +97,26 @@ class FeishuAssistantTests(unittest.TestCase):
                 channel,
                 _payload(chat_type="group", message_id="om_group", is_at_bot=False),
             )
+        self.assertEqual(channel.sent, [])
+
+    def test_group_message_without_bot_mention_is_ignored_even_when_legacy_switch_is_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+        ) as send:
+            root = Path(tmp)
+            _write_config(root, ["ou_user"], allowed_chat_ids=["oc_chat"])
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            config["integrations"]["feishu"]["group_mentions_only"] = False
+            (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            channel = FakeChannel()
+            feishu_assistant._handle_message(
+                root,
+                "",
+                channel,
+                _payload(chat_type="group", message_id="om_group_no_at", is_at_bot=False),
+            )
+
+        send.assert_not_called()
         self.assertEqual(channel.sent, [])
 
     def test_unlisted_user_is_denied_before_session_binding(self) -> None:
@@ -345,8 +366,14 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(binding["active_task_id"], "task-007")
         self.assertEqual(send.call_args.args[2]["task_id"], "task-007")
 
-    def test_allowed_group_all_members_routes_and_records_group_subscription(self) -> None:
-        task = {"id": "task-group", "status": "pending", "kind": "service_assistant"}
+    def test_private_chat_records_owner_binding_for_group_handoff(self) -> None:
+        task = {
+            "id": "task-owner",
+            "title": "AHA Assistant · DM · abc123",
+            "status": "pending",
+            "kind": "service_assistant",
+            "system_managed": True,
+        }
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_assistant._dedicated_run",
             return_value="run-001",
@@ -356,6 +383,29 @@ class FeishuAssistantTests(unittest.TestCase):
         ), mock.patch(
             "aha_cli.services.feishu_assistant.ensure_service_assistant_task",
             return_value=task,
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ):
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            feishu_assistant._handle_message(root, "", FakeChannel(), _payload(chat_id="oc_owner_dm"))
+            state = json.loads(feishu_owner_state_path(root).read_text(encoding="utf-8"))
+
+        self.assertEqual(state["owners"]["tenant-1"]["open_id"], "ou_user")
+        self.assertEqual(state["owners"]["tenant-1"]["chat_id"], "oc_owner_dm")
+        self.assertEqual(state["owners"]["tenant-1"]["session_key"], "tenant-1:p2p:ou_user")
+
+    def test_allowed_group_all_members_routes_to_digital_human_without_group_subscription(self) -> None:
+        task = {"id": "task-group", "status": "pending", "kind": "feishu_group_digital_human"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._feishu_group_run",
+            return_value="run-001",
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.ensure_feishu_group_task",
+            return_value=task,
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.mark_feishu_group_task_interaction",
         ), mock.patch(
             "aha_cli.services.feishu_assistant.handle_send_payload",
             return_value={"ok": True},
@@ -376,9 +426,53 @@ class FeishuAssistantTests(unittest.TestCase):
                 channel,
                 _payload(chat_type="group", open_id="ou_member", is_at_bot=True),
             )
+            binding = get_session_binding(root, "tenant-1:feishu-group-user:ou_member")
 
         self.assertEqual(send.call_args.args[2]["task_id"], "task-group")
-        self.assertEqual(subscribe.call_args.kwargs["chat_type"], "group")
+        self.assertEqual(send.call_args.args[1], "run-001")
+        self.assertIn("飞书群聊 @ 数字人请求", send.call_args.args[2]["message"])
+        self.assertEqual(send.call_args.args[2]["reply_target"], "feishu")
+        self.assertEqual(send.call_args.args[2]["feishu_chat_id"], "oc_chat")
+        self.assertEqual(send.call_args.args[2]["feishu_mention_open_id"], "ou_member")
+        self.assertEqual(send.call_args.args[2]["feishu_channel"], "group_digital_human")
+        self.assertEqual(binding["active_task_id"], "task-group")
+        subscribe.assert_not_called()
+        self.assertEqual(channel.sent, [])
+
+    def test_group_digital_human_task_is_keyed_by_sender_across_groups(self) -> None:
+        task = {"id": "task-user", "status": "pending", "kind": "feishu_group_digital_human"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._feishu_group_run",
+            return_value="run-001",
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.ensure_feishu_group_task",
+            return_value=task,
+        ) as ensure, mock.patch(
+            "aha_cli.services.feishu_assistant._active_group_task",
+            side_effect=[None, task],
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.mark_feishu_group_task_interaction",
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ):
+            root = Path(tmp)
+            _write_config(root, ["ou_admin"], allowed_chat_ids=["oc_a", "oc_b"], group_access_mode="all_members")
+            channel = FakeChannel()
+            feishu_assistant._handle_message(
+                root,
+                "",
+                channel,
+                _payload(chat_type="group", chat_id="oc_a", open_id="ou_member", message_id="om_a", is_at_bot=True),
+            )
+            feishu_assistant._handle_message(
+                root,
+                "",
+                channel,
+                _payload(chat_type="group", chat_id="oc_b", open_id="ou_member", message_id="om_b", is_at_bot=True),
+            )
+
+        ensure.assert_called_once()
 
     def test_duplicate_message_is_not_sent_twice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -457,6 +551,81 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["task_id"], "task-006")
         self.assertEqual(send.call_args.args[2]["message"], "trusted result")
         self.assertIn("操作已确认并执行", channel.sent[-1][1]["text"])
+
+    def test_choice_card_action_returns_selected_option_to_assistant_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.resolve_choice",
+            return_value={"choice": True, "cancelled": False, "tool_message": "trusted choice"},
+        ) as resolve, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send:
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            set_subscription(
+                root,
+                "tenant-1:p2p:ou_user",
+                chat_id="oc_chat",
+                open_id="ou_user",
+                run_id="run-001",
+                task_id="task-006",
+            )
+            channel = FakeChannel()
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_chat",
+                    "message_id": "om_choice",
+                    "open_id": "ou_user",
+                    "action": {
+                        "kind": "aha_service_choice",
+                        "choice_id": "private",
+                    },
+                },
+            )
+
+        resolve.assert_called_once_with(
+            root,
+            open_id="ou_user",
+            session_key="tenant-1:p2p:ou_user",
+            message_id="om_choice",
+            choice_id="private",
+        )
+        self.assertEqual(send.call_args.args[1], "run-001")
+        self.assertEqual(send.call_args.args[2]["task_id"], "task-006")
+        self.assertEqual(send.call_args.args[2]["message"], "trusted choice")
+        self.assertIn("已收到选择", channel.sent[-1][1]["text"])
+
+    def test_bare_confirmation_text_is_forwarded_as_normal_private_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.run_exists",
+            return_value=True,
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant._active_task",
+            return_value={"id": "task-006", "status": "awaiting_user"},
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send:
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            set_session_binding(
+                root,
+                "tenant-1:p2p:ou_user",
+                active_run_id="run-001",
+                active_task_id="task-006",
+                acl_subject="ou_user",
+            )
+            channel = FakeChannel()
+
+            feishu_assistant._handle_message(root, "", channel, _payload(text="确认"))
+
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(send.call_args.args[2]["message"], "确认")
+        self.assertNotIn("无法处理确认", channel.sent[-1][1]["text"])
 
     def test_resolved_confirmation_updates_original_card_before_reply(self) -> None:
         channel = FakeChannel()

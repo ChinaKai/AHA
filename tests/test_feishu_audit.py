@@ -65,6 +65,22 @@ class FeishuAuditTests(unittest.TestCase):
         self.assertEqual(record["content_summary"], "card: 请确认 AHA 操作")
         self.assertNotIn("must-not-be-written", json.dumps(record, ensure_ascii=False))
 
+    def test_text_audit_redacts_feishu_at_user_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audit_feishu_channel(
+                root,
+                direction="outbound",
+                kind="direct_reply",
+                status="delivered",
+                transport="channel_ws",
+                content='<at user_id="ou-secret-user"></at> 已记录',
+            )
+            record = json.loads(feishu_audit_path(root).read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertIn("<at user_id=[REDACTED]></at>", record["content_summary"])
+        self.assertNotIn("ou-secret-user", json.dumps(record, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main()

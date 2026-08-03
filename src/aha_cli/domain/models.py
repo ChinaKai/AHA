@@ -19,6 +19,8 @@ MAX_TASK_RELATED_PROJECTS = 5
 SYSTEM_RUN_KIND = "system"
 SERVICE_ASSISTANT_TASK_KIND = "service_assistant"
 SERVICE_ASSISTANT_PURPOSE = "service_assistant"
+FEISHU_GROUP_TASK_KIND = "feishu_group_digital_human"
+FEISHU_GROUP_PURPOSE = "feishu_group"
 
 
 def is_system_managed(value: object) -> bool:
@@ -39,6 +41,23 @@ def is_service_assistant_task(value: object) -> bool:
         isinstance(value, dict)
         and value.get("system_managed")
         and str(value.get("kind") or "") == SERVICE_ASSISTANT_TASK_KIND
+    )
+
+
+def is_feishu_group_run(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("system_managed")
+        and str(value.get("kind") or "") == SYSTEM_RUN_KIND
+        and str(value.get("system_purpose") or "") == FEISHU_GROUP_PURPOSE
+    )
+
+
+def is_feishu_group_task(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("system_managed")
+        and str(value.get("kind") or "") == FEISHU_GROUP_TASK_KIND
     )
 
 
@@ -122,6 +141,8 @@ def default_feishu_integration_config() -> dict:
         "model": "",
         "reasoning_effort": "",
         "proxy_enabled": None,
+        "owner_open_id": "",
+        "owner_chat_id": "",
         "allowed_open_ids": [],
         "allowed_chat_ids": [],
         "group_access_mode": "allowed_users",
@@ -317,9 +338,24 @@ def normalize_feishu_integration_config(value: object | None = None) -> dict:
     for key in ("enabled", "group_mentions_only", "notifications_enabled"):
         if key in raw:
             config[key] = normalize_bool(raw.get(key))
-    for key in ("app_id", "app_secret", "app_id_env", "app_secret_env", "backend", "model", "reasoning_effort"):
+    for key in (
+        "app_id",
+        "app_secret",
+        "app_id_env",
+        "app_secret_env",
+        "backend",
+        "model",
+        "reasoning_effort",
+    ):
         if key in raw:
             config[key] = str(raw.get(key) or "").strip()
+    for key in ("owner_open_id", "owner_chat_id"):
+        if key not in raw:
+            continue
+        value = raw.get(key)
+        if isinstance(value, list):
+            value = next((item for item in value if str(item or "").strip()), "")
+        config[key] = str(value or "").strip()
     if "proxy_enabled" in raw and raw.get("proxy_enabled") is not None:
         config["proxy_enabled"] = normalize_bool(raw.get("proxy_enabled"))
     for key in ("allowed_open_ids", "allowed_chat_ids"):

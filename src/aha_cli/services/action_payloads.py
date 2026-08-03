@@ -8,7 +8,8 @@ from typing import NamedTuple
 
 AHA_ACTION_TYPES = {"route_to_agent", "spawn_sub", "record_task_update"}
 SERVICE_ACTION_TYPES = {"service_assistant"}
-SUPPORTED_ACTION_TYPES = AHA_ACTION_TYPES | SERVICE_ACTION_TYPES
+FEISHU_GROUP_ACTION_TYPES = {"feishu_group_handoff"}
+SUPPORTED_ACTION_TYPES = AHA_ACTION_TYPES | SERVICE_ACTION_TYPES | FEISHU_GROUP_ACTION_TYPES
 
 
 class ActionPayloadExtraction(NamedTuple):
@@ -138,6 +139,11 @@ def invalid_action_schema_reason(payload: dict) -> str | None:
     )
     if service_action_count and (service_action_count != 1 or len(actions) != 1):
         return "service_assistant payload must contain exactly one action"
+    feishu_group_action_count = sum(
+        1 for action in actions if isinstance(action, dict) and action.get("type") == "feishu_group_handoff"
+    )
+    if feishu_group_action_count and (feishu_group_action_count != 1 or len(actions) != 1):
+        return "feishu_group_handoff payload must contain exactly one action"
     for action in actions:
         if not isinstance(action, dict):
             return "actions must contain objects"
@@ -156,6 +162,9 @@ def invalid_action_schema_reason(payload: dict) -> str | None:
                 return "service_assistant operation must be a non-empty string"
             if "arguments" in action and not isinstance(action.get("arguments"), dict):
                 return "service_assistant arguments must be an object"
+        if action_type == "feishu_group_handoff":
+            if "arguments" in action and not isinstance(action.get("arguments"), dict):
+                return "feishu_group_handoff arguments must be an object"
     return None
 
 

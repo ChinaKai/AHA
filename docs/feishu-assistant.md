@@ -1,8 +1,9 @@
 # 飞书助手接入
 
 AHA 的飞书接入使用企业自建应用、应用机器人和飞书长连接。AHA 主动连接飞书，
-本机不需要公网 IP、域名或事件回调端口。机器人收到的普通文本会直接进入真实
-AHA agent，agent 回复再推送回原飞书会话；不使用关键词菜单或固定问答规则。
+本机不需要公网 IP、域名或事件回调端口。私聊普通文本进入私聊“管家” agent；
+群聊只有 `@机器人` 的消息会进入受限“数字人” agent。agent 回复再推送回原飞书会话；
+不使用关键词菜单或固定问答规则。
 
 ## 安装与飞书应用配置
 
@@ -45,7 +46,7 @@ Integrations → 飞书助手，启用接入并配置：
 - `Group member access`：默认“仅授权用户”，即群 `chat_id` 和发送者 `open_id` 都必须获授权；选择
   “授权群内全部成员”后，该群任何成员均可使用助手，但私聊仍只接受 `Allowed open IDs` 中的用户。
 - `Only handle group @mentions`：建议保持开启，群聊只响应 `@机器人`。
-- `Push task status changes`：在任意 run 的 task 状态改变时，向已建立的飞书会话推送 run/task、新旧状态和变更来源。进入 `busy` 显示用户触发消息，离开 `busy` 显示 agent 最后回复，系统迁移显示事件原因。关闭后仍会送达飞书助手对话的直接回复。
+- `Push task status changes`：在普通项目 run 的 task 状态改变时，只向 owner 私聊推送 run/task、新旧状态和变更来源；系统 Run/Task、群聊和其他授权用户私聊不会收到状态推送。进入 `busy` 显示用户触发消息，离开 `busy` 显示 agent 最后回复，系统迁移显示事件原因。关闭后仍会送达飞书助手对话的直接回复。
 
 保存后重启 AHA，使长连接使用新配置。在 Web 设置的 Integrations 区域点击
 “飞书助手”，可在当前页面展开完整控制面板，配置 App ID、App Secret、授权用户、群聊策略、
@@ -59,10 +60,10 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
 
 ## AHA 服务管家 Agent
 
-- 所有非空文本（包括“帮助”“任务”或 `/help`）均原样交给 agent 理解，不做固定意图匹配。
+- 私聊所有非空文本（包括“帮助”“任务”或 `/help`）均原样交给 agent 理解，不做固定意图匹配。
 - 飞书只是消息 Channel；真实身份是当前 AHA 实例的系统管家，不是用户项目任务。AHA 会创建一个
-  `kind=system`、`system_purpose=service_assistant` 的可见 Run，并为每个飞书会话创建
-  `AHA Assistant · DM/Group · <短标识>` 系统 Task。旧版名称为 `Feishu Assistant` 的专用 Run
+  `kind=system`、`system_purpose=service_assistant` 的可见 Run，并为每个私聊会话创建
+  `AHA Assistant · DM · <短标识>` 系统 Task。旧版名称为 `Feishu Assistant` 的专用 Run
   会原位迁移，旧普通 Task 隐藏保留，不删除历史。
 - 管家 Run 与 Task 的 Workspace 固定为当前 `AHA_HOME`，不继承最近 Run、默认 Run 或某个项目路径；
   sandbox 固定为 `read-only`、approval 固定为 `never`、禁止子 agent。系统 Run 会出现在普通 Run
@@ -74,7 +75,12 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
 - 管家只能通过服务端 `service_assistant` 动作读写 AHA 状态，不能直接改 `config.json`、plan、事件、
   session 或飞书状态文件。查询操作立即执行；创建 Run/Task、给 Task 发消息、完成/重开 Task、
   创建/修改 Memo 及安全 Settings 修改会先生成自然语言预览卡片，隐藏内部 JSON 动作体，由用户点击“确认 / 取消”。
-  文本兼容模式也可直接回复“确认”或“取消”，无需复制 token。
+  裸文本“确认/取消”会作为普通私聊消息交给 agent，不再绑定任何待确认操作，避免误确认其他上下文。
+  需要主人在多个方案间选择时，管家应生成选择卡片；点击选项只把选择结果送回当前私聊管家继续处理，不直接执行写操作。
+  同一群、同一提问人的连续补充、追问、催促或同一上下文下的输出请求会复用同一个 active 群聊转单线程；
+  只有确实存在多个不同群/不同人/不同 active 需求时，服务端才会自动生成转单选择卡，不要求主人填写内部 `handoff_id`。
+- 飞书图片、文件、音视频等消息会先归一化为附件 manifest，并作为资源摘要传给数字人/私聊管家；当前不会臆测附件内容。
+  已有飞书资源 key 时，发送侧可构造图片/文件消息；本地文件上传、消息资源下载和内容解析属于后续二进制资源链路。
 - 管家路由提交、推送、合并或回滚请求时，只转发用户意图和仓库约束，不指定 backend、model
   或 `Generated-by`。提交身份由目标 Task 当前执行 Agent 的 AHA commit policy 生成；服务端不会让
   显式 `Generated-by:` 进入目标 Task，避免飞书助手自身模型污染提交尾注。
@@ -94,16 +100,16 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
 - 服务重启/升级、凭据/ACL/认证、sandbox/approval、原始文件写入、KB 审批/同步以及删除类操作不向
   飞书管家开放。需要项目分析或代码修改时，管家应创建普通项目 Task 或向已有 Task 发消息，
   不在 AHA Home 中直接完成项目工作。
-- 入站 `message_id` 做 24 小时幂等；单聊按企业与用户隔离，群聊按企业与群隔离，并默认只处理
-  `@机器人` 的消息。最近检测到的群只作为本地管理页候选，不会自动获得访问权限；记录保存在
+- 入站 `message_id` 做 24 小时幂等；私聊按企业与用户隔离。最近检测到的群只作为本地管理页候选，
+  不会自动获得访问权限；记录保存在
   `AHA_HOME/feishu/recent_groups.json`（`0600`），Channel 审计仍只保存 chat ID 哈希。
-- 会话绑定与回复订阅保存在 AHA home 的 `feishu/` 私有目录。消息送达 agent 后，AHA 自动订阅该
+- 私聊管家会话绑定与回复订阅保存在 AHA home 的 `feishu/` 私有目录。消息送达 agent 后，AHA 自动订阅该
   task，把 agent 回复推回原飞书会话。
 - 管家通过 `send_task_message` 把需求派发给普通 Task 后，会持久记录原飞书会话与目标 run/task 的 handoff。
   目标 Agent 的本轮真实回复会自动以“`AHA 跟进已完成`”推回原会话，不依赖全局状态推送开关，也无需用户
   再次要求跟进；该会话随后的一条通用完成状态会被抑制，避免重复通知。
 
-状态推送开启时，所有 run 的 task 状态变化会推送到已建立助手会话的飞书聊天；
+状态推送开启时，非系统 run/task 的状态变化只会推送到已解析的 owner 私聊；
 `running` 对外显示为 `busy`，`awaiting_user` 显示为 `awaiting`：
 
 ```text
@@ -114,6 +120,32 @@ message: agent 最后一条回复
 
 开关开启时，agent 最终回复与状态变化合并为一条飞书消息，避免重复推送；关闭时
 不发状态通知，但助手对话的直接 agent 回复仍正常送达。
+
+## 群聊数字人模式
+
+- 群聊身份与私聊管家分离。群聊只处理已授权群中的 `@机器人` 消息，不监听全量消息；未 `@` 的群消息会被忽略。
+- AHA 会创建长期系统 Run：`feishu-group`，标记为 `kind=system`、`system_purpose=feishu_group`。
+  Workspace 固定为 `AHA_HOME/feishu_group_state/`，权限为 `read-only`/`never`，禁止子 agent；这些资产属于服务状态，
+  不写入任何项目 repo。
+- 数字人 Task 按飞书发送者 `open_id` 建立映射：`Feishu Digital Human · User · <短标识>`。同一用户跨群复用同一
+  task 记忆；不同用户互相隔离。被 `@` 的原群、原消息和提问者身份只作为本轮回复投递元数据保存，不作为普通群订阅。
+- 主人身份是单一收件人，不是列表；优先使用 `integrations.feishu.owner_open_id`/`owner_chat_id`；未配置时使用首次私聊管家
+  成功建立的 owner 私聊状态；若仍没有状态且 `allowed_open_ids` 只有一个值，则把该值作为 owner。群聊提问者
+  `open_id` 只用于数字人 per-user 记忆，不会被当成主人。
+- 直接问答：模型判断可公开回答时，数字人在原群、原消息下回复，并由服务端自动携带提问者飞书 `@`。
+- 执行类但信息不足：数字人先在群里简短追问，直到需求明确。
+- 需求明确且需执行、需授权、涉及私密内容、承诺/争议类请求：数字人只能触发 `feishu_group_handoff`，服务端在群里发送固定话术
+  `您的问题已记录，我已转发给主人，有进展给您回复`，同时把问题转发到主人私聊管家 Task，并补齐主人私聊订阅。
+  管家只在主人私聊中确认、执行和回复；群聊外显身份只有数字人，管家不会自动回到原群。若结果需要公开给群里，
+  应先由主人私聊确认；管家会生成“数字人代发群聊回复”卡片，主人点击确认后才回原群原消息并 @ 提问者。
+- 同一群同一提问人的连续补充、追问、催促或同一上下文下的输出请求不会创建多个 pending 转单；服务端会合并到 active
+  handoff thread，保留原始群消息作为默认回群锚点，并记录最新补充消息。刚刚代发过的 `delivered` 单在短时间内收到同一上下文追问时会重新打开为 pending。
+- 数字人 prompt 会列出当前用户的 active/recent 转单线程摘要；模型判断当前 @ 是同一需求的补充、追问、催促、继续执行或请求输出时，应在
+  `feishu_group_handoff` action 中带 `merge_handoff_id` 复用该单。只有明确是独立新需求时才设置 `new_handoff: true`。
+- 数字人全局红线：不碰钥匙、不泄底、不替你做主。它不能提交、推送、合并、改设置、承诺结果、透露 AHA 内部、
+  密钥、权限结构或其他 task 私密内容。
+- 当前实现的上下文窗口以本次 `@` 消息为锚，并保留线程/root/parent 标识供后续历史抓取扩展；默认不额外拉取群历史。
+  若后续启用飞书历史消息 API，应继续遵守 2000 token 上限、自然边界停止和“引用消息单次只读”的隐私约束。
 
 ## Tailnet HTTPS 网页入口
 

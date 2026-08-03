@@ -135,6 +135,31 @@ class FeishuServiceTests(unittest.TestCase):
 
         self.assertEqual(normalized["text"], "Task\nline one\nline two")
 
+    def test_normalize_media_messages_extracts_resource_attachment_manifest(self) -> None:
+        image_payload = message_event(message_id="om_image")
+        image_payload["event"]["message"]["message_type"] = "image"
+        image_payload["event"]["message"]["content"] = json.dumps({"image_key": "img_v2_abcdef123456"})
+        file_payload = message_event(message_id="om_file")
+        file_payload["event"]["message"]["message_type"] = "file"
+        file_payload["event"]["message"]["content"] = json.dumps(
+            {
+                "file_key": "file_v2_abcdef123456",
+                "file_name": "需求文档.pdf",
+                "file_size": 12345,
+            },
+            ensure_ascii=False,
+        )
+
+        image = feishu.normalize_message_event(image_payload)
+        file = feishu.normalize_message_event(file_payload)
+
+        self.assertEqual(image["attachments"][0]["type"], "image")
+        self.assertEqual(image["attachments"][0]["image_key"], "img_v2_abcdef123456")
+        self.assertEqual(file["attachments"][0]["type"], "file")
+        self.assertEqual(file["attachments"][0]["file_key"], "file_v2_abcdef123456")
+        self.assertEqual(file["attachments"][0]["file_name"], "需求文档.pdf")
+        self.assertIn("需求文档.pdf", feishu.message_attachment_summary(file["attachments"]))
+
     def test_rejects_unrelated_event_type(self) -> None:
         payload = message_event()
         payload["header"]["event_type"] = "contact.user.created_v3"
@@ -389,8 +414,13 @@ class FeishuServiceTests(unittest.TestCase):
             self.assertEqual(json.loads(first_request.data), {"app_id": "cli_app", "app_secret": "secret"})
             self.assertEqual(stat.S_IMODE(feishu.token_cache_path(root).stat().st_mode), 0o600)
 
-    def test_send_text_and_card_build_feishu_message_requests(self) -> None:
-        opener = QueueOpener(FakeResponse({"code": 0, "data": {"message_id": "om_text"}}), FakeResponse({"code": 0}))
+    def test_send_text_card_image_and_file_build_feishu_message_requests(self) -> None:
+        opener = QueueOpener(
+            FakeResponse({"code": 0, "data": {"message_id": "om_text"}}),
+            FakeResponse({"code": 0}),
+            FakeResponse({"code": 0}),
+            FakeResponse({"code": 0}),
+        )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             text_result = feishu.send_text_message(
@@ -412,6 +442,24 @@ class FeishuServiceTests(unittest.TestCase):
                 tenant_access_token="tenant-token",
                 opener=opener,
             )
+            feishu.send_image_message(
+                root,
+                "",
+                "",
+                "oc_chat",
+                "img_v2_key",
+                tenant_access_token="tenant-token",
+                opener=opener,
+            )
+            feishu.send_file_message(
+                root,
+                "",
+                "",
+                "oc_chat",
+                "file_v2_key",
+                tenant_access_token="tenant-token",
+                opener=opener,
+            )
 
         self.assertEqual(text_result["data"]["message_id"], "om_text")
         text_request = opener.requests[0][0]
@@ -425,6 +473,12 @@ class FeishuServiceTests(unittest.TestCase):
         card_body = json.loads(card_request.data)
         self.assertEqual(card_body["msg_type"], "interactive")
         self.assertEqual(json.loads(card_body["content"])["elements"][0]["content"], "card")
+        image_body = json.loads(opener.requests[2][0].data)
+        self.assertEqual(image_body["msg_type"], "image")
+        self.assertEqual(json.loads(image_body["content"]), {"image_key": "img_v2_key"})
+        file_body = json.loads(opener.requests[3][0].data)
+        self.assertEqual(file_body["msg_type"], "file")
+        self.assertEqual(json.loads(file_body["content"]), {"file_key": "file_v2_key"})
 
     def test_update_card_uses_message_patch_endpoint(self) -> None:
         opener = QueueOpener(FakeResponse({"code": 0}))

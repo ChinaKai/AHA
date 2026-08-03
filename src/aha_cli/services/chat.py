@@ -11,7 +11,7 @@ from aha_cli import platform
 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
 from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort, resolve_model
-from aha_cli.domain.models import is_service_assistant_task, utc_now
+from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import (
     detect_runtime_context_compaction,
@@ -189,16 +189,23 @@ def _mark_force_full_for_runtime_context_compaction(
     return marker
 
 
-def action_retry_schema(*, service_assistant: bool = False) -> str:
-    template = "chat_service_action_retry_schema.md" if service_assistant else "chat_action_retry_schema.md"
+def action_retry_schema(*, service_assistant: bool = False, feishu_group: bool = False) -> str:
+    if feishu_group:
+        template = "chat_feishu_group_action_retry_schema.md"
+    else:
+        template = "chat_service_action_retry_schema.md" if service_assistant else "chat_action_retry_schema.md"
     return render_prompt_template(template).strip()
 
 
-def action_schema_retry_message(reason: str, *, service_assistant: bool = False) -> str:
+def action_schema_retry_message(reason: str, *, service_assistant: bool = False, feishu_group: bool = False) -> str:
+    if feishu_group:
+        allowed_action_types = "`feishu_group_handoff`"
+    else:
+        allowed_action_types = "`service_assistant`" if service_assistant else "`route_to_agent`, `spawn_sub`, and `record_task_update`"
     return render_prompt_template(
         "chat_action_schema_retry.md",
-        action_retry_schema=action_retry_schema(service_assistant=service_assistant),
-        allowed_action_types="`service_assistant`" if service_assistant else "`route_to_agent`, `spawn_sub`, and `record_task_update`",
+        action_retry_schema=action_retry_schema(service_assistant=service_assistant, feishu_group=feishu_group),
+        allowed_action_types=allowed_action_types,
         reason=reason,
     )
 
@@ -1141,6 +1148,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             message=action_schema_retry_message(
                                 schema_error,
                                 service_assistant=is_service_assistant_task(task),
+                                feishu_group=is_feishu_group_task(task),
                             ),
                             gate="action_schema_retry",
                             reason=schema_error,
@@ -1360,11 +1368,12 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     else:
                         display_source = split_knowledge_sidecar(reply)[0] if writes_task_final else reply
                     service_actions = [action for action in executed if action.get("type") == "service_assistant"]
+                    feishu_group_actions = [action for action in executed if action.get("type") == "feishu_group_handoff"]
                     service_continuation = any(action.get("continuation") for action in service_actions)
-                    service_user_response = next(
+                    action_user_response = next(
                         (
                             str(action.get("user_response") or "").strip()
-                            for action in reversed(service_actions)
+                            for action in reversed([*service_actions, *feishu_group_actions])
                             if str(action.get("user_response") or "").strip()
                         ),
                         "",
@@ -1385,7 +1394,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         ),
                         "",
                     )
-                    display_reply = "" if service_continuation else (service_user_response or action_response_text(display_source))
+                    display_reply = "" if service_continuation else (action_user_response or action_response_text(display_source))
                     if display_reply:
                         append_message(
                             root,
@@ -1399,6 +1408,11 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             to_agent=reply_target,
                             feishu_card=service_confirmation_card if reply_target == "feishu" else None,
                             feishu_confirmation_id=service_confirmation_id if reply_target == "feishu" else None,
+                            feishu_chat_id=str(item.get("feishu_chat_id") or "") or None,
+                            feishu_reply_to=str(item.get("feishu_reply_to") or item.get("feishu_message_id") or "") or None,
+                            feishu_mention_open_id=str(item.get("feishu_mention_open_id") or "") or None,
+                            feishu_channel=str(item.get("feishu_channel") or "") or None,
+                            feishu_chat_type=str(item.get("feishu_chat_type") or "") or None,
                         )
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
                     main_followup_after_delegation = bool(

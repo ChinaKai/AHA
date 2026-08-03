@@ -176,6 +176,70 @@ def _message_text(message_type: str, content: dict) -> str:
     return ""
 
 
+def message_resource_attachments(message_type: str, content: dict, *, message_id: str = "") -> list[dict]:
+    kind = str(message_type or "").strip()
+    if not isinstance(content, dict):
+        return []
+    attachments: list[dict] = []
+
+    def add(resource_type: str, payload: dict) -> None:
+        item = {
+            "message_id": str(message_id or ""),
+            "type": resource_type,
+        }
+        for key in (
+            "image_key",
+            "file_key",
+            "media_key",
+            "file_name",
+            "name",
+            "mime_type",
+            "file_size",
+            "size",
+            "duration",
+        ):
+            value = payload.get(key)
+            if value not in (None, ""):
+                item[key] = value
+        if any(key.endswith("_key") for key in item):
+            attachments.append(item)
+
+    if kind in {"image", "img"}:
+        add("image", content)
+    elif kind in {"file", "folder"}:
+        add("file", content)
+    elif kind in {"media", "video"}:
+        add("media", content)
+    elif kind == "audio":
+        add("audio", content)
+    elif kind == "post":
+        for paragraph in _list(content.get("content")):
+            for element in _list(paragraph):
+                if isinstance(element, dict) and str(element.get("tag") or "") in {"img", "media", "file"}:
+                    add(str(element.get("tag") or "attachment"), element)
+    return attachments
+
+
+def message_attachment_summary(attachments: list[dict]) -> str:
+    clean = [item for item in attachments if isinstance(item, dict)]
+    if not clean:
+        return ""
+    lines = ["飞书附件："]
+    for index, item in enumerate(clean[:8], start=1):
+        resource_type = str(item.get("type") or "attachment")
+        name = str(item.get("file_name") or item.get("name") or "").strip()
+        key = str(item.get("image_key") or item.get("file_key") or item.get("media_key") or "").strip()
+        label = f"{resource_type}"
+        if name:
+            label += f" {name}"
+        if key:
+            label += f" key={key[:6]}...{key[-4:]}" if len(key) > 12 else f" key={key}"
+        lines.append(f"{index}. {label}")
+    if len(clean) > 8:
+        lines.append(f"... 另有 {len(clean) - 8} 个附件")
+    return "\n".join(lines)
+
+
 def _mention_open_id(mention: dict) -> str:
     identity = _object(mention.get("id"))
     return str(identity.get("open_id") or mention.get("open_id") or "").strip()
@@ -207,6 +271,7 @@ def normalize_message_event(payload: dict, *, bot_open_id: str | None = None) ->
     message_type = str(message.get("message_type") or "").strip()
     content = _content_object(message.get("content"))
     text = _message_text(message_type, content)
+    attachments = message_resource_attachments(message_type, content, message_id=str(message.get("message_id") or "").strip())
     if is_at_bot:
         for mention in mentions:
             mention_id = _mention_open_id(mention)
@@ -232,6 +297,7 @@ def normalize_message_event(payload: dict, *, bot_open_id: str | None = None) ->
         "parent_id": str(message.get("parent_id") or "").strip(),
         "message_type": message_type,
         "text": text,
+        "attachments": attachments,
         "is_at_bot": is_at_bot,
         "mentioned_open_ids": mentioned_open_ids,
         "sender_type": str(sender.get("sender_type") or "").strip(),
@@ -411,6 +477,7 @@ def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict
     result = json.loads(json.dumps(card, ensure_ascii=False)) if isinstance(card, dict) else {}
     labels = {
         "confirmed": ("操作已确认", "green", "已确认并提交 AHA 执行。"),
+        "selected": ("已选择方案", "green", "已收到选择，AHA 助手将继续处理。"),
         "cancelled": ("操作已取消", "grey", "已取消，本操作不会执行。"),
         "expired": ("确认已失效", "grey", "已超过 5 分钟有效期，请重新发起操作。"),
         "stale": ("确认已失效", "grey", "目标状态已变化，请重新发起操作。"),
@@ -990,6 +1057,68 @@ def send_card_message(
     )
 
 
+def send_image_message(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    receive_id: str,
+    image_key: str,
+    *,
+    receive_id_type: str = "chat_id",
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = API_TIMEOUT_SECONDS,
+) -> dict:
+    key = str(image_key or "").strip()
+    if not key:
+        raise FeishuError("image_key 不能为空")
+    return _send_message(
+        root,
+        app_id,
+        app_secret,
+        receive_id,
+        message_type="image",
+        content={"image_key": key},
+        receive_id_type=receive_id_type,
+        tenant_access_token=tenant_access_token,
+        base_url=base_url,
+        opener=opener,
+        timeout=timeout,
+    )
+
+
+def send_file_message(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    receive_id: str,
+    file_key: str,
+    *,
+    receive_id_type: str = "chat_id",
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = API_TIMEOUT_SECONDS,
+) -> dict:
+    key = str(file_key or "").strip()
+    if not key:
+        raise FeishuError("file_key 不能为空")
+    return _send_message(
+        root,
+        app_id,
+        app_secret,
+        receive_id,
+        message_type="file",
+        content={"file_key": key},
+        receive_id_type=receive_id_type,
+        tenant_access_token=tenant_access_token,
+        base_url=base_url,
+        opener=opener,
+        timeout=timeout,
+    )
+
+
 def update_card_message(
     root: Path,
     app_id: str,
@@ -1069,6 +1198,8 @@ __all__ = [
     "load_session_bindings",
     "mark_confirmation_card_updated",
     "make_session_key",
+    "message_attachment_summary",
+    "message_resource_attachments",
     "normalize_message_event",
     "pending_confirmation_card_updates",
     "recent_groups",
@@ -1076,6 +1207,8 @@ __all__ = [
     "record_recent_group",
     "register_confirmation_card",
     "send_card_message",
+    "send_file_message",
+    "send_image_message",
     "send_text_message",
     "session_bindings_path",
     "session_key_for_message",

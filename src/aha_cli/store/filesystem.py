@@ -208,6 +208,16 @@ def append_message(
     request_policy: dict | None = None,
     feishu_card: dict | None = None,
     feishu_confirmation_id: str | None = None,
+    feishu_chat_id: str | None = None,
+    feishu_reply_to: str | None = None,
+    feishu_mention_open_id: str | None = None,
+    feishu_channel: str | None = None,
+    feishu_tenant_key: str | None = None,
+    feishu_chat_type: str | None = None,
+    feishu_message_id: str | None = None,
+    feishu_session_key: str | None = None,
+    feishu_original_text: str | None = None,
+    feishu_attachments: object | None = None,
     image: object | None = None,
     images: object | None = None,
 ) -> dict:
@@ -258,6 +268,26 @@ def append_message(
         payload["feishu_card"] = feishu_card
     if feishu_confirmation_id:
         payload["feishu_confirmation_id"] = str(feishu_confirmation_id)
+    if feishu_chat_id:
+        payload["feishu_chat_id"] = str(feishu_chat_id)
+    if feishu_reply_to:
+        payload["feishu_reply_to"] = str(feishu_reply_to)
+    if feishu_mention_open_id:
+        payload["feishu_mention_open_id"] = str(feishu_mention_open_id)
+    if feishu_channel:
+        payload["feishu_channel"] = str(feishu_channel)
+    if feishu_tenant_key:
+        payload["feishu_tenant_key"] = str(feishu_tenant_key)
+    if feishu_chat_type:
+        payload["feishu_chat_type"] = str(feishu_chat_type)
+    if feishu_message_id:
+        payload["feishu_message_id"] = str(feishu_message_id)
+    if feishu_session_key:
+        payload["feishu_session_key"] = str(feishu_session_key)
+    if feishu_original_text:
+        payload["feishu_original_text"] = str(feishu_original_text)
+    if isinstance(feishu_attachments, list) and feishu_attachments:
+        payload["feishu_attachments"] = feishu_attachments
     if image:
         payload["image"] = image
     if images:

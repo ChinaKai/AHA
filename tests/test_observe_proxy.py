@@ -44,6 +44,8 @@ class ObserveProxyTests(unittest.TestCase):
                 "model": " claude-sonnet-4-6 ",
                 "reasoning_effort": " high ",
                 "proxy_enabled": "true",
+                "owner_open_id": ["", " ou_owner ", "ou_other"],
+                "owner_chat_id": " oc_owner ",
                 "allowed_open_ids": "ou_a, ou_b,ou_a",
                 "allowed_chat_ids": "oc_a\noc_b,oc_a",
                 "group_access_mode": "all_members",
@@ -57,6 +59,8 @@ class ObserveProxyTests(unittest.TestCase):
         self.assertEqual(config["model"], "claude-sonnet-4-6")
         self.assertEqual(config["reasoning_effort"], "high")
         self.assertTrue(config["proxy_enabled"])
+        self.assertEqual(config["owner_open_id"], "ou_owner")
+        self.assertEqual(config["owner_chat_id"], "oc_owner")
         self.assertEqual(config["allowed_open_ids"], ["ou_a", "ou_b"])
         self.assertEqual(config["allowed_chat_ids"], ["oc_a", "oc_b"])
         self.assertEqual(config["group_access_mode"], "all_members")

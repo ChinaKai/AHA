@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import queue
 import sys
@@ -13,24 +14,35 @@ from aha_cli.services.feishu import (
     get_session_binding,
     make_session_key,
     mark_confirmation_card_updated,
+    message_attachment_summary,
+    message_resource_attachments,
     record_recent_group,
     set_session_binding,
 )
 from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
+from aha_cli.services.feishu_owner import remember_owner_private_chat
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
+from aha_cli.services.feishu_group import (
+    ensure_feishu_group_run,
+    ensure_feishu_group_task,
+    feishu_group_state_dir,
+    feishu_group_user_session_key,
+    group_agent_message,
+    mark_feishu_group_task_interaction,
+)
 from aha_cli.services.service_assistant import (
     LEGACY_ASSISTANT_RUN_TITLE,
     ensure_service_assistant_run,
     ensure_service_assistant_task,
     session_task_title,
 )
-from aha_cli.services.service_assistant_actions import ServiceAssistantActionError, resolve_confirmation
+from aha_cli.services.service_assistant_actions import ServiceAssistantActionError, resolve_choice, resolve_confirmation
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import aha_home_path
 from aha_cli.store.runs import run_exists
 from aha_cli.store.snapshots import task_snapshot
-from aha_cli.domain.models import is_service_assistant_task
+from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task
 from aha_cli.web.status import TERMINAL_TASK_STATUSES
 from aha_cli.web.task_messaging import handle_send_payload
 
@@ -49,19 +61,60 @@ def _plain_message(root: Path, message: Any) -> dict:
     raw = getattr(message, "raw", {})
     raw = raw if isinstance(raw, dict) else {}
     header = raw.get("header") if isinstance(raw.get("header"), dict) else {}
+    raw_message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    raw_event = raw.get("event") if isinstance(raw.get("event"), dict) else {}
+    if not raw_message and isinstance(raw_event.get("message"), dict):
+        raw_message = raw_event["message"]
     sender = getattr(message, "sender", None)
+    message_type = str(
+        getattr(message, "message_type", "")
+        or raw_message.get("message_type")
+        or raw.get("message_type")
+        or ""
+    ).strip()
+    content_value = (
+        getattr(message, "content", None)
+        or getattr(message, "raw_content", None)
+        or raw_message.get("content")
+        or raw.get("content")
+    )
+    if isinstance(content_value, dict):
+        content = content_value
+    elif isinstance(content_value, str):
+        try:
+            parsed = json.loads(content_value)
+        except json.JSONDecodeError:
+            content = {"text": content_value}
+        else:
+            content = parsed if isinstance(parsed, dict) else {"text": content_value}
+    else:
+        content = {}
+    attachments = message_resource_attachments(
+        message_type,
+        content,
+        message_id=str(getattr(message, "message_id", "") or getattr(message, "id", "") or raw_message.get("message_id") or ""),
+    )
+    text = str(
+        getattr(message, "body_text", "")
+        or getattr(message, "safe_content_text", "")
+        or getattr(message, "content_text", "")
+        or content.get("text")
+        or ""
+    ).strip()
+    if not text and attachments:
+        text = message_attachment_summary(attachments)
     return {
         "tenant_key": str(header.get("tenant_key") or app_id or "local"),
         "open_id": str(getattr(message, "sender_id", "") or getattr(sender, "open_id", "") or ""),
         "chat_id": str(getattr(message, "chat_id", "") or ""),
         "chat_type": str(getattr(message, "chat_type", "") or "unknown").lower(),
-        "message_id": str(getattr(message, "message_id", "") or getattr(message, "id", "") or ""),
-        "text": str(
-            getattr(message, "body_text", "")
-            or getattr(message, "safe_content_text", "")
-            or getattr(message, "content_text", "")
-            or ""
-        ).strip(),
+        "message_id": str(getattr(message, "message_id", "") or getattr(message, "id", "") or raw_message.get("message_id") or ""),
+        "root_id": str(getattr(message, "root_id", "") or ""),
+        "thread_id": str(getattr(message, "thread_id", "") or getattr(message, "root_id", "") or ""),
+        "parent_id": str(getattr(message, "parent_id", "") or ""),
+        "message_type": message_type,
+        "text": text,
+        "attachments": attachments,
         "is_at_bot": bool(getattr(message, "mentioned_bot", False)),
         "sender_is_bot": bool(getattr(message, "sender_is_bot", False)),
     }
@@ -405,6 +458,10 @@ def _assistant_task_title(session_key: str) -> str:
     return session_task_title(session_key)
 
 
+def _feishu_group_run(root: Path) -> str:
+    return ensure_feishu_group_run(root, _assistant_agent_defaults(root))
+
+
 def _active_task(root: Path, run_id: str, task_id: str) -> dict | None:
     if not run_id or not task_id:
         return None
@@ -416,6 +473,21 @@ def _active_task(root: Path, run_id: str, task_id: str) -> dict | None:
     if workspace and not Path(workspace).is_dir():
         return None
     if not is_service_assistant_task(task) or Path(workspace).resolve() != aha_home_path(root).resolve():
+        return None
+    return None if str(task.get("status") or "") in TERMINAL_TASK_STATUSES else task
+
+
+def _active_group_task(root: Path, run_id: str, task_id: str) -> dict | None:
+    if not run_id or not task_id:
+        return None
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except (KeyError, SystemExit):
+        return None
+    workspace = str(task.get("workspace_path") or "").strip()
+    if workspace and not Path(workspace).is_dir():
+        return None
+    if not is_feishu_group_task(task) or Path(workspace).resolve() != feishu_group_state_dir(root).resolve():
         return None
     return None if str(task.get("status") or "") in TERMINAL_TASK_STATUSES else task
 
@@ -435,9 +507,82 @@ def _ensure_agent_task(root: Path, run_id: str, session_key: str, open_id: str, 
     return task
 
 
+def _ensure_group_agent_task(root: Path, run_id: str, session_key: str, open_id: str, binding: dict) -> dict:
+    active = _active_group_task(root, run_id, str(binding.get("active_task_id") or ""))
+    if active is not None:
+        return active
+    task = ensure_feishu_group_task(root, run_id, session_key, _assistant_agent_defaults(root))
+    set_session_binding(
+        root,
+        session_key,
+        active_run_id=run_id,
+        active_task_id=str(task.get("id") or ""),
+        acl_subject=open_id,
+    )
+    return task
+
+
 def _never_handle_command(_root: Path, _run_id: str, _payload: dict, _message: str, _task_id: str | None) -> tuple[bool, None, dict]:
     """Keep Feishu text as agent input, including text that starts with '/'."""
     return False, None, {}
+
+
+def _handle_group_mention(root: Path, channel: Any, payload: dict, *, text: str) -> None:
+    chat_id = str(payload.get("chat_id") or "")
+    message_id = str(payload.get("message_id") or "")
+    open_id = str(payload.get("open_id") or "")
+    try:
+        session_key = feishu_group_user_session_key(
+            tenant_key=str(payload.get("tenant_key") or "local"),
+            open_id=open_id,
+        )
+        run_id = _feishu_group_run(root)
+        binding = get_session_binding(root, session_key)
+        if binding is None or str(binding.get("active_run_id") or "") != run_id:
+            binding = set_session_binding(
+                root,
+                session_key,
+                active_run_id=run_id,
+                active_task_id=None,
+                acl_subject=open_id,
+        )
+        task = _ensure_group_agent_task(root, run_id, session_key, open_id, binding)
+        task_id = str(task.get("id") or "")
+        mark_feishu_group_task_interaction(root, run_id, task_id)
+        handle_send_payload(
+            root,
+            run_id,
+            {
+                "task_id": task_id,
+                "target": "main",
+                "sender": "feishu",
+                "reply_target": "feishu",
+                "message": group_agent_message(payload, text),
+                "feishu_chat_id": chat_id,
+                "feishu_reply_to": message_id,
+                "feishu_mention_open_id": open_id,
+                "feishu_channel": "group_digital_human",
+                "feishu_tenant_key": str(payload.get("tenant_key") or "local"),
+                "feishu_chat_type": "group",
+                "feishu_message_id": message_id,
+                "feishu_session_key": session_key,
+                "feishu_original_text": text,
+                "feishu_attachments": payload.get("attachments") if isinstance(payload.get("attachments"), list) else [],
+            },
+            command_handler=_never_handle_command,
+            background_backend_start=True,
+        )
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "accepted",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+        )
+    except (FeishuError, KeyError, SystemExit, ValueError) as exc:
+        _audit_inbound_resolution(root, payload, "failed", error=exc)
+        _send_text(root, channel, chat_id, "飞书群聊数字人处理失败，请稍后重试。", reply_to=message_id)
 
 
 def _confirmation_subscription(root: Path, chat_id: str, open_id: str) -> tuple[str, dict]:
@@ -489,21 +634,28 @@ def _finish_confirmation(
         command_handler=_never_handle_command,
         background_backend_start=True,
     )
-    _send_text(root, channel, chat_id, "操作已确认并执行，AHA 助手正在整理结果。", reply_to=message_id)
+    reply = "已收到选择，AHA 助手正在继续处理。" if confirmation.get("choice") else "操作已确认并执行，AHA 助手正在整理结果。"
+    _send_text(root, channel, chat_id, reply, reply_to=message_id)
 
 
 def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
     value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
-    if str(value.get("kind") or "") != "aha_service_confirmation":
+    action_kind = str(value.get("kind") or "")
+    if action_kind not in {"aha_service_confirmation", "aha_service_choice"}:
         _audit_inbound_resolution(root, payload, "ignored", reason="unsupported_card_action")
         return
     chat_id = str(payload.get("chat_id") or "")
     message_id = str(payload.get("message_id") or "")
     open_id = str(payload.get("open_id") or "")
     decision = {"confirm": "确认", "cancel": "取消"}.get(str(value.get("decision") or "").lower())
-    if not decision:
+    choice_id = str(value.get("choice_id") or "").strip()
+    if action_kind == "aha_service_confirmation" and not decision:
         _audit_inbound_resolution(root, payload, "rejected", reason="invalid_decision")
         _send_text(root, channel, chat_id, "无法处理卡片操作：确认数据不完整。", reply_to=message_id)
+        return
+    if action_kind == "aha_service_choice" and not choice_id:
+        _audit_inbound_resolution(root, payload, "rejected", reason="invalid_choice")
+        _send_text(root, channel, chat_id, "无法处理卡片操作：选择数据不完整。", reply_to=message_id)
         return
     try:
         session_key, subscription = _confirmation_subscription(root, chat_id, open_id)
@@ -518,13 +670,22 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
             _audit_inbound_resolution(root, payload, "rejected", reason=authorization_error, session_key=session_key)
             _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
             return
-        confirmation = resolve_confirmation(
-            root,
-            open_id=open_id,
-            session_key=session_key,
-            text=decision,
-            message_id=message_id,
-        )
+        if action_kind == "aha_service_choice":
+            confirmation = resolve_choice(
+                root,
+                open_id=open_id,
+                session_key=session_key,
+                message_id=message_id,
+                choice_id=choice_id,
+            )
+        else:
+            confirmation = resolve_confirmation(
+                root,
+                open_id=open_id,
+                session_key=session_key,
+                text=decision,
+                message_id=message_id,
+            )
         if confirmation is None:
             raise ServiceAssistantActionError("卡片确认数据无效")
         _finish_confirmation(
@@ -566,7 +727,10 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
     chat_type = str(payload.get("chat_type") or "").lower()
     if chat_type == "group" and chat_id:
         record_recent_group(root, chat_id)
-    if payload.get("chat_type") != "p2p" and config.get("group_mentions_only") and not payload.get("is_at_bot"):
+    if chat_type == "group" and not payload.get("is_at_bot"):
+        _audit_inbound_resolution(root, payload, "ignored", reason="group_without_mention")
+        return
+    if chat_type != "p2p" and config.get("group_mentions_only") and not payload.get("is_at_bot"):
         _audit_inbound_resolution(root, payload, "ignored", reason="group_without_mention")
         return
     if not claim_inbound_message(root, message_id):
@@ -588,6 +752,9 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         _audit_inbound_resolution(root, payload, "rejected", reason="empty_text")
         _send_text(root, channel, chat_id, "请发送文本消息。", reply_to=message_id)
         return
+    if chat_type == "group":
+        _handle_group_mention(root, channel, payload, text=text)
+        return
 
     session_key = _session_key(payload)
     binding = _binding(root, session_key, open_id, server_default_run_id)
@@ -606,6 +773,13 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         run_id=run_id,
         task_id=task_id,
         chat_type=chat_type,
+    )
+    remember_owner_private_chat(
+        root,
+        tenant_key=str(payload.get("tenant_key") or "local"),
+        open_id=open_id,
+        chat_id=chat_id,
+        session_key=session_key,
     )
     try:
         confirmation = resolve_confirmation(root, open_id=open_id, session_key=session_key, text=text)
@@ -644,7 +818,13 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
     handle_send_payload(
         root,
         run_id,
-        {"task_id": task_id, "target": "main", "sender": "feishu", "message": text},
+        {
+            "task_id": task_id,
+            "target": "main",
+            "sender": "feishu",
+            "message": text,
+            "feishu_attachments": payload.get("attachments") if isinstance(payload.get("attachments"), list) else [],
+        },
         command_handler=_never_handle_command,
         background_backend_start=True,
     )

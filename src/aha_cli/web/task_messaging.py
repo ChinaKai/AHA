@@ -6,6 +6,7 @@ from pathlib import Path
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
+from aha_cli.services.feishu import message_attachment_summary
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -315,6 +316,11 @@ def handle_send_payload(
         ensure_chat_offset_before_message(root, run_id, task_id, target_id)
 
     message = message_with_memo_attachment_context(root, run_id, agent_message or message)
+    feishu_attachments = payload.get("feishu_attachments") if isinstance(payload.get("feishu_attachments"), list) else []
+    if feishu_attachments and str(payload.get("feishu_channel") or "") != "group_digital_human":
+        attachment_summary = message_attachment_summary(feishu_attachments)
+        if attachment_summary and attachment_summary not in message:
+            message = f"{message}\n\n{attachment_summary}".strip()
     recovery_context = consume_agent_recovery_context(root, run_id, task_id, target_id)
     plain_sticky = message_should_use_plain_sticky(root, run_id, task_id, target_id, command_payload)
     sent = append_message(
@@ -335,6 +341,16 @@ def handle_send_payload(
         plain_sticky=plain_sticky,
         service_action_depth=int(payload.get("service_action_depth") or 0) if "service_action_depth" in payload else None,
         request_policy=trusted_request_policy if isinstance(trusted_request_policy, dict) else None,
+        feishu_chat_id=str(payload.get("feishu_chat_id") or "") or None,
+        feishu_reply_to=str(payload.get("feishu_reply_to") or "") or None,
+        feishu_mention_open_id=str(payload.get("feishu_mention_open_id") or "") or None,
+        feishu_channel=str(payload.get("feishu_channel") or "") or None,
+        feishu_tenant_key=str(payload.get("feishu_tenant_key") or "") or None,
+        feishu_chat_type=str(payload.get("feishu_chat_type") or "") or None,
+        feishu_message_id=str(payload.get("feishu_message_id") or "") or None,
+        feishu_session_key=str(payload.get("feishu_session_key") or "") or None,
+        feishu_original_text=str(payload.get("feishu_original_text") or "") or None,
+        feishu_attachments=feishu_attachments or None,
         image=payload.get("image"),
         images=payload.get("images"),
     )

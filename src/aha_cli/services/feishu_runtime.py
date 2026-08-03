@@ -8,6 +8,8 @@ import threading
 from typing import Any
 
 from aha_cli.domain.models import (
+    is_feishu_group_run,
+    is_feishu_group_task,
     is_service_assistant_run,
     is_service_assistant_task,
     normalize_feishu_integration_config,
@@ -138,6 +140,44 @@ def _service_assistant_status(root: Path) -> dict:
     }
 
 
+def _feishu_group_status(root: Path) -> dict:
+    run_id = ""
+    plan: dict = {}
+    for summary in list_run_summaries(root):
+        candidate = str(summary.get("id") or "")
+        if not candidate:
+            continue
+        try:
+            candidate_plan = require_plan(root, candidate)
+        except SystemExit:
+            continue
+        if is_feishu_group_run(candidate_plan):
+            run_id = candidate
+            plan = candidate_plan
+            break
+    tasks = [
+        task
+        for task in plan.get("tasks", [])
+        if isinstance(task, dict) and is_feishu_group_task(task) and not task.get("deleted_at")
+    ]
+    active = [task for task in tasks if str(task.get("status") or "") not in {"completed", "failed", "blocked"}]
+    return {
+        "identity": "feishu_group_digital_human",
+        "system_managed": True,
+        "workspace_path": str((aha_home_path(root) / "feishu_group_state").resolve()),
+        "sandbox": "read-only",
+        "approval": "never",
+        "run_id": run_id,
+        "provisioned": bool(run_id),
+        "conversation_count": len(tasks),
+        "active_conversation_count": len(active),
+        "prompt_templates": [
+            "feishu_group_digital_human_identity.md",
+            "feishu_group_digital_human_action_contract.md",
+        ],
+    }
+
+
 def _create_feishu_channel(app_id: str, app_secret: str, security_mode: str) -> Any:
     """Import and construct the SDK outside the web server's event-loop thread.
 
@@ -187,6 +227,8 @@ def feishu_status(root: Path) -> dict:
         "model": str(config.get("model") or ""),
         "reasoning_effort": str(config.get("reasoning_effort") or ""),
         "proxy_enabled": configured_proxy_enabled if isinstance(configured_proxy_enabled, bool) else None,
+        "owner_open_id": str(config.get("owner_open_id") or ""),
+        "owner_chat_id": str(config.get("owner_chat_id") or ""),
         "effective_backend": effective_backend,
         "effective_model": effective_model,
         "effective_reasoning_effort": effective_reasoning_effort,
@@ -205,6 +247,7 @@ def feishu_status(root: Path) -> dict:
         "sdk_installed": feishu_sdk_available(),
         "runtime": runtime,
         "assistant": _service_assistant_status(root),
+        "group_digital_human": _feishu_group_status(root),
     }
 
 
@@ -234,6 +277,8 @@ def update_feishu_settings(root: Path, payload: dict) -> dict:
             "model",
             "reasoning_effort",
             "proxy_enabled",
+            "owner_open_id",
+            "owner_chat_id",
             "allowed_open_ids",
             "allowed_chat_ids",
             "group_access_mode",
