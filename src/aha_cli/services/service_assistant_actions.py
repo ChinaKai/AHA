@@ -6,12 +6,24 @@ from pathlib import Path
 import re
 import secrets
 import time
+from aha_cli.backends.registry import (
+    CLAUDE_MODEL_OPTIONS,
+    CODEX_DEFAULT_MODEL,
+    agent_backend_names,
+    model_options,
+    normalize_reasoning_effort,
+    reasoning_effort_options as backend_reasoning_effort_options,
+)
 from aha_cli.domain.models import (
+    TASK_COLLABORATION_MODES,
     is_feishu_group_run,
     is_feishu_group_task,
     is_service_assistant_run,
     is_service_assistant_task,
+    normalize_bool,
+    resolve_task_collaboration,
 )
+from aha_cli.domain.workflow_templates import is_workflow_template, normalize_workflow_template
 from aha_cli.services.feishu import (
     ACTION_TOKEN_TTL_SECONDS,
     consume_action_token,
@@ -22,6 +34,7 @@ from aha_cli.services.feishu import (
 )
 from aha_cli.services.feishu_notifications import load_subscription_state, send_direct_message
 from aha_cli.services.feishu_runtime import feishu_config, feishu_status, update_feishu_settings
+from aha_cli.services.feishu_work_run import feishu_work_run_options, resolve_feishu_work_run_id
 from aha_cli.services.feishu_group import FEISHU_GROUP_HANDOFF_ACK
 from aha_cli.services.feishu_group_handoffs import (
     get_group_handoff,
@@ -30,6 +43,7 @@ from aha_cli.services.feishu_group_handoffs import (
 )
 from aha_cli.services.service_assistant_handoffs import mark_service_handoff, register_service_handoff
 from aha_cli.services.service_runtime import service_runtime_prompt_payload
+from aha_cli.web.run_api import workspace_options as web_workspace_options
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_event, create_plan
 from aha_cli.store.io import iter_jsonl_reverse
@@ -37,16 +51,25 @@ from aha_cli.store.knowledge import iter_all_entries, search_entries
 from aha_cli.store.paths import event_path
 from aha_cli.store.runs import list_run_summaries, require_plan, run_summary
 from aha_cli.store.snapshots import task_snapshot
-from aha_cli.store.task_memos import create_task_memo, read_task_memos, update_task_memo
-from aha_cli.store.workspaces import list_workspaces, resolve_workspace_path
+from aha_cli.store.task_memos import create_task_memo, normalize_memo_date, normalize_memo_status, read_task_memos, update_task_memo
+from aha_cli.store.workspaces import resolve_workspace_path
 
 SERVICE_ASSISTANT_ACTION = "service_assistant_change"
 SERVICE_ASSISTANT_CHOICE = "service_assistant_choice"
 GROUP_HANDOFF_REPLY_CHOICE_OPERATION = "select_feishu_group_handoff_for_reply"
+CREATE_MEMO_ATTRIBUTE_CHOICE_OPERATION = "select_create_memo_attributes"
+CREATE_TASK_RUNTIME_CHOICE_OPERATION = "select_create_task_runtime"
+CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION = "select_create_task_attributes"
+CREATE_TASK_CONFIG_CHOICE_OPERATION = "configure_create_task"
+CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID = "__submit_memo_config__"
+CREATE_TASK_CONFIG_SUBMIT_CHOICE_ID = "__submit_task_config__"
 MAX_ACTION_RESULT_CHARS = 12_000
 MAX_ACTION_RESULT_ITEMS = 20
 MAX_ACTION_DEPTH = 3
 MAX_CHOICE_OPTIONS = 6
+MAX_FORM_SELECT_OPTIONS = 80
+SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
+APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 CONFIRM_RE = re.compile(r"^\s*(确认|取消)(?:\s+([A-Za-z0-9_-]{8,}))?\s*$")
 COMMIT_ROUTING_RE = re.compile(
     r"(?:\b(?:aha\s+commit|git\s+commit|commit|push|merge|revert|cherry-pick|amend)\b|提交|推送|合并|回滚|撤销提交)",
@@ -85,11 +108,13 @@ WRITE_OPERATIONS = {
     "update_memo",
     "update_safe_settings",
     "send_feishu_group_reply",
+    "dismiss_feishu_group_handoff",
 }
 CHOICE_ARGUMENT_KEYS = {"prompt", "options"}
 SAFE_SETTING_KEYS = {
     "notifications_enabled",
     "group_mentions_only",
+    "default_run_id",
     "backend",
     "model",
     "reasoning_effort",
@@ -106,13 +131,63 @@ WRITE_ARGUMENT_KEYS = {
         "backend",
         "model",
         "reasoning_effort",
+        "sandbox",
+        "approval",
+        "proxy_enabled",
+        "collaboration_mode",
+        "workflow_template",
+        "delegation_policy",
+        "max_sub_agents",
+        "preferred_sub_backend",
+        "preferred_sub_model",
+        "knowledge_enabled",
+        "runtime_selected",
+        "runtime_preset",
+        "attributes_selected",
+        "attribute_preset",
+        "source_memo_id",
+        "memo_id",
     },
     "send_task_message": {"run_id", "task_id", "message"},
     "complete_task": {"run_id", "task_id"},
     "reopen_task": {"run_id", "task_id"},
-    "create_memo": {"run_id", "title", "description", "status", "scheduled_date", "end_date"},
-    "update_memo": {"run_id", "memo_id", "title", "description", "status", "scheduled_date", "end_date"},
+    "create_memo": {
+        "run_id",
+        "title",
+        "description",
+        "status",
+        "created_at",
+        "scheduled_date",
+        "end_date",
+        "workspace_id",
+        "workspace_path",
+        "backend",
+        "model",
+        "sandbox",
+        "approval",
+        "proxy_enabled",
+        "collaboration_mode",
+        "workflow_template",
+        "delegation_policy",
+        "max_sub_agents",
+        "preferred_sub_backend",
+        "source_handoff_id",
+        "created_task_id",
+        "attributes_selected",
+        "attribute_preset",
+    },
+    "update_memo": {
+        "run_id",
+        "memo_id",
+        "title",
+        "description",
+        "status",
+        "scheduled_date",
+        "end_date",
+        "created_task_id",
+    },
     "send_feishu_group_reply": {"handoff_id", "message"},
+    "dismiss_feishu_group_handoff": {"handoff_id", "terminal_status", "reason"},
 }
 
 
@@ -311,6 +386,16 @@ def _task_projection(task: dict) -> dict:
         "backend": task.get("preferred_backend"),
         "model": task.get("preferred_model"),
         "reasoning_effort": task.get("preferred_reasoning_effort"),
+        "sandbox": task.get("preferred_sandbox"),
+        "approval": task.get("preferred_approval"),
+        "proxy_enabled": bool(task.get("preferred_proxy_enabled")),
+        "collaboration_mode": task.get("collaboration_mode"),
+        "workflow_template": task.get("workflow_template"),
+        "delegation_policy": task.get("delegation_policy"),
+        "max_sub_agents": task.get("max_sub_agents"),
+        "preferred_sub_backend": task.get("preferred_sub_backend"),
+        "preferred_sub_model": task.get("preferred_sub_model"),
+        "token_saving": task.get("token_saving"),
         "created_at": task.get("created_at"),
         "started_at": task.get("started_at"),
         "finished_at": task.get("finished_at"),
@@ -344,6 +429,18 @@ def _memo_projection(memo: dict) -> dict:
         "status": memo.get("status"),
         "scheduled_date": memo.get("scheduled_date"),
         "end_date": memo.get("end_date"),
+        "workspace_id": memo.get("workspace_id"),
+        "workspace_path": memo.get("workspace_path"),
+        "backend": memo.get("backend"),
+        "model": memo.get("model"),
+        "sandbox": memo.get("sandbox"),
+        "approval": memo.get("approval"),
+        "proxy_enabled": memo.get("proxy_enabled"),
+        "collaboration_mode": memo.get("collaboration_mode"),
+        "workflow_template": memo.get("workflow_template"),
+        "delegation_policy": memo.get("delegation_policy"),
+        "max_sub_agents": memo.get("max_sub_agents"),
+        "preferred_sub_backend": memo.get("preferred_sub_backend"),
         "created_task_id": memo.get("created_task_id"),
         "created_at": memo.get("created_at"),
         "updated_at": memo.get("updated_at"),
@@ -388,6 +485,9 @@ def _settings_summary(root: Path) -> dict:
             "proxy_enabled": status.get("effective_proxy_enabled"),
             "notifications_enabled": status.get("notifications_enabled"),
             "group_mentions_only": status.get("group_mentions_only"),
+            "default_run_id": status.get("default_run_id"),
+            "default_run_available": status.get("default_run_available"),
+            "default_run_goal": (status.get("default_run") or {}).get("goal") if isinstance(status.get("default_run"), dict) else "",
             "security_mode": status.get("security_mode"),
             "allowed_open_id_count": status.get("allowed_open_id_count"),
             "allowed_chat_id_count": status.get("allowed_chat_id_count"),
@@ -453,12 +553,12 @@ def _read_operation(root: Path, operation: str, arguments: dict) -> object:
             raise ServiceAssistantActionError("system-managed tasks are not available through ordinary task operations")
         return _task_projection(task)
     if operation == "list_memos":
-        run_id = _required_text(arguments, "run_id")
+        run_id = str(arguments.get("run_id") or "").strip() or resolve_feishu_work_run_id(root)
         if _is_service_run(require_plan(root, run_id)):
             raise ServiceAssistantActionError("system-managed runs are not available through ordinary memo operations")
         return [_memo_projection(item) for item in read_task_memos(root, run_id)[: _limit(arguments)]]
     if operation == "get_memo":
-        run_id = _required_text(arguments, "run_id")
+        run_id = str(arguments.get("run_id") or "").strip() or resolve_feishu_work_run_id(root)
         memo_id = _required_text(arguments, "memo_id")
         if _is_service_run(require_plan(root, run_id)):
             raise ServiceAssistantActionError("system-managed runs are not available through ordinary memo operations")
@@ -489,8 +589,12 @@ def _read_operation(root: Path, operation: str, arguments: dict) -> object:
     raise ServiceAssistantActionError(f"unknown read operation: {operation}")
 
 
-def _target_run(root: Path, arguments: dict) -> tuple[str, dict]:
-    run_id = _required_text(arguments, "run_id")
+def _target_run(root: Path, arguments: dict, *, allow_default: bool = False) -> tuple[str, dict]:
+    run_id = str(arguments.get("run_id") or "").strip()
+    if not run_id and allow_default:
+        run_id = resolve_feishu_work_run_id(root)
+    if not run_id:
+        raise ServiceAssistantActionError("run_id is required")
     plan = require_plan(root, run_id)
     if _is_service_run(plan):
         raise ServiceAssistantActionError("system-managed runs cannot be changed by ordinary operations")
@@ -572,6 +676,61 @@ def _latest_feishu_user_request(root: Path, run_id: str, task_id: str) -> str:
     return ""
 
 
+def _latest_group_handoff_id_for_steward(root: Path, run_id: str, task_id: str) -> str:
+    for _offset, event in iter_jsonl_reverse(event_path(root, run_id)):
+        if str(event.get("type") or "") != "message":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if str(data.get("task_id") or "") != task_id:
+            continue
+        senders = {
+            str(data.get(key) or "").strip().lower()
+            for key in ("sender", "from_agent", "display_sender")
+        }
+        targets = {
+            str(data.get(key) or "").strip().lower()
+            for key in ("target", "to_agent", "display_target")
+        }
+        if "main" not in targets:
+            continue
+        if "feishu" in senders:
+            return ""
+        if "feishu-group" not in senders:
+            continue
+        handoff_id = str(data.get("feishu_group_handoff_id") or "").strip()
+        if not handoff_id:
+            return ""
+        handoff = get_group_handoff(root, handoff_id)
+        if not isinstance(handoff, dict):
+            return ""
+        if str(handoff.get("status") or "") != "pending":
+            return ""
+        if str(handoff.get("steward_run_id") or "") != str(run_id or "") or str(
+            handoff.get("steward_task_id") or ""
+        ) != str(task_id or ""):
+            return ""
+        return handoff_id
+    return ""
+
+
+def _source_group_handoff_id(root: Path, arguments: dict, *, assistant_run_id: str, assistant_task_id: str) -> str:
+    requested = str(arguments.get("source_handoff_id") or arguments.get("handoff_id") or "").strip()
+    if requested:
+        return str(
+            _target_group_handoff(
+                root,
+                {"handoff_id": requested},
+                assistant_run_id=assistant_run_id,
+                assistant_task_id=assistant_task_id,
+            ).get("id")
+            or ""
+        )
+    latest = _latest_group_handoff_id_for_steward(root, assistant_run_id, assistant_task_id)
+    if latest:
+        return latest
+    return ""
+
+
 def _commit_only_request_policy() -> dict:
     return {
         "source": "feishu_service_assistant",
@@ -579,6 +738,119 @@ def _commit_only_request_policy() -> dict:
         "remote_push": "forbidden",
         "commit_policy": "inherit_target_runtime",
     }
+
+
+def _attributes_selected(arguments: dict) -> bool:
+    return normalize_bool(arguments.get("attributes_selected"), default=False)
+
+
+def _runtime_selected(arguments: dict) -> bool:
+    return normalize_bool(arguments.get("runtime_selected"), default=False)
+
+
+def _clean_optional_string(arguments: dict, key: str, *, limit: int = 800) -> str:
+    return _text(arguments.get(key), limit).strip()
+
+
+def _normalize_sandbox(arguments: dict, normalized: dict) -> None:
+    if "sandbox" not in arguments:
+        return
+    sandbox = str(arguments.get("sandbox") or "").strip()
+    if sandbox and sandbox not in SANDBOX_OPTIONS:
+        raise ServiceAssistantActionError("sandbox must be read-only, workspace-write, or danger-full-access")
+    if sandbox:
+        normalized["sandbox"] = sandbox
+
+
+def _normalize_approval(arguments: dict, normalized: dict) -> None:
+    if "approval" not in arguments:
+        return
+    approval = str(arguments.get("approval") or "").strip()
+    if approval and approval not in APPROVAL_OPTIONS:
+        raise ServiceAssistantActionError("approval must be untrusted, on-failure, on-request, or never")
+    if approval:
+        normalized["approval"] = approval
+
+
+def _normalize_proxy_enabled(arguments: dict, normalized: dict) -> None:
+    if "proxy_enabled" in arguments:
+        normalized["proxy_enabled"] = normalize_bool(arguments.get("proxy_enabled"))
+
+
+def _normalize_task_runtime_preferences(arguments: dict, normalized: dict) -> None:
+    if "backend" in arguments:
+        backend = str(arguments.get("backend") or "").strip().lower()
+        if backend and backend not in {"codex", "claude", "stub"}:
+            raise ServiceAssistantActionError("backend must be codex, claude, stub, or empty to inherit")
+        if backend:
+            normalized["backend"] = backend
+        elif "backend" in normalized:
+            normalized.pop("backend", None)
+    for key in ("model", "reasoning_effort"):
+        if key in arguments:
+            value = _clean_optional_string(arguments, key, limit=200)
+            if value:
+                normalized[key] = value
+            else:
+                normalized.pop(key, None)
+    if "knowledge_enabled" in arguments:
+        normalized["knowledge_enabled"] = normalize_bool(arguments.get("knowledge_enabled"))
+    if "runtime_selected" in arguments:
+        normalized["runtime_selected"] = _runtime_selected(arguments)
+    if "runtime_preset" in arguments:
+        value = _clean_optional_string(arguments, "runtime_preset", limit=200)
+        if value:
+            normalized["runtime_preset"] = value
+
+
+def _normalize_workflow(arguments: dict, normalized: dict) -> None:
+    if "workflow_template" not in arguments:
+        return
+    raw = str(arguments.get("workflow_template") or "auto").strip() or "auto"
+    if not is_workflow_template(raw):
+        raise ServiceAssistantActionError(f"unknown workflow template: {raw}")
+    normalized["workflow_template"] = normalize_workflow_template(raw)
+
+
+def _normalize_collaboration(arguments: dict, normalized: dict) -> None:
+    if not any(key in arguments for key in ("collaboration_mode", "delegation_policy", "max_sub_agents")):
+        return
+    if "collaboration_mode" in arguments:
+        mode = str(arguments.get("collaboration_mode") or "").strip().lower()
+        if mode and mode not in TASK_COLLABORATION_MODES:
+            raise ServiceAssistantActionError(f"unknown collaboration mode: {mode}")
+    if "max_sub_agents" in arguments and arguments.get("max_sub_agents") not in (None, ""):
+        try:
+            int(arguments.get("max_sub_agents"))
+        except (TypeError, ValueError) as exc:
+            raise ServiceAssistantActionError("max_sub_agents must be a non-negative integer") from exc
+    try:
+        mode, policy, limit = resolve_task_collaboration(
+            arguments.get("collaboration_mode") if "collaboration_mode" in arguments else None,
+            arguments.get("delegation_policy") if "delegation_policy" in arguments else None,
+            arguments.get("max_sub_agents") if "max_sub_agents" in arguments else None,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ServiceAssistantActionError("max_sub_agents must be a non-negative integer") from exc
+    normalized["collaboration_mode"] = mode
+    normalized["delegation_policy"] = policy
+    normalized["max_sub_agents"] = limit
+
+
+def _normalize_execution_preferences(arguments: dict, normalized: dict) -> None:
+    _normalize_task_runtime_preferences(arguments, normalized)
+    _normalize_sandbox(arguments, normalized)
+    _normalize_approval(arguments, normalized)
+    _normalize_proxy_enabled(arguments, normalized)
+    _normalize_workflow(arguments, normalized)
+    _normalize_collaboration(arguments, normalized)
+    for key in ("preferred_sub_backend", "preferred_sub_model", "attribute_preset"):
+        if key in arguments:
+            value = _clean_optional_string(arguments, key, limit=200)
+            if value:
+                normalized[key] = value
+    if "attributes_selected" in arguments:
+        normalized["attributes_selected"] = _attributes_selected(arguments)
 
 
 def _normalized_write_arguments(
@@ -608,17 +880,39 @@ def _normalized_write_arguments(
         normalized["workspace_path"] = resolved_path
         normalized["workspace_id"] = resolved_id
     elif operation == "create_task":
-        run_id, plan = _target_run(root, arguments)
+        try:
+            run_id, plan = _target_run(root, arguments, allow_default=True)
+        except (SystemExit, ValueError) as exc:
+            if str(arguments.get("run_id") or "").strip():
+                raise
+            fallback_runs = feishu_work_run_options(root, limit=1)
+            if not fallback_runs:
+                raise exc
+            run_id, plan = _target_run(root, {"run_id": str(fallback_runs[0].get("id") or "")})
         normalized.update({"run_id": run_id, "title": _required_text(arguments, "title")})
         requested_workspace = str(arguments.get("workspace_path") or "").strip()
         if requested_workspace:
-            normalized["workspace_path"], _workspace_id = _validated_workspace(
-                root,
-                workspace_id=str(arguments.get("workspace_id") or "").strip() or None,
-                workspace_path=requested_workspace,
-            )
+            run_workspace = _run_workspace(plan)
+            if Path(requested_workspace).resolve() == Path(run_workspace).resolve():
+                normalized["workspace_path"] = run_workspace
+            else:
+                normalized["workspace_path"], _workspace_id = _validated_workspace(
+                    root,
+                    workspace_id=str(arguments.get("workspace_id") or "").strip() or None,
+                    workspace_path=requested_workspace,
+                )
         else:
             normalized["workspace_path"] = _run_workspace(plan)
+        source_memo_id = str(arguments.get("source_memo_id") or arguments.get("memo_id") or "").strip()
+        if source_memo_id:
+            memo = next((item for item in read_task_memos(root, run_id) if str(item.get("id") or "") == source_memo_id), None)
+            if not isinstance(memo, dict):
+                raise ServiceAssistantActionError(f"memo not found: {source_memo_id}")
+            normalized["source_memo_id"] = source_memo_id
+            normalized.pop("memo_id", None)
+        _normalize_execution_preferences(arguments, normalized)
+        normalized.pop("runtime_preset", None)
+        normalized.pop("attribute_preset", None)
     elif operation == "send_task_message":
         run_id, _plan = _target_run(root, arguments)
         message = _required_text(arguments, "message")
@@ -657,15 +951,62 @@ def _normalized_write_arguments(
         if _is_service_task(task_snapshot(root, run_id, normalized["task_id"])["task"]):
             raise ServiceAssistantActionError("cannot change a system-managed task")
     elif operation == "create_memo":
-        run_id, _plan = _target_run(root, arguments)
+        run_id, _plan = _target_run(root, arguments, allow_default=True)
         normalized["run_id"] = run_id
         if not str(arguments.get("title") or "").strip() and not str(arguments.get("description") or "").strip():
             raise ServiceAssistantActionError("title or description is required")
+        if "workspace_path" in arguments:
+            normalized["workspace_path"], workspace_id = _validated_workspace(
+                root,
+                workspace_id=str(arguments.get("workspace_id") or "").strip() or None,
+                workspace_path=str(arguments.get("workspace_path") or "").strip() or None,
+            )
+            if workspace_id:
+                normalized["workspace_id"] = workspace_id
+        elif str(arguments.get("workspace_id") or "").strip():
+            normalized["workspace_path"], workspace_id = _validated_workspace(
+                root,
+                workspace_id=str(arguments.get("workspace_id") or "").strip() or None,
+                workspace_path=None,
+            )
+            if workspace_id:
+                normalized["workspace_id"] = workspace_id
+        for key in ("backend", "model"):
+            if key in arguments:
+                value = _clean_optional_string(arguments, key, limit=200)
+                if value:
+                    normalized[key] = value
+        if "created_at" in arguments:
+            created_at = _validated_memo_form_date(arguments.get("created_at"), "创建日期")
+            if created_at:
+                normalized["created_at"] = created_at
+            else:
+                normalized.pop("created_at", None)
+        _normalize_execution_preferences(arguments, normalized)
+        normalized.pop("attribute_preset", None)
+        if "created_task_id" in arguments:
+            created_task_id = _validated_memo_task_link(root, run_id, str(arguments.get("created_task_id") or ""))
+            if created_task_id:
+                normalized["created_task_id"] = created_task_id
+        source_handoff_id = _source_group_handoff_id(
+            root,
+            arguments,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+        )
+        if source_handoff_id:
+            normalized["source_handoff_id"] = source_handoff_id
     elif operation == "update_memo":
-        run_id, _plan = _target_run(root, arguments)
+        run_id, _plan = _target_run(root, arguments, allow_default=True)
         normalized.update({"run_id": run_id, "memo_id": _required_text(arguments, "memo_id")})
-        if not any(key in arguments for key in ("title", "description", "status", "scheduled_date", "end_date")):
+        if not any(key in arguments for key in ("title", "description", "status", "scheduled_date", "end_date", "created_task_id")):
             raise ServiceAssistantActionError("at least one memo field is required")
+        if "created_task_id" in arguments:
+            normalized["created_task_id"] = _validated_memo_task_link(
+                root,
+                run_id,
+                str(arguments.get("created_task_id") or ""),
+            )
     elif operation == "update_safe_settings":
         if "settings" in arguments and set(arguments) != {"settings"}:
             raise ServiceAssistantActionError("settings cannot be combined with top-level setting fields")
@@ -684,6 +1025,10 @@ def _normalized_write_arguments(
         for key in ("backend", "model", "reasoning_effort"):
             if key in normalized and not isinstance(normalized[key], str):
                 raise ServiceAssistantActionError(f"{key} must be a string")
+        if "default_run_id" in normalized:
+            normalized["default_run_id"] = str(normalized.get("default_run_id") or "").strip()
+            if normalized["default_run_id"]:
+                resolve_feishu_work_run_id(root, normalized["default_run_id"])
     elif operation == "send_feishu_group_reply":
         message = _required_text(arguments, "message")
         handoff = _target_group_handoff(
@@ -696,6 +1041,45 @@ def _normalized_write_arguments(
             {
                 "handoff_id": str(handoff.get("id") or ""),
                 "message": message,
+                "_assistant_run_id": str(assistant_run_id or ""),
+                "_assistant_task_id": str(assistant_task_id or ""),
+            }
+        )
+    elif operation == "dismiss_feishu_group_handoff":
+        source_handoff_id = _source_group_handoff_id(
+            root,
+            arguments,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+        )
+        handoff = _target_group_handoff(
+            root,
+            {"handoff_id": source_handoff_id} if source_handoff_id else arguments,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+        )
+        terminal_status = str(arguments.get("terminal_status") or "owner_handled").strip().lower()
+        aliases = {
+            "answered": "answered",
+            "已答": "answered",
+            "replied": "answered",
+            "rejected": "rejected",
+            "refused": "rejected",
+            "已拒": "rejected",
+            "owner_handled": "owner_handled",
+            "owner": "owner_handled",
+            "转主人本人": "owner_handled",
+            "dismissed": "dismissed",
+            "closed": "dismissed",
+        }
+        terminal_status = aliases.get(terminal_status, terminal_status)
+        if terminal_status not in {"answered", "rejected", "owner_handled", "dismissed"}:
+            raise ServiceAssistantActionError("terminal_status must be answered, rejected, owner_handled, or dismissed")
+        normalized.update(
+            {
+                "handoff_id": str(handoff.get("id") or ""),
+                "terminal_status": terminal_status,
+                "reason": _text(arguments.get("reason"), 600),
                 "_assistant_run_id": str(assistant_run_id or ""),
                 "_assistant_task_id": str(assistant_task_id or ""),
             }
@@ -716,7 +1100,7 @@ def _precondition(root: Path, operation: str, arguments: dict) -> str:
     if operation == "update_safe_settings":
         config = feishu_config(root)
         return _fingerprint({key: config.get(key) for key in sorted(SAFE_SETTING_KEYS)})
-    if operation == "send_feishu_group_reply":
+    if operation in {"send_feishu_group_reply", "dismiss_feishu_group_handoff"}:
         handoff = get_group_handoff(root, str(arguments.get("handoff_id") or ""))
         return _fingerprint(
             {
@@ -730,7 +1114,18 @@ def _precondition(root: Path, operation: str, arguments: dict) -> str:
     run_id = str(arguments.get("run_id") or "")
     plan = require_plan(root, run_id)
     if operation in {"create_memo", "update_memo"}:
-        return _fingerprint({"run_updated_at": plan.get("updated_at"), "memos": read_task_memos(root, run_id)})
+        handoff = get_group_handoff(root, str(arguments.get("source_handoff_id") or ""))
+        return _fingerprint(
+            {
+                "run_updated_at": plan.get("updated_at"),
+                "memos": read_task_memos(root, run_id),
+                "source_handoff": {
+                    "id": str((handoff or {}).get("id") or ""),
+                    "status": str((handoff or {}).get("status") or ""),
+                    "updated_at": str((handoff or {}).get("updated_at") or ""),
+                },
+            }
+        )
     return _fingerprint({"run_updated_at": plan.get("updated_at"), "tasks": [(task.get("id"), task.get("status")) for task in plan.get("tasks", [])]})
 
 
@@ -745,9 +1140,11 @@ def _preview(operation: str, arguments: dict) -> str:
         "update_memo": "修改 Memo",
         "update_safe_settings": "修改 AHA Settings",
         "send_feishu_group_reply": "数字人代发群聊回复",
+        "dismiss_feishu_group_handoff": "关闭数字人转单",
     }
     def inline(value: object, limit: int = 300) -> str:
-        return _text(value, limit).replace("`", "'").replace("\r", " ").replace("\n", " ").strip() or "-"
+        raw = "" if value is None or value == "" else str(value)
+        return _text(raw, limit).replace("`", "'").replace("\r", " ").replace("\n", " ").strip() or "-"
 
     def block(value: object, limit: int = 1200) -> str:
         lines = _text(value, limit).replace("\r", "").replace("```", "''' ").splitlines() or ["-"]
@@ -771,11 +1168,31 @@ def _preview(operation: str, arguments: dict) -> str:
                 row("Workspace", arguments.get("workspace_path")),
             ]
         )
+        if arguments.get("source_memo_id"):
+            lines.append(row("关联 Memo", arguments.get("source_memo_id")))
         if arguments.get("description"):
             lines.extend(["**说明**：", block(arguments.get("description"))])
         agent_values = [arguments.get(key) for key in ("backend", "model", "reasoning_effort") if arguments.get(key)]
         if agent_values:
             lines.append(row("Agent", " / ".join(str(value) for value in agent_values)))
+        task_attributes = [
+            ("collaboration_mode", "协作模式"),
+            ("workflow_template", "工作流"),
+            ("delegation_policy", "委派策略"),
+            ("max_sub_agents", "最多 sub-agent"),
+            ("sandbox", "Sandbox"),
+            ("approval", "Approval"),
+            ("proxy_enabled", "Proxy"),
+            ("knowledge_enabled", "AHA KB"),
+            ("preferred_sub_backend", "Sub backend"),
+            ("preferred_sub_model", "Sub model"),
+        ]
+        for key, label in task_attributes:
+            if key in arguments:
+                value = arguments.get(key)
+                if isinstance(value, bool):
+                    value = "开启" if value else "关闭"
+                lines.append(row(label, value))
     elif operation == "send_task_message":
         lines.extend(
             [
@@ -796,19 +1213,35 @@ def _preview(operation: str, arguments: dict) -> str:
             ("title", "标题"),
             ("description", "说明"),
             ("status", "状态"),
+            ("created_at", "创建日期"),
             ("scheduled_date", "计划日期"),
             ("end_date", "结束日期"),
+            ("created_task_id", "关联 Task"),
+            ("backend", "Backend"),
+            ("model", "Model"),
+            ("collaboration_mode", "协作模式"),
+            ("workflow_template", "工作流"),
+            ("delegation_policy", "委派策略"),
+            ("max_sub_agents", "最多 sub-agent"),
+            ("sandbox", "Sandbox"),
+            ("approval", "Approval"),
+            ("proxy_enabled", "Proxy"),
+            ("preferred_sub_backend", "Sub backend"),
         ):
             if key not in arguments:
                 continue
             if key == "description":
                 lines.extend(["**说明**：", block(arguments.get(key))])
             else:
-                lines.append(row(label, arguments.get(key)))
+                value = arguments.get(key)
+                if isinstance(value, bool):
+                    value = "开启" if value else "关闭"
+                lines.append(row(label, value))
     elif operation == "update_safe_settings":
         setting_labels = {
             "notifications_enabled": "状态推送",
             "group_mentions_only": "群聊仅响应 @",
+            "default_run_id": "飞书默认归属 Run",
             "backend": "默认后端",
             "model": "默认模型",
             "reasoning_effort": "思考深度",
@@ -826,6 +1259,21 @@ def _preview(operation: str, arguments: dict) -> str:
                 block(arguments.get("message")),
             ]
         )
+    elif operation == "dismiss_feishu_group_handoff":
+        status_labels = {
+            "answered": "已答",
+            "rejected": "已拒",
+            "owner_handled": "转主人本人处理",
+            "dismissed": "无回复关闭",
+        }
+        lines.extend(
+            [
+                row("转单", arguments.get("handoff_id")),
+                row("终态", status_labels.get(str(arguments.get("terminal_status") or ""), arguments.get("terminal_status"))),
+            ]
+        )
+        if arguments.get("reason"):
+            lines.extend(["**原因**：", block(arguments.get("reason"))])
     return "\n".join(lines)
 
 
@@ -884,8 +1332,8 @@ def _confirmation_card(preview: str) -> dict:
 def _choice_card(prompt: str, options: list[dict]) -> dict:
     safe_prompt = str(prompt).replace("```", "''' ")
 
-    def button(label: str, choice_id: str, button_type: str, element_id: str) -> dict:
-        return {
+    def button(label: str, choice_id: str, button_type: str, element_id: str, *, submit: bool = False) -> dict:
+        payload = {
             "tag": "button",
             "element_id": element_id,
             "text": {"tag": "plain_text", "content": label},
@@ -900,6 +1348,9 @@ def _choice_card(prompt: str, options: list[dict]) -> dict:
                 }
             ],
         }
+        if submit:
+            payload["action_type"] = "form_submit"
+        return payload
 
     elements: list[dict] = [{"tag": "markdown", "content": safe_prompt}]
     for index, option in enumerate(options, start=1):
@@ -944,6 +1395,923 @@ def _choice_card(prompt: str, options: list[dict]) -> dict:
             "template": "blue",
         },
         "body": {"elements": elements},
+    }
+
+
+def _select_option(label: object, value: object) -> dict:
+    return {"text": {"tag": "plain_text", "content": _text(" ".join(str(label or "").split()), 120)}, "value": str(value or "")}
+
+
+def _field_select(name: str, label: str, options: list[dict], initial_value: object) -> dict:
+    default_label = ""
+    normalized_initial = str(initial_value or "")
+    rendered_options: list[dict] = []
+    for option in options[:MAX_FORM_SELECT_OPTIONS]:
+        if not isinstance(option, dict):
+            continue
+        option_label = str(option.get("label") or "")
+        option_value = str(option.get("value") or "")
+        if option_value == normalized_initial:
+            default_label = option_label
+            option_label = f"{option_label}（默认）"
+        rendered_options.append(_select_option(option_label, option_value))
+    placeholder = label
+    if default_label:
+        placeholder = _text(f"{label}（默认：{default_label}）", 120)
+    return {
+        "tag": "select_static",
+        "element_id": name,
+        "name": name,
+        "placeholder": {"tag": "plain_text", "content": placeholder},
+        "options": rendered_options,
+    }
+
+
+def _field_date_picker(name: str, label: str, initial_value: object) -> dict:
+    initial_date = normalize_memo_date(initial_value)
+    payload = {
+        "tag": "date_picker",
+        "element_id": name,
+        "name": name,
+        "placeholder": {"tag": "plain_text", "content": label},
+    }
+    if initial_date:
+        payload["initial_date"] = initial_date
+    return payload
+
+
+def _task_config_card(prompt: str, fields: dict) -> dict:
+    safe_prompt = str(prompt).replace("```", "''' ")
+
+    def button(label: str, choice_id: str, button_type: str, element_id: str, *, submit: bool = False) -> dict:
+        payload = {
+            "tag": "button",
+            "element_id": element_id,
+            "text": {"tag": "plain_text", "content": label},
+            "type": button_type,
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "kind": "aha_service_choice",
+                        "choice_id": choice_id,
+                    },
+                }
+            ],
+        }
+        if submit:
+            payload["action_type"] = "form_submit"
+            payload["form_action_type"] = "submit"
+            payload["name"] = "form_submit"
+        return payload
+
+    form_elements = [
+        _field_select("run_id", "Run", fields.get("runs") or [], fields.get("run_id")),
+        _field_select("workspace_path", "Workspace", fields.get("workspaces") or [], fields.get("workspace_path")),
+        _field_select("backend_model", "Backend / Model", fields.get("backend_models") or [], fields.get("backend_model")),
+        _field_select("reasoning_effort", "思考深度", fields.get("reasoning_efforts") or [], fields.get("reasoning_effort")),
+        _field_select("proxy_enabled", "代理", fields.get("proxy_options") or [], fields.get("proxy_enabled")),
+        _field_select("knowledge_enabled", "AHA 知识库", fields.get("knowledge_options") or [], fields.get("knowledge_enabled")),
+    ]
+    return {
+        "schema": "2.0",
+        "header": {
+            "title": {"tag": "plain_text", "content": "配置 Task 创建"},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": safe_prompt},
+                {
+                    "tag": "form",
+                    "name": "aha_create_task_config",
+                    "elements": [
+                        {"tag": "markdown", "content": "**Run**"},
+                        form_elements[0],
+                        {"tag": "markdown", "content": "**Workspace**"},
+                        form_elements[1],
+                        {"tag": "markdown", "content": "**Backend / Model**"},
+                        form_elements[2],
+                        {"tag": "markdown", "content": "**思考深度**"},
+                        form_elements[3],
+                        {"tag": "markdown", "content": "**代理**"},
+                        form_elements[4],
+                        {"tag": "markdown", "content": "**AHA 知识库**"},
+                        form_elements[5],
+                        {
+                            "tag": "column_set",
+                            "columns": [
+                                {
+                                    "tag": "column",
+                                    "width": "auto",
+                                    "elements": [
+                                        button(
+                                            "提交配置",
+                                            CREATE_TASK_CONFIG_SUBMIT_CHOICE_ID,
+                                            "primary",
+                                            "aha_task_config_submit",
+                                            submit=True,
+                                        )
+                                    ],
+                                },
+                                {
+                                    "tag": "column",
+                                    "width": "auto",
+                                    "elements": [button("取消", "__cancel__", "default", "aha_task_config_cancel")],
+                                },
+                            ],
+                        },
+                    ],
+                },
+                {"tag": "markdown", "content": "<font color='grey'>Run 只包含非系统管理 Run；提交后还需要最终确认。</font>"},
+            ]
+        },
+    }
+
+
+def _memo_config_card(prompt: str, fields: dict) -> dict:
+    safe_prompt = str(prompt).replace("```", "''' ")
+
+    def button(label: str, choice_id: str, button_type: str, element_id: str, *, submit: bool = False) -> dict:
+        payload = {
+            "tag": "button",
+            "element_id": element_id,
+            "text": {"tag": "plain_text", "content": label},
+            "type": button_type,
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "kind": "aha_service_choice",
+                        "choice_id": choice_id,
+                    },
+                }
+            ],
+        }
+        if submit:
+            payload["action_type"] = "form_submit"
+            payload["form_action_type"] = "submit"
+            payload["name"] = "form_submit"
+        return payload
+
+    form_elements = [
+        _field_select("run_id", "Run", fields.get("runs") or [], fields.get("run_id")),
+        _field_select("status", "状态", fields.get("statuses") or [], fields.get("status")),
+        _field_date_picker("created_at", "创建日期", fields.get("created_at")),
+        _field_date_picker("scheduled_date", "开始日期", fields.get("scheduled_date")),
+        _field_date_picker("end_date", "结束日期", fields.get("end_date")),
+        _field_select("created_task_id", "关联 Task", fields.get("tasks") or [], fields.get("created_task_id")),
+    ]
+    return {
+        "schema": "2.0",
+        "header": {
+            "title": {"tag": "plain_text", "content": "配置 Memo 创建"},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": safe_prompt},
+                {
+                    "tag": "form",
+                    "name": "aha_create_memo_config",
+                    "elements": [
+                        {"tag": "markdown", "content": "**Run**"},
+                        form_elements[0],
+                        {"tag": "markdown", "content": "**状态**"},
+                        form_elements[1],
+                        {"tag": "markdown", "content": "**创建日期**"},
+                        form_elements[2],
+                        {"tag": "markdown", "content": "**开始日期**"},
+                        form_elements[3],
+                        {"tag": "markdown", "content": "**结束日期**"},
+                        form_elements[4],
+                        {"tag": "markdown", "content": "**关联 Task**"},
+                        form_elements[5],
+                        {
+                            "tag": "column_set",
+                            "columns": [
+                                {
+                                    "tag": "column",
+                                    "width": "auto",
+                                    "elements": [
+                                        button(
+                                            "提交配置",
+                                            CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID,
+                                            "primary",
+                                            "aha_memo_config_submit",
+                                            submit=True,
+                                        )
+                                    ],
+                                },
+                                {
+                                    "tag": "column",
+                                    "width": "auto",
+                                    "elements": [button("取消", "__cancel__", "default", "aha_memo_config_cancel")],
+                                },
+                            ],
+                        },
+                    ],
+                },
+                {"tag": "markdown", "content": "<font color='grey'>提交后还需要最终确认；日期不选则按默认规则处理。</font>"},
+            ]
+        },
+    }
+
+
+def _run_option_label(summary: dict) -> str:
+    run_id = str(summary.get("id") or "").strip()
+    name = str(summary.get("goal") or summary.get("name") or "Run").strip() or "Run"
+    return _text(f"{name}.{run_id}", 120)
+
+
+def _ordinary_run_options(root: Path, current_run_id: str) -> list[dict]:
+    options: list[dict] = []
+    seen: set[str] = set()
+
+    def add(summary: dict) -> None:
+        run_id = str(summary.get("id") or "").strip()
+        if not run_id or run_id in seen:
+            return
+        seen.add(run_id)
+        options.append({"value": run_id, "label": _run_option_label(summary)})
+
+    if current_run_id:
+        try:
+            _target_run(root, {"run_id": current_run_id})
+            add(run_summary(root, current_run_id))
+        except (KeyError, SystemExit, ValueError):
+            pass
+    for summary in feishu_work_run_options(root, limit=MAX_FORM_SELECT_OPTIONS):
+        add(summary)
+        if len(options) >= MAX_FORM_SELECT_OPTIONS:
+            break
+    if not options:
+        raise ServiceAssistantActionError("没有可用于飞书创建 Task 的普通 Run，请先创建一个非系统 Run")
+    return options
+
+
+def _workspace_options(root: Path) -> list[dict]:
+    options = [
+        {"value": str(option.get("path") or ""), "label": str(option.get("label") or option.get("path") or "")}
+        for option in web_workspace_options(aha_home=root)
+        if str(option.get("path") or "").strip()
+    ]
+    if not options:
+        raise ServiceAssistantActionError("没有可用于创建 Task 的 workspace")
+    return options[:MAX_FORM_SELECT_OPTIONS]
+
+
+def _default_workspace_path(root: Path, requested_workspace_path: str) -> str:
+    options = _workspace_options(root)
+    allowed = {str(option.get("value") or "") for option in options}
+    requested = str(requested_workspace_path or "").strip()
+    if requested in allowed:
+        return requested
+    return str(options[0].get("value") or "")
+
+
+def _task_link_option_label(task: dict) -> str:
+    task_id = str(task.get("id") or "").strip()
+    title = str(task.get("title") or "").strip()
+    status = str(task.get("status") or "").strip()
+    parts = [task_id]
+    if title and title != task_id:
+        parts.append(title)
+    if status:
+        parts.append(status)
+    return _text(" · ".join(parts), 120)
+
+
+def _memo_task_link_options(root: Path, run_id: str, *, current_task_id: str = "") -> list[dict]:
+    options = [{"value": "", "label": "不关联"}]
+    run_id = str(run_id or "").strip()
+    current_task_id = str(current_task_id or "").strip()
+    if not run_id:
+        return options
+    try:
+        plan = require_plan(root, run_id)
+    except (KeyError, SystemExit, ValueError):
+        return options
+    terminal_statuses = {"completed", "failed", "blocked"}
+    linked_task: dict | None = None
+    tasks: list[dict] = []
+    for item in plan.get("tasks", []):
+        if not isinstance(item, dict):
+            continue
+        task_id = str(item.get("id") or "").strip()
+        if not task_id:
+            continue
+        if task_id == current_task_id:
+            linked_task = item
+        status = str(item.get("status") or "").strip().lower()
+        if item.get("deleted_at") or item.get("hidden") or status in terminal_statuses or _is_service_task(item):
+            continue
+        tasks.append(item)
+    if current_task_id and not any(str(item.get("id") or "").strip() == current_task_id for item in tasks):
+        tasks.insert(0, linked_task or {"id": current_task_id, "title": "", "status": "missing"})
+    for task in tasks[: MAX_FORM_SELECT_OPTIONS - 1]:
+        task_id = str(task.get("id") or "").strip()
+        options.append({"value": task_id, "label": _task_link_option_label(task)})
+    return options
+
+
+def _validated_memo_task_link(root: Path, run_id: str, task_id: str | None) -> str:
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return ""
+    try:
+        plan = require_plan(root, run_id)
+    except (KeyError, SystemExit, ValueError) as exc:
+        raise ServiceAssistantActionError(f"run not found: {run_id}") from exc
+    for item in plan.get("tasks", []):
+        if not isinstance(item, dict) or str(item.get("id") or "").strip() != task_id:
+            continue
+        if item.get("deleted_at"):
+            raise ServiceAssistantActionError(f"task not found: {task_id}")
+        if _is_service_task(item):
+            raise ServiceAssistantActionError("cannot attach memo to a system-managed task")
+        return task_id
+    raise ServiceAssistantActionError(f"task not found in run {run_id}: {task_id}")
+
+
+def _validated_memo_form_date(value: object, label: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized = normalize_memo_date(raw)
+    if not normalized:
+        raise ServiceAssistantActionError(f"{label}必须是 YYYY-MM-DD 日期")
+    return normalized
+
+
+def _memo_status_options() -> list[dict]:
+    return [
+        {"value": "todo", "label": "未开始"},
+        {"value": "doing", "label": "进行中"},
+        {"value": "done", "label": "完成"},
+        {"value": "closed", "label": "关闭"},
+    ]
+
+
+def _env_model_key(backend: str) -> str:
+    return "OPENAI_MODEL" if backend == "codex" else "ANTHROPIC_MODEL"
+
+
+def _pack_backend_model(backend: str, model: object) -> str:
+    return f"{backend}::{str(model or '').strip()}"
+
+
+def _unpack_backend_model(value: object) -> tuple[str, str]:
+    raw = str(value or "").strip()
+    if "::" not in raw:
+        return "", ""
+    backend, model = raw.split("::", 1)
+    return backend.strip().lower(), model.strip()
+
+
+def _backend_model_options(root: Path, current_backend: str, current_model: str) -> list[dict]:
+    config = load_config(root)
+    options: list[dict] = []
+    seen: set[str] = set()
+
+    def add(backend: str, model: object, label: object) -> None:
+        value = _pack_backend_model(backend, model)
+        if value in seen:
+            return
+        seen.add(value)
+        options.append({"value": value, "label": _text(f"{backend} / {label}", 120)})
+
+    current_value = _pack_backend_model(current_backend, current_model)
+    if current_backend:
+        add(current_backend, current_model, current_model or "default")
+    for backend in agent_backend_names():
+        section = config.get(backend) if isinstance(config.get(backend), dict) else {}
+        groups = section.get("env") if isinstance(section, dict) else []
+        if isinstance(groups, list):
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                name = str(group.get("name") or "").strip()
+                if not name:
+                    continue
+                model_name = str(group.get(_env_model_key(backend)) or "env").strip() or "env"
+                add(backend, f"env:{name}", f"{model_name} ({name})")
+                if len(options) >= MAX_FORM_SELECT_OPTIONS:
+                    return options
+        try:
+            official = model_options(backend, config)
+        except (Exception, SystemExit):
+            official = []
+        for option in official:
+            name = str(option.get("name") or "").strip()
+            label = str(option.get("label") or name or "default").strip()
+            add(backend, name, label)
+            if len(options) >= MAX_FORM_SELECT_OPTIONS:
+                return options
+    if current_value not in {str(option.get("value") or "") for option in options} and current_backend:
+        options.insert(0, {"value": current_value, "label": _text(f"{current_backend} / {current_model or 'default'}", 120)})
+    return options
+
+
+def _reasoning_effort_card_options(root: Path, current_effort: str) -> list[dict]:
+    config = load_config(root)
+    options: list[dict] = []
+    seen: set[str] = set()
+
+    def add(value: object, label: object = "") -> None:
+        raw = str(value or "").strip().lower()
+        if raw in {"default", "none", "null"}:
+            raw = ""
+        if raw in seen:
+            return
+        seen.add(raw)
+        options.append({"value": raw, "label": _text(str(label or raw or "default"), 120)})
+
+    add("", "default")
+    for backend in agent_backend_names():
+        try:
+            model_candidates = model_options(backend, config)
+        except (Exception, SystemExit):
+            model_candidates = []
+        for model in model_candidates:
+            efforts = model.get("reasoning_efforts") if isinstance(model, dict) else None
+            if not isinstance(efforts, list):
+                continue
+            for effort in efforts:
+                if isinstance(effort, dict):
+                    add(effort.get("name") or effort.get("value"), effort.get("label") or effort.get("name"))
+                else:
+                    add(effort)
+                if len(options) >= MAX_FORM_SELECT_OPTIONS:
+                    return options
+        for effort in backend_reasoning_effort_options(backend):
+            add(effort.get("name"), effort.get("label"))
+            if len(options) >= MAX_FORM_SELECT_OPTIONS:
+                return options
+    if current_effort and current_effort not in seen:
+        add(current_effort, current_effort)
+    return options
+
+
+def _bool_option(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _bool_options() -> list[dict]:
+    return [{"value": "true", "label": "开启"}, {"value": "false", "label": "关闭"}]
+
+
+def _form_scalar(value: object) -> str:
+    if isinstance(value, list):
+        return _form_scalar(value[0] if value else "")
+    if isinstance(value, dict):
+        for key in ("value", "selected_value", "selected", "text", "content", "default_value"):
+            if key in value:
+                return _form_scalar(value.get(key))
+        values = value.get("values")
+        if isinstance(values, list):
+            return _form_scalar(values[0] if values else "")
+        return ""
+    if isinstance(value, bool):
+        return _bool_option(value)
+    return str(value or "").strip()
+
+
+def _form_value(form_values: dict | None, name: str, default: object = "") -> str:
+    if not isinstance(form_values, dict):
+        return str(default or "").strip()
+    for key in (name, f"aha_create_task_config.{name}"):
+        if key in form_values:
+            value = _form_scalar(form_values.get(key))
+            return value if value != "" else str(default or "").strip()
+    for value in form_values.values():
+        if isinstance(value, dict):
+            nested = _form_value(value, name, "")
+            if nested:
+                return nested
+    return str(default or "").strip()
+
+
+def _prepare_create_task_config_choice(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    actor: dict,
+    arguments: dict,
+) -> dict:
+    try:
+        status = feishu_status(root)
+    except (Exception, SystemExit):
+        status = {}
+    current_backend = str(arguments.get("backend") or status.get("effective_backend") or "codex").strip().lower() or "codex"
+    current_model = str(arguments.get("model") or status.get("effective_model") or "").strip()
+    current_reasoning_effort = str(
+        arguments.get("reasoning_effort") or status.get("effective_reasoning_effort") or ""
+    ).strip().lower()
+    current_proxy = normalize_bool(arguments.get("proxy_enabled")) if "proxy_enabled" in arguments else bool(status.get("effective_proxy_enabled"))
+    current_knowledge = normalize_bool(arguments.get("knowledge_enabled")) if "knowledge_enabled" in arguments else True
+    current_backend_model = _pack_backend_model(current_backend, current_model)
+    current_workspace_path = _default_workspace_path(root, str(arguments.get("workspace_path") or ""))
+    fields = {
+        "run_id": str(arguments.get("run_id") or ""),
+        "workspace_path": current_workspace_path,
+        "backend_model": current_backend_model,
+        "reasoning_effort": current_reasoning_effort,
+        "proxy_enabled": _bool_option(current_proxy),
+        "knowledge_enabled": _bool_option(current_knowledge),
+        "runs": _ordinary_run_options(root, str(arguments.get("run_id") or "")),
+        "workspaces": _workspace_options(root),
+        "backend_models": _backend_model_options(root, current_backend, current_model),
+        "reasoning_efforts": _reasoning_effort_card_options(root, current_reasoning_effort),
+        "proxy_options": _bool_options(),
+        "knowledge_options": _bool_options(),
+    }
+    confirmation_id = secrets.token_urlsafe(18)
+    prompt = "\n".join(
+        [
+            "请先选择创建 Task 的配置。提交后系统会生成最终确认卡。",
+            "",
+            _preview("create_task", arguments),
+            "",
+            "执行模式固定为 `auto`，这里不再提供执行模式选择。",
+        ]
+    )
+    card = _task_config_card(prompt, fields)
+    context = {
+        "operation": CREATE_TASK_CONFIG_CHOICE_OPERATION,
+        "arguments": {
+            "target_operation": "create_task",
+            "base_arguments": arguments,
+            "fields": fields,
+        },
+        "assistant_run_id": run_id,
+        "assistant_task_id": task_id,
+        "confirmation_id": confirmation_id,
+        "chat_id": actor["chat_id"],
+    }
+    issue_action_token(
+        root,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        context=context,
+    )
+    register_confirmation_card(
+        root,
+        confirmation_id,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        card=card,
+        expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+    )
+    return {
+        "type": "service_assistant",
+        "operation": "create_task",
+        "ok": True,
+        "choice_required": True,
+        "confirmation_id": confirmation_id,
+        "confirmation_card": card,
+        "user_response": "\n".join(
+            [
+                "请先在飞书卡片中配置 Task。",
+                "",
+                "Run 下拉只包含非系统管理 Run，显示为 `名称.run_id`。",
+                "提交配置后还会生成最终确认卡；裸文本确认不会执行操作。",
+            ]
+        ),
+    }
+
+
+def _task_attribute_options() -> list[dict]:
+    return [
+        {
+            "id": "auto",
+            "label": "默认自动",
+            "message": "自动协作，最多 3 个 sub-agent，继承当前权限边界。",
+            "patch": {
+                "collaboration_mode": "auto",
+                "workflow_template": "auto",
+                "delegation_policy": "auto",
+                "max_sub_agents": 3,
+            },
+        },
+        {
+            "id": "solo",
+            "label": "单 Agent",
+            "message": "关闭委派，只由 main agent 处理。",
+            "patch": {
+                "collaboration_mode": "solo",
+                "workflow_template": "auto",
+                "delegation_policy": "disabled",
+                "max_sub_agents": 0,
+            },
+        },
+        {
+            "id": "team",
+            "label": "多 Agent",
+            "message": "自动协作，最多 2 个 sub-agent。",
+            "patch": {
+                "collaboration_mode": "team",
+                "workflow_template": "auto",
+                "delegation_policy": "auto",
+                "max_sub_agents": 2,
+            },
+        },
+        {
+            "id": "readonly",
+            "label": "只读分析",
+            "message": "只读沙箱、无需审批、关闭委派，适合调研和排查。",
+            "patch": {
+                "collaboration_mode": "solo",
+                "workflow_template": "auto",
+                "delegation_policy": "disabled",
+                "max_sub_agents": 0,
+                "sandbox": "read-only",
+                "approval": "never",
+            },
+        },
+    ]
+
+
+def _preferred_claude_model() -> str:
+    sonnet = next(
+        (str(item.get("name") or "") for item in CLAUDE_MODEL_OPTIONS if "sonnet" in str(item.get("name") or "").lower()),
+        "",
+    )
+    return sonnet or str((CLAUDE_MODEL_OPTIONS[0] if CLAUDE_MODEL_OPTIONS else {}).get("name") or "")
+
+
+def _task_runtime_options(root: Path, arguments: dict) -> list[dict]:
+    try:
+        status = feishu_status(root)
+    except (Exception, SystemExit):
+        status = {}
+    current_backend = str(arguments.get("backend") or status.get("effective_backend") or "codex").strip() or "codex"
+    current_model = str(arguments.get("model") or status.get("effective_model") or "default").strip() or "default"
+    if "proxy_enabled" in arguments:
+        current_proxy = normalize_bool(arguments.get("proxy_enabled"))
+    else:
+        current_proxy = bool(status.get("effective_proxy_enabled"))
+    current_summary = f"{current_backend} / {current_model} / proxy {'on' if current_proxy else 'off'}"
+    claude_model = _preferred_claude_model()
+    return [
+        {
+            "id": "keep_kb_on",
+            "label": "保留配置 + KB 开",
+            "message": f"保留 {current_summary}，为此 Task 开启 AHA KB。",
+            "patch": {"runtime_selected": True, "knowledge_enabled": True},
+        },
+        {
+            "id": "keep_kb_off",
+            "label": "保留配置 + KB 关",
+            "message": f"保留 {current_summary}，为此 Task 关闭 AHA KB。",
+            "patch": {"runtime_selected": True, "knowledge_enabled": False},
+        },
+        {
+            "id": "codex_proxy_kb",
+            "label": f"Codex {CODEX_DEFAULT_MODEL} + 代理开 + KB",
+            "message": f"backend=codex，model={CODEX_DEFAULT_MODEL}，proxy=on，AHA KB=on。",
+            "patch": {
+                "runtime_selected": True,
+                "backend": "codex",
+                "model": CODEX_DEFAULT_MODEL,
+                "proxy_enabled": True,
+                "knowledge_enabled": True,
+            },
+        },
+        {
+            "id": "codex_direct_kb",
+            "label": f"Codex {CODEX_DEFAULT_MODEL} + 代理关 + KB",
+            "message": f"backend=codex，model={CODEX_DEFAULT_MODEL}，proxy=off，AHA KB=on。",
+            "patch": {
+                "runtime_selected": True,
+                "backend": "codex",
+                "model": CODEX_DEFAULT_MODEL,
+                "proxy_enabled": False,
+                "knowledge_enabled": True,
+            },
+        },
+        {
+            "id": "claude_proxy_kb",
+            "label": f"Claude {claude_model or '默认模型'} + 代理开 + KB",
+            "message": f"backend=claude，model={claude_model or 'default'}，proxy=on，AHA KB=on。",
+            "patch": {
+                "runtime_selected": True,
+                "backend": "claude",
+                "model": claude_model,
+                "proxy_enabled": True,
+                "knowledge_enabled": True,
+            },
+        },
+        {
+            "id": "claude_direct_kb",
+            "label": f"Claude {claude_model or '默认模型'} + 代理关 + KB",
+            "message": f"backend=claude，model={claude_model or 'default'}，proxy=off，AHA KB=on。",
+            "patch": {
+                "runtime_selected": True,
+                "backend": "claude",
+                "model": claude_model,
+                "proxy_enabled": False,
+                "knowledge_enabled": True,
+            },
+        },
+    ]
+
+
+def _attribute_choice_prompt(operation: str, arguments: dict, options: list[dict]) -> str:
+    target_label = "Memo" if operation == "create_memo" else "Task"
+    lines = [
+        f"请先选择创建 {target_label} 的字段配置。选择后系统会生成最终确认卡。",
+        "",
+        _preview(operation, arguments),
+        "",
+        "**可选预设**：",
+    ]
+    for index, option in enumerate(options, start=1):
+        lines.append(f"{index}. {option['label']}：{option.get('message') or ''}")
+    return "\n".join(lines)
+
+
+def _task_runtime_choice_prompt(arguments: dict, options: list[dict]) -> str:
+    lines = [
+        "请先选择创建 Task 的运行配置。选择后系统会生成最终确认卡。",
+        "",
+        _preview("create_task", arguments),
+        "",
+        "**可选运行配置**：",
+    ]
+    for index, option in enumerate(options, start=1):
+        lines.append(f"{index}. {option['label']}：{option.get('message') or ''}")
+    return "\n".join(lines)
+
+
+def _prepare_create_task_runtime_choice(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    actor: dict,
+    arguments: dict,
+) -> dict:
+    options = _task_runtime_options(root, arguments)
+    confirmation_id = secrets.token_urlsafe(18)
+    prompt = _task_runtime_choice_prompt(arguments, options)
+    card = _choice_card(prompt, options)
+    context = {
+        "operation": CREATE_TASK_RUNTIME_CHOICE_OPERATION,
+        "arguments": {
+            "target_operation": "create_task",
+            "base_arguments": arguments,
+            "options": options,
+        },
+        "assistant_run_id": run_id,
+        "assistant_task_id": task_id,
+        "confirmation_id": confirmation_id,
+        "chat_id": actor["chat_id"],
+    }
+    issue_action_token(
+        root,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        context=context,
+    )
+    register_confirmation_card(
+        root,
+        confirmation_id,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        card=card,
+        expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+    )
+    return {
+        "type": "service_assistant",
+        "operation": "create_task",
+        "ok": True,
+        "choice_required": True,
+        "confirmation_id": confirmation_id,
+        "confirmation_card": card,
+        "user_response": "\n".join(
+            [
+                "请先选择创建 Task 的运行配置。",
+                "",
+                "点击后会生成最终确认卡；真正创建仍需最终确认。",
+                "裸文本选择不会绑定到这张卡片，避免误选其他上下文。",
+            ]
+        ),
+    }
+
+
+def _prepare_create_attribute_choice(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    actor: dict,
+    operation: str,
+    arguments: dict,
+) -> dict:
+    options = [] if operation == "create_memo" else _task_attribute_options()
+    confirmation_id = secrets.token_urlsafe(18)
+    choice_operation = (
+        CREATE_MEMO_ATTRIBUTE_CHOICE_OPERATION
+        if operation == "create_memo"
+        else CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION
+    )
+    if operation == "create_memo":
+        current_run_id = str(arguments.get("run_id") or "")
+        created_task_id = str(arguments.get("created_task_id") or "").strip()
+        task_options = _memo_task_link_options(root, current_run_id, current_task_id=created_task_id)
+        if created_task_id not in {str(option.get("value") or "") for option in task_options}:
+            created_task_id = ""
+        fields = {
+            "run_id": current_run_id,
+            "status": normalize_memo_status(arguments.get("status")),
+            "created_at": normalize_memo_date(arguments.get("created_at")),
+            "scheduled_date": normalize_memo_date(arguments.get("scheduled_date")),
+            "end_date": normalize_memo_date(arguments.get("end_date")),
+            "created_task_id": created_task_id,
+            "runs": _ordinary_run_options(root, str(arguments.get("run_id") or "")),
+            "statuses": _memo_status_options(),
+            "tasks": task_options,
+        }
+        prompt = "\n".join(
+            [
+                "请先配置创建 Memo 的属性。提交后系统会生成最终确认卡。",
+                "",
+                _preview(operation, arguments),
+            ]
+        )
+        card = _memo_config_card(prompt, fields)
+    else:
+        fields = {}
+        prompt = _attribute_choice_prompt(operation, arguments, options)
+        card = _choice_card(prompt, options)
+    context = {
+        "operation": choice_operation,
+        "arguments": {
+            "target_operation": operation,
+            "base_arguments": arguments,
+            "options": options,
+            "fields": fields,
+        },
+        "assistant_run_id": run_id,
+        "assistant_task_id": task_id,
+        "confirmation_id": confirmation_id,
+        "chat_id": actor["chat_id"],
+    }
+    issue_action_token(
+        root,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        context=context,
+    )
+    register_confirmation_card(
+        root,
+        confirmation_id,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        card=card,
+        expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+    )
+    target_label = "Memo" if operation == "create_memo" else "Task"
+    if operation == "create_memo":
+        return {
+            "type": "service_assistant",
+            "operation": operation,
+            "ok": True,
+            "choice_required": True,
+            "confirmation_id": confirmation_id,
+            "confirmation_card": card,
+            "user_response": "\n".join(
+                [
+                    "请先配置创建 Memo 的属性。",
+                    "",
+                    "提交后系统会生成最终确认卡；真正创建仍需再点一次确认。",
+                    "裸文本选择不会绑定到这张卡片，避免误选其他上下文。",
+                ]
+            ),
+        }
+    return {
+        "type": "service_assistant",
+        "operation": operation,
+        "ok": True,
+        "choice_required": True,
+        "confirmation_id": confirmation_id,
+        "confirmation_card": card,
+        "user_response": "\n".join(
+            [
+                f"请先选择创建 {target_label} 的字段配置。",
+                "",
+                "点击后系统会根据所选字段生成最终确认卡；真正创建仍需再点一次确认。",
+                "裸文本选择不会绑定到这张卡片，避免误选其他上下文。",
+            ]
+        ),
     }
 
 
@@ -1084,6 +2452,23 @@ def prepare_service_assistant_action(root: Path, run_id: str, task: dict, action
                 assistant_task_id=task_id,
             )
             actor = _actor_for_task(root, run_id, task_id)
+            if operation == "create_task" and not _runtime_selected(normalized):
+                return _prepare_create_task_config_choice(
+                    root,
+                    run_id,
+                    task_id,
+                    actor=actor,
+                    arguments=normalized,
+                )
+            if operation == "create_memo" and not _attributes_selected(normalized):
+                return _prepare_create_attribute_choice(
+                    root,
+                    run_id,
+                    task_id,
+                    actor=actor,
+                    operation=operation,
+                    arguments=normalized,
+                )
             confirmation_id = secrets.token_urlsafe(18)
             card = _confirmation_card(_preview(operation, normalized))
             context = {
@@ -1165,6 +2550,7 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
         return {"ok": True, "run": _run_projection(run_summary(root, str(plan["id"])))}
     if operation == "create_task":
         from aha_cli.services.tasks import create_task_and_dispatch
+        from aha_cli.web.task_routes import task_description_with_memo_attachment_context
 
         run_id = str(arguments["run_id"])
         plan = require_plan(root, run_id)
@@ -1173,23 +2559,49 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
             raise ServiceAssistantActionError(f"workspace path is not a directory: {workspace_path}")
         main_agent = plan.get("main_agent") if isinstance(plan.get("main_agent"), dict) else {}
         backend = str(arguments.get("backend") or main_agent.get("backend") or load_config(root).get("backend") or "codex")
+        source_memo_id = str(arguments.get("source_memo_id") or "").strip()
+        description = task_description_with_memo_attachment_context(
+            root,
+            run_id,
+            str(arguments.get("description") or "") or "",
+            source_memo_id,
+        )
         task = create_task_and_dispatch(
             root,
             run_id,
             str(arguments["title"]),
-            description=str(arguments.get("description") or "") or None,
+            description=description or None,
             backend=backend,
             model=str(arguments.get("model") or "") or None,
             reasoning_effort=str(arguments.get("reasoning_effort") or "") or None,
             workspace_path=str(workspace_path),
+            sandbox=str(arguments.get("sandbox") or "") or None,
+            approval=str(arguments.get("approval") or "") or None,
+            proxy_enabled=normalize_bool(arguments.get("proxy_enabled")) if "proxy_enabled" in arguments else None,
             collaboration_mode="auto",
             workflow_template="auto",
+            delegation_policy="auto",
+            max_sub_agents=3,
+            preferred_sub_backend=str(arguments.get("preferred_sub_backend") or "") or None,
+            preferred_sub_model=str(arguments.get("preferred_sub_model") or "") or None,
+            token_saving={
+                "enabled": normalize_bool(arguments.get("knowledge_enabled")),
+                "provider": "nav",
+            } if "knowledge_enabled" in arguments else None,
             dispatch=True,
         )
         from aha_cli.web.task_runtime import start_dispatched_task_backend
 
         backend_start = start_dispatched_task_backend(root, run_id, task, True, background=True)
-        return {"ok": True, "task": _task_projection(task), "backend_start": backend_start}
+        memo = None
+        if source_memo_id:
+            memo = update_task_memo(root, run_id, source_memo_id, {"created_task_id": str(task.get("id") or "")})
+        return {
+            "ok": True,
+            "task": _task_projection(task),
+            "memo": _memo_projection(memo) if isinstance(memo, dict) else None,
+            "backend_start": backend_start,
+        }
     if operation == "send_task_message":
         from aha_cli.web.task_messaging import handle_send_payload
 
@@ -1219,10 +2631,54 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
         message = reopen_selected_task(root, str(arguments["run_id"]), str(arguments["task_id"]))
         return {"ok": "not found" not in message.lower(), "message": message}
     if operation == "create_memo":
-        payload = {key: arguments.get(key) for key in ("title", "description", "status", "scheduled_date", "end_date") if key in arguments}
-        return {"ok": True, "memo": _memo_projection(create_task_memo(root, str(arguments["run_id"]), payload))}
+        memo_fields = (
+            "title",
+            "description",
+            "status",
+            "created_at",
+            "scheduled_date",
+            "end_date",
+            "workspace_id",
+            "workspace_path",
+            "backend",
+            "model",
+            "sandbox",
+            "approval",
+            "proxy_enabled",
+            "collaboration_mode",
+            "workflow_template",
+            "delegation_policy",
+            "max_sub_agents",
+            "preferred_sub_backend",
+            "created_task_id",
+        )
+        payload = {key: arguments.get(key) for key in memo_fields if key in arguments}
+        memo = create_task_memo(root, str(arguments["run_id"]), payload)
+        handoff_terminal = None
+        source_handoff_id = str(arguments.get("source_handoff_id") or "").strip()
+        if source_handoff_id:
+            handoff_terminal = mark_group_handoff(
+                root,
+                source_handoff_id,
+                "owner_handled",
+                reason=f"已进入主人待办池 memo={memo.get('id') or ''}",
+                memo_id=str(memo.get("id") or ""),
+            )
+        return {
+            "ok": True,
+            "memo": _memo_projection(memo),
+            "group_handoff_terminal": {
+                "handoff_id": str((handoff_terminal or {}).get("id") or ""),
+                "status": str((handoff_terminal or {}).get("status") or ""),
+                "memo_id": str(memo.get("id") or ""),
+            } if handoff_terminal is not None else None,
+        }
     if operation == "update_memo":
-        payload = {key: arguments.get(key) for key in ("title", "description", "status", "scheduled_date", "end_date") if key in arguments}
+        payload = {
+            key: arguments.get(key)
+            for key in ("title", "description", "status", "scheduled_date", "end_date", "created_task_id")
+            if key in arguments
+        }
         memo = update_task_memo(root, str(arguments["run_id"]), str(arguments["memo_id"]), payload)
         return {"ok": True, "memo": _memo_projection(memo)}
     if operation == "update_safe_settings":
@@ -1240,6 +2696,8 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
                     "effective_model",
                     "effective_reasoning_effort",
                     "effective_proxy_enabled",
+                    "default_run_id",
+                    "default_run_available",
                     "notifications_enabled",
                     "group_mentions_only",
                 )
@@ -1267,6 +2725,27 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
             "reply_to": str(handoff.get("group_message_id") or ""),
             "public_reply": str(arguments.get("message") or ""),
             "group_ack": FEISHU_GROUP_HANDOFF_ACK,
+        }
+    if operation == "dismiss_feishu_group_handoff":
+        status = str(arguments.get("terminal_status") or "owner_handled")
+        handoff = mark_group_handoff(
+            root,
+            str(arguments.get("handoff_id") or ""),
+            status,
+            reason=str(arguments.get("reason") or ""),
+        )
+        labels = {
+            "answered": "已答",
+            "rejected": "已拒",
+            "owner_handled": "转主人本人处理",
+            "dismissed": "无回复关闭",
+        }
+        return {
+            "ok": True,
+            "handoff_id": str((handoff or {}).get("id") or arguments.get("handoff_id") or ""),
+            "status": status,
+            "status_label": labels.get(status, status),
+            "reason": str(arguments.get("reason") or ""),
         }
     raise ServiceAssistantActionError(f"unknown write operation: {operation}")
 
@@ -1320,6 +2799,433 @@ def _group_handoff_reply_choice_tool_message(arguments: dict, handoff: dict) -> 
             "Issue exactly this service_assistant action next unless the owner changes the requested public reply text.",
         ]
     )
+
+
+def _create_attribute_choice_tool_message(target_operation: str, selected: dict, next_arguments: dict) -> str:
+    payload = {
+        "target_operation": target_operation,
+        "selected_id": selected.get("id"),
+        "selected_label": selected.get("label"),
+        "selected_fields": {key: value for key, value in selected.items() if key not in {"id", "label"}},
+        "next_arguments": next_arguments,
+    }
+    next_action = {
+        "type": "service_assistant",
+        "operation": target_operation,
+        "arguments": next_arguments,
+    }
+    return "\n".join(
+        [
+            "AHA service-assistant create form configuration result (trusted system envelope).",
+            "The owner submitted creation fields in the Feishu form card.",
+            "The memo/task has not been created yet; it still requires the normal confirmation card.",
+            "data:",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+            "next_service_action:",
+            json.dumps(next_action, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+            "Issue exactly this service_assistant action next unless the owner changes the requested creation details.",
+        ]
+    )
+
+
+def _create_runtime_choice_tool_message(selected: dict, next_arguments: dict) -> str:
+    payload = {
+        "target_operation": "create_task",
+        "selected_id": selected.get("id"),
+        "selected_label": selected.get("label"),
+        "selected_message": selected.get("message") or selected.get("label"),
+        "selected_patch": selected.get("patch") if isinstance(selected.get("patch"), dict) else {},
+        "next_arguments": next_arguments,
+    }
+    next_action = {
+        "type": "service_assistant",
+        "operation": "create_task",
+        "arguments": next_arguments,
+    }
+    return "\n".join(
+        [
+            "AHA service-assistant create task runtime selection result (trusted system envelope).",
+            "The owner selected backend/model/proxy/AHA KB runtime settings in the Feishu card.",
+            "The task has not been created yet; execution attributes and the final confirmation are still required.",
+            "data:",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+            "next_service_action:",
+            json.dumps(next_action, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+            "Issue exactly this service_assistant action next unless the owner changes the requested task details.",
+        ]
+    )
+
+
+def _create_task_config_tool_message(selected: dict, next_arguments: dict) -> str:
+    payload = {
+        "target_operation": "create_task",
+        "selected_config": selected,
+        "next_arguments": next_arguments,
+    }
+    next_action = {
+        "type": "service_assistant",
+        "operation": "create_task",
+        "arguments": next_arguments,
+    }
+    return "\n".join(
+        [
+            "AHA service-assistant create task configuration result (trusted system envelope).",
+            "The owner submitted Task creation settings in the Feishu card.",
+            "The task has not been created yet; the final confirmation card is still required.",
+            "data:",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+            "next_service_action:",
+            json.dumps(next_action, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+            "Issue exactly this service_assistant action next unless the owner changes the requested task details.",
+        ]
+    )
+
+
+def _allowed_option_values(options: object) -> set[str]:
+    if not isinstance(options, list):
+        return set()
+    return {str(option.get("value") or "") for option in options if isinstance(option, dict)}
+
+
+def _selected_option_label(options: object, value: str) -> str:
+    if not isinstance(options, list):
+        return value
+    selected = next((option for option in options if isinstance(option, dict) and str(option.get("value") or "") == value), None)
+    return str((selected or {}).get("label") or value)
+
+
+def _resolve_create_task_config_choice(
+    root: Path,
+    *,
+    arguments: dict,
+    selected_id: str,
+    form_values: dict | None,
+    assistant_run_id: str,
+    assistant_task_id: str,
+    confirmation_id: str,
+    confirmation_message_id: str,
+) -> dict:
+    if selected_id != CREATE_TASK_CONFIG_SUBMIT_CHOICE_ID:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError(f"Task 创建配置操作不存在：{selected_id}")
+    base_arguments = arguments.get("base_arguments") if isinstance(arguments.get("base_arguments"), dict) else {}
+    fields = arguments.get("fields") if isinstance(arguments.get("fields"), dict) else {}
+
+    run_id = _form_value(form_values, "run_id", fields.get("run_id") or base_arguments.get("run_id"))
+    if run_id not in _allowed_option_values(fields.get("runs")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的 Run 不在本次配置卡可用范围内")
+    run_id, plan = _target_run(root, {"run_id": run_id})
+
+    workspace_path = _form_value(form_values, "workspace_path", fields.get("workspace_path") or base_arguments.get("workspace_path"))
+    if workspace_path not in _allowed_option_values(fields.get("workspaces")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的 workspace 不在本次配置卡可用范围内")
+    run_workspace = _run_workspace(plan)
+    if Path(workspace_path).resolve() == Path(run_workspace).resolve():
+        resolved_workspace = run_workspace
+    else:
+        resolved_workspace, _workspace_id = _validated_workspace(root, workspace_id=None, workspace_path=workspace_path)
+
+    backend_model = _form_value(form_values, "backend_model", fields.get("backend_model"))
+    if backend_model not in _allowed_option_values(fields.get("backend_models")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的 backend/model 不在本次配置卡可用范围内")
+    backend, model = _unpack_backend_model(backend_model)
+    if backend not in set(agent_backend_names()):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的 backend 不可用")
+
+    reasoning_effort = _form_value(form_values, "reasoning_effort", fields.get("reasoning_effort")).lower()
+    if reasoning_effort in {"default", "none", "null"}:
+        reasoning_effort = ""
+    if reasoning_effort not in _allowed_option_values(fields.get("reasoning_efforts")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的思考深度不在本次配置卡可用范围内")
+    try:
+        normalized_reasoning_effort = normalize_reasoning_effort(reasoning_effort, backend)
+    except ValueError as exc:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的思考深度不可用") from exc
+
+    proxy_enabled = normalize_bool(_form_value(form_values, "proxy_enabled", fields.get("proxy_enabled")), default=False)
+    knowledge_enabled = normalize_bool(_form_value(form_values, "knowledge_enabled", fields.get("knowledge_enabled")), default=True)
+    next_arguments = {
+        **base_arguments,
+        "run_id": run_id,
+        "workspace_path": resolved_workspace,
+        "backend": backend,
+        "proxy_enabled": proxy_enabled,
+        "knowledge_enabled": knowledge_enabled,
+        "collaboration_mode": "auto",
+        "workflow_template": "auto",
+        "delegation_policy": "auto",
+        "max_sub_agents": 3,
+        "runtime_selected": True,
+    }
+    if model:
+        next_arguments["model"] = model
+    else:
+        next_arguments.pop("model", None)
+    if normalized_reasoning_effort:
+        next_arguments["reasoning_effort"] = normalized_reasoning_effort
+    else:
+        next_arguments.pop("reasoning_effort", None)
+    next_arguments.pop("attributes_selected", None)
+    next_arguments.pop("attribute_preset", None)
+
+    selected = {
+        "run": _selected_option_label(fields.get("runs"), run_id),
+        "workspace": _selected_option_label(fields.get("workspaces"), workspace_path),
+        "backend_model": _selected_option_label(fields.get("backend_models"), backend_model),
+        "reasoning_effort": _selected_option_label(fields.get("reasoning_efforts"), reasoning_effort),
+        "proxy_enabled": proxy_enabled,
+        "knowledge_enabled": knowledge_enabled,
+        "execution_mode": "auto",
+    }
+    confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", "已提交 Task 创建配置")
+    if assistant_run_id:
+        append_event(
+            root,
+            assistant_run_id,
+            "service_assistant_choice",
+            {
+                "task_id": assistant_task_id,
+                "operation": "create_task_config",
+                "decision": "selected",
+                "run_id": run_id,
+                "workspace_path": resolved_workspace,
+                "backend": backend,
+                "model": model,
+                "proxy_enabled": proxy_enabled,
+                "knowledge_enabled": knowledge_enabled,
+            },
+        )
+    return {
+        "choice": True,
+        "cancelled": False,
+        "operation": "create_task_config",
+        "assistant_run_id": assistant_run_id,
+        "assistant_task_id": assistant_task_id,
+        "confirmation_id": confirmation_id,
+        "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+        "confirmation_card": (confirmation_record or {}).get("terminal_card"),
+        "tool_message": _create_task_config_tool_message(selected, next_arguments),
+        "result": {
+            "ok": True,
+            "target_operation": "create_task",
+            "selected": selected,
+            "next_arguments": next_arguments,
+        },
+    }
+
+
+def _resolve_create_task_runtime_choice(
+    root: Path,
+    *,
+    arguments: dict,
+    selected_id: str,
+    assistant_run_id: str,
+    assistant_task_id: str,
+    confirmation_id: str,
+    confirmation_message_id: str,
+) -> dict:
+    base_arguments = arguments.get("base_arguments") if isinstance(arguments.get("base_arguments"), dict) else {}
+    options = arguments.get("options") if isinstance(arguments.get("options"), list) else []
+    selected = next((item for item in options if isinstance(item, dict) and str(item.get("id") or "") == selected_id), None)
+    if selected is None:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError(f"Task 运行配置选项不存在：{selected_id}")
+    patch = selected.get("patch") if isinstance(selected.get("patch"), dict) else {}
+    next_arguments = {
+        **base_arguments,
+        **patch,
+        "runtime_selected": True,
+    }
+    confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", f"已选择：{selected.get('label')}")
+    if assistant_run_id:
+        append_event(
+            root,
+            assistant_run_id,
+            "service_assistant_choice",
+            {
+                "task_id": assistant_task_id,
+                "operation": "create_task_runtime",
+                "decision": "selected",
+                "choice_id": selected_id,
+                "choice_label": selected.get("label"),
+            },
+        )
+    return {
+        "choice": True,
+        "cancelled": False,
+        "operation": "create_task_runtime",
+        "assistant_run_id": assistant_run_id,
+        "assistant_task_id": assistant_task_id,
+        "confirmation_id": confirmation_id,
+        "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+        "confirmation_card": (confirmation_record or {}).get("terminal_card"),
+        "tool_message": _create_runtime_choice_tool_message(selected, next_arguments),
+        "result": {
+            "ok": True,
+            "target_operation": "create_task",
+            "selected": selected,
+            "next_arguments": next_arguments,
+        },
+    }
+
+
+def _resolve_create_attribute_choice(
+    root: Path,
+    *,
+    arguments: dict,
+    selected_id: str,
+    form_values: dict | None,
+    assistant_run_id: str,
+    assistant_task_id: str,
+    confirmation_id: str,
+    confirmation_message_id: str,
+) -> dict:
+    target_operation = str(arguments.get("target_operation") or "").strip()
+    if target_operation not in {"create_memo", "create_task"}:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("创建属性选择卡缺少目标操作")
+    base_arguments = arguments.get("base_arguments") if isinstance(arguments.get("base_arguments"), dict) else {}
+    options = arguments.get("options") if isinstance(arguments.get("options"), list) else []
+    fields = arguments.get("fields") if isinstance(arguments.get("fields"), dict) else {}
+    if target_operation == "create_memo" and selected_id == CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID:
+        run_id = _form_value(form_values, "run_id", fields.get("run_id") or base_arguments.get("run_id"))
+        if run_id not in _allowed_option_values(fields.get("runs")):
+            finalize_confirmation_card(root, confirmation_id, "failed")
+            raise ServiceAssistantActionError("选择的 Run 不在本次配置卡可用范围内")
+        run_id, _plan = _target_run(root, {"run_id": run_id})
+
+        status = normalize_memo_status(_form_value(form_values, "status", fields.get("status") or "todo"))
+        if status not in _allowed_option_values(fields.get("statuses")):
+            finalize_confirmation_card(root, confirmation_id, "failed")
+            raise ServiceAssistantActionError("选择的状态不在本次配置卡可用范围内")
+        created_at = _validated_memo_form_date(_form_value(form_values, "created_at", fields.get("created_at")), "创建日期")
+        scheduled_date = _validated_memo_form_date(
+            _form_value(form_values, "scheduled_date", fields.get("scheduled_date")),
+            "开始日期",
+        )
+        end_date = _validated_memo_form_date(_form_value(form_values, "end_date", fields.get("end_date")), "结束日期")
+        if end_date and scheduled_date and end_date < scheduled_date:
+            finalize_confirmation_card(root, confirmation_id, "failed")
+            raise ServiceAssistantActionError("结束日期不能早于开始日期")
+        created_task_id = _form_value(form_values, "created_task_id", fields.get("created_task_id"))
+        if created_task_id not in _allowed_option_values(fields.get("tasks")):
+            finalize_confirmation_card(root, confirmation_id, "failed")
+            raise ServiceAssistantActionError("选择的 Task 不在本次配置卡可用范围内")
+        created_task_id = _validated_memo_task_link(root, run_id, created_task_id)
+        next_arguments = {
+            **base_arguments,
+            "run_id": run_id,
+            "status": status,
+            "attributes_selected": True,
+        }
+        next_arguments.pop("attribute_preset", None)
+        if created_at:
+            next_arguments["created_at"] = created_at
+        else:
+            next_arguments.pop("created_at", None)
+        if scheduled_date:
+            next_arguments["scheduled_date"] = scheduled_date
+        else:
+            next_arguments.pop("scheduled_date", None)
+        if end_date:
+            next_arguments["end_date"] = end_date
+        else:
+            next_arguments.pop("end_date", None)
+        if created_task_id:
+            next_arguments["created_task_id"] = created_task_id
+        else:
+            next_arguments.pop("created_task_id", None)
+        selected_payload = {
+            "run": _selected_option_label(fields.get("runs"), run_id),
+            "status": _selected_option_label(fields.get("statuses"), status),
+            "created_at": created_at,
+            "scheduled_date": scheduled_date,
+            "end_date": end_date,
+            "created_task": _selected_option_label(fields.get("tasks"), created_task_id),
+        }
+        confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", "已提交 Memo 创建配置")
+        if assistant_run_id:
+            append_event(
+                root,
+                assistant_run_id,
+                "service_assistant_choice",
+                {
+                    "task_id": assistant_task_id,
+                    "operation": target_operation,
+                    "decision": "selected",
+                    "run_id": run_id,
+                    "status": status,
+                    "created_at": created_at,
+                    "scheduled_date": scheduled_date,
+                    "end_date": end_date,
+                    "created_task_id": created_task_id,
+                },
+            )
+        return {
+            "choice": True,
+            "cancelled": False,
+            "operation": target_operation,
+            "assistant_run_id": assistant_run_id,
+            "assistant_task_id": assistant_task_id,
+            "confirmation_id": confirmation_id,
+            "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+            "confirmation_card": (confirmation_record or {}).get("terminal_card"),
+            "tool_message": _create_attribute_choice_tool_message(target_operation, selected_payload, next_arguments),
+            "result": {
+                "ok": True,
+                "target_operation": target_operation,
+                "selected": selected_payload,
+                "next_arguments": next_arguments,
+            },
+        }
+    selected = next((item for item in options if isinstance(item, dict) and str(item.get("id") or "") == selected_id), None)
+    if selected is None:
+        confirmation_record = finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError(f"创建属性选项不存在：{selected_id}")
+    patch = selected.get("patch") if isinstance(selected.get("patch"), dict) else {}
+    next_arguments = {
+        **base_arguments,
+        **patch,
+        "attributes_selected": True,
+    }
+    next_arguments.pop("attribute_preset", None)
+    confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", f"已选择：{selected.get('label')}")
+    if assistant_run_id:
+        append_event(
+            root,
+            assistant_run_id,
+            "service_assistant_choice",
+            {
+                "task_id": assistant_task_id,
+                "operation": target_operation,
+                "decision": "selected",
+                "choice_id": selected_id,
+                "choice_label": selected.get("label"),
+            },
+        )
+    return {
+        "choice": True,
+        "cancelled": False,
+        "operation": target_operation,
+        "assistant_run_id": assistant_run_id,
+        "assistant_task_id": assistant_task_id,
+        "confirmation_id": confirmation_id,
+        "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+        "confirmation_card": (confirmation_record or {}).get("terminal_card"),
+        "tool_message": _create_attribute_choice_tool_message(target_operation, selected, next_arguments),
+        "result": {
+            "ok": True,
+            "target_operation": target_operation,
+            "selected": selected,
+            "next_arguments": next_arguments,
+        },
+    }
 
 
 def _resolve_group_handoff_reply_choice(
@@ -1382,6 +3288,7 @@ def resolve_choice(
     session_key: str,
     message_id: str,
     choice_id: str,
+    form_values: dict | None = None,
 ) -> dict | None:
     selected_id = str(choice_id or "").strip()
     if not message_id or not selected_id:
@@ -1418,13 +3325,55 @@ def resolve_choice(
             "confirmation_id": confirmation_id,
             "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
             "confirmation_card": (confirmation_record or {}).get("terminal_card"),
-            "user_response": "已取消本次转单选择。" if operation == GROUP_HANDOFF_REPLY_CHOICE_OPERATION else "已取消本次方案选择。",
+            "user_response": (
+                "已取消本次转单选择。"
+                if operation == GROUP_HANDOFF_REPLY_CHOICE_OPERATION
+                else "已取消本次 Task 创建配置。"
+                if operation == CREATE_TASK_CONFIG_CHOICE_OPERATION
+                else "已取消本次 Task 运行配置选择。"
+                if operation == CREATE_TASK_RUNTIME_CHOICE_OPERATION
+                else "已取消本次创建字段配置。"
+                if operation in {CREATE_MEMO_ATTRIBUTE_CHOICE_OPERATION, CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION}
+                else "已取消本次方案选择。"
+            ),
         }
     if operation == GROUP_HANDOFF_REPLY_CHOICE_OPERATION:
         return _resolve_group_handoff_reply_choice(
             root,
             arguments=arguments,
             selected_id=selected_id,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+            confirmation_id=confirmation_id,
+            confirmation_message_id=confirmation_message_id,
+        )
+    if operation == CREATE_TASK_CONFIG_CHOICE_OPERATION:
+        return _resolve_create_task_config_choice(
+            root,
+            arguments=arguments,
+            selected_id=selected_id,
+            form_values=form_values,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+            confirmation_id=confirmation_id,
+            confirmation_message_id=confirmation_message_id,
+        )
+    if operation == CREATE_TASK_RUNTIME_CHOICE_OPERATION:
+        return _resolve_create_task_runtime_choice(
+            root,
+            arguments=arguments,
+            selected_id=selected_id,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+            confirmation_id=confirmation_id,
+            confirmation_message_id=confirmation_message_id,
+        )
+    if operation in {CREATE_MEMO_ATTRIBUTE_CHOICE_OPERATION, CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION}:
+        return _resolve_create_attribute_choice(
+            root,
+            arguments=arguments,
+            selected_id=selected_id,
+            form_values=form_values,
             assistant_run_id=assistant_run_id,
             assistant_task_id=assistant_task_id,
             confirmation_id=confirmation_id,

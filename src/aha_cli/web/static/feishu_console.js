@@ -138,6 +138,25 @@
       return options.join("");
     }
 
+    function workRunOptionsHtml(selected) {
+      const runs = Array.isArray(status.work_run_options) ? status.work_run_options : [];
+      const options = [
+        `<option value="" ${selected ? "" : "selected"}>${escapeHtml(t("feishu.default_run_unbound", "Not bound"))}</option>`,
+        ...runs.map(run => {
+          const id = String(run?.id || "");
+          if (!id) return "";
+          const goal = String(run?.goal || id);
+          const statusText = String(run?.lifecycle_status || run?.status || "");
+          const label = statusText ? `${goal} · ${id} · ${statusText}` : `${goal} · ${id}`;
+          return `<option value="${escapeHtml(id)}" ${selected === id ? "selected" : ""}>${escapeHtml(label)}</option>`;
+        })
+      ];
+      if (selected && !runs.some(run => String(run?.id || "") === selected)) {
+        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(`${selected} (${t("feishu.default_run_unavailable", "unavailable")})`)}</option>`);
+      }
+      return options.join("");
+    }
+
     function setupMessage() {
       if (loading && !loaded) return t("feishu.loading", "Loading Feishu status...");
       if (!status.enabled) return t("feishu.disabled_hint", "Enable Feishu below, save, then restart the Web service.");
@@ -261,6 +280,12 @@
                     <span>${escapeHtml(t("feishu.default_proxy_toggle", "Use the selected backend proxy"))}</span>
                   </span>
                 </label>
+                <label class="field-label">
+                  <span>${escapeHtml(t("feishu.default_run", "Default work Run"))}</span>
+                  <select name="default_run_id">${workRunOptionsHtml(String(status.configured_default_run_id || status.default_run_id || ""))}</select>
+                  <div class="field-help">${escapeHtml(t("feishu.default_run_hint", "Default landing Run for Feishu memos and task creation. System-managed Runs are excluded; specific operations may still choose another Run."))}</div>
+                  ${status.default_run_error ? `<div class="field-help error">${escapeHtml(status.default_run_error)}</div>` : ""}
+                </label>
               </div>
               <p class="feishu-console-section-help">${escapeHtml(t("feishu.agent_defaults_hint", "Used for new system-managed AHA service-steward conversations. Its workspace is AHA Home, not a project; existing conversations are unchanged."))}</p>
             </fieldset>
@@ -368,6 +393,7 @@
         backend: String(field("backend")?.value || "").trim(),
         model: String(field("model")?.value || "").trim(),
         reasoning_effort: String(field("reasoning_effort")?.value || "").trim(),
+        default_run_id: String(field("default_run_id")?.value || "").trim(),
         proxy_enabled: Boolean(field("proxy_enabled")?.checked),
         owner_open_id: String(field("owner_open_id")?.value || "").trim(),
         owner_chat_id: String(field("owner_chat_id")?.value || "").trim(),

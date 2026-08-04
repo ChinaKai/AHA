@@ -32,7 +32,7 @@ class ObserveProxyTests(unittest.TestCase):
     def test_normalizes_feishu_and_hides_weixin_by_default(self) -> None:
         defaults = default_config()["integrations"]
         self.assertFalse(defaults["feishu"]["enabled"])
-        self.assertNotIn("default_run_id", defaults["feishu"])
+        self.assertEqual(defaults["feishu"]["default_run_id"], "")
         self.assertFalse(defaults["weixin"]["enabled"])
         self.assertFalse(defaults["weixin"]["visible"])
 

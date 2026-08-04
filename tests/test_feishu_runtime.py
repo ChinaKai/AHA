@@ -14,6 +14,8 @@ from aha_cli.services.feishu_runtime import (
     update_feishu_notifications_enabled,
     update_feishu_settings,
 )
+from aha_cli.services.feishu_group import ensure_feishu_group_run
+from aha_cli.store.filesystem import create_plan
 from aha_cli.web.system_routes import system_route_response
 from tests.helpers import json_response_body
 
@@ -165,6 +167,7 @@ class FeishuRuntimeTests(unittest.TestCase):
                     "backend": "claude",
                     "model": "claude-sonnet-4-6",
                     "reasoning_effort": "high",
+                    "default_run_id": "",
                     "proxy_enabled": True,
                     "owner_open_id": "ou_owner",
                     "owner_chat_id": "oc_owner",
@@ -191,15 +194,31 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertEqual(status["effective_backend"], "claude")
         self.assertEqual(status["effective_model"], "claude-sonnet-4-6")
         self.assertEqual(status["effective_reasoning_effort"], "high")
+        self.assertEqual(status["default_run_id"], "")
         self.assertTrue(status["effective_proxy_enabled"])
         self.assertEqual(saved["integrations"]["feishu"]["backend"], "claude")
         self.assertEqual(saved["integrations"]["feishu"]["model"], "claude-sonnet-4-6")
         self.assertEqual(saved["integrations"]["feishu"]["reasoning_effort"], "high")
+        self.assertEqual(saved["integrations"]["feishu"]["default_run_id"], "")
         self.assertTrue(saved["integrations"]["feishu"]["proxy_enabled"])
         self.assertEqual(saved["integrations"]["feishu"]["owner_open_id"], "ou_owner")
         self.assertEqual(saved["integrations"]["feishu"]["owner_chat_id"], "oc_owner")
         self.assertNotIn("ignored", saved["integrations"]["feishu"])
         self.assertEqual(saved["integrations"]["custom"], {"keep": True})
+
+    def test_settings_default_run_accepts_only_non_system_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = create_plan(root, "Work run", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            system_run = ensure_feishu_group_run(root, {"backend": "stub"})
+
+            status = update_feishu_settings(root, {"default_run_id": work["id"]})
+            with self.assertRaises(ValueError):
+                update_feishu_settings(root, {"default_run_id": system_run})
+
+        self.assertEqual(status["default_run_id"], work["id"])
+        self.assertEqual([item["id"] for item in status["work_run_options"]], [work["id"]])
+        self.assertTrue(status["default_run_available"])
 
     def test_status_exposes_recent_groups_for_authenticated_settings_page(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

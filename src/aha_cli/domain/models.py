@@ -141,6 +141,7 @@ def default_feishu_integration_config() -> dict:
         "model": "",
         "reasoning_effort": "",
         "proxy_enabled": None,
+        "default_run_id": "",
         "owner_open_id": "",
         "owner_chat_id": "",
         "allowed_open_ids": [],
@@ -346,6 +347,7 @@ def normalize_feishu_integration_config(value: object | None = None) -> dict:
         "backend",
         "model",
         "reasoning_effort",
+        "default_run_id",
     ):
         if key in raw:
             config[key] = str(raw.get(key) or "").strip()

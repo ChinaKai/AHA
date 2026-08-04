@@ -21,6 +21,7 @@ from aha_cli.services.feishu import (
     recent_groups,
 )
 from aha_cli.services.feishu_audit import audit_feishu_channel
+from aha_cli.services.feishu_work_run import feishu_work_run_status, validate_feishu_work_run_id
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, config_path
@@ -215,6 +216,7 @@ def feishu_status(root: Path) -> dict:
         runtime = read_json(feishu_runtime_path(root))
     except (FileNotFoundError, OSError, ValueError):
         runtime = {}
+    work_run = feishu_work_run_status(root)
     return {
         "enabled": bool(config.get("enabled")),
         "configured": bool(app_id and app_secret),
@@ -226,6 +228,12 @@ def feishu_status(root: Path) -> dict:
         "backend": str(config.get("backend") or ""),
         "model": str(config.get("model") or ""),
         "reasoning_effort": str(config.get("reasoning_effort") or ""),
+        "default_run_id": work_run.get("default_run_id") or "",
+        "configured_default_run_id": work_run.get("configured_default_run_id") or "",
+        "default_run_available": bool(work_run.get("default_run_available")),
+        "default_run_error": str(work_run.get("default_run_error") or ""),
+        "default_run": work_run.get("default_run"),
+        "work_run_options": work_run.get("work_run_options") or [],
         "proxy_enabled": configured_proxy_enabled if isinstance(configured_proxy_enabled, bool) else None,
         "owner_open_id": str(config.get("owner_open_id") or ""),
         "owner_chat_id": str(config.get("owner_chat_id") or ""),
@@ -276,6 +284,7 @@ def update_feishu_settings(root: Path, payload: dict) -> dict:
             "backend",
             "model",
             "reasoning_effort",
+            "default_run_id",
             "proxy_enabled",
             "owner_open_id",
             "owner_chat_id",
@@ -287,6 +296,8 @@ def update_feishu_settings(root: Path, payload: dict) -> dict:
             "security_mode",
         }
         updated = {**current, **{key: value for key, value in payload.items() if key in accepted}}
+        if "default_run_id" in payload and str(payload.get("default_run_id") or "").strip():
+            validate_feishu_work_run_id(root, str(payload.get("default_run_id") or ""))
         if not str(payload.get("app_secret") or "").strip():
             updated["app_secret"] = str(current.get("app_secret") or "")
         integrations["feishu"] = normalize_feishu_integration_config(updated)

@@ -9,6 +9,7 @@ from aha_cli.services.feishu_group_handoffs import mark_group_handoff, register_
 from aha_cli.services.feishu_notifications import set_subscription
 from aha_cli.services.feishu_owner import resolve_feishu_owner
 from aha_cli.services.feishu_runtime import feishu_config
+from aha_cli.services.feishu_work_run import feishu_work_run_status
 from aha_cli.store.config import load_config
 from aha_cli.store.io import iter_jsonl_reverse
 from aha_cli.store.paths import event_path
@@ -66,7 +67,7 @@ def _latest_group_request(root: Path, run_id: str, task_id: str) -> dict:
     return {}
 
 
-def _steward_forward_message(origin: dict, action: dict, *, handoff: dict | None = None) -> str:
+def _steward_forward_message(root: Path, origin: dict, action: dict, *, handoff: dict | None = None) -> str:
     arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
     reason = str(arguments.get("reason") or action.get("reason") or "").strip()
     summary = str(arguments.get("summary") or arguments.get("question") or "").strip()
@@ -104,10 +105,36 @@ def _steward_forward_message(origin: dict, action: dict, *, handoff: dict | None
         parts.extend(["", "转发原因：", reason])
     if merged and isinstance(handoff, dict):
         parts.extend(["", "当前合并后的需求上下文：", str(handoff.get("request_preview") or "")])
+    work_run = feishu_work_run_status(root)
+    default_run = work_run.get("default_run") if isinstance(work_run.get("default_run"), dict) else {}
+    if work_run:
+        if work_run.get("default_run_available"):
+            parts.extend(
+                [
+                    "",
+                    "默认工作 Run：",
+                    f"{work_run.get('default_run_id')} · {default_run.get('goal') or '-'}",
+                ]
+            )
+        else:
+            parts.extend(
+                [
+                    "",
+                    "默认工作 Run：",
+                    "未绑定。计划类待办需要主人先在飞书助手设置里选择默认归属 Run，或本次手动指定 run_id。",
+                ]
+            )
     parts.extend(
         [
             "",
-            "如果结果需要公开到群聊，请先在主人私聊中说明建议公开的内容，由主人决定是否让数字人代发。",
+            "处理 SOP：",
+            "- 纯信息问答：如可公开，整理脱敏文字后请主人确认，再由数字人代发回群。",
+            "- 需主人拍板：在私聊向主人确认；公开文字必须先脱敏给主人确认。",
+            "- 执行类：计划/可延后类先 create_memo 进入默认工作 Run 的待办池，不要直接 create_task；即时类且主人在线确认时才走直接执行/发 Task 消息链路。",
+            "- 越界红线：固件包、密钥、破坏性/不可逆或授权敏感操作默认拒绝，并关闭转单。",
+            "- 当前群聊数字人只支持文本回复，不支持在群里发送图片、二进制或文件；涉及这类内容时请告知需要主人本人发送或走其他渠道。",
+            "",
+            "如果本单不需要回群，请使用 dismiss_feishu_group_handoff 显式关闭，终态选 answered / rejected / owner_handled / dismissed。",
         ]
     )
     return "\n".join(parts).strip()
@@ -238,7 +265,8 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
                 "target": "main",
                 "sender": "feishu-group",
                 "reply_target": "feishu",
-                "message": _steward_forward_message(origin, action, handoff=handoff),
+                "message": _steward_forward_message(root, origin, action, handoff=handoff),
+                "feishu_group_handoff_id": str(handoff.get("id") or ""),
                 "feishu_chat_id": owner_chat_id,
                 "feishu_mention_open_id": owner_open_id,
                 "feishu_channel": "private_steward",

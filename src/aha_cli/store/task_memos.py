@@ -259,6 +259,7 @@ def create_task_memo(root: Path, run_id: str, payload: dict) -> dict:
     memos = read_task_memos(root, run_id)
     now = utc_now()
     fields = memo_fields_from_payload(payload)
+    created_at = str(fields.get("created_at") or now).strip() or now
     status = normalize_memo_status(fields.get("status"))
     scheduled_date = normalize_memo_date(fields.get("scheduled_date") or fields.get("date"))
     provided_completed_at = normalize_memo_terminal_timestamp(fields.get("completed_at"), scheduled_date)
@@ -273,7 +274,7 @@ def create_task_memo(root: Path, run_id: str, payload: dict) -> dict:
             **fields,
             **timestamps,
             "id": next_memo_id(memos),
-            "created_at": now,
+            "created_at": created_at,
             "updated_at": now,
         }
     )

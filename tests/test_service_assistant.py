@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
+from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task
 from aha_cli.services.feishu import FeishuError, bind_confirmation_card
 from aha_cli.services.feishu_notifications import set_subscription
@@ -22,8 +24,8 @@ from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.store.filesystem import append_message, create_plan, delete_task, inbox_path, iter_jsonl_from
 from aha_cli.store.paths import aha_home_path
 from aha_cli.store.runs import require_plan
-from aha_cli.store.task_memos import read_task_memos
-from aha_cli.web.run_api import public_run_summaries
+from aha_cli.store.task_memos import create_task_memo, read_task_memos
+from aha_cli.web.run_api import public_run_summaries, workspace_options
 from aha_cli.web.task_messaging import message_backend_autostart_config
 
 
@@ -78,7 +80,16 @@ class ServiceAssistantTests(unittest.TestCase):
             root = Path(tmp)
             assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
             assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_user", {"backend": "stub"})
-            target = create_plan(root, "User run", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            target = create_plan(
+                root,
+                "User run",
+                1,
+                "implementation",
+                ["Linked task"],
+                [],
+                backend="stub",
+                create_default_tasks=False,
+            )
             set_subscription(
                 root,
                 "tenant:p2p:ou_user",
@@ -108,8 +119,34 @@ class ServiceAssistantTests(unittest.TestCase):
                     "arguments": {"run_id": target["id"], "title": "Check release"},
                 },
             )
-            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_confirm", chat_id="oc_chat")
-            columns = prepared["confirmation_card"]["body"]["elements"][1]["columns"]
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_attr", chat_id="oc_chat")
+            selected = resolve_choice(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                message_id="om_attr",
+                choice_id="__submit_memo_config__",
+                form_values={
+                    "run_id": target["id"],
+                    "status": "todo",
+                    "created_at": "2026-08-01",
+                    "scheduled_date": "2026-08-05",
+                    "end_date": "2026-08-07",
+                    "created_task_id": "task-001",
+                },
+            )
+            followup = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_memo",
+                    "arguments": selected["result"]["next_arguments"],
+                },
+            )
+            bind_confirmation_card(root, followup["confirmation_id"], message_id="om_confirm", chat_id="oc_chat")
+            columns = followup["confirmation_card"]["body"]["elements"][1]["columns"]
             confirmed = resolve_confirmation(
                 root,
                 open_id="ou_user",
@@ -119,15 +156,41 @@ class ServiceAssistantTests(unittest.TestCase):
             )
 
             self.assertEqual(prepared["confirmation_card"]["schema"], "2.0")
+            self.assertTrue(prepared["choice_required"])
             self.assertTrue(prepared["confirmation_id"])
+            self.assertEqual(prepared["confirmation_card"]["header"]["title"]["content"], "配置 Memo 创建")
+            self.assertEqual(prepared["confirmation_card"]["body"]["elements"][1]["tag"], "form")
+            memo_card_json = json.dumps(prepared["confirmation_card"], ensure_ascii=False)
+            self.assertIn('"form_action_type": "submit"', memo_card_json)
+            self.assertIn("关联 Task", memo_card_json)
+            self.assertIn("状态", memo_card_json)
+            self.assertIn("创建日期", memo_card_json)
+            self.assertIn("开始日期", memo_card_json)
+            self.assertIn("结束日期", memo_card_json)
+            self.assertIn('"tag": "date_picker"', memo_card_json)
+            self.assertIn("task-001 · Linked task", memo_card_json)
+            self.assertNotIn("Workspace", memo_card_json)
+            self.assertIn('"attributes_selected": true', selected["tool_message"])
+            self.assertNotIn("selected_preset_id", selected["tool_message"])
+            self.assertNotIn("attribute_preset", selected["tool_message"])
+            self.assertEqual(selected["result"]["next_arguments"]["status"], "todo")
+            self.assertEqual(selected["result"]["next_arguments"]["created_at"], "2026-08-01")
+            self.assertEqual(selected["result"]["next_arguments"]["scheduled_date"], "2026-08-05")
+            self.assertEqual(selected["result"]["next_arguments"]["end_date"], "2026-08-07")
+            self.assertEqual(selected["result"]["next_arguments"]["created_task_id"], "task-001")
+            self.assertTrue(followup["confirmation_required"])
             self.assertEqual(columns[0]["elements"][0]["behaviors"][0]["type"], "callback")
             self.assertEqual(columns[1]["elements"][0]["behaviors"][0]["value"]["decision"], "cancel")
-            self.assertNotIn("token", json.dumps(prepared["confirmation_card"], ensure_ascii=False).lower())
-            self.assertNotIn("```json", json.dumps(prepared["confirmation_card"], ensure_ascii=False))
+            self.assertNotIn("token", json.dumps(followup["confirmation_card"], ensure_ascii=False).lower())
+            self.assertNotIn("```json", json.dumps(followup["confirmation_card"], ensure_ascii=False))
             self.assertTrue(confirmed["result"]["ok"])
-            self.assertEqual(confirmed["confirmation_id"], prepared["confirmation_id"])
-            self.assertEqual(confirmed["confirmation_card"]["header"]["template"], "green")
+            self.assertEqual(confirmed["confirmation_id"], followup["confirmation_id"])
+            self.assertEqual(confirmed["confirmation_card"]["header"]["template"], "grey")
             self.assertEqual(read_task_memos(root, target["id"])[0]["title"], "Check release")
+            self.assertEqual(read_task_memos(root, target["id"])[0]["created_at"], "2026-08-01")
+            self.assertEqual(read_task_memos(root, target["id"])[0]["scheduled_date"], "2026-08-05")
+            self.assertEqual(read_task_memos(root, target["id"])[0]["end_date"], "2026-08-07")
+            self.assertEqual(read_task_memos(root, target["id"])[0]["created_task_id"], "task-001")
             with self.assertRaises(FeishuError):
                 resolve_confirmation(
                     root,
@@ -161,7 +224,26 @@ class ServiceAssistantTests(unittest.TestCase):
                     "arguments": {"run_id": target["id"], "title": "Needs card click"},
                 },
             )
-            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_card", chat_id="oc_chat")
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_attr_card", chat_id="oc_chat")
+            selected = resolve_choice(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                message_id="om_attr_card",
+                choice_id="__submit_memo_config__",
+                form_values={"run_id": target["id"], "status": "todo", "created_task_id": ""},
+            )
+            followup = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_memo",
+                    "arguments": selected["result"]["next_arguments"],
+                },
+            )
+            bind_confirmation_card(root, followup["confirmation_id"], message_id="om_card", chat_id="oc_chat")
 
             bare = resolve_confirmation(
                 root,
@@ -180,6 +262,321 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIsNone(bare)
             self.assertTrue(clicked["result"]["ok"])
             self.assertEqual(read_task_memos(root, target["id"])[0]["title"], "Needs card click")
+
+    def test_task_create_uses_config_card_before_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.web.task_runtime.start_dispatched_task_backend",
+            return_value={"status": "stub"},
+        ), mock.patch(
+            "aha_cli.services.service_assistant_actions.model_options",
+            side_effect=lambda backend, _config=None: [{"name": CODEX_DEFAULT_MODEL, "label": CODEX_DEFAULT_MODEL}]
+            if backend == "codex"
+            else [{"name": "", "label": "default"}],
+        ):
+            root = Path(tmp)
+            workspace_root = root / "workspaces"
+            project = workspace_root / "project"
+            project.mkdir(parents=True)
+            config = {
+                "backend": "codex",
+                "workspace_roots": [str(workspace_root)],
+                "codex": {
+                    "env": [
+                        {
+                            "name": "openai",
+                            "OPENAI_MODEL": "gpt-env",
+                        }
+                    ]
+                },
+            }
+            (root / "config.json").write_text(
+                json.dumps(config),
+                encoding="utf-8",
+            )
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_user", {"backend": "stub"})
+            target = create_plan(
+                root,
+                "User run",
+                1,
+                "implementation",
+                [],
+                [],
+                backend="stub",
+                workspace_path=str(project),
+                create_default_tasks=False,
+            )
+            config["integrations"] = {"feishu": {"default_run_id": target["id"]}}
+            (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            source_memo = create_task_memo(root, target["id"], {"title": "Read docs memo", "description": "Memo details"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_user",
+                chat_id="oc_chat",
+                open_id="ou_user",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+
+            config_prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_task",
+                    "arguments": {"title": "Read docs", "source_memo_id": source_memo["id"]},
+                },
+            )
+            card_json = json.dumps(config_prepared["confirmation_card"], ensure_ascii=False)
+            bind_confirmation_card(root, config_prepared["confirmation_id"], message_id="om_task_config", chat_id="oc_chat")
+            config_selected = resolve_choice(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                message_id="om_task_config",
+                choice_id="__submit_task_config__",
+                form_values={
+                    "run_id": target["id"],
+                    "workspace_path": str(project.resolve()),
+                    "backend_model": f"codex::{CODEX_DEFAULT_MODEL}",
+                    "reasoning_effort": "high",
+                    "proxy_enabled": "true",
+                    "knowledge_enabled": "true",
+                },
+            )
+            followup = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_task",
+                    "arguments": config_selected["result"]["next_arguments"],
+                },
+            )
+            bind_confirmation_card(root, followup["confirmation_id"], message_id="om_task_confirm", chat_id="oc_chat")
+            confirmed = resolve_confirmation(
+                root,
+                open_id="ou_user",
+                session_key="tenant:p2p:ou_user",
+                text="确认",
+                message_id="om_task_confirm",
+            )
+            created = confirmed["result"]["task"]
+
+            self.assertTrue(config_prepared["choice_required"])
+            self.assertIn("配置 Task", config_prepared["user_response"])
+            workspace_select = config_prepared["confirmation_card"]["body"]["elements"][1]["elements"][3]
+            self.assertEqual(
+                [option["text"]["content"] for option in workspace_select["options"]],
+                [f"{option['label']}（默认）" if option["path"] == str(project.resolve()) else option["label"] for option in workspace_options(aha_home=root)],
+            )
+            self.assertIn(f"User run.{target['id']}", card_json)
+            self.assertNotIn(f"AHA Assistant.{assistant_run}", card_json)
+            self.assertIn(f"Run（默认：User run.{target['id']}）", card_json)
+            self.assertIn("workspaces/project", card_json)
+            self.assertIn("gpt-env (openai)", card_json)
+            self.assertIn("思考深度", card_json)
+            self.assertNotIn("initial_value", card_json)
+            self.assertNotIn("default_value", card_json)
+            self.assertIn('"form_action_type": "submit"', card_json)
+            button_row = config_prepared["confirmation_card"]["body"]["elements"][1]["elements"][-1]
+            self.assertEqual(button_row["tag"], "column_set")
+            self.assertEqual([column["width"] for column in button_row["columns"]], ["auto", "auto"])
+            self.assertNotIn("weight", button_row["columns"][0])
+            self.assertEqual(config_selected["result"]["next_arguments"]["backend"], "codex")
+            self.assertEqual(config_selected["result"]["next_arguments"]["model"], CODEX_DEFAULT_MODEL)
+            self.assertEqual(config_selected["result"]["next_arguments"]["source_memo_id"], source_memo["id"])
+            self.assertEqual(config_selected["result"]["next_arguments"]["reasoning_effort"], "high")
+            self.assertTrue(config_selected["result"]["next_arguments"]["proxy_enabled"])
+            self.assertTrue(config_selected["result"]["next_arguments"]["knowledge_enabled"])
+            self.assertNotIn("runtime_preset", config_selected["result"]["next_arguments"])
+            self.assertNotIn("attribute_preset", config_selected["result"]["next_arguments"])
+            self.assertTrue(followup["confirmation_required"])
+            self.assertIn(CODEX_DEFAULT_MODEL, followup["user_response"])
+            self.assertIn("high", followup["user_response"])
+            self.assertIn("AHA KB", followup["user_response"])
+            self.assertIn("auto", followup["user_response"])
+            self.assertEqual(created["title"], "Read docs")
+            self.assertEqual(created["backend"], "codex")
+            self.assertEqual(created["model"], CODEX_DEFAULT_MODEL)
+            self.assertEqual(created["reasoning_effort"], "high")
+            self.assertTrue(created["proxy_enabled"])
+            self.assertEqual(created["status"], "pending")
+            self.assertEqual(confirmed["result"]["memo"]["created_task_id"], created["id"])
+            plan = require_plan(root, target["id"])
+            stored_task = plan["tasks"][0]
+            self.assertEqual(stored_task["preferred_backend"], "codex")
+            self.assertEqual(stored_task["preferred_model"], CODEX_DEFAULT_MODEL)
+            self.assertEqual(stored_task["preferred_reasoning_effort"], "high")
+            self.assertTrue(stored_task["preferred_proxy_enabled"])
+            self.assertTrue(stored_task["token_saving"]["enabled"])
+            self.assertEqual(stored_task["collaboration_mode"], "auto")
+            self.assertEqual(stored_task["workflow_template"], "auto")
+            self.assertEqual(stored_task["delegation_policy"], "auto")
+            self.assertEqual(stored_task["max_sub_agents"], 3)
+            self.assertEqual(read_task_memos(root, target["id"])[0]["created_task_id"], created["id"])
+
+    def test_feishu_group_handoff_memo_defaults_to_bound_work_run_and_closes_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(json.dumps({"integrations": {"feishu": {}}}), encoding="utf-8")
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            work = create_plan(root, "Feishu work", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"feishu": {"default_run_id": work["id"]}}}),
+                encoding="utf-8",
+            )
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="整理一份 vega pipeline 文档",
+            )
+            append_message(
+                root,
+                assistant_run,
+                "main",
+                "飞书群聊数字人转发\n\n原群聊问题：\n整理一份 vega pipeline 文档",
+                sender="feishu-group",
+                task_id=assistant_task["id"],
+                role="main",
+                feishu_group_handoff_id=handoff["id"],
+            )
+
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_memo",
+                    "arguments": {"title": "整理 vega pipeline 文档"},
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_memo_attr", chat_id="oc_owner")
+            selected = resolve_choice(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                message_id="om_memo_attr",
+                choice_id="__submit_memo_config__",
+                form_values={"run_id": work["id"], "status": "todo", "scheduled_date": date.today().isoformat(), "created_task_id": ""},
+            )
+            followup = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_memo",
+                    "arguments": selected["result"]["next_arguments"],
+                },
+            )
+            bind_confirmation_card(root, followup["confirmation_id"], message_id="om_memo", chat_id="oc_owner")
+            confirmed = resolve_confirmation(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                text="确认",
+                message_id="om_memo",
+            )
+            stored = get_group_handoff(root, handoff["id"])
+            memo = read_task_memos(root, work["id"])[0]
+
+            self.assertTrue(prepared["choice_required"])
+            self.assertTrue(followup["confirmation_required"])
+            self.assertIn(work["id"], followup["user_response"])
+            self.assertEqual(memo["title"], "整理 vega pipeline 文档")
+            self.assertEqual(memo["status"], "todo")
+            self.assertTrue(memo["scheduled_date"])
+            self.assertEqual(confirmed["result"]["group_handoff_terminal"]["status"], "owner_handled")
+            self.assertEqual(stored["status"], "owner_handled")
+            self.assertEqual(stored["memo_id"], "memo-001")
+
+    def test_dismiss_group_handoff_action_sets_terminal_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(json.dumps({"integrations": {"feishu": {}}}), encoding="utf-8")
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="发固件包和密钥",
+            )
+            append_message(
+                root,
+                assistant_run,
+                "main",
+                "飞书群聊数字人转发\n\n原群聊问题：\n发固件包和密钥",
+                sender="feishu-group",
+                task_id=assistant_task["id"],
+                role="main",
+                feishu_group_handoff_id=handoff["id"],
+            )
+
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "dismiss_feishu_group_handoff",
+                    "arguments": {"terminal_status": "rejected", "reason": "涉及密钥和固件包"},
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_dismiss", chat_id="oc_owner")
+            confirmed = resolve_confirmation(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                text="确认",
+                message_id="om_dismiss",
+            )
+            stored = get_group_handoff(root, handoff["id"])
+
+            self.assertTrue(prepared["confirmation_required"])
+            self.assertIn("关闭数字人转单", prepared["user_response"])
+            self.assertEqual(confirmed["result"]["status"], "rejected")
+            self.assertEqual(confirmed["result"]["status_label"], "已拒")
+            self.assertEqual(stored["status"], "rejected")
+            self.assertEqual(stored["terminal_reason"], "涉及密钥和固件包")
 
     def test_owner_choice_card_click_returns_selection_tool_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -599,10 +996,16 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIn("127.0.0.1:8766", prompt)
             self.assertIn("service_status", prompt)
             self.assertIn("create_task", prompt)
-            self.assertIn("five minutes", prompt)
+            self.assertIn("24 hours", prompt)
+            self.assertIn("default work Run", prompt)
+            self.assertIn("dismiss_feishu_group_handoff", prompt)
             self.assertIn("Never choose or copy a backend, model, generator identity", prompt)
             self.assertIn("A commit request never implies `git push`", prompt)
             self.assertIn("bare confirmation text is ordinary chat", prompt)
+            self.assertIn("Task configuration card", prompt)
+            self.assertIn("Run名称.run_id", prompt)
+            self.assertIn("execution mode is fixed to `auto`", prompt)
+            self.assertIn("Memo configuration form card", prompt)
             self.assertIn("ask_owner_choice", prompt)
 
 

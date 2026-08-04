@@ -350,6 +350,7 @@ def handle_send_payload(
         feishu_message_id=str(payload.get("feishu_message_id") or "") or None,
         feishu_session_key=str(payload.get("feishu_session_key") or "") or None,
         feishu_original_text=str(payload.get("feishu_original_text") or "") or None,
+        feishu_group_handoff_id=str(payload.get("feishu_group_handoff_id") or "") or None,
         feishu_attachments=feishu_attachments or None,
         image=payload.get("image"),
         images=payload.get("images"),

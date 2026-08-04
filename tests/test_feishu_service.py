@@ -418,6 +418,45 @@ class FeishuServiceTests(unittest.TestCase):
         self.assertIn("失效", terminal["header"]["title"]["content"])
         self.assertFalse(any(item.get("tag") == "column_set" for item in terminal["body"]["elements"]))
 
+    def test_terminal_confirmation_card_removes_form_actions(self) -> None:
+        card = {
+            "schema": "2.0",
+            "header": {"title": {"tag": "plain_text", "content": "配置 Task"}, "template": "blue"},
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": "请选择配置"},
+                    {
+                        "tag": "form",
+                        "name": "task_config",
+                        "elements": [
+                            {"tag": "select_static", "name": "backend_model", "options": []},
+                            {
+                                "tag": "column_set",
+                                "columns": [
+                                    {
+                                        "tag": "column",
+                                        "elements": [
+                                            {
+                                                "tag": "button",
+                                                "text": {"tag": "plain_text", "content": "提交"},
+                                                "form_action_type": "submit",
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                ]
+            },
+        }
+
+        terminal = feishu.terminal_confirmation_card(card, "selected", "已提交 Task 创建配置")
+
+        self.assertEqual(terminal["header"]["template"], "grey")
+        self.assertFalse(any(item.get("tag") == "form" for item in terminal["body"]["elements"]))
+        self.assertIn("已提交 Task 创建配置", terminal["body"]["elements"][-1]["content"])
+
     def test_tenant_token_is_cached_until_refresh_window(self) -> None:
         opener = QueueOpener(
             FakeResponse({"code": 0, "tenant_access_token": "t-one", "expire": 3600}),

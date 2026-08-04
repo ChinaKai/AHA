@@ -567,7 +567,15 @@ def get_group_handoff(root: Path, handoff_id: str) -> dict | None:
     return dict(record) if isinstance(record, dict) else None
 
 
-def mark_group_handoff(root: Path, handoff_id: str, status: str, *, error: str = "") -> dict | None:
+def mark_group_handoff(
+    root: Path,
+    handoff_id: str,
+    status: str,
+    *,
+    error: str = "",
+    reason: str = "",
+    memo_id: str = "",
+) -> dict | None:
     with _state_lock, _with_lock(root) as handle, exclusive_lock(handle):
         handoffs = _load(root)
         now = utc_now()
@@ -581,8 +589,15 @@ def mark_group_handoff(root: Path, handoff_id: str, status: str, *, error: str =
         record["updated_at_epoch"] = now_epoch
         if status == "delivered":
             record["delivered_at"] = record["updated_at"]
+        if status in {"answered", "rejected", "owner_handled", "dismissed"}:
+            record["closed_at"] = record["updated_at"]
+            record[f"{status}_at"] = record["updated_at"]
         if error:
             record["error"] = str(error)[:1000]
+        if reason:
+            record["terminal_reason"] = str(reason)[:1000]
+        if memo_id:
+            record["memo_id"] = str(memo_id)
         _save(root, handoffs)
     return dict(record)
 

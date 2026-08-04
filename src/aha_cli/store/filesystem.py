@@ -217,6 +217,7 @@ def append_message(
     feishu_message_id: str | None = None,
     feishu_session_key: str | None = None,
     feishu_original_text: str | None = None,
+    feishu_group_handoff_id: str | None = None,
     feishu_attachments: object | None = None,
     image: object | None = None,
     images: object | None = None,
@@ -286,6 +287,8 @@ def append_message(
         payload["feishu_session_key"] = str(feishu_session_key)
     if feishu_original_text:
         payload["feishu_original_text"] = str(feishu_original_text)
+    if feishu_group_handoff_id:
+        payload["feishu_group_handoff_id"] = str(feishu_group_handoff_id)
     if isinstance(feishu_attachments, list) and feishu_attachments:
         payload["feishu_attachments"] = feishu_attachments
     if image:

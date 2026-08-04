@@ -563,6 +563,9 @@ if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.fei
         self.assertIn('name="backend"', console)
         self.assertIn('name="model"', console)
         self.assertIn('name="reasoning_effort"', console)
+        self.assertIn('name="default_run_id"', console)
+        self.assertIn("workRunOptionsHtml", console)
+        self.assertIn("status.work_run_options", console)
         self.assertIn('name="proxy_enabled"', console)
         self.assertIn('name="notifications_enabled"', console)
         self.assertIn('assistant.workspace_path', console)
@@ -588,11 +591,12 @@ if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.fei
         self.assertIn('"feishu.notifications": "任务状态推送"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications_toggle": "Push task status changes to owner"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications_toggle": "向主人私聊推送 Task 状态变化"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertIn('"feishu.default_run": "Default work Run"', i18n)
+        self.assertIn('"feishu.default_run": "默认工作 Run"', i18n)
         self.assertNotIn('integrations.feishu.web.', bootstrap)
         self.assertIn('Configured; leave blank to keep', console)
         self.assertNotIn('id="feishu-web-login"', html)
         self.assertNotIn('integrations.feishu.default_run_id', bootstrap)
-        self.assertNotIn('feishu.default_run', console)
         self.assertIn('weixin: { enabled: false, visible: false }', bootstrap)
 
     def test_integrations_include_local_terminal(self) -> None:

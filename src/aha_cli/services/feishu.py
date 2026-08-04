@@ -476,8 +476,8 @@ def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict
     """Return a Schema 2.0 card with actions removed and a terminal status."""
     result = json.loads(json.dumps(card, ensure_ascii=False)) if isinstance(card, dict) else {}
     labels = {
-        "confirmed": ("操作已确认", "green", "已确认并提交 AHA 执行。"),
-        "selected": ("已选择方案", "green", "已收到选择，AHA 助手将继续处理。"),
+        "confirmed": ("操作已确认", "grey", "已确认并提交 AHA 执行。"),
+        "selected": ("已选择方案", "grey", "已收到选择，AHA 助手将继续处理。"),
         "cancelled": ("操作已取消", "grey", "已取消，本操作不会执行。"),
         "expired": ("确认已失效", "grey", "已超过 24 小时有效期，请重新发起操作。"),
         "stale": ("确认已失效", "grey", "目标状态已变化，请重新发起操作。"),
@@ -489,10 +489,25 @@ def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict
     header["template"] = template
     result["header"] = header
     body = result.get("body") if isinstance(result.get("body"), dict) else {}
+
+    def terminal_element(item: object) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        if item.get("tag") in {"button", "column_set", "form"}:
+            return None
+        cloned = dict(item)
+        if isinstance(cloned.get("elements"), list):
+            cloned["elements"] = [
+                child
+                for child in (terminal_element(child) for child in cloned["elements"])
+                if child is not None
+            ]
+        return cloned
+
     elements = [
         item
-        for item in (body.get("elements") if isinstance(body.get("elements"), list) else [])
-        if not (isinstance(item, dict) and item.get("tag") == "column_set")
+        for item in (terminal_element(item) for item in (body.get("elements") if isinstance(body.get("elements"), list) else []))
+        if item is not None
     ]
     if elements and isinstance(elements[-1], dict) and elements[-1].get("tag") == "markdown":
         elements.pop()

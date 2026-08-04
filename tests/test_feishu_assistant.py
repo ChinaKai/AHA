@@ -599,6 +599,51 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["message"], "trusted choice")
         self.assertIn("已收到选择", channel.sent[-1][1]["text"])
 
+    def test_choice_card_action_passes_form_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.resolve_choice",
+            return_value={"choice": True, "cancelled": False, "tool_message": "trusted choice"},
+        ) as resolve, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ):
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            set_subscription(
+                root,
+                "tenant-1:p2p:ou_user",
+                chat_id="oc_chat",
+                open_id="ou_user",
+                run_id="run-001",
+                task_id="task-006",
+            )
+            channel = FakeChannel()
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_chat",
+                    "message_id": "om_choice",
+                    "open_id": "ou_user",
+                    "action": {
+                        "kind": "aha_service_choice",
+                        "choice_id": "__submit_task_config__",
+                    },
+                    "form_values": {"run_id": "run-a", "backend_model": "codex::gpt-5.5"},
+                },
+            )
+
+        resolve.assert_called_once_with(
+            root,
+            open_id="ou_user",
+            session_key="tenant-1:p2p:ou_user",
+            message_id="om_choice",
+            choice_id="__submit_task_config__",
+            form_values={"run_id": "run-a", "backend_model": "codex::gpt-5.5"},
+        )
+
     def test_bare_confirmation_text_is_forwarded_as_normal_private_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_assistant.run_exists",

@@ -160,10 +160,25 @@ def enqueue_message(root: Path, default_run_id: str, channel: Any, message: Any)
         _send_text_background(root, channel, chat_id, "AHA 助手当前繁忙，请稍后重试。")
 
 
+def _mapping_attr(value: object, name: str) -> dict:
+    raw = getattr(value, name, None)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _card_action_form_values_from_event(event: Any, action: Any) -> dict:
+    for source in (action, event):
+        for name in ("form_value", "form_values", "formValue", "input_values", "inputs"):
+            values = _mapping_attr(source, name)
+            if values:
+                return values
+    return {}
+
+
 def enqueue_card_action(root: Path, default_run_id: str, channel: Any, event: Any) -> None:
     _ensure_worker()
     action = getattr(event, "action", None)
     operator = getattr(event, "operator", None)
+    form_values = _card_action_form_values_from_event(event, action)
     payload = {
         "kind": "card_action",
         "chat_id": str(getattr(event, "chat_id", "") or ""),
@@ -171,6 +186,8 @@ def enqueue_card_action(root: Path, default_run_id: str, channel: Any, event: An
         "open_id": str(getattr(operator, "open_id", "") or ""),
         "action": getattr(action, "value", None),
     }
+    if form_values:
+        payload["form_values"] = form_values
     try:
         _assistant_queue.put_nowait((root, default_run_id, channel, payload))
         action_value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
@@ -638,6 +655,17 @@ def _finish_confirmation(
     _send_text(root, channel, chat_id, reply, reply_to=message_id)
 
 
+def _card_action_form_values(payload: dict) -> dict:
+    for source in (payload, payload.get("action") if isinstance(payload.get("action"), dict) else {}):
+        if not isinstance(source, dict):
+            continue
+        for key in ("form_values", "form_value", "formValue", "input_values", "inputs"):
+            values = source.get(key)
+            if isinstance(values, dict) and values:
+                return values
+    return {}
+
+
 def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
     value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
     action_kind = str(value.get("kind") or "")
@@ -671,13 +699,16 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
             _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
             return
         if action_kind == "aha_service_choice":
-            confirmation = resolve_choice(
-                root,
-                open_id=open_id,
-                session_key=session_key,
-                message_id=message_id,
-                choice_id=choice_id,
-            )
+            choice_kwargs = {
+                "open_id": open_id,
+                "session_key": session_key,
+                "message_id": message_id,
+                "choice_id": choice_id,
+            }
+            form_values = _card_action_form_values(payload)
+            if form_values:
+                choice_kwargs["form_values"] = form_values
+            confirmation = resolve_choice(root, **choice_kwargs)
         else:
             confirmation = resolve_confirmation(
                 root,

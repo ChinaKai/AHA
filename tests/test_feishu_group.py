@@ -201,8 +201,12 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["feishu_mention_open_id"], "ou_owner")
         self.assertEqual(send.call_args.args[2]["feishu_chat_type"], "p2p")
         self.assertEqual(send.call_args.args[2]["feishu_session_key"], "tenant-1:p2p:ou_owner")
+        self.assertEqual(send.call_args.args[2]["feishu_group_handoff_id"], handoff["id"])
         self.assertIn("请帮我提交代码", send.call_args.args[2]["message"])
         self.assertIn("群聊提问者 open_id：\nou_requester", send.call_args.args[2]["message"])
+        self.assertIn("处理 SOP：", send.call_args.args[2]["message"])
+        self.assertIn("计划/可延后类先 create_memo", send.call_args.args[2]["message"])
+        self.assertIn("当前群聊数字人只支持文本回复", send.call_args.args[2]["message"])
         self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["chat_id"], "oc_owner")
         self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["task_id"], executed[0]["steward_task_id"])
 
