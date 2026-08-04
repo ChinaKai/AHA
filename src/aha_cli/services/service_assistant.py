@@ -26,10 +26,81 @@ SERVICE_ASSISTANT_TASK_TITLE = "AHA Assistant"
 _run_lock = threading.RLock()
 
 
-def session_task_title(session_key: str) -> str:
+def _session_short_hash(session_key: str) -> str:
+    return hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:6]
+
+
+def _clean_display_name(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    return text[:40]
+
+
+def session_task_title(session_key: str, *, display_name: str = "") -> str:
     kind = "Group" if ":group:" in str(session_key or "").lower() else "DM"
-    short_id = hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:6]
+    short_id = _session_short_hash(session_key)
+    clean_name = _clean_display_name(display_name)
+    if clean_name:
+        return f"{SERVICE_ASSISTANT_TASK_TITLE} · {clean_name} · {kind} · {short_id}"
     return f"{SERVICE_ASSISTANT_TASK_TITLE} · {kind} · {short_id}"
+
+
+def _unique_task_title(plan: dict, title: str, *, exclude_task_id: str = "") -> str:
+    titles = {
+        str(task.get("title") or "")
+        for task in plan.get("tasks", [])
+        if isinstance(task, dict) and str(task.get("id") or "") != str(exclude_task_id or "")
+    }
+    if title not in titles:
+        return title
+    generation = 2
+    while f"{title} #{generation}" in titles:
+        generation += 1
+    return f"{title} #{generation}"
+
+
+def _sync_task_display_title(
+    root: Path,
+    run_id: str,
+    task: dict,
+    *,
+    session_key: str,
+    display_name: str = "",
+) -> dict:
+    clean_name = _clean_display_name(display_name) or _clean_display_name(task.get("feishu_display_name"))
+    if not clean_name:
+        return task
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        stored = next(
+            (
+                item
+                for item in plan.get("tasks", [])
+                if isinstance(item, dict) and str(item.get("id") or "") == str(task.get("id") or "")
+            ),
+            None,
+        )
+        if stored is None:
+            return task
+        desired = _unique_task_title(
+            plan,
+            session_task_title(session_key, display_name=clean_name),
+            exclude_task_id=str(stored.get("id") or ""),
+        )
+        changed = False
+        if str(stored.get("title") or "") != desired:
+            stored["title"] = desired
+            changed = True
+        if clean_name and str(stored.get("feishu_display_name") or "") != clean_name:
+            stored["feishu_display_name"] = clean_name
+            changed = True
+        if not changed:
+            return dict(stored)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / str(stored["id"]) / "task.json", stored)
+        return dict(stored)
 
 
 def _mark_system_run(root: Path, run_id: str, *, legacy: bool) -> dict:
@@ -114,8 +185,11 @@ def ensure_service_assistant_task(
     run_id: str,
     session_key: str,
     defaults: dict[str, object],
+    *,
+    display_name: str = "",
 ) -> dict:
-    base_title = session_task_title(session_key)
+    clean_name = _clean_display_name(display_name)
+    base_title = session_task_title(session_key, display_name=clean_name)
     plan = require_plan(root, run_id)
     existing = [
         task
@@ -127,13 +201,14 @@ def ensure_service_assistant_task(
         and str(task.get("status") or "") not in {"completed", "failed", "blocked"}
     ]
     if existing:
-        return existing[-1]
-    titles = {str(task.get("title") or "") for task in plan.get("tasks", []) if isinstance(task, dict)}
-    title = base_title
-    generation = 2
-    while title in titles:
-        title = f"{base_title} #{generation}"
-        generation += 1
+        return _sync_task_display_title(
+            root,
+            run_id,
+            existing[-1],
+            session_key=session_key,
+            display_name=clean_name,
+        )
+    title = _unique_task_title(plan, base_title)
     task = create_task_and_dispatch(
         root,
         run_id,
@@ -167,6 +242,8 @@ def ensure_service_assistant_task(
                 "system_schema_version": 1,
             }
         )
+        if clean_name:
+            stored["feishu_display_name"] = clean_name
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / str(stored["id"]) / "task.json", stored)

@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin
+from urllib.parse import quote, urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from aha_cli.domain.models import utc_now
@@ -27,6 +27,12 @@ INBOUND_DEDUPE_MAX_ENTRIES = 4096
 ACTION_TOKEN_TTL_SECONDS = 24 * 60 * 60
 ACTION_TOKEN_MAX_ENTRIES = 1024
 RECENT_GROUP_MAX_ENTRIES = 100
+RECENT_CHAT_MAX_ENTRIES = 100
+IDENTITY_PROFILE_MAX_ENTRIES = 300
+IDENTITY_PROFILE_LOOKUP_MAX_ITEMS = 8
+IDENTITY_PROFILE_LOOKUP_TIMEOUT_SECONDS = 4
+IDENTITY_PROFILE_LOOKUP_RETRY_SECONDS = 60
+UNSUPPORTED_CARD_PROPERTIES = {"input_value", "initial_value", "default_value"}
 
 UrlOpener = Callable[..., Any]
 _state_lock = threading.RLock()
@@ -69,6 +75,14 @@ def confirmation_cards_path(root: Path) -> Path:
 
 def recent_groups_path(root: Path) -> Path:
     return feishu_dir(root) / "recent_groups.json"
+
+
+def recent_chats_path(root: Path) -> Path:
+    return feishu_dir(root) / "recent_chats.json"
+
+
+def identity_profiles_path(root: Path) -> Path:
+    return feishu_dir(root) / "identity_profiles.json"
 
 
 def feishu_state_lock_path(root: Path) -> Path:
@@ -128,6 +142,46 @@ def _object(value: object) -> dict:
 
 def _list(value: object) -> list:
     return value if isinstance(value, list) else []
+
+
+def _first_string(*values: object) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if value not in (None, "") and not isinstance(value, (dict, list, tuple)):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _nested(mapping: object, *keys: str) -> object:
+    current = mapping
+    for key in keys:
+        if isinstance(current, dict):
+            current = current.get(key)
+        else:
+            current = getattr(current, key, None)
+        if current is None:
+            return None
+    return current
+
+
+def sanitize_card_payload(card: dict) -> dict:
+    """Remove card fields rejected by the Feishu parser from new or persisted cards."""
+
+    def clean(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                str(key): clean(item)
+                for key, item in value.items()
+                if str(key) not in UNSUPPORTED_CARD_PROPERTIES
+            }
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        return value
+
+    return clean(card) if isinstance(card, dict) else {}
 
 
 def _content_object(raw: object) -> dict:
@@ -263,6 +317,7 @@ def normalize_message_event(payload: dict, *, bot_open_id: str | None = None) ->
     sender = _object(event.get("sender"))
     sender_id = _object(sender.get("sender_id"))
     message = _object(event.get("message"))
+    chat = _object(message.get("chat"))
     mentions = [item for item in _list(message.get("mentions")) if isinstance(item, dict)]
     mentioned_open_ids = [value for value in (_mention_open_id(item) for item in mentions) if value]
     expected_bot = str(bot_open_id or "").strip()
@@ -289,7 +344,18 @@ def normalize_message_event(payload: dict, *, bot_open_id: str | None = None) ->
         "event_type": event_type or "im.message.receive_v1",
         "tenant_key": tenant_key,
         "open_id": str(sender_id.get("open_id") or "").strip(),
+        "user_id": str(sender_id.get("user_id") or sender.get("user_id") or "").strip(),
+        "union_id": str(sender_id.get("union_id") or sender.get("union_id") or "").strip(),
+        "sender_name": _first_string(
+            sender.get("sender_name"),
+            sender.get("name"),
+            sender.get("display_name"),
+            sender.get("user_name"),
+            _nested(sender, "sender", "name"),
+            _nested(sender, "user", "name"),
+        ),
         "chat_id": str(message.get("chat_id") or "").strip(),
+        "chat_name": _first_string(message.get("chat_name"), chat.get("name"), chat.get("chat_name")),
         "chat_type": str(message.get("chat_type") or "").strip(),
         "message_id": str(message.get("message_id") or "").strip(),
         "root_id": root_id,
@@ -405,30 +471,315 @@ def claim_inbound_message(
     return True
 
 
-def record_recent_group(root: Path, chat_id: str, *, seen_at: str | None = None) -> dict:
+def _identity_fingerprint(identity: str) -> str:
+    return hashlib.sha256(str(identity or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _trim_recent(records: dict[str, dict], *, limit: int) -> dict[str, dict]:
+    if len(records) <= limit:
+        return records
+    ordered = sorted(
+        records.items(),
+        key=lambda item: (str(item[1].get("last_seen_at") or item[1].get("updated_at") or ""), item[0]),
+        reverse=True,
+    )[:limit]
+    return dict(ordered)
+
+
+def _profile_bucket(kind: str) -> str:
+    return "open_ids" if kind == "open_id" else "chat_ids"
+
+
+def _profile_record(kind: str, identity: str, *, display_name: str = "", chat_type: str = "", seen_at: str = "") -> dict:
+    record = {
+        "kind": kind,
+        "id": identity,
+        "id_hash": _identity_fingerprint(identity),
+        "updated_at": seen_at or utc_now(),
+    }
+    if kind == "open_id":
+        record["open_id"] = identity
+    elif kind == "chat_id":
+        record["chat_id"] = identity
+    if display_name:
+        record["display_name"] = display_name
+    if chat_type:
+        record["chat_type"] = chat_type
+    return record
+
+
+def _profiles_from_payload(payload: dict) -> dict[str, dict[str, dict]]:
+    result = {"open_ids": {}, "chat_ids": {}}
+    for bucket in result:
+        raw_items = payload.get(bucket)
+        if not isinstance(raw_items, dict):
+            continue
+        result[bucket] = {
+            str(key): dict(value)
+            for key, value in raw_items.items()
+            if str(key).strip() and isinstance(value, dict)
+        }
+    return result
+
+
+def _upsert_profile(
+    profiles: dict[str, dict[str, dict]],
+    *,
+    kind: str,
+    identity: str,
+    display_name: str = "",
+    chat_type: str = "",
+    seen_at: str = "",
+) -> dict:
+    clean_identity = str(identity or "").strip()
+    if not clean_identity:
+        return {}
+    bucket = _profile_bucket(kind)
+    records = profiles.setdefault(bucket, {})
+    current = dict(records.get(clean_identity) or {})
+    merged = _profile_record(kind, clean_identity, display_name=display_name, chat_type=chat_type, seen_at=seen_at)
+    if current.get("display_name") and not merged.get("display_name"):
+        merged["display_name"] = current["display_name"]
+    if current.get("chat_type") and not merged.get("chat_type"):
+        merged["chat_type"] = current["chat_type"]
+    current.update(merged)
+    if seen_at and display_name:
+        current.pop("lookup_failed_at", None)
+        current.pop("lookup_error", None)
+    elif seen_at and not display_name:
+        current.pop("lookup_failed_at", None)
+        current.pop("lookup_error", None)
+    records[clean_identity] = current
+    profiles[bucket] = _trim_recent(records, limit=IDENTITY_PROFILE_MAX_ENTRIES)
+    return dict(current)
+
+
+def _mark_profile_lookup_failed(
+    root: Path,
+    *,
+    kind: str,
+    identity: str,
+    error: str,
+    seen_at: str | None = None,
+) -> None:
+    clean_kind = "chat_id" if str(kind or "").strip() == "chat_id" else "open_id"
+    clean_identity = str(identity or "").strip()
+    if not clean_identity:
+        return
+    timestamp = str(seen_at or utc_now())
+    with _locked_state(root):
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
+        record = _upsert_profile(
+            profiles,
+            kind=clean_kind,
+            identity=clean_identity,
+            seen_at=timestamp,
+        )
+        record["lookup_failed_at"] = timestamp
+        record["lookup_error"] = str(error or "")[:240]
+        profiles[_profile_bucket(clean_kind)][clean_identity] = record
+        _write_secret_json(identity_profiles_path(root), {"version": 1, **profiles})
+
+
+def _profile_needs_lookup(profile: dict, *, now: float | None = None) -> bool:
+    if str(profile.get("display_name") or "").strip():
+        return False
+    failed_at = str(profile.get("lookup_failed_at") or "").strip()
+    if not failed_at:
+        return True
+    try:
+        from datetime import datetime, timezone
+
+        parsed = datetime.fromisoformat(failed_at.replace("Z", "+00:00"))
+        current = time.time() if now is None else float(now)
+        return current - parsed.astimezone(timezone.utc).timestamp() >= IDENTITY_PROFILE_LOOKUP_RETRY_SECONDS
+    except (TypeError, ValueError, OSError):
+        return True
+
+
+def remember_identity_profile(
+    root: Path,
+    *,
+    kind: str,
+    identity: str,
+    display_name: str = "",
+    chat_type: str = "",
+    seen_at: str | None = None,
+) -> dict:
+    clean_kind = "chat_id" if str(kind or "").strip() == "chat_id" else "open_id"
+    timestamp = str(seen_at or utc_now())
+    with _locked_state(root):
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
+        record = _upsert_profile(
+            profiles,
+            kind=clean_kind,
+            identity=identity,
+            display_name=str(display_name or "").strip(),
+            chat_type=str(chat_type or "").strip(),
+            seen_at=timestamp,
+        )
+        _write_secret_json(identity_profiles_path(root), {"version": 1, **profiles})
+    return record
+
+
+def identity_profiles(root: Path) -> dict[str, dict[str, dict]]:
+    with _locked_state(root):
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
+    return {"open_ids": dict(profiles["open_ids"]), "chat_ids": dict(profiles["chat_ids"])}
+
+
+def identity_label_items(root: Path, *, kind: str, identities: list[str]) -> list[dict]:
+    bucket = _profile_bucket("chat_id" if str(kind or "") == "chat_id" else "open_id")
+    profiles = identity_profiles(root).get(bucket, {})
+    items: list[dict] = []
+    for identity in identities:
+        clean_identity = str(identity or "").strip()
+        if not clean_identity:
+            continue
+        profile = dict(profiles.get(clean_identity) or {})
+        item = {
+            "kind": "chat_id" if bucket == "chat_ids" else "open_id",
+            "id": clean_identity,
+            "id_hash": _identity_fingerprint(clean_identity),
+        }
+        if bucket == "chat_ids":
+            item["chat_id"] = clean_identity
+        else:
+            item["open_id"] = clean_identity
+        item.update({key: value for key, value in profile.items() if value not in (None, "")})
+        items.append(item)
+    return items
+
+
+def _recent_chats_from_payload(payload: dict) -> dict[str, dict[str, dict]]:
+    result = {"groups": {}, "private_chats": {}}
+    for bucket in result:
+        raw_items = payload.get(bucket)
+        if not isinstance(raw_items, dict):
+            continue
+        result[bucket] = {
+            str(key): dict(value)
+            for key, value in raw_items.items()
+            if str(key).strip() and isinstance(value, dict)
+        }
+    return result
+
+
+def _sort_recent(values: list[dict], *, id_key: str, limit: int) -> list[dict]:
+    values.sort(
+        key=lambda item: (str(item.get("last_seen_at") or ""), str(item.get(id_key) or "")),
+        reverse=True,
+    )
+    return values[:limit]
+
+
+def record_recent_group(
+    root: Path,
+    chat_id: str,
+    *,
+    seen_at: str | None = None,
+    display_name: str = "",
+) -> dict:
     """Remember a detected group as an admin-only authorization candidate."""
     identity = str(chat_id or "").strip()
     if not identity:
         raise FeishuError("chat_id 不能为空")
     timestamp = str(seen_at or utc_now())
     with _locked_state(root):
-        payload = _read_json(recent_groups_path(root))
-        raw_groups = payload.get("groups")
+        legacy_payload = _read_json(recent_groups_path(root))
+        raw_groups = legacy_payload.get("groups")
         groups = {
             str(key): value
             for key, value in (raw_groups.items() if isinstance(raw_groups, dict) else ())
             if isinstance(value, dict) and str(key).strip()
         }
-        groups[identity] = {"chat_id": identity, "last_seen_at": timestamp}
-        if len(groups) > RECENT_GROUP_MAX_ENTRIES:
-            ordered = sorted(
-                groups.items(),
-                key=lambda item: (str(item[1].get("last_seen_at") or ""), item[0]),
-                reverse=True,
-            )[:RECENT_GROUP_MAX_ENTRIES]
-            groups = dict(ordered)
+        group_record = {
+            "chat_id": identity,
+            "chat_id_hash": _identity_fingerprint(identity),
+            "last_seen_at": timestamp,
+        }
+        clean_name = str(display_name or "").strip()
+        if clean_name:
+            group_record["display_name"] = clean_name
+        elif isinstance(groups.get(identity), dict) and groups[identity].get("display_name"):
+            group_record["display_name"] = str(groups[identity]["display_name"])
+        groups[identity] = group_record
+        groups = _trim_recent(groups, limit=RECENT_GROUP_MAX_ENTRIES)
         _write_secret_json(recent_groups_path(root), {"version": 1, "groups": groups})
+
+        recent_payload = _recent_chats_from_payload(_read_json(recent_chats_path(root)))
+        recent_payload["groups"][identity] = dict(group_record)
+        recent_payload["groups"] = _trim_recent(recent_payload["groups"], limit=RECENT_CHAT_MAX_ENTRIES)
+        _write_secret_json(recent_chats_path(root), {"version": 1, **recent_payload})
+
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
+        _upsert_profile(
+            profiles,
+            kind="chat_id",
+            identity=identity,
+            display_name=str(group_record.get("display_name") or ""),
+            chat_type="group",
+            seen_at=timestamp,
+        )
+        _write_secret_json(identity_profiles_path(root), {"version": 1, **profiles})
     return dict(groups[identity])
+
+
+def record_recent_private_chat(
+    root: Path,
+    *,
+    chat_id: str,
+    open_id: str,
+    seen_at: str | None = None,
+    display_name: str = "",
+) -> dict:
+    """Remember a detected owner/user private chat for settings and owner binding."""
+    user_identity = str(open_id or "").strip()
+    conversation_id = str(chat_id or "").strip()
+    if not user_identity and not conversation_id:
+        raise FeishuError("open_id 或 chat_id 不能为空")
+    key = user_identity or conversation_id
+    timestamp = str(seen_at or utc_now())
+    clean_name = str(display_name or "").strip()
+    with _locked_state(root):
+        recent_payload = _recent_chats_from_payload(_read_json(recent_chats_path(root)))
+        current = dict(recent_payload["private_chats"].get(key) or {})
+        record = {
+            "open_id": user_identity,
+            "open_id_hash": _identity_fingerprint(user_identity) if user_identity else "",
+            "chat_id": conversation_id,
+            "chat_id_hash": _identity_fingerprint(conversation_id) if conversation_id else "",
+            "last_seen_at": timestamp,
+        }
+        if clean_name:
+            record["display_name"] = clean_name
+        elif current.get("display_name"):
+            record["display_name"] = str(current["display_name"])
+        recent_payload["private_chats"][key] = record
+        recent_payload["private_chats"] = _trim_recent(recent_payload["private_chats"], limit=RECENT_CHAT_MAX_ENTRIES)
+        _write_secret_json(recent_chats_path(root), {"version": 1, **recent_payload})
+
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
+        if user_identity:
+            _upsert_profile(
+                profiles,
+                kind="open_id",
+                identity=user_identity,
+                display_name=str(record.get("display_name") or ""),
+                chat_type="p2p",
+                seen_at=timestamp,
+            )
+        if conversation_id:
+            _upsert_profile(
+                profiles,
+                kind="chat_id",
+                identity=conversation_id,
+                display_name=str(record.get("display_name") or ""),
+                chat_type="p2p",
+                seen_at=timestamp,
+            )
+        _write_secret_json(identity_profiles_path(root), {"version": 1, **profiles})
+    return dict(record)
 
 
 def recent_groups(root: Path, *, limit: int = 20) -> list[dict]:
@@ -437,17 +788,49 @@ def recent_groups(root: Path, *, limit: int = 20) -> list[dict]:
         return []
     with _locked_state(root):
         payload = _read_json(recent_groups_path(root))
+        chats_payload = _recent_chats_from_payload(_read_json(recent_chats_path(root)))
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
     raw_groups = payload.get("groups")
-    groups = [
-        dict(value)
-        for value in (raw_groups.values() if isinstance(raw_groups, dict) else ())
-        if isinstance(value, dict)
-    ]
-    groups.sort(
-        key=lambda item: (str(item.get("last_seen_at") or ""), str(item.get("chat_id") or "")),
-        reverse=True,
-    )
-    return groups[:limit]
+    groups_by_id = {
+        str(value.get("chat_id") or key): dict(value)
+        for key, value in (raw_groups.items() if isinstance(raw_groups, dict) else ())
+        if isinstance(value, dict) and str(value.get("chat_id") or key).strip()
+    }
+    for key, value in chats_payload["groups"].items():
+        chat_id = str(value.get("chat_id") or key).strip()
+        if chat_id:
+            groups_by_id[chat_id] = {**groups_by_id.get(chat_id, {}), **dict(value)}
+    for chat_id, value in list(groups_by_id.items()):
+        profile = profiles["chat_ids"].get(chat_id)
+        if isinstance(profile, dict):
+            groups_by_id[chat_id] = {**dict(value), **{key: item for key, item in profile.items() if item not in (None, "")}}
+    return _sort_recent(list(groups_by_id.values()), id_key="chat_id", limit=limit)
+
+
+def recent_private_chats(root: Path, *, limit: int = 20) -> list[dict]:
+    """Return detected p2p chat IDs to the authenticated local settings UI."""
+    if limit <= 0:
+        return []
+    with _locked_state(root):
+        payload = _recent_chats_from_payload(_read_json(recent_chats_path(root)))
+        profiles = _profiles_from_payload(_read_json(identity_profiles_path(root)))
+    values = []
+    for value in payload["private_chats"].values():
+        if not isinstance(value, dict):
+            continue
+        item = dict(value)
+        open_id = str(item.get("open_id") or "").strip()
+        chat_id = str(item.get("chat_id") or "").strip()
+        if open_id and isinstance(profiles["open_ids"].get(open_id), dict):
+            item = {**item, **{key: data for key, data in profiles["open_ids"][open_id].items() if data not in (None, "")}}
+            item["open_id"] = open_id
+        if chat_id and isinstance(profiles["chat_ids"].get(chat_id), dict):
+            chat_profile = profiles["chat_ids"][chat_id]
+            if not item.get("display_name") and chat_profile.get("display_name"):
+                item["display_name"] = chat_profile["display_name"]
+            item["chat_id_hash"] = str(chat_profile.get("id_hash") or item.get("chat_id_hash") or "")
+        values.append(item)
+    return _sort_recent(values, id_key="open_id", limit=limit)
 
 
 def _action_token_digest(token: str) -> str:
@@ -474,7 +857,7 @@ def _confirmation_records(payload: dict) -> dict[str, dict]:
 
 def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict:
     """Return a Schema 2.0 card with actions removed and a terminal status."""
-    result = json.loads(json.dumps(card, ensure_ascii=False)) if isinstance(card, dict) else {}
+    result = sanitize_card_payload(card)
     labels = {
         "confirmed": ("操作已确认", "grey", "已确认并提交 AHA 执行。"),
         "selected": ("已选择方案", "grey", "已收到选择，AHA 助手将继续处理。"),
@@ -532,6 +915,7 @@ def register_confirmation_card(
     identity = str(confirmation_id or "").strip()
     if not identity or not isinstance(card, dict):
         raise FeishuError("confirmation_id 和 card 不能为空")
+    card = sanitize_card_payload(card)
     current = time.time() if now is None else float(now)
     with _locked_state(root):
         records = _confirmation_records(_read_json(confirmation_cards_path(root)))
@@ -700,6 +1084,26 @@ def mark_confirmation_card_updated(root: Path, confirmation_id: str) -> None:
         record["card_updated"] = True
         record["card_updated_at"] = time.time()
         _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+
+
+def sanitize_confirmation_cards(root: Path) -> dict:
+    with _locked_state(root):
+        records = _confirmation_records(_read_json(confirmation_cards_path(root)))
+        sanitized_count = 0
+        for record in records.values():
+            if not isinstance(record, dict):
+                continue
+            for key in ("card", "terminal_card", "confirmation_card"):
+                if not isinstance(record.get(key), dict):
+                    continue
+                before = json.dumps(record.get(key), ensure_ascii=False, sort_keys=True)
+                cleaned = sanitize_card_payload(record.get(key) or {})
+                if json.dumps(cleaned, ensure_ascii=False, sort_keys=True) != before:
+                    record[key] = cleaned
+                    sanitized_count += 1
+        if sanitized_count:
+            _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
+        return {"sanitized_count": sanitized_count}
 
 
 def issue_action_token(
@@ -947,6 +1351,205 @@ def get_tenant_access_token(
         return token
 
 
+def _get_api_json(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    endpoint: str,
+    *,
+    query: dict[str, str] | None = None,
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = API_TIMEOUT_SECONDS,
+) -> dict:
+    access_token = str(tenant_access_token or "").strip() or get_tenant_access_token(
+        root,
+        app_id,
+        app_secret,
+        base_url=base_url,
+        opener=opener,
+        timeout=timeout,
+    )
+    url = _api_url(base_url, endpoint)
+    if query:
+        url = f"{url}?{urlencode(query)}"
+    return _request_json(url, token=access_token, opener=opener, timeout=timeout)
+
+
+def fetch_user_profile(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    open_id: str,
+    *,
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = API_TIMEOUT_SECONDS,
+) -> dict:
+    identity = str(open_id or "").strip()
+    if not identity:
+        raise FeishuError("open_id 不能为空")
+    payload = _get_api_json(
+        root,
+        app_id,
+        app_secret,
+        f"/open-apis/contact/v3/users/{quote(identity, safe='')}",
+        query={"user_id_type": "open_id"},
+        tenant_access_token=tenant_access_token,
+        base_url=base_url,
+        opener=opener,
+        timeout=timeout,
+    )
+    data = _object(payload.get("data"))
+    user = _object(data.get("user") or data)
+    display_name = _first_string(user.get("name"), user.get("nickname"), user.get("en_name"), user.get("display_name"))
+    record = {
+        "kind": "open_id",
+        "id": identity,
+        "open_id": _first_string(user.get("open_id"), identity),
+        "user_id": _first_string(user.get("user_id")),
+        "union_id": _first_string(user.get("union_id")),
+        "id_hash": _identity_fingerprint(identity),
+        "chat_type": "p2p",
+        "updated_at": utc_now(),
+    }
+    if display_name:
+        record["display_name"] = display_name
+    return record
+
+
+def fetch_chat_profile(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    chat_id: str,
+    *,
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = API_TIMEOUT_SECONDS,
+) -> dict:
+    identity = str(chat_id or "").strip()
+    if not identity:
+        raise FeishuError("chat_id 不能为空")
+    payload = _get_api_json(
+        root,
+        app_id,
+        app_secret,
+        f"/open-apis/im/v1/chats/{quote(identity, safe='')}",
+        query={"user_id_type": "open_id"},
+        tenant_access_token=tenant_access_token,
+        base_url=base_url,
+        opener=opener,
+        timeout=timeout,
+    )
+    data = _object(payload.get("data"))
+    display_name = _first_string(data.get("name"), data.get("chat_name"))
+    record = {
+        "kind": "chat_id",
+        "id": identity,
+        "chat_id": _first_string(data.get("chat_id"), identity),
+        "id_hash": _identity_fingerprint(identity),
+        "chat_type": "group",
+        "updated_at": utc_now(),
+    }
+    if display_name:
+        record["display_name"] = display_name
+    owner_id = _first_string(data.get("owner_id"), _nested(data, "owner_id", "open_id"))
+    if owner_id:
+        record["owner_open_id"] = owner_id
+    return record
+
+
+def refresh_identity_profiles(
+    root: Path,
+    app_id: str,
+    app_secret: str,
+    *,
+    open_ids: list[str] | None = None,
+    chat_ids: list[str] | None = None,
+    tenant_access_token: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    opener: UrlOpener | None = None,
+    timeout: int = IDENTITY_PROFILE_LOOKUP_TIMEOUT_SECONDS,
+    max_items: int = IDENTITY_PROFILE_LOOKUP_MAX_ITEMS,
+) -> dict:
+    """Best-effort user/group display-name refresh for the authenticated settings UI."""
+    application_id = str(app_id or "").strip()
+    secret = str(app_secret or "").strip()
+    if not application_id or not secret or max_items <= 0:
+        return {"attempted": 0, "updated": 0, "errors": []}
+    profiles = identity_profiles(root)
+    candidates: list[tuple[str, str]] = []
+    for identity in dict.fromkeys(str(item or "").strip() for item in (open_ids or []) if str(item or "").strip()):
+        profile = profiles["open_ids"].get(identity, {})
+        if _profile_needs_lookup(profile):
+            candidates.append(("open_id", identity))
+    for identity in dict.fromkeys(str(item or "").strip() for item in (chat_ids or []) if str(item or "").strip()):
+        profile = profiles["chat_ids"].get(identity, {})
+        if _profile_needs_lookup(profile):
+            candidates.append(("chat_id", identity))
+    candidates = candidates[:max_items]
+    if not candidates:
+        return {"attempted": 0, "updated": 0, "errors": []}
+    errors: list[str] = []
+    updated = 0
+    token = str(tenant_access_token or "").strip()
+    if not token:
+        try:
+            token = get_tenant_access_token(
+                root,
+                application_id,
+                secret,
+                base_url=base_url,
+                opener=opener,
+                timeout=timeout,
+            )
+        except FeishuError as exc:
+            return {"attempted": 0, "updated": 0, "errors": [str(exc)]}
+    for kind, identity in candidates:
+        try:
+            if kind == "open_id":
+                record = fetch_user_profile(
+                    root,
+                    application_id,
+                    secret,
+                    identity,
+                    tenant_access_token=token,
+                    base_url=base_url,
+                    opener=opener,
+                    timeout=timeout,
+                )
+            else:
+                record = fetch_chat_profile(
+                    root,
+                    application_id,
+                    secret,
+                    identity,
+                    tenant_access_token=token,
+                    base_url=base_url,
+                    opener=opener,
+                    timeout=timeout,
+                )
+            remember_identity_profile(
+                root,
+                kind=kind,
+                identity=identity,
+                display_name=str(record.get("display_name") or ""),
+                chat_type=str(record.get("chat_type") or ""),
+                seen_at=str(record.get("updated_at") or utc_now()),
+            )
+            if record.get("display_name"):
+                updated += 1
+        except FeishuError as exc:
+            message = str(exc)
+            errors.append(message)
+            _mark_profile_lookup_failed(root, kind=kind, identity=identity, error=message)
+    return {"attempted": len(candidates), "updated": updated, "errors": errors[:3]}
+
+
 def _send_message(
     root: Path,
     app_id: str,
@@ -1057,6 +1660,7 @@ def send_card_message(
 ) -> dict:
     if not isinstance(card, dict):
         raise FeishuError("card 必须是 JSON 对象")
+    card = sanitize_card_payload(card)
     return _send_message(
         root,
         app_id,
@@ -1205,9 +1809,14 @@ __all__ = [
     "consume_action_token",
     "consume_pending_action_token",
     "feishu_dir",
+    "fetch_chat_profile",
+    "fetch_user_profile",
     "finalize_confirmation_card",
     "get_session_binding",
     "get_tenant_access_token",
+    "identity_label_items",
+    "identity_profiles",
+    "identity_profiles_path",
     "inbound_dedupe_path",
     "issue_action_token",
     "load_session_bindings",
@@ -1217,10 +1826,17 @@ __all__ = [
     "message_resource_attachments",
     "normalize_message_event",
     "pending_confirmation_card_updates",
+    "recent_chats_path",
     "recent_groups",
     "recent_groups_path",
+    "recent_private_chats",
+    "refresh_identity_profiles",
     "record_recent_group",
+    "record_recent_private_chat",
+    "remember_identity_profile",
     "register_confirmation_card",
+    "sanitize_card_payload",
+    "sanitize_confirmation_cards",
     "send_card_message",
     "send_file_message",
     "send_image_message",

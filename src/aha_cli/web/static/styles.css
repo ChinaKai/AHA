@@ -948,6 +948,11 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   background: #fef3f2;
   color: #b42318;
 }
+.feishu-console-message.warning {
+  border: 1px solid #fedf89;
+  background: #fffaeb;
+  color: #93370d;
+}
 .feishu-console-message.success {
   border: 1px solid #abefc6;
   background: #ecfdf3;
@@ -1049,12 +1054,23 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   gap: 2px;
   min-width: 0;
 }
+.feishu-recent-group strong {
+  color: #101828;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .feishu-recent-group code {
   overflow-wrap: anywhere;
 }
 .feishu-recent-group small {
   color: #667085;
   font-size: 11px;
+}
+.feishu-recent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 .feishu-console-settings-actions {
   display: flex;

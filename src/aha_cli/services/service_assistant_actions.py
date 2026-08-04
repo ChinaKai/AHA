@@ -1427,6 +1427,24 @@ def _field_select(name: str, label: str, options: list[dict], initial_value: obj
     }
 
 
+def _field_input(name: str, label: str, initial_value: object = "", *, multiline: bool = False, max_length: int = 1000) -> dict:
+    normalized_max_length = max(1, min(int(max_length or 1000), 1000))
+    value = str(initial_value or "").strip()
+    placeholder = label
+    if value:
+        placeholder = _text(f"{label}（默认：{_text(value, 80)}）", 120)
+    payload = {
+        "tag": "input",
+        "element_id": name,
+        "name": name,
+        "placeholder": {"tag": "plain_text", "content": placeholder},
+        "max_length": normalized_max_length,
+    }
+    if multiline:
+        payload["input_type"] = "multiline_text"
+    return payload
+
+
 def _field_date_picker(name: str, label: str, initial_value: object) -> dict:
     initial_date = normalize_memo_date(initial_value)
     payload = {
@@ -1466,6 +1484,8 @@ def _task_config_card(prompt: str, fields: dict) -> dict:
         return payload
 
     form_elements = [
+        _field_input("title", "标题", fields.get("title"), max_length=200),
+        _field_input("description", "正文", fields.get("description"), multiline=True, max_length=1000),
         _field_select("run_id", "Run", fields.get("runs") or [], fields.get("run_id")),
         _field_select("workspace_path", "Workspace", fields.get("workspaces") or [], fields.get("workspace_path")),
         _field_select("backend_model", "Backend / Model", fields.get("backend_models") or [], fields.get("backend_model")),
@@ -1486,18 +1506,22 @@ def _task_config_card(prompt: str, fields: dict) -> dict:
                     "tag": "form",
                     "name": "aha_create_task_config",
                     "elements": [
-                        {"tag": "markdown", "content": "**Run**"},
+                        {"tag": "markdown", "content": "**标题**"},
                         form_elements[0],
-                        {"tag": "markdown", "content": "**Workspace**"},
+                        {"tag": "markdown", "content": "**正文**"},
                         form_elements[1],
-                        {"tag": "markdown", "content": "**Backend / Model**"},
+                        {"tag": "markdown", "content": "**Run**"},
                         form_elements[2],
-                        {"tag": "markdown", "content": "**思考深度**"},
+                        {"tag": "markdown", "content": "**Workspace**"},
                         form_elements[3],
-                        {"tag": "markdown", "content": "**代理**"},
+                        {"tag": "markdown", "content": "**Backend / Model**"},
                         form_elements[4],
-                        {"tag": "markdown", "content": "**AHA 知识库**"},
+                        {"tag": "markdown", "content": "**思考深度**"},
                         form_elements[5],
+                        {"tag": "markdown", "content": "**代理**"},
+                        form_elements[6],
+                        {"tag": "markdown", "content": "**AHA 知识库**"},
+                        form_elements[7],
                         {
                             "tag": "column_set",
                             "columns": [
@@ -1555,6 +1579,8 @@ def _memo_config_card(prompt: str, fields: dict) -> dict:
         return payload
 
     form_elements = [
+        _field_input("title", "标题", fields.get("title"), max_length=200),
+        _field_input("description", "正文", fields.get("description"), multiline=True, max_length=1000),
         _field_select("run_id", "Run", fields.get("runs") or [], fields.get("run_id")),
         _field_select("status", "状态", fields.get("statuses") or [], fields.get("status")),
         _field_date_picker("created_at", "创建日期", fields.get("created_at")),
@@ -1575,18 +1601,22 @@ def _memo_config_card(prompt: str, fields: dict) -> dict:
                     "tag": "form",
                     "name": "aha_create_memo_config",
                     "elements": [
-                        {"tag": "markdown", "content": "**Run**"},
+                        {"tag": "markdown", "content": "**标题**"},
                         form_elements[0],
-                        {"tag": "markdown", "content": "**状态**"},
+                        {"tag": "markdown", "content": "**正文**"},
                         form_elements[1],
-                        {"tag": "markdown", "content": "**创建日期**"},
+                        {"tag": "markdown", "content": "**Run**"},
                         form_elements[2],
-                        {"tag": "markdown", "content": "**开始日期**"},
+                        {"tag": "markdown", "content": "**状态**"},
                         form_elements[3],
-                        {"tag": "markdown", "content": "**结束日期**"},
+                        {"tag": "markdown", "content": "**创建日期**"},
                         form_elements[4],
-                        {"tag": "markdown", "content": "**关联 Task**"},
+                        {"tag": "markdown", "content": "**开始日期**"},
                         form_elements[5],
+                        {"tag": "markdown", "content": "**结束日期**"},
+                        form_elements[6],
+                        {"tag": "markdown", "content": "**关联 Task**"},
+                        form_elements[7],
                         {
                             "tag": "column_set",
                             "columns": [
@@ -1880,7 +1910,7 @@ def _form_scalar(value: object) -> str:
 def _form_value(form_values: dict | None, name: str, default: object = "") -> str:
     if not isinstance(form_values, dict):
         return str(default or "").strip()
-    for key in (name, f"aha_create_task_config.{name}"):
+    for key in (name, f"aha_create_task_config.{name}", f"aha_create_memo_config.{name}"):
         if key in form_values:
             value = _form_scalar(form_values.get(key))
             return value if value != "" else str(default or "").strip()
@@ -1914,6 +1944,8 @@ def _prepare_create_task_config_choice(
     current_backend_model = _pack_backend_model(current_backend, current_model)
     current_workspace_path = _default_workspace_path(root, str(arguments.get("workspace_path") or ""))
     fields = {
+        "title": str(arguments.get("title") or ""),
+        "description": str(arguments.get("description") or ""),
         "run_id": str(arguments.get("run_id") or ""),
         "workspace_path": current_workspace_path,
         "backend_model": current_backend_model,
@@ -2228,6 +2260,8 @@ def _prepare_create_attribute_choice(
         if created_task_id not in {str(option.get("value") or "") for option in task_options}:
             created_task_id = ""
         fields = {
+            "title": str(arguments.get("title") or ""),
+            "description": str(arguments.get("description") or ""),
             "run_id": current_run_id,
             "status": normalize_memo_status(arguments.get("status")),
             "created_at": normalize_memo_date(arguments.get("created_at")),
@@ -2911,6 +2945,12 @@ def _resolve_create_task_config_choice(
     base_arguments = arguments.get("base_arguments") if isinstance(arguments.get("base_arguments"), dict) else {}
     fields = arguments.get("fields") if isinstance(arguments.get("fields"), dict) else {}
 
+    title = _form_value(form_values, "title", fields.get("title") or base_arguments.get("title"))
+    description = _form_value(form_values, "description", fields.get("description") or base_arguments.get("description"))
+    if not title:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("Task 标题不能为空")
+
     run_id = _form_value(form_values, "run_id", fields.get("run_id") or base_arguments.get("run_id"))
     if run_id not in _allowed_option_values(fields.get("runs")):
         finalize_confirmation_card(root, confirmation_id, "failed")
@@ -2952,6 +2992,7 @@ def _resolve_create_task_config_choice(
     knowledge_enabled = normalize_bool(_form_value(form_values, "knowledge_enabled", fields.get("knowledge_enabled")), default=True)
     next_arguments = {
         **base_arguments,
+        "title": title,
         "run_id": run_id,
         "workspace_path": resolved_workspace,
         "backend": backend,
@@ -2963,6 +3004,10 @@ def _resolve_create_task_config_choice(
         "max_sub_agents": 3,
         "runtime_selected": True,
     }
+    if description:
+        next_arguments["description"] = description
+    else:
+        next_arguments.pop("description", None)
     if model:
         next_arguments["model"] = model
     else:
@@ -2975,6 +3020,8 @@ def _resolve_create_task_config_choice(
     next_arguments.pop("attribute_preset", None)
 
     selected = {
+        "title": title,
+        "description": description,
         "run": _selected_option_label(fields.get("runs"), run_id),
         "workspace": _selected_option_label(fields.get("workspaces"), workspace_path),
         "backend_model": _selected_option_label(fields.get("backend_models"), backend_model),
@@ -2993,6 +3040,7 @@ def _resolve_create_task_config_choice(
                 "task_id": assistant_task_id,
                 "operation": "create_task_config",
                 "decision": "selected",
+                "title": title,
                 "run_id": run_id,
                 "workspace_path": resolved_workspace,
                 "backend": backend,
@@ -3094,6 +3142,12 @@ def _resolve_create_attribute_choice(
     options = arguments.get("options") if isinstance(arguments.get("options"), list) else []
     fields = arguments.get("fields") if isinstance(arguments.get("fields"), dict) else {}
     if target_operation == "create_memo" and selected_id == CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID:
+        title = _form_value(form_values, "title", fields.get("title") or base_arguments.get("title"))
+        description = _form_value(form_values, "description", fields.get("description") or base_arguments.get("description"))
+        if not title and not description:
+            finalize_confirmation_card(root, confirmation_id, "failed")
+            raise ServiceAssistantActionError("Memo 标题或正文至少填写一项")
+
         run_id = _form_value(form_values, "run_id", fields.get("run_id") or base_arguments.get("run_id"))
         if run_id not in _allowed_option_values(fields.get("runs")):
             finalize_confirmation_card(root, confirmation_id, "failed")
@@ -3125,6 +3179,14 @@ def _resolve_create_attribute_choice(
             "attributes_selected": True,
         }
         next_arguments.pop("attribute_preset", None)
+        if title:
+            next_arguments["title"] = title
+        else:
+            next_arguments.pop("title", None)
+        if description:
+            next_arguments["description"] = description
+        else:
+            next_arguments.pop("description", None)
         if created_at:
             next_arguments["created_at"] = created_at
         else:
@@ -3142,6 +3204,8 @@ def _resolve_create_attribute_choice(
         else:
             next_arguments.pop("created_task_id", None)
         selected_payload = {
+            "title": title,
+            "description": description,
             "run": _selected_option_label(fields.get("runs"), run_id),
             "status": _selected_option_label(fields.get("statuses"), status),
             "created_at": created_at,
@@ -3159,6 +3223,7 @@ def _resolve_create_attribute_choice(
                     "task_id": assistant_task_id,
                     "operation": target_operation,
                     "decision": "selected",
+                    "title": title,
                     "run_id": run_id,
                     "status": status,
                     "created_at": created_at,

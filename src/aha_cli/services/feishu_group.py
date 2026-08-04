@@ -29,6 +29,17 @@ DEFAULT_TASK_RETENTION_DAYS = 30
 _run_lock = threading.RLock()
 
 
+def _session_short_hash(session_key: str) -> str:
+    return hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:6]
+
+
+def _clean_display_name(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    return text[:40]
+
+
 def feishu_group_state_dir(root: Path) -> Path:
     path = aha_home_path(root) / FEISHU_GROUP_STATE_DIR
     path.mkdir(parents=True, exist_ok=True)
@@ -49,9 +60,69 @@ def feishu_group_user_session_key(*, tenant_key: str, open_id: str) -> str:
     return f"{tenant}:feishu-group-user:{identity}"
 
 
-def session_task_title(session_key: str) -> str:
-    short_id = hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:6]
+def session_task_title(session_key: str, *, display_name: str = "") -> str:
+    short_id = _session_short_hash(session_key)
+    clean_name = _clean_display_name(display_name)
+    if clean_name:
+        return f"{FEISHU_GROUP_TASK_TITLE} · {clean_name} · User · {short_id}"
     return f"{FEISHU_GROUP_TASK_TITLE} · User · {short_id}"
+
+
+def _unique_task_title(plan: dict, title: str, *, exclude_task_id: str = "") -> str:
+    titles = {
+        str(task.get("title") or "")
+        for task in plan.get("tasks", [])
+        if isinstance(task, dict) and str(task.get("id") or "") != str(exclude_task_id or "")
+    }
+    if title not in titles:
+        return title
+    generation = 2
+    while f"{title} #{generation}" in titles:
+        generation += 1
+    return f"{title} #{generation}"
+
+
+def _sync_task_display_title(
+    root: Path,
+    run_id: str,
+    task: dict,
+    *,
+    session_key: str,
+    display_name: str = "",
+) -> dict:
+    clean_name = _clean_display_name(display_name) or _clean_display_name(task.get("feishu_display_name"))
+    if not clean_name:
+        return task
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        stored = next(
+            (
+                item
+                for item in plan.get("tasks", [])
+                if isinstance(item, dict) and str(item.get("id") or "") == str(task.get("id") or "")
+            ),
+            None,
+        )
+        if stored is None:
+            return task
+        desired = _unique_task_title(
+            plan,
+            session_task_title(session_key, display_name=clean_name),
+            exclude_task_id=str(stored.get("id") or ""),
+        )
+        changed = False
+        if str(stored.get("title") or "") != desired:
+            stored["title"] = desired
+            changed = True
+        if clean_name and str(stored.get("feishu_display_name") or "") != clean_name:
+            stored["feishu_display_name"] = clean_name
+            changed = True
+        if not changed:
+            return dict(stored)
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / str(stored["id"]) / "task.json", stored)
+        return dict(stored)
 
 
 def _epoch(value: object) -> float:
@@ -195,8 +266,11 @@ def ensure_feishu_group_task(
     run_id: str,
     session_key: str,
     defaults: dict[str, object],
+    *,
+    display_name: str = "",
 ) -> dict:
     session_hash = hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()
+    clean_name = _clean_display_name(display_name)
     plan = require_plan(root, run_id)
     existing = [
         task
@@ -209,14 +283,15 @@ def ensure_feishu_group_task(
         and str(task.get("status") or "") not in {"completed", "failed", "blocked"}
     ]
     if existing:
-        return existing[-1]
-    base_title = session_task_title(session_key)
-    titles = {str(task.get("title") or "") for task in plan.get("tasks", []) if isinstance(task, dict)}
-    title = base_title
-    generation = 2
-    while title in titles:
-        title = f"{base_title} #{generation}"
-        generation += 1
+        return _sync_task_display_title(
+            root,
+            run_id,
+            existing[-1],
+            session_key=session_key,
+            display_name=clean_name,
+        )
+    base_title = session_task_title(session_key, display_name=clean_name)
+    title = _unique_task_title(plan, base_title)
     workspace = str(feishu_group_state_dir(root).resolve())
     from aha_cli.services.tasks import create_task_and_dispatch
 
@@ -253,6 +328,8 @@ def ensure_feishu_group_task(
                 "system_schema_version": 1,
             }
         )
+        if clean_name:
+            stored["feishu_display_name"] = clean_name
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / str(stored["id"]) / "task.json", stored)

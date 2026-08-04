@@ -18,7 +18,7 @@ from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_
 from aha_cli.services.run_retention import RunRetentionError, apply_run_retention
 from aha_cli.services.orchestrator import execute_actions
 from aha_cli.services import service_assistant_actions
-from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task
+from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task, session_task_title
 from aha_cli.services.service_assistant_actions import prepare_service_assistant_action, resolve_choice, resolve_confirmation
 from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.store.filesystem import append_message, create_plan, delete_task, inbox_path, iter_jsonl_from
@@ -46,6 +46,28 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(task["collaboration_mode"], "solo")
             self.assertEqual(task["max_sub_agents"], 0)
             self.assertEqual([item["id"] for item in public_run_summaries(root)], [run_id])
+
+    def test_service_assistant_task_title_includes_display_name_and_upgrades_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_key = "tenant:p2p:ou_user"
+            run_id = ensure_service_assistant_run(root, {"backend": "stub"})
+            first = ensure_service_assistant_task(root, run_id, session_key, {"backend": "stub"})
+            renamed = ensure_service_assistant_task(
+                root,
+                run_id,
+                session_key,
+                {"backend": "stub"},
+                display_name="蒋 开开",
+            )
+            plan = require_plan(root, run_id)
+            stored = next(item for item in plan["tasks"] if item["id"] == first["id"])
+
+        self.assertEqual(first["id"], renamed["id"])
+        self.assertRegex(first["title"], r"^AHA Assistant · DM · [0-9a-f]{6}$")
+        self.assertEqual(renamed["title"], session_task_title(session_key, display_name="蒋 开开"))
+        self.assertEqual(stored["title"], renamed["title"])
+        self.assertEqual(stored["feishu_display_name"], "蒋 开开")
 
     def test_new_conversation_autostart_keeps_feishu_reasoning_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -127,6 +149,8 @@ class ServiceAssistantTests(unittest.TestCase):
                 message_id="om_attr",
                 choice_id="__submit_memo_config__",
                 form_values={
+                    "title": "Check release v2",
+                    "description": "Release details from Feishu form",
                     "run_id": target["id"],
                     "status": "todo",
                     "created_at": "2026-08-01",
@@ -162,6 +186,10 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(prepared["confirmation_card"]["body"]["elements"][1]["tag"], "form")
             memo_card_json = json.dumps(prepared["confirmation_card"], ensure_ascii=False)
             self.assertIn('"form_action_type": "submit"', memo_card_json)
+            self.assertIn('"tag": "input"', memo_card_json)
+            self.assertIn('"input_type": "multiline_text"', memo_card_json)
+            self.assertIn("标题", memo_card_json)
+            self.assertIn("正文", memo_card_json)
             self.assertIn("关联 Task", memo_card_json)
             self.assertIn("状态", memo_card_json)
             self.assertIn("创建日期", memo_card_json)
@@ -173,6 +201,8 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIn('"attributes_selected": true', selected["tool_message"])
             self.assertNotIn("selected_preset_id", selected["tool_message"])
             self.assertNotIn("attribute_preset", selected["tool_message"])
+            self.assertEqual(selected["result"]["next_arguments"]["title"], "Check release v2")
+            self.assertEqual(selected["result"]["next_arguments"]["description"], "Release details from Feishu form")
             self.assertEqual(selected["result"]["next_arguments"]["status"], "todo")
             self.assertEqual(selected["result"]["next_arguments"]["created_at"], "2026-08-01")
             self.assertEqual(selected["result"]["next_arguments"]["scheduled_date"], "2026-08-05")
@@ -186,7 +216,8 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertTrue(confirmed["result"]["ok"])
             self.assertEqual(confirmed["confirmation_id"], followup["confirmation_id"])
             self.assertEqual(confirmed["confirmation_card"]["header"]["template"], "grey")
-            self.assertEqual(read_task_memos(root, target["id"])[0]["title"], "Check release")
+            self.assertEqual(read_task_memos(root, target["id"])[0]["title"], "Check release v2")
+            self.assertEqual(read_task_memos(root, target["id"])[0]["description"], "Release details from Feishu form")
             self.assertEqual(read_task_memos(root, target["id"])[0]["created_at"], "2026-08-01")
             self.assertEqual(read_task_memos(root, target["id"])[0]["scheduled_date"], "2026-08-05")
             self.assertEqual(read_task_memos(root, target["id"])[0]["end_date"], "2026-08-07")
@@ -337,6 +368,8 @@ class ServiceAssistantTests(unittest.TestCase):
                 message_id="om_task_config",
                 choice_id="__submit_task_config__",
                 form_values={
+                    "title": "Read docs from form",
+                    "description": "Task body from Feishu form",
                     "run_id": target["id"],
                     "workspace_path": str(project.resolve()),
                     "backend_model": f"codex::{CODEX_DEFAULT_MODEL}",
@@ -367,7 +400,8 @@ class ServiceAssistantTests(unittest.TestCase):
 
             self.assertTrue(config_prepared["choice_required"])
             self.assertIn("配置 Task", config_prepared["user_response"])
-            workspace_select = config_prepared["confirmation_card"]["body"]["elements"][1]["elements"][3]
+            task_form_elements = config_prepared["confirmation_card"]["body"]["elements"][1]["elements"]
+            workspace_select = next(item for item in task_form_elements if item.get("element_id") == "workspace_path")
             self.assertEqual(
                 [option["text"]["content"] for option in workspace_select["options"]],
                 [f"{option['label']}（默认）" if option["path"] == str(project.resolve()) else option["label"] for option in workspace_options(aha_home=root)],
@@ -378,6 +412,10 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIn("workspaces/project", card_json)
             self.assertIn("gpt-env (openai)", card_json)
             self.assertIn("思考深度", card_json)
+            self.assertIn('"tag": "input"', card_json)
+            self.assertIn('"input_type": "multiline_text"', card_json)
+            self.assertIn("标题", card_json)
+            self.assertIn("正文", card_json)
             self.assertNotIn("initial_value", card_json)
             self.assertNotIn("default_value", card_json)
             self.assertIn('"form_action_type": "submit"', card_json)
@@ -387,6 +425,8 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertNotIn("weight", button_row["columns"][0])
             self.assertEqual(config_selected["result"]["next_arguments"]["backend"], "codex")
             self.assertEqual(config_selected["result"]["next_arguments"]["model"], CODEX_DEFAULT_MODEL)
+            self.assertEqual(config_selected["result"]["next_arguments"]["title"], "Read docs from form")
+            self.assertEqual(config_selected["result"]["next_arguments"]["description"], "Task body from Feishu form")
             self.assertEqual(config_selected["result"]["next_arguments"]["source_memo_id"], source_memo["id"])
             self.assertEqual(config_selected["result"]["next_arguments"]["reasoning_effort"], "high")
             self.assertTrue(config_selected["result"]["next_arguments"]["proxy_enabled"])
@@ -398,7 +438,8 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIn("high", followup["user_response"])
             self.assertIn("AHA KB", followup["user_response"])
             self.assertIn("auto", followup["user_response"])
-            self.assertEqual(created["title"], "Read docs")
+            self.assertEqual(created["title"], "Read docs from form")
+            self.assertEqual(created["description"], "Task body from Feishu form")
             self.assertEqual(created["backend"], "codex")
             self.assertEqual(created["model"], CODEX_DEFAULT_MODEL)
             self.assertEqual(created["reasoning_effort"], "high")

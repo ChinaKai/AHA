@@ -86,6 +86,49 @@ class FeishuServiceTests(unittest.TestCase):
         self.assertEqual([item["chat_id"] for item in groups], ["oc_a", "oc_b"])
         self.assertEqual(mode, 0o600)
 
+    def test_recent_private_chats_and_identity_profiles_are_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            feishu.record_recent_private_chat(
+                root,
+                chat_id="oc_private_old",
+                open_id="ou_owner",
+                display_name="Owner Name",
+                seen_at="2026-08-01T00:00:00Z",
+            )
+            feishu.record_recent_private_chat(
+                root,
+                chat_id="oc_private_new",
+                open_id="ou_owner",
+                seen_at="2026-08-02T00:00:00Z",
+            )
+            chats = feishu.recent_private_chats(root)
+            profiles = feishu.identity_profiles(root)
+            mode = stat.S_IMODE(feishu.recent_chats_path(root).stat().st_mode)
+
+        self.assertEqual([item["open_id"] for item in chats], ["ou_owner"])
+        self.assertEqual(chats[0]["chat_id"], "oc_private_new")
+        self.assertEqual(chats[0]["display_name"], "Owner Name")
+        self.assertEqual(profiles["open_ids"]["ou_owner"]["display_name"], "Owner Name")
+        self.assertEqual(profiles["chat_ids"]["oc_private_new"]["chat_type"], "p2p")
+        self.assertEqual(mode, 0o600)
+
+    def test_recent_private_chat_seen_again_clears_name_lookup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            feishu.record_recent_private_chat(root, chat_id="oc_private", open_id="ou_owner")
+            path = feishu.identity_profiles_path(root)
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            stored["open_ids"]["ou_owner"]["lookup_failed_at"] = "2026-08-04T00:00:00+00:00"
+            stored["open_ids"]["ou_owner"]["lookup_error"] = "missing scope"
+            path.write_text(json.dumps(stored), encoding="utf-8")
+
+            feishu.record_recent_private_chat(root, chat_id="oc_private", open_id="ou_owner")
+            profiles = feishu.identity_profiles(root)
+
+        self.assertNotIn("lookup_failed_at", profiles["open_ids"]["ou_owner"])
+        self.assertNotIn("lookup_error", profiles["open_ids"]["ou_owner"])
+
     def test_normalize_message_event_extracts_identity_thread_and_text(self) -> None:
         normalized = feishu.normalize_message_event(message_event(root_id="om_root"))
 
@@ -457,6 +500,52 @@ class FeishuServiceTests(unittest.TestCase):
         self.assertFalse(any(item.get("tag") == "form" for item in terminal["body"]["elements"]))
         self.assertIn("已提交 Task 创建配置", terminal["body"]["elements"][-1]["content"])
 
+    def test_confirmation_cards_are_sanitized_for_unsupported_input_defaults(self) -> None:
+        card = {
+            "schema": "2.0",
+            "header": {"title": {"tag": "plain_text", "content": "配置 Memo"}, "template": "blue"},
+            "body": {
+                "elements": [
+                    {
+                        "tag": "form",
+                        "elements": [
+                            {
+                                "tag": "input",
+                                "name": "title",
+                                "input_value": "旧默认标题",
+                                "default_value": "旧默认标题",
+                                "placeholder": {"tag": "plain_text", "content": "标题"},
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record = feishu.register_confirmation_card(
+                root,
+                "confirmation-input",
+                open_id="ou_user",
+                session_key="session",
+                action="change",
+                card=card,
+                expires_at=105,
+                now=100,
+            )
+            stored = json.loads(feishu.confirmation_cards_path(root).read_text(encoding="utf-8"))
+            # Simulate a card persisted by an older version before the sanitizer existed.
+            stored["confirmations"]["confirmation-input"]["terminal_card"] = card
+            feishu.confirmation_cards_path(root).write_text(json.dumps(stored), encoding="utf-8")
+            result = feishu.sanitize_confirmation_cards(root)
+            sanitized = json.loads(feishu.confirmation_cards_path(root).read_text(encoding="utf-8"))
+            raw = json.dumps(sanitized, ensure_ascii=False)
+
+        self.assertNotIn("input_value", json.dumps(record, ensure_ascii=False))
+        self.assertNotIn("default_value", raw)
+        self.assertNotIn("input_value", raw)
+        self.assertEqual(result["sanitized_count"], 1)
+
     def test_tenant_token_is_cached_until_refresh_window(self) -> None:
         opener = QueueOpener(
             FakeResponse({"code": 0, "tenant_access_token": "t-one", "expire": 3600}),
@@ -474,6 +563,84 @@ class FeishuServiceTests(unittest.TestCase):
             self.assertTrue(first_request.full_url.endswith("/open-apis/auth/v3/tenant_access_token/internal"))
             self.assertEqual(json.loads(first_request.data), {"app_id": "cli_app", "app_secret": "secret"})
             self.assertEqual(stat.S_IMODE(feishu.token_cache_path(root).stat().st_mode), 0o600)
+
+    def test_fetch_user_and_chat_profiles_use_feishu_identity_apis(self) -> None:
+        opener = QueueOpener(
+            FakeResponse(
+                {
+                    "code": 0,
+                    "data": {
+                        "user": {
+                            "open_id": "ou_owner",
+                            "user_id": "u_owner",
+                            "union_id": "on_owner",
+                            "name": "Owner Name",
+                        }
+                    },
+                }
+            ),
+            FakeResponse(
+                {
+                    "code": 0,
+                    "data": {
+                        "chat_id": "oc_group",
+                        "name": "项目群",
+                        "owner_id": "ou_owner",
+                    },
+                }
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user = feishu.fetch_user_profile(
+                root,
+                "",
+                "",
+                "ou_owner",
+                tenant_access_token="tenant-token",
+                opener=opener,
+            )
+            chat = feishu.fetch_chat_profile(
+                root,
+                "",
+                "",
+                "oc_group",
+                tenant_access_token="tenant-token",
+                opener=opener,
+            )
+
+        self.assertEqual(user["display_name"], "Owner Name")
+        self.assertEqual(user["user_id"], "u_owner")
+        self.assertEqual(chat["display_name"], "项目群")
+        self.assertEqual(chat["owner_open_id"], "ou_owner")
+        self.assertIn("/open-apis/contact/v3/users/ou_owner?user_id_type=open_id", opener.requests[0][0].full_url)
+        self.assertIn("/open-apis/im/v1/chats/oc_group?user_id_type=open_id", opener.requests[1][0].full_url)
+
+    def test_refresh_identity_profiles_updates_display_name_cache(self) -> None:
+        opener = QueueOpener(
+            FakeResponse({"code": 0, "tenant_access_token": "tenant-token", "expire": 3600}),
+            FakeResponse({"code": 0, "data": {"user": {"open_id": "ou_owner", "name": "Owner Name"}}}),
+            FakeResponse({"code": 0, "data": {"chat_id": "oc_group", "name": "项目群"}}),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            feishu.record_recent_private_chat(root, chat_id="oc_owner", open_id="ou_owner")
+            feishu.record_recent_group(root, "oc_group")
+            result = feishu.refresh_identity_profiles(
+                root,
+                "cli_app",
+                "secret",
+                open_ids=["ou_owner"],
+                chat_ids=["oc_group"],
+                opener=opener,
+            )
+            private_chats = feishu.recent_private_chats(root)
+            groups = feishu.recent_groups(root)
+
+        self.assertEqual(result["attempted"], 2)
+        self.assertEqual(result["updated"], 2)
+        self.assertEqual(private_chats[0]["display_name"], "Owner Name")
+        self.assertEqual(groups[0]["display_name"], "项目群")
 
     def test_send_text_card_image_and_file_build_feishu_message_requests(self) -> None:
         opener = QueueOpener(

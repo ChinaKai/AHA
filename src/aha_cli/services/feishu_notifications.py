@@ -126,6 +126,22 @@ def set_subscription(
     return dict(state["subscriptions"].get(key) or {"session_key": key, "enabled": False})
 
 
+def remove_subscriptions(root: Path, session_keys: list[str] | set[str] | tuple[str, ...]) -> dict:
+    keys = {str(key or "").strip() for key in session_keys if str(key or "").strip()}
+    if not keys:
+        return {"removed_count": 0}
+    with _locked_subscription_state(root):
+        state = _load_subscription_state_unlocked(root)
+        before = len(state["subscriptions"])
+        for key in keys:
+            state["subscriptions"].pop(key, None)
+        removed_count = before - len(state["subscriptions"])
+        if removed_count:
+            state["updated_at"] = utc_now()
+            _write_subscription_state_unlocked(root, state)
+    return {"removed_count": removed_count}
+
+
 def _session_tenant_key(session_key: object) -> str:
     return str(session_key or "").split(":", 1)[0].strip()
 
@@ -598,6 +614,7 @@ __all__ = [
     "load_subscription_state",
     "notification_message_for_event",
     "notify_event",
+    "remove_subscriptions",
     "send_direct_message",
     "set_subscription",
     "subscription_state_lock_path",

@@ -46,6 +46,73 @@
       return `<div class="feishu-console-metric"><span>${escapeHtml(label)}</span>${content}</div>`;
     }
 
+    function compactId(value) {
+      const text = String(value || "");
+      if (text.length <= 18) return text;
+      return `${text.slice(0, 9)}...${text.slice(-5)}`;
+    }
+
+    function identityEntry(item, idKey) {
+      const id = String(item?.[idKey] || item?.id || "");
+      if (!id) return "";
+      const name = String(item?.display_name || "").trim();
+      const hash = String(item?.id_hash || item?.[`${idKey}_hash`] || "").trim();
+      const chatType = String(item?.chat_type || "").trim();
+      const seenAt = String(item?.last_seen_at || item?.updated_at || "").trim();
+      const lookupError = String(item?.lookup_error || "").trim();
+      const heading = `${compactId(id)}.${name || t("feishu.name_unresolved", "unresolved")}`;
+      const meta = [chatType, hash ? `#${hash}` : "", seenAt, lookupError ? t("feishu.name_lookup_failed", "name lookup failed") : ""].filter(Boolean).join(" · ");
+      return `
+        <div>
+          <strong title="${escapeHtml([id, lookupError].filter(Boolean).join("\n"))}">${escapeHtml(heading)}</strong>
+          <code>${escapeHtml(id)}</code>
+          ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+        </div>`;
+    }
+
+    function mergeIdentityRows(primaryItems, configuredItems, idKey, extraItems = []) {
+      const rows = new Map();
+      const put = item => {
+        if (!item || typeof item !== "object") return;
+        const id = String(item?.[idKey] || item?.id || "").trim();
+        if (!id) return;
+        rows.set(id, { ...(rows.get(id) || {}), ...item, [idKey]: id, id });
+      };
+      (Array.isArray(primaryItems) ? primaryItems : []).forEach(put);
+      (Array.isArray(configuredItems) ? configuredItems : []).forEach(put);
+      (Array.isArray(extraItems) ? extraItems : []).forEach(put);
+      return Array.from(rows.values());
+    }
+
+    function ownerOptionsHtml(items, selected) {
+      const cleanSelected = String(selected || "");
+      const rows = mergeIdentityRows(items, [], "open_id");
+      const options = [
+        `<option value="" ${cleanSelected ? "" : "selected"}>${escapeHtml(t("feishu.owner_unset", "Not set"))}</option>`,
+        ...rows.map(item => {
+          const openId = String(item?.open_id || item?.id || "");
+          const label = String(item?.display_name || "").trim()
+            ? `${compactId(openId)}.${String(item.display_name).trim()}`
+            : `${compactId(openId)}.${t("feishu.name_unresolved", "unresolved")}`;
+          return `<option value="${escapeHtml(openId)}" ${cleanSelected === openId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+        })
+      ];
+      if (cleanSelected && !rows.some(item => String(item?.open_id || item?.id || "") === cleanSelected)) {
+        options.push(`<option value="${escapeHtml(cleanSelected)}" selected>${escapeHtml(compactId(cleanSelected))}</option>`);
+      }
+      return options.join("");
+    }
+
+    function csvValues(input) {
+      return String(input?.value || "").replaceAll("\n", ",").split(",").map(item => item.trim()).filter(Boolean);
+    }
+
+    function setCsvValues(input, values) {
+      if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+        input.value = Array.from(new Set(values.map(item => String(item || "").trim()).filter(Boolean))).join(", ");
+      }
+    }
+
     function backendOptions() {
       const catalog = backendCatalog.filter(item => item && typeof item === "object" && item.name);
       if (catalog.length) return catalog;
@@ -171,23 +238,53 @@
       if (!popover) return;
       const runtime = status.runtime && typeof status.runtime === "object" ? status.runtime : {};
       const assistant = status.assistant && typeof status.assistant === "object" ? status.assistant : {};
+      const profileRefresh = status.identity_profile_refresh && typeof status.identity_profile_refresh === "object" ? status.identity_profile_refresh : {};
       const runtimeState = connectionState();
       const runtimeError = String(runtime.error || "");
+      const profileErrors = Array.isArray(profileRefresh.errors) ? profileRefresh.errors.map(item => String(item || "").trim()).filter(Boolean) : [];
       const allowedOpenIds = Array.isArray(status.allowed_open_ids) ? status.allowed_open_ids : [];
       const allowedChatIds = Array.isArray(status.allowed_chat_ids) ? status.allowed_chat_ids : [];
+      const allowedOpenIdItems = Array.isArray(status.allowed_open_id_items) ? status.allowed_open_id_items : [];
+      const allowedChatIdItems = Array.isArray(status.allowed_chat_id_items) ? status.allowed_chat_id_items : [];
       const allowedChatSet = new Set(allowedChatIds.map(value => String(value)));
+      const allowedOpenSet = new Set(allowedOpenIds.map(value => String(value)));
       const recentGroups = Array.isArray(status.recent_groups) ? status.recent_groups : [];
-      const recentGroupsHtml = recentGroups.length
-        ? recentGroups.map(group => {
+      const recentPrivateChats = Array.isArray(status.recent_private_chats) ? status.recent_private_chats : [];
+      const ownerOpenItem = status.owner_open_id_item && typeof status.owner_open_id_item === "object" ? status.owner_open_id_item : {};
+      const privateChatItems = mergeIdentityRows(
+        recentPrivateChats,
+        allowedOpenIdItems,
+        "open_id",
+        status.owner_open_id ? [ownerOpenItem] : []
+      );
+      const groupItems = mergeIdentityRows(recentGroups, allowedChatIdItems, "chat_id");
+      const recentGroupsHtml = groupItems.length
+        ? groupItems.map(group => {
             const chatId = String(group?.chat_id || "");
             const added = allowedChatSet.has(chatId);
             return `
               <div class="feishu-recent-group">
-                <div><code>${escapeHtml(chatId)}</code><small>${escapeHtml(String(group?.last_seen_at || ""))}</small></div>
-                <button type="button" data-feishu-action="add-group" data-feishu-chat-id="${escapeHtml(chatId)}" ${added ? "disabled" : ""}>${escapeHtml(added ? t("feishu.group_added", "Added") : t("feishu.add_group", "Add"))}</button>
+                ${identityEntry(group, "chat_id")}
+                <button type="button" data-feishu-action="${added ? "remove-group" : "add-group"}" data-feishu-chat-id="${escapeHtml(chatId)}">${escapeHtml(added ? t("feishu.remove_group", "Remove") : t("feishu.add_group", "Add"))}</button>
               </div>`;
           }).join("")
-        : `<p class="feishu-console-section-help">${escapeHtml(t("feishu.recent_groups_empty", "No groups detected yet. Add the bot to a group, @ it once, then refresh."))}</p>`;
+        : `<p class="feishu-console-section-help">${escapeHtml(t("feishu.group_list_empty", "No groups detected or allowed yet. Add the bot to a group, @ it once, then refresh."))}</p>`;
+      const recentPrivateChatsHtml = privateChatItems.length
+        ? privateChatItems.map(chat => {
+            const openId = String(chat?.open_id || "");
+            const chatId = String(chat?.chat_id || "");
+            const isOwner = openId && String(status.owner_open_id || "") === openId;
+            const added = openId && allowedOpenSet.has(openId);
+            return `
+              <div class="feishu-recent-group">
+                ${identityEntry(chat, "open_id")}
+                <div class="feishu-recent-actions">
+                  <button type="button" data-feishu-action="set-owner" data-feishu-open-id="${escapeHtml(openId)}" data-feishu-chat-id="${escapeHtml(chatId)}" ${openId && !isOwner ? "" : "disabled"}>${escapeHtml(isOwner ? t("feishu.owner_set", "Owner") : t("feishu.set_owner", "Set owner"))}</button>
+                  <button type="button" data-feishu-action="${added ? "remove-user" : "add-user"}" data-feishu-open-id="${escapeHtml(openId)}" ${openId ? "" : "disabled"}>${escapeHtml(added ? t("feishu.remove_user", "Remove") : t("feishu.add_user", "Add user"))}</button>
+                </div>
+              </div>`;
+          }).join("")
+        : `<p class="feishu-console-section-help">${escapeHtml(t("feishu.private_chat_list_empty", "No private chats detected or allowed yet. Send the bot a private message, then refresh."))}</p>`;
       const secretPlaceholder = status.app_secret_configured
         ? t("feishu.secret_configured", "Configured; leave blank to keep")
         : "";
@@ -221,6 +318,7 @@
             ${metric(t("feishu.assistant_guard", "Assistant guard"), `${assistant.sandbox || "read-only"} / ${assistant.approval || "never"}`, { code: true })}
           </div>
           ${runtimeError ? `<div class="feishu-console-message error"><strong>${escapeHtml(t("feishu.runtime_error", "Runtime error"))}</strong><span>${escapeHtml(runtimeError)}</span></div>` : ""}
+          ${profileErrors.length ? `<div class="feishu-console-message warning"><strong>${escapeHtml(t("feishu.identity_lookup_warning", "ID name lookup"))}</strong><span>${escapeHtml(profileErrors[0])}</span></div>` : ""}
           <form class="feishu-console-settings" data-feishu-settings-form>
             <fieldset class="feishu-console-section">
               <legend>${escapeHtml(t("feishu.connection_section", "Connection"))}</legend>
@@ -239,24 +337,9 @@
                 </label>
               </div>
               <div class="field-help">${escapeHtml(t("feishu.secret_hint", "The secret is never shown. Leave blank to keep the existing value."))}</div>
-              <details class="feishu-console-advanced">
-                <summary>${escapeHtml(t("feishu.advanced_connection", "Environment fallback and security"))}</summary>
-                <div class="feishu-console-settings-grid">
-                  <label class="field-label">
-                    <span>${escapeHtml(t("feishu.app_id_env", "App ID environment variable"))}</span>
-                    <input name="app_id_env" value="${escapeHtml(status.app_id_env || "AHA_FEISHU_APP_ID")}">
-                  </label>
-                  <label class="field-label">
-                    <span>${escapeHtml(t("feishu.app_secret_env", "App Secret environment variable"))}</span>
-                    <input name="app_secret_env" value="${escapeHtml(status.app_secret_env || "AHA_FEISHU_APP_SECRET")}">
-                  </label>
-                  <label class="field-label">
-                    <span>${escapeHtml(t("feishu.security_mode", "Security mode"))}</span>
-                    <select name="security_mode">${["audit", "strict", "compat"].map(value => `<option value="${value}" ${status.security_mode === value ? "selected" : ""}>${value}</option>`).join("")}</select>
-                    <div class="field-help">${escapeHtml(t("feishu.security_modes_hint", "audit: record security findings while preserving compatibility (recommended); strict: reject insecure or legacy flows; compat: maximize legacy compatibility with the fewest restrictions."))}</div>
-                  </label>
-                </div>
-              </details>
+              <input name="app_id_env" type="hidden" value="${escapeHtml(status.app_id_env || "AHA_FEISHU_APP_ID")}">
+              <input name="app_secret_env" type="hidden" value="${escapeHtml(status.app_secret_env || "AHA_FEISHU_APP_SECRET")}">
+              <input name="security_mode" type="hidden" value="${escapeHtml(status.security_mode || "audit")}">
             </fieldset>
             <fieldset class="feishu-console-section">
               <legend>${escapeHtml(t("feishu.agent_section", "Agent defaults"))}</legend>
@@ -291,41 +374,33 @@
             </fieldset>
             <fieldset class="feishu-console-section">
               <legend>${escapeHtml(t("feishu.access_section", "Access and delivery"))}</legend>
-              <div class="feishu-console-settings-grid">
-                <label class="field-label">
-                  <span>${escapeHtml(t("feishu.owner_open_id", "Owner open_id"))}</span>
-                  <input name="owner_open_id" placeholder="ou_owner" value="${escapeHtml(status.owner_open_id || "")}">
-                  <div class="field-help">${escapeHtml(t("feishu.owner_open_id_hint", "Group digital-human handoffs are forwarded to this private steward identity. Leave blank to use the first private steward chat, or the only allowed open_id."))}</div>
-                </label>
-                <label class="field-label">
-                  <span>${escapeHtml(t("feishu.owner_chat_id", "Owner private chat_id"))}</span>
-                  <input name="owner_chat_id" placeholder="oc_owner" value="${escapeHtml(status.owner_chat_id || "")}">
-                  <div class="field-help">${escapeHtml(t("feishu.owner_chat_id_hint", "Optional. Usually filled by the owner sending a private message to the bot once."))}</div>
-                </label>
-              </div>
+              <input name="owner_chat_id" type="hidden" value="${escapeHtml(status.owner_chat_id || "")}">
+              <input name="allowed_open_ids" type="hidden" value="${escapeHtml(allowedOpenIds.join(", "))}">
+              <input name="allowed_chat_ids" type="hidden" value="${escapeHtml(allowedChatIds.join(", "))}">
               <label class="field-label">
-                <span>${escapeHtml(t("feishu.allowed_open_ids", "Allowed open_id values"))}</span>
-                <input name="allowed_open_ids" placeholder="ou_xxx, ou_yyy" value="${escapeHtml(allowedOpenIds.join(", "))}">
-                <div class="field-help">${escapeHtml(t("feishu.allowed_open_ids_hint", "Required for private chats and for groups using the allowed-users policy."))}</div>
+                <span>${escapeHtml(t("feishu.owner_open_id", "Owner open_id"))}</span>
+                <select name="owner_open_id">${ownerOptionsHtml(
+                  mergeIdentityRows(allowedOpenIdItems, [], "open_id", status.owner_open_id ? [ownerOpenItem] : []),
+                  String(status.owner_open_id || "")
+                )}</select>
+                <div class="field-help">${escapeHtml(t("feishu.owner_open_id_hint", "Choose one allowed open_id as the owner. The private chat_id is recorded automatically from the owner private chat."))}</div>
               </label>
-              <div class="feishu-console-settings-grid">
-                <label class="field-label">
-                  <span>${escapeHtml(t("feishu.allowed_chat_ids", "Allowed group chat_id values"))}</span>
-                  <textarea name="allowed_chat_ids" rows="3" placeholder="oc_xxx, oc_yyy">${escapeHtml(allowedChatIds.join(", "))}</textarea>
-                  <div class="field-help">${escapeHtml(t("feishu.allowed_chat_ids_hint", "A group must be listed here before the assistant responds in it."))}</div>
-                </label>
-                <label class="field-label">
-                  <span>${escapeHtml(t("feishu.group_access_mode", "Group member access"))}</span>
-                  <select name="group_access_mode">
-                    <option value="allowed_users" ${status.group_access_mode !== "all_members" ? "selected" : ""}>${escapeHtml(t("feishu.group_access_allowed_users", "Allowed users only (recommended)"))}</option>
-                    <option value="all_members" ${status.group_access_mode === "all_members" ? "selected" : ""}>${escapeHtml(t("feishu.group_access_all_members", "All members of allowed groups"))}</option>
-                  </select>
-                  <div class="field-help">${escapeHtml(t("feishu.group_access_mode_hint", "All members lets anyone in an allowed group use the AHA assistant; private chats still require an allowed open_id."))}</div>
-                </label>
+              <label class="field-label">
+                <span>${escapeHtml(t("feishu.group_access_mode", "Group member access"))}</span>
+                <select name="group_access_mode">
+                  <option value="allowed_users" ${status.group_access_mode !== "all_members" ? "selected" : ""}>${escapeHtml(t("feishu.group_access_allowed_users", "Allowed users only (recommended)"))}</option>
+                  <option value="all_members" ${status.group_access_mode === "all_members" ? "selected" : ""}>${escapeHtml(t("feishu.group_access_all_members", "All members of allowed groups"))}</option>
+                </select>
+                <div class="field-help">${escapeHtml(t("feishu.group_access_mode_hint", "All members lets anyone in an allowed group use the AHA assistant; private chats still require an allowed open_id."))}</div>
+              </label>
+              <div class="feishu-recent-groups">
+                <strong>${escapeHtml(t("feishu.private_chat_list", "Private chats list"))}</strong>
+                <p class="feishu-console-section-help">${escapeHtml(t("feishu.private_chat_list_hint", "Manage allowed open_id values here. Set owner also adds the open_id to the allowed list."))}</p>
+                ${recentPrivateChatsHtml}
               </div>
               <div class="feishu-recent-groups">
-                <strong>${escapeHtml(t("feishu.recent_groups", "Recently detected groups"))}</strong>
-                <p class="feishu-console-section-help">${escapeHtml(t("feishu.recent_groups_hint", "Detection does not grant access. Add a group here, then save settings."))}</p>
+                <strong>${escapeHtml(t("feishu.group_list", "Group list"))}</strong>
+                <p class="feishu-console-section-help">${escapeHtml(t("feishu.group_list_hint", "Manage allowed group chat_id values here. Groups must be allowed before the assistant responds."))}</p>
                 ${recentGroupsHtml}
               </div>
               <div class="feishu-console-toggle-list">
@@ -461,12 +536,76 @@
         const button = target?.closest('[data-feishu-action="add-group"]');
         const chatId = String(button?.getAttribute("data-feishu-chat-id") || "").trim();
         const input = button?.closest("form")?.querySelector('[name="allowed_chat_ids"]');
-        if (chatId && input instanceof HTMLTextAreaElement) {
-          const values = input.value.replaceAll("\n", ",").split(",").map(item => item.trim()).filter(Boolean);
+        if (chatId && (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) {
+          const values = csvValues(input);
           if (!values.includes(chatId)) values.push(chatId);
-          input.value = values.join(", ");
+          setCsvValues(input, values);
+          button.setAttribute("data-feishu-action", "remove-group");
+          button.textContent = t("feishu.remove_group", "Remove");
+        }
+      }
+      if (action === "remove-group") {
+        const button = target?.closest('[data-feishu-action="remove-group"]');
+        const chatId = String(button?.getAttribute("data-feishu-chat-id") || "").trim();
+        const input = button?.closest("form")?.querySelector('[name="allowed_chat_ids"]');
+        if (chatId && (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) {
+          setCsvValues(input, csvValues(input).filter(value => value !== chatId));
+          button.setAttribute("data-feishu-action", "add-group");
+          button.textContent = t("feishu.add_group", "Add");
+        }
+      }
+      if (action === "add-user") {
+        const button = target?.closest('[data-feishu-action="add-user"]');
+        const openId = String(button?.getAttribute("data-feishu-open-id") || "").trim();
+        const input = button?.closest("form")?.querySelector('[name="allowed_open_ids"]');
+        if (openId && input instanceof HTMLInputElement) {
+          const values = csvValues(input);
+          if (!values.includes(openId)) values.push(openId);
+          setCsvValues(input, values);
+          button.setAttribute("data-feishu-action", "remove-user");
+          button.textContent = t("feishu.remove_user", "Remove");
+        }
+      }
+      if (action === "remove-user") {
+        const button = target?.closest('[data-feishu-action="remove-user"]');
+        const openId = String(button?.getAttribute("data-feishu-open-id") || "").trim();
+        const form = button?.closest("form");
+        const input = form?.querySelector('[name="allowed_open_ids"]');
+        const ownerInput = form?.querySelector('[name="owner_open_id"]');
+        const ownerChatInput = form?.querySelector('[name="owner_chat_id"]');
+        if (openId && input instanceof HTMLInputElement) {
+          setCsvValues(input, csvValues(input).filter(value => value !== openId));
+          if (ownerInput instanceof HTMLSelectElement && ownerInput.value === openId) ownerInput.value = "";
+          if (ownerChatInput instanceof HTMLInputElement && ownerInput instanceof HTMLSelectElement && ownerInput.value === "") ownerChatInput.value = "";
+          button.setAttribute("data-feishu-action", "add-user");
+          button.textContent = t("feishu.add_user", "Add user");
+        }
+      }
+      if (action === "set-owner") {
+        const button = target?.closest('[data-feishu-action="set-owner"]');
+        const openId = String(button?.getAttribute("data-feishu-open-id") || "").trim();
+        const chatId = String(button?.getAttribute("data-feishu-chat-id") || "").trim();
+        const form = button?.closest("form");
+        const ownerInput = form?.querySelector('[name="owner_open_id"]');
+        const ownerChatInput = form?.querySelector('[name="owner_chat_id"]');
+        const allowedInput = form?.querySelector('[name="allowed_open_ids"]');
+        if (openId && ownerInput instanceof HTMLSelectElement) {
+          if (![...ownerInput.options].some(option => option.value === openId)) {
+            ownerInput.append(new Option(compactId(openId), openId));
+          }
+          ownerInput.value = openId;
+        }
+        if (chatId && ownerChatInput instanceof HTMLInputElement) ownerChatInput.value = chatId;
+        if (openId && allowedInput instanceof HTMLInputElement) {
+          const values = csvValues(allowedInput);
+          if (!values.includes(openId)) {
+            values.unshift(openId);
+            setCsvValues(allowedInput, values);
+          }
+        }
+        if (openId || chatId) {
+          button.textContent = t("feishu.owner_set", "Owner");
           button.disabled = true;
-          button.textContent = t("feishu.group_added", "Added");
         }
       }
     });

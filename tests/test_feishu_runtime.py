@@ -9,7 +9,9 @@ from unittest import mock
 from aha_cli.domain.models import normalize_feishu_integration_config
 from aha_cli.services.feishu_runtime import (
     _create_feishu_channel,
+    _install_bot_menu_dispatcher,
     feishu_credentials,
+    feishu_runtime_path,
     feishu_status,
     update_feishu_notifications_enabled,
     update_feishu_settings,
@@ -36,6 +38,45 @@ class FeishuRuntimeTests(unittest.TestCase):
             transport="ws",
             security="security",
         )
+
+    def test_bot_menu_dispatcher_patch_survives_sdk_start_rebuild(self) -> None:
+        class Dispatcher:
+            def __init__(self) -> None:
+                self._processorMap = {"p2.im.message.receive_v1": object()}
+
+        class Channel:
+            def __init__(self) -> None:
+                self._dispatcher = None
+                self.build_count = 0
+
+            def _build_dispatcher(self) -> Dispatcher:
+                self.build_count += 1
+                self._dispatcher = Dispatcher()
+                return self._dispatcher
+
+            async def _invoke(self, name: str, event: object) -> None:
+                return None
+
+            def schedule(self, coroutine: object) -> None:
+                close = getattr(coroutine, "close", None)
+                if close:
+                    close()
+
+        channel = Channel()
+
+        _install_bot_menu_dispatcher(channel)
+        self.assertIsNone(channel._dispatcher)
+        dispatcher = channel._build_dispatcher()
+
+        self.assertEqual(channel.build_count, 1)
+        self.assertIn("p2.im.message.receive_v1", dispatcher._processorMap)
+        self.assertIn("p2.application.bot.menu_v6", dispatcher._processorMap)
+        self.assertIn("p1.application.bot.menu_v6", dispatcher._processorMap)
+
+        _install_bot_menu_dispatcher(channel)
+        rebuilt = channel._build_dispatcher()
+        self.assertEqual(channel.build_count, 2)
+        self.assertIn("p2.application.bot.menu_v6", rebuilt._processorMap)
 
     def test_credentials_use_configured_environment_names(self) -> None:
         config = {"app_id": "", "app_id_env": "CUSTOM_ID", "app_secret_env": "CUSTOM_SECRET"}
@@ -183,7 +224,7 @@ class FeishuRuntimeTests(unittest.TestCase):
             saved = json.loads(path.read_text(encoding="utf-8"))
 
         self.assertTrue(status["enabled"])
-        self.assertEqual(status["allowed_open_ids"], ["ou_a", "ou_b"])
+        self.assertEqual(status["allowed_open_ids"], ["ou_owner", "ou_a", "ou_b"])
         self.assertEqual(status["owner_open_id"], "ou_owner")
         self.assertEqual(status["owner_chat_id"], "oc_owner")
         self.assertEqual(status["allowed_chat_ids"], ["oc_a", "oc_b"])
@@ -203,6 +244,7 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertTrue(saved["integrations"]["feishu"]["proxy_enabled"])
         self.assertEqual(saved["integrations"]["feishu"]["owner_open_id"], "ou_owner")
         self.assertEqual(saved["integrations"]["feishu"]["owner_chat_id"], "oc_owner")
+        self.assertEqual(saved["integrations"]["feishu"]["allowed_open_ids"], ["ou_owner", "ou_a", "ou_b"])
         self.assertNotIn("ignored", saved["integrations"]["feishu"])
         self.assertEqual(saved["integrations"]["custom"], {"keep": True})
 
@@ -223,13 +265,55 @@ class FeishuRuntimeTests(unittest.TestCase):
     def test_status_exposes_recent_groups_for_authenticated_settings_page(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            from aha_cli.services.feishu import record_recent_group
+            from aha_cli.services.feishu import record_recent_group, record_recent_private_chat
 
-            record_recent_group(root, "oc_old", seen_at="2026-08-01T00:00:00Z")
-            record_recent_group(root, "oc_new", seen_at="2026-08-02T00:00:00Z")
+            record_recent_group(root, "oc_old", seen_at="2026-08-01T00:00:00Z", display_name="旧群")
+            record_recent_group(root, "oc_new", seen_at="2026-08-02T00:00:00Z", display_name="新群")
+            record_recent_private_chat(
+                root,
+                chat_id="oc_private",
+                open_id="ou_owner",
+                display_name="主人",
+                seen_at="2026-08-03T00:00:00Z",
+            )
             status = feishu_status(root)
 
         self.assertEqual([item["chat_id"] for item in status["recent_groups"]], ["oc_new", "oc_old"])
+        self.assertEqual(status["recent_groups"][0]["display_name"], "新群")
+        self.assertEqual(status["recent_private_chats"][0]["open_id"], "ou_owner")
+        self.assertEqual(status["identity_profiles"]["open_ids"]["ou_owner"]["display_name"], "主人")
+
+    def test_connected_status_refreshes_feishu_identity_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_runtime.refresh_identity_profiles",
+            return_value={"attempted": 2, "updated": 2, "errors": []},
+        ) as refresh:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "cli_app",
+                                "app_secret": "secret",
+                                "owner_open_id": "ou_owner",
+                                "allowed_open_ids": ["ou_owner"],
+                                "allowed_chat_ids": ["oc_group"],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            feishu_runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
+            feishu_runtime_path(root).write_text(json.dumps({"status": "connected"}), encoding="utf-8")
+            status = feishu_status(root)
+
+        self.assertEqual(status["identity_profile_refresh"], {"attempted": 2, "updated": 2, "errors": []})
+        refresh.assert_called_once()
+        self.assertIn("ou_owner", refresh.call_args.kwargs["open_ids"])
+        self.assertIn("oc_group", refresh.call_args.kwargs["chat_ids"])
 
     def test_system_route_updates_all_feishu_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

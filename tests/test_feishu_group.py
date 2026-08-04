@@ -15,6 +15,7 @@ from aha_cli.services.feishu_group import (
     ensure_feishu_group_run,
     ensure_feishu_group_task,
     mark_feishu_group_task_interaction,
+    session_task_title,
 )
 from aha_cli.services.feishu_group_handoffs import (
     feishu_group_handoffs_path,
@@ -50,6 +51,28 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertEqual(task["preferred_approval"], "never")
         self.assertEqual(task["collaboration_mode"], "solo")
         self.assertEqual(task["max_sub_agents"], 0)
+
+    def test_group_user_task_title_includes_display_name_and_upgrades_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_key = "tenant:feishu-group-user:ou_user"
+            run_id = ensure_feishu_group_run(root, {"backend": "stub"})
+            first = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
+            renamed = ensure_feishu_group_task(
+                root,
+                run_id,
+                session_key,
+                {"backend": "stub"},
+                display_name="张 三",
+            )
+            plan = require_plan(root, run_id)
+            stored = next(item for item in plan["tasks"] if item["id"] == first["id"])
+
+        self.assertEqual(first["id"], renamed["id"])
+        self.assertRegex(first["title"], r"^Feishu Digital Human · User · [0-9a-f]{6}$")
+        self.assertEqual(renamed["title"], session_task_title(session_key, display_name="张 三"))
+        self.assertEqual(stored["title"], renamed["title"])
+        self.assertEqual(stored["feishu_display_name"], "张 三")
 
     def test_group_digital_human_prompt_includes_source_index_without_file_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

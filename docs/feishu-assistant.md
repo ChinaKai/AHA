@@ -2,8 +2,8 @@
 
 AHA 的飞书接入使用企业自建应用、应用机器人和飞书长连接。AHA 主动连接飞书，
 本机不需要公网 IP、域名或事件回调端口。私聊普通文本进入私聊“管家” agent；
-群聊只有 `@机器人` 的消息会进入受限“数字人” agent。agent 回复再推送回原飞书会话；
-不使用关键词菜单或固定问答规则。
+owner 私聊机器人菜单可打开 Memo/Task 表单和查询入口；群聊只有 `@机器人` 的消息会进入受限“数字人” agent。
+agent 回复再推送回原飞书会话；群聊不使用关键词菜单或固定问答规则。
 
 ## 安装与飞书应用配置
 
@@ -22,8 +22,8 @@ Release onebin 不内置飞书 SDK。使用 onebin 时，需要在运行 onebin 
 - `im:message.group_at_msg:readonly`
 - `im:message:send_as_bot`
 
-事件与回调订阅选择长连接：消息事件订阅 `im.message.receive_v1`，回调订阅新版卡片回传交互
-`card.action.trigger`。应用发布并安装到企业后，可以直接在 Web
+事件与回调订阅选择长连接：消息事件订阅 `im.message.receive_v1`，机器人菜单事件订阅
+`application.bot.menu_v6`，回调订阅新版卡片回传交互 `card.action.trigger`。应用发布并安装到企业后，可以直接在 Web
 设置的 Integrations → 飞书助手控制面板填写 App ID 与 App Secret。App Secret 与 Codex/Claude provider API Key
 采用相同方式：密码框不回显已有值，再次保存时留空会保留原值。
 
@@ -37,12 +37,14 @@ export AHA_FEISHU_APP_SECRET=xxx
 设置中的直接值优先于环境变量；直接值为空时才读取配置指定的环境变量名。打开
 Integrations → 飞书助手，启用接入并配置：
 
-- `Allowed open IDs`：允许访问 AHA 的飞书用户 `open_id`，逗号分隔。私聊始终校验此列表；
-  群聊采用“仅授权用户”策略时也会校验。未授权用户私聊机器人时，拒绝提示会回显本次检测到的
-  `open_id`，可直接复制到此字段；群聊中不会公开该标识。
-- `Allowed group chat IDs`：允许使用机器人的群 `chat_id`。群聊必须先命中此列表；空列表表示不开放群聊。
-  将机器人加入群并 `@` 一次后，群会出现在“最近检测群组”，点击“加入”并保存即可，不需要逐个添加
-  全部群成员的 `open_id`。
+- `Private chats list`：展示最近检测到和已授权的私聊 `open_id/chat_id`。私聊始终校验 allowed
+  `open_id`；群聊采用“仅授权用户”策略时也会校验发送者 `open_id`。列表支持加入/移除 allowed
+  `open_id`，以及把某个 allowed `open_id` 设为唯一 owner。owner 私聊 `chat_id` 由主人私聊机器人后自动记录，
+  不在设置页手动维护或手填。
+- `Group list`：允许使用机器人的群 `chat_id`。群聊必须先命中此列表；空列表表示不开放群聊。
+  将机器人加入群并 `@` 一次后，群会出现在 `Group list`，点击“加入”并保存即可，不需要逐个添加
+  全部群成员的 `open_id`。列表支持加入/移除 allowed `chat_id`。如果飞书事件或后续权限能提供名称，设置页会在 ID 旁展示可读名称；
+  否则展示短 ID/指纹。
 - `Group member access`：默认“仅授权用户”，即群 `chat_id` 和发送者 `open_id` 都必须获授权；选择
   “授权群内全部成员”后，该群任何成员均可使用助手，但私聊仍只接受 `Allowed open IDs` 中的用户。
 - `Only handle group @mentions`：建议保持开启，群聊只响应 `@机器人`。
@@ -107,9 +109,14 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
 - 服务重启/升级、凭据/ACL/认证、全局 sandbox/approval 设置、原始文件写入、KB 审批/同步以及删除类操作不向
   飞书管家开放。需要项目分析或代码修改时，管家应创建普通项目 Task 或向已有 Task 发消息，
   不在 AHA Home 中直接完成项目工作。
-- 入站 `message_id` 做 24 小时幂等；私聊按企业与用户隔离。最近检测到的群只作为本地管理页候选，
+- 入站 `message_id` 做 24 小时幂等；私聊按企业与用户隔离。最近检测到的私聊和群只作为本地管理页候选，
   不会自动获得访问权限；记录保存在
-  `AHA_HOME/feishu/recent_groups.json`（`0600`），Channel 审计仍只保存 chat ID 哈希。
+  `AHA_HOME/feishu/recent_chats.json` 和 `recent_groups.json`（均为 `0600`）。可读名称缓存保存在
+  `identity_profiles.json`（`0600`）。飞书长连接为 `connected` 且配置了 App ID/Secret 时，设置页会 best-effort
+  调用飞书“获取单个用户信息”和“获取群信息”接口补齐用户名/群名；列表展示为 `id.name`，权限不足或接口失败时
+  降级为 `id.未解析`，并在设置页显示飞书返回的权限错误。用户名称通常需要 `contact:contact.base:readonly`
+  等通讯录权限；群名称需要 `im:chat:readonly`、`im:chat` 或 `im:chat:read` 之一。
+  Channel 审计仍只保存 chat/open ID 哈希。
 - 私聊管家会话绑定与回复订阅保存在 AHA home 的 `feishu/` 私有目录。消息送达 agent 后，AHA 自动订阅该
   task，把 agent 回复推回原飞书会话。
 - 管家通过 `send_task_message` 把需求派发给普通 Task 后，会持久记录原飞书会话与目标 run/task 的 handoff。
@@ -120,6 +127,10 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
   AHA KB 开关；Run 下拉只包含非系统管理 Run，按 `Run 名称.run_id` 展示。model 选项由服务端动态读取
   backend 支持列表，并合并已配置的 env group。Task 执行模式固定为 `auto`，不再提供执行模式选择。
   复杂字段仍可由主人在自然语言里明确补充后重新生成卡片。
+- owner 私聊机器人菜单是同一套管家入口的显式触发方式，只支持 owner。飞书开放平台可配置事件型菜单：
+  `aha_create_memo`、`aha_create_task`、`aha_list_memos`、`aha_list_tasks`。创建菜单复用上面的表单卡和最终确认；
+  菜单创建 Memo/Task 时会在表单内提供标题和正文输入，其他属性与 Web 创建表单使用同一套真实字段；
+  查询菜单读取飞书绑定工作 Run 后交给 owner 私聊管家总结。群聊仍只响应 `@机器人`，不开放菜单管理入口。
 
 状态推送开启时，非系统 run/task 的状态变化只会推送到已解析的 owner 私聊；
 `running` 对外显示为 `busy`，`awaiting_user` 显示为 `awaiting`：
@@ -144,6 +155,9 @@ message: agent 最后一条回复
 - 主人身份是单一收件人，不是列表；优先使用 `integrations.feishu.owner_open_id`/`owner_chat_id`；未配置时使用首次私聊管家
   成功建立的 owner 私聊状态；若仍没有状态且 `allowed_open_ids` 只有一个值，则把该值作为 owner。群聊提问者
   `open_id` 只用于数字人 per-user 记忆，不会被当成主人。
+- `allowed_open_ids` 表示谁可以私聊使用飞书助手；`owner_open_id` 是其中唯一主人。保存 Feishu 设置时，
+  AHA 会自动保证 owner 在 allowed 列表中，并基于 owner 私聊状态清理旧 app/旧 owner 留下的 p2p 订阅和 owner 状态。
+  群订阅不参与这类清理，群聊访问仍由 `allowed_chat_ids` 和 `group_access_mode` 控制。
 - 直接问答：模型判断可公开回答时，数字人在原群、原消息下回复，并由服务端自动携带提问者飞书 `@`。
 - 数字人问答的信息源包括 AHA 知识库索引、已配置 `workspace_roots`/已注册 workspace 的项目路径索引、
   当前群聊 `@` 上下文和同一数字人 task 的近期群聊上下文。Prompt 只注入索引、路径候选、README/docs/src/tests

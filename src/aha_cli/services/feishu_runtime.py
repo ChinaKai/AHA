@@ -16,9 +16,14 @@ from aha_cli.domain.models import (
     utc_now,
 )
 from aha_cli.services.feishu import (
+    identity_label_items,
+    identity_profiles,
     mark_confirmation_card_updated,
     pending_confirmation_card_updates,
     recent_groups,
+    recent_private_chats,
+    refresh_identity_profiles,
+    sanitize_card_payload,
 )
 from aha_cli.services.feishu_audit import audit_feishu_channel
 from aha_cli.services.feishu_work_run import feishu_work_run_status, validate_feishu_work_run_id
@@ -31,6 +36,7 @@ _channels: dict[str, Any] = {}
 _channels_lock = threading.Lock()
 _config_lock = threading.Lock()
 _runtime_lock = threading.Lock()
+FEISHU_BOT_MENU_EVENT_TYPES = ("application.bot.menu_v6",)
 
 
 def feishu_config(root: Path) -> dict:
@@ -189,12 +195,59 @@ def _create_feishu_channel(app_id: str, app_secret: str, security_mode: str) -> 
     """
     from lark_channel import FeishuChannel, SecurityConfig
 
-    return FeishuChannel(
+    channel = FeishuChannel(
         app_id=app_id,
         app_secret=app_secret,
         transport="ws",
         security=SecurityConfig(mode=security_mode),
     )
+    _install_bot_menu_dispatcher(channel)
+    return channel
+
+
+def _install_bot_menu_dispatcher(channel: Any) -> None:
+    """Extend the SDK dispatcher with Feishu bot-menu custom events.
+
+    lark-channel-sdk exposes message/card callbacks directly, but bot custom
+    menu clicks arrive as the custom event ``application.bot.menu_v6``. The SDK
+    rebuilds its dispatcher during ``start()``, so patch its dispatcher factory
+    rather than installing a one-off dispatcher before startup.
+    """
+    required = ("_build_dispatcher", "_invoke", "schedule")
+    if not all(hasattr(channel, name) for name in required):
+        return
+    if getattr(channel, "_aha_bot_menu_dispatcher_installed", False):
+        return
+    original_build_dispatcher = channel._build_dispatcher
+
+    def build_dispatcher_with_bot_menu() -> Any:
+        dispatcher = original_build_dispatcher()
+        _register_bot_menu_dispatcher(channel, dispatcher)
+        return dispatcher
+
+    channel._build_dispatcher = build_dispatcher_with_bot_menu
+    if getattr(channel, "_dispatcher", None) is not None:
+        _register_bot_menu_dispatcher(channel, channel._dispatcher)
+    channel._aha_bot_menu_dispatcher_installed = True
+
+
+def _register_bot_menu_dispatcher(channel: Any, dispatcher: Any) -> None:
+    try:
+        from lark_channel.event.custom import CustomizedEventProcessor
+    except ImportError:
+        return
+    processor_map = getattr(dispatcher, "_processorMap", None)
+    if not isinstance(processor_map, dict):
+        return
+
+    def bot_menu_handler(event: Any) -> None:
+        channel.schedule(channel._invoke("raw", event))
+
+    for event_type in FEISHU_BOT_MENU_EVENT_TYPES:
+        for schema in ("p2", "p1"):
+            key = f"{schema}.{event_type}"
+            if key not in processor_map:
+                processor_map[key] = CustomizedEventProcessor(bot_menu_handler)
 
 
 def feishu_status(root: Path) -> dict:
@@ -217,6 +270,27 @@ def feishu_status(root: Path) -> dict:
     except (FileNotFoundError, OSError, ValueError):
         runtime = {}
     work_run = feishu_work_run_status(root)
+    allowed_open_ids = list(config.get("allowed_open_ids") or [])
+    allowed_chat_ids = list(config.get("allowed_chat_ids") or [])
+    owner_open_id = str(config.get("owner_open_id") or "")
+    owner_chat_id = str(config.get("owner_chat_id") or "")
+    recent_group_items = recent_groups(root)
+    recent_private_items = recent_private_chats(root)
+    profile_refresh = {"attempted": 0, "updated": 0, "errors": []}
+    if runtime.get("status") == "connected" and app_id and app_secret:
+        try:
+            profile_refresh = refresh_identity_profiles(
+                root,
+                app_id,
+                app_secret,
+                open_ids=[owner_open_id, *allowed_open_ids, *(str(item.get("open_id") or "") for item in recent_private_items)],
+                chat_ids=[*allowed_chat_ids, *(str(item.get("chat_id") or "") for item in recent_group_items)],
+            )
+            if profile_refresh.get("attempted") or profile_refresh.get("updated"):
+                recent_group_items = recent_groups(root)
+                recent_private_items = recent_private_chats(root)
+        except Exception as exc:  # noqa: BLE001 - settings page must survive Feishu profile API failures.
+            profile_refresh = {"attempted": 0, "updated": 0, "errors": [str(exc)]}
     return {
         "enabled": bool(config.get("enabled")),
         "configured": bool(app_id and app_secret),
@@ -235,20 +309,27 @@ def feishu_status(root: Path) -> dict:
         "default_run": work_run.get("default_run"),
         "work_run_options": work_run.get("work_run_options") or [],
         "proxy_enabled": configured_proxy_enabled if isinstance(configured_proxy_enabled, bool) else None,
-        "owner_open_id": str(config.get("owner_open_id") or ""),
-        "owner_chat_id": str(config.get("owner_chat_id") or ""),
+        "owner_open_id": owner_open_id,
+        "owner_chat_id": owner_chat_id,
+        "owner_open_id_item": (identity_label_items(root, kind="open_id", identities=[owner_open_id]) or [{}])[0] if owner_open_id else {},
+        "owner_chat_id_item": (identity_label_items(root, kind="chat_id", identities=[owner_chat_id]) or [{}])[0] if owner_chat_id else {},
         "effective_backend": effective_backend,
         "effective_model": effective_model,
         "effective_reasoning_effort": effective_reasoning_effort,
         "effective_proxy_enabled": effective_proxy_enabled,
         "backend_defaults": _feishu_backend_defaults(global_config),
         "env_groups": _feishu_env_groups(global_config),
-        "allowed_open_ids": list(config.get("allowed_open_ids") or []),
-        "allowed_open_id_count": len(config.get("allowed_open_ids") or []),
-        "allowed_chat_ids": list(config.get("allowed_chat_ids") or []),
-        "allowed_chat_id_count": len(config.get("allowed_chat_ids") or []),
+        "allowed_open_ids": allowed_open_ids,
+        "allowed_open_id_items": identity_label_items(root, kind="open_id", identities=allowed_open_ids),
+        "allowed_open_id_count": len(allowed_open_ids),
+        "allowed_chat_ids": allowed_chat_ids,
+        "allowed_chat_id_items": identity_label_items(root, kind="chat_id", identities=allowed_chat_ids),
+        "allowed_chat_id_count": len(allowed_chat_ids),
         "group_access_mode": str(config.get("group_access_mode") or "allowed_users"),
-        "recent_groups": recent_groups(root),
+        "recent_groups": recent_group_items,
+        "recent_private_chats": recent_private_items,
+        "identity_profiles": identity_profiles(root),
+        "identity_profile_refresh": profile_refresh,
         "group_mentions_only": bool(config.get("group_mentions_only")),
         "notifications_enabled": bool(config.get("notifications_enabled")),
         "security_mode": config.get("security_mode"),
@@ -303,6 +384,13 @@ def update_feishu_settings(root: Path, payload: dict) -> dict:
         integrations["feishu"] = normalize_feishu_integration_config(updated)
         config["integrations"] = integrations
         write_json(path, config)
+    if any(key in payload for key in ("app_id", "owner_open_id", "owner_chat_id", "allowed_open_ids")):
+        try:
+            from aha_cli.services.feishu_owner import cleanup_feishu_identity_state
+
+            cleanup_feishu_identity_state(root, config=integrations["feishu"])
+        except (OSError, ValueError, RuntimeError):
+            pass
     return feishu_status(root)
 
 
@@ -342,6 +430,8 @@ def send_via_active_channel(root: Path, target: str, message: object, opts: dict
     channel = active_feishu_channel(root)
     if channel is None:
         raise RuntimeError("Feishu channel is not connected in this process")
+    if isinstance(message, dict) and isinstance(message.get("card"), dict):
+        message = {**message, "card": sanitize_card_payload(message.get("card") or {})}
     kind = "card" if isinstance(message, dict) and isinstance(message.get("card"), dict) else "message"
     try:
         future = channel.schedule(channel.send(target, message, opts))
@@ -383,6 +473,7 @@ def update_card_via_active_channel(root: Path, message_id: str, card: dict, *, t
     channel = active_feishu_channel(root)
     if channel is None:
         raise RuntimeError("Feishu channel is not connected in this process")
+    card = sanitize_card_payload(card)
     try:
         future = channel.schedule(channel.update_card(str(message_id), card))
         result = future.result(timeout=timeout)
@@ -443,7 +534,7 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         _write_runtime(root, status="sdk_missing", connected=False, error="Feishu Channel SDK is unavailable")
         return
 
-    from aha_cli.services.feishu_assistant import enqueue_card_action, enqueue_message
+    from aha_cli.services.feishu_assistant import enqueue_card_action, enqueue_message, enqueue_raw_event
 
     try:
         channel = await asyncio.to_thread(
@@ -457,6 +548,7 @@ async def run_feishu_channel(root: Path, default_run_id: str = "") -> None:
         return
     channel.on("message", lambda message: enqueue_message(root, default_run_id, channel, message))
     channel.on("cardAction", lambda event: enqueue_card_action(root, default_run_id, channel, event))
+    channel.on("raw", lambda event: enqueue_raw_event(root, default_run_id, channel, event))
     def channel_error(error: object) -> None:
         audit_feishu_channel(
             root,
