@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 import re
 
-from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, normalize_task_token_saving
+from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, is_system_managed, normalize_task_token_saving
 from aha_cli.services.chat_supervision import (
     agents_visible_to_prompt,
     is_task_supervision_host_agent,
@@ -36,6 +36,8 @@ from aha_cli.store.filesystem import (
 )
 from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.store.task_memo_assets import TASK_MEMO_ASSET_DIR, task_memo_assets_dir
+from aha_cli.store.runs import list_run_summaries
+from aha_cli.store.task_memos import normalize_memo_status, read_task_memos
 
 
 PROMPT_REDACTED_PROXY_FIELDS = {
@@ -344,6 +346,86 @@ def _knowledge_context_delta_for_prompt(root: Path, run_id: str, task: dict) -> 
     return render_prompt_template("backend_knowledge_enabled_empty.md").rstrip()
 
 
+_FEISHU_GROUP_MEMO_STATUS_LABELS = {
+    "todo": "待办",
+    "doing": "进行中",
+    "done": "已完成",
+    "closed": "已关闭",
+}
+
+
+def _feishu_group_memo_status_label(status: object) -> str:
+    normalized = normalize_memo_status(status)
+    return _FEISHU_GROUP_MEMO_STATUS_LABELS.get(normalized, normalized or "-")
+
+
+def _memo_lookup_run_ids(root: Path, preferred_run_id: object = "") -> list[str]:
+    run_ids: list[str] = []
+    preferred = str(preferred_run_id or "").strip()
+    if preferred:
+        run_ids.append(preferred)
+    try:
+        summaries = list_run_summaries(root)
+    except (Exception, SystemExit):
+        summaries = []
+    for summary in summaries:
+        run_id = str(summary.get("id") or "").strip() if isinstance(summary, dict) else ""
+        if not run_id or run_id in run_ids:
+            continue
+        try:
+            plan = require_plan(root, run_id)
+        except (Exception, SystemExit):
+            continue
+        if is_system_managed(plan):
+            continue
+        run_ids.append(run_id)
+    return run_ids
+
+
+def _memo_match_tokens(*values: object) -> set[str]:
+    text = " ".join(str(value or "").lower() for value in values)
+    tokens = {item.strip("._-") for item in re.findall(r"[a-z0-9][a-z0-9._-]*", text)}
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        tokens.update(chunk[index : index + 2] for index in range(0, max(0, len(chunk) - 1)))
+    return {item for item in tokens if len(item) >= 2}
+
+
+def _handoff_memo_match_score(handoff: dict, memo: dict) -> int:
+    handoff_tokens = _memo_match_tokens(
+        handoff.get("request_summary"),
+        handoff.get("request_detail"),
+        handoff.get("request_preview"),
+    )
+    memo_tokens = _memo_match_tokens(
+        memo.get("title"),
+        memo.get("description"),
+        memo.get("feishu_request_summary"),
+        memo.get("feishu_request_detail"),
+    )
+    return len(handoff_tokens & memo_tokens)
+
+
+def _feishu_group_handoff_memo(root: Path, handoff: dict) -> tuple[str, dict] | None:
+    memo_id = str(handoff.get("memo_id") or "").strip()
+    if not memo_id:
+        return None
+    candidates: list[tuple[int, str, dict]] = []
+    for candidate_run_id in _memo_lookup_run_ids(root, handoff.get("memo_run_id")):
+        try:
+            memos = read_task_memos(root, candidate_run_id)
+        except (Exception, SystemExit):
+            continue
+        for memo in memos:
+            if str(memo.get("id") or "") != memo_id:
+                continue
+            candidates.append((_handoff_memo_match_score(handoff, memo), candidate_run_id, memo))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _score, memo_run_id, memo = candidates[0]
+    return memo_run_id, memo
+
+
 def _service_assistant_context_for_prompt(root: Path, task: dict | None) -> str:
     if not is_service_assistant_task(task):
         return ""
@@ -386,18 +468,37 @@ def _feishu_group_active_handoffs_context(root: Path, run_id: str, task: dict | 
         "Active group handoff threads for this digital-human user:",
         "- These ids are internal. Use one only as `merge_handoff_id` in `feishu_group_handoff`; never reveal ids publicly.",
         "- Reuse an active thread when the current @ message is a supplement, follow-up, reminder, continuation, or requested output for the same need.",
+        "- If an active thread has status=memo_created, use memo_status/memo_status_label when present. If memo_status is done or closed, answer publicly that it has been completed/closed; do not say it is still pending/in progress.",
+        "- If status=memo_created and memo_status is todo/doing/unknown, answer publicly with the todo/progress status instead of creating a new handoff unless the current message is clearly a new need.",
         "- Set `new_handoff` to true only when the current @ message is clearly an independent new need.",
     ]
     for index, handoff in enumerate(handoffs, start=1):
         preview = " ".join(str(handoff.get("request_preview") or "").split())
         if len(preview) > 240:
             preview = preview[:239].rstrip() + "..."
+        memo_run_id = str(handoff.get("memo_run_id") or "")
+        memo_id = str(handoff.get("memo_id") or "")
+        memo_status = ""
+        memo_status_label = ""
+        memo_title = ""
+        memo_ref = _feishu_group_handoff_memo(root, handoff)
+        if memo_ref is not None:
+            memo_run_id, memo = memo_ref
+            memo_status = normalize_memo_status(memo.get("status"))
+            memo_status_label = _feishu_group_memo_status_label(memo_status)
+            memo_title = " ".join(str(memo.get("title") or "").split())
+            if len(memo_title) > 120:
+                memo_title = memo_title[:119].rstrip() + "..."
         lines.append(
             f"{index}. id={handoff.get('id') or '-'} "
             f"group={handoff.get('group_chat_id') or '-'} "
             f"created={handoff.get('created_at') or '-'} "
             f"updated={handoff.get('updated_at') or handoff.get('created_at') or '-'} "
             f"status={handoff.get('status') or '-'} "
+            f"memo={memo_run_id or '-'}:{memo_id or '-'} "
+            f"memo_status={memo_status or '-'} "
+            f"memo_status_label={memo_status_label or '-'} "
+            f"memo_title={memo_title or '-'} "
             f"merged_count={handoff.get('merged_count') or 0} "
             f"request={preview or '-'}"
         )

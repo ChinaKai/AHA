@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
+from typing import Callable
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
@@ -132,7 +133,14 @@ def _start_backend_from_autostart(root: Path, run_id: str, autostart: dict, *, f
     return backend
 
 
-def queue_backend_start(root: Path, run_id: str, autostart: dict | None, *, from_start: bool = False) -> dict | None:
+def queue_backend_start(
+    root: Path,
+    run_id: str,
+    autostart: dict | None,
+    *,
+    from_start: bool = False,
+    failure_callback: Callable[[BaseException], None] | None = None,
+) -> dict | None:
     if not autostart:
         return None
     payload = _backend_start_event_payload(autostart, from_start=from_start) | {"queued": True}
@@ -143,6 +151,16 @@ def queue_backend_start(root: Path, run_id: str, autostart: dict | None, *, from
             _start_backend_from_autostart(root, run_id, autostart, from_start=from_start)
         except (Exception, SystemExit) as exc:
             append_event(root, run_id, "backend_start_failed", payload | {"error": str(exc)})
+            if failure_callback is not None:
+                try:
+                    failure_callback(exc)
+                except (Exception, SystemExit) as callback_exc:
+                    append_event(
+                        root,
+                        run_id,
+                        "backend_start_failure_notification_failed",
+                        payload | {"error": str(callback_exc)},
+                    )
 
     thread = threading.Thread(
         target=run,

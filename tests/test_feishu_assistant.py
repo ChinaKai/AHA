@@ -766,7 +766,35 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["message"], "帮助")
         self.assertIs(send.call_args.kwargs["command_handler"], feishu_assistant._never_handle_command)
         subscribe.assert_called_once()
-        self.assertEqual(channel.sent[-1][1]["text"], "已交给 AHA agent，回复会推送到本会话。")
+        self.assertEqual(channel.sent, [])
+
+    def test_private_message_replies_only_when_agent_dispatch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._dedicated_run",
+            return_value="run-001",
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.run_exists",
+            return_value=True,
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant._active_task",
+            return_value={"id": "task-006", "status": "running"},
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            side_effect=ValueError("backend start failed"),
+        ):
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            set_session_binding(
+                root,
+                "tenant-1:p2p:ou_user",
+                active_run_id="run-001",
+                active_task_id="task-006",
+                acl_subject="ou_user",
+            )
+            channel = FakeChannel()
+            feishu_assistant._handle_message(root, "", channel, _payload(text="帮助"))
+
+        self.assertIn("AHA agent 启动或消息投递失败", channel.sent[-1][1]["text"])
 
     def test_slash_text_is_also_routed_to_agent(self) -> None:
         handled, agent_message, payload = feishu_assistant._never_handle_command(
@@ -1047,7 +1075,7 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[1], "run-001")
         self.assertEqual(send.call_args.args[2]["task_id"], "task-006")
         self.assertEqual(send.call_args.args[2]["message"], "trusted result")
-        self.assertIn("操作已确认并执行", channel.sent[-1][1]["text"])
+        self.assertEqual(channel.sent, [])
 
     def test_card_action_prefers_bound_confirmation_record_over_ambiguous_subscriptions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -1107,7 +1135,7 @@ class FeishuAssistantTests(unittest.TestCase):
         )
         self.assertIn("已取消", channel.sent[-1][1]["text"])
 
-    def test_confirmed_menu_create_memo_replies_directly_without_agent_backend(self) -> None:
+    def test_confirmed_menu_create_memo_updates_card_without_extra_text_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_assistant.confirmation_card_for_message",
             return_value={
@@ -1155,8 +1183,7 @@ class FeishuAssistantTests(unittest.TestCase):
             )
 
         send.assert_not_called()
-        self.assertIn("已创建 Memo", channel.sent[-1][1]["text"])
-        self.assertIn("memo-001", channel.sent[-1][1]["text"])
+        self.assertEqual(channel.sent, [])
 
     def test_choice_card_action_returns_selected_option_to_assistant_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -1203,7 +1230,7 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[1], "run-001")
         self.assertEqual(send.call_args.args[2]["task_id"], "task-006")
         self.assertEqual(send.call_args.args[2]["message"], "trusted choice")
-        self.assertIn("已收到选择", channel.sent[-1][1]["text"])
+        self.assertEqual(channel.sent, [])
 
     def test_group_handoff_dismissed_choice_does_not_start_assistant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -1251,8 +1278,7 @@ class FeishuAssistantTests(unittest.TestCase):
             )
 
         send.assert_not_called()
-        self.assertIn("已标记为无需处理", channel.sent[-1][1]["text"])
-        self.assertIn("不会回群", channel.sent[-1][1]["text"])
+        self.assertEqual(channel.sent, [])
 
     def test_choice_card_action_passes_form_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -1325,7 +1351,7 @@ class FeishuAssistantTests(unittest.TestCase):
 
         self.assertEqual(send.call_count, 1)
         self.assertEqual(send.call_args.args[2]["message"], "确认")
-        self.assertNotIn("无法处理确认", channel.sent[-1][1]["text"])
+        self.assertEqual(channel.sent, [])
 
     def test_resolved_confirmation_updates_original_card_before_reply(self) -> None:
         channel = FakeChannel()
@@ -1352,6 +1378,56 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(channel.updated[0][1]["header"]["template"], "grey")
         marked.assert_called_once_with(Path(tmp), "confirmation-1")
         self.assertIn("已取消", channel.sent[-1][1]["text"])
+
+    def test_choice_followup_card_is_sent_without_extra_text_reply(self) -> None:
+        channel = FakeChannel()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.task_snapshot",
+            return_value={"task": {"id": "task-006"}},
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.prepare_service_assistant_action",
+            return_value={"confirmation_card": {"schema": "2.0"}, "confirmation_id": "next-card"},
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant._send_menu_card",
+        ) as send_card:
+            feishu_assistant._finish_confirmation(
+                Path(tmp),
+                channel,
+                chat_id="oc_chat",
+                message_id="om_choice",
+                run_id="run-001",
+                task_id="task-006",
+                confirmation={
+                    "choice": True,
+                    "assistant_run_id": "run-001",
+                    "assistant_task_id": "task-006",
+                    "result": {
+                        "target_operation": "create_memo",
+                        "next_arguments": {"title": "整理需求"},
+                    },
+                },
+            )
+
+        send_card.assert_called_once()
+        self.assertEqual(channel.sent, [])
+
+    def test_confirmation_agent_dispatch_failure_replies_with_error(self) -> None:
+        channel = FakeChannel()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            side_effect=ValueError("backend start failed"),
+        ):
+            feishu_assistant._finish_confirmation(
+                Path(tmp),
+                channel,
+                chat_id="oc_chat",
+                message_id="om_card",
+                run_id="run-001",
+                task_id="task-006",
+                confirmation={"cancelled": False, "tool_message": "trusted result"},
+            )
+
+        self.assertIn("AHA agent 启动或消息投递失败", channel.sent[-1][1]["text"])
 
     def test_task_workspace_skips_missing_previous_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -38,6 +38,7 @@ from aha_cli.services.feishu_runtime import feishu_config, feishu_status, update
 from aha_cli.services.feishu_work_run import feishu_work_run_options, resolve_feishu_work_run_id
 from aha_cli.services.feishu_group import FEISHU_GROUP_HANDOFF_ACK
 from aha_cli.services.feishu_group_handoffs import (
+    active_group_handoffs_for_digital_task,
     get_group_handoff,
     mark_group_handoff,
     pending_group_handoffs_for_steward_reply,
@@ -60,6 +61,7 @@ SERVICE_ASSISTANT_CHOICE = "service_assistant_choice"
 GROUP_HANDOFF_REPLY_CHOICE_OPERATION = "select_feishu_group_handoff_for_reply"
 GROUP_HANDOFF_OWNER_CHOICE_OPERATION = "handle_feishu_group_handoff"
 GROUP_HANDOFF_MEMO_CREATED_ACK = "主人已经加入待办，请耐心等待，有进展我会同步。"
+GROUP_HANDOFF_EXISTING_MEMO_ACK = "这个需求已在主人待办中，当前状态：{status}，请耐心等待，有进展我会同步。"
 CREATE_MEMO_ATTRIBUTE_CHOICE_OPERATION = "select_create_memo_attributes"
 CREATE_TASK_RUNTIME_CHOICE_OPERATION = "select_create_task_runtime"
 CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION = "select_create_task_attributes"
@@ -84,6 +86,11 @@ COMMIT_EXECUTION_RE = re.compile(
 )
 PUSH_EXECUTION_RE = re.compile(r"(?:\b(?:git\s+push|push)\b|推送|同步远程)", re.IGNORECASE)
 GENERATED_BY_TRAILER_RE = re.compile(r"\bGenerated-by\s*:", re.IGNORECASE)
+GROUP_HANDOFF_FOLLOWUP_RE = re.compile(
+    r"(再\s*帮我|帮我\s*(问|催)|问一下|催(一下|一催|下)|跟进|进展|有结果|怎么样了|"
+    r"刚才|上面|前面|这个(需求|问题|事情|事)|那(个|件)事|补充|顺便|对了|follow\s*up|ping)",
+    re.IGNORECASE,
+)
 
 READ_OPERATIONS = {
     "service_status",
@@ -189,6 +196,7 @@ WRITE_ARGUMENT_KEYS = {
         "scheduled_date",
         "end_date",
         "created_task_id",
+        "source_handoff_id",
     },
     "send_feishu_group_reply": {"handoff_id", "message"},
     "dismiss_feishu_group_handoff": {"handoff_id", "terminal_status", "reason"},
@@ -393,7 +401,7 @@ def _group_handoff_owner_options() -> list[dict]:
             "id": "create_memo",
             "label": "整理为待办",
             "message": "整理为待办",
-            "description": "交给主人私聊助手整理 Memo 草稿；主人确认创建成功后，数字人会回原群说明已加入待办。",
+            "description": "先查是否已有同需求待办；有则关联并回群同步进度，没有再交给主人私聊助手整理 Memo 草稿。",
         },
         {
             "id": "dismissed",
@@ -596,8 +604,282 @@ def _memo_projection(memo: dict) -> dict:
         "max_sub_agents": memo.get("max_sub_agents"),
         "preferred_sub_backend": memo.get("preferred_sub_backend"),
         "created_task_id": memo.get("created_task_id"),
+        "source_handoff_id": memo.get("source_handoff_id"),
+        "source_handoff_ids": list(memo.get("source_handoff_ids") or []),
+        "feishu_group_chat_id": memo.get("feishu_group_chat_id"),
+        "feishu_group_thread_id": memo.get("feishu_group_thread_id"),
+        "feishu_requester_open_id": memo.get("feishu_requester_open_id"),
         "created_at": memo.get("created_at"),
         "updated_at": memo.get("updated_at"),
+    }
+
+
+def _unique_text_items(*values: object) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        items = value if isinstance(value, (list, tuple)) else [value]
+        for item in items:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+    return result
+
+
+def _group_handoff_memo_source_patch(handoff: dict, *, memo: dict | None = None) -> dict:
+    handoff_id = str(handoff.get("id") or "").strip()
+    source_handoff_id = str((memo or {}).get("source_handoff_id") or handoff_id).strip()
+    source_handoff_ids = _unique_text_items((memo or {}).get("source_handoff_ids"), source_handoff_id, handoff_id)
+    return {
+        "source_handoff_id": source_handoff_id,
+        "source_handoff_ids": source_handoff_ids,
+        "feishu_group_chat_id": str(handoff.get("group_chat_id") or "").strip(),
+        "feishu_group_message_id": str(handoff.get("latest_group_message_id") or handoff.get("group_message_id") or "").strip(),
+        "feishu_group_thread_id": str(handoff.get("thread_id") or handoff.get("id") or "").strip(),
+        "feishu_requester_open_id": str(handoff.get("open_id") or "").strip(),
+        "feishu_request_summary": _handoff_summary(handoff),
+        "feishu_request_detail": _handoff_detail(handoff),
+    }
+
+
+def _memo_status_label(memo: dict | None) -> str:
+    labels = {
+        "todo": "待办",
+        "doing": "进行中",
+        "done": "已完成",
+        "closed": "已关闭",
+    }
+    return labels.get(normalize_memo_status((memo or {}).get("status")), "待办")
+
+
+def group_handoff_existing_memo_reply(memo: dict | None) -> str:
+    status = normalize_memo_status((memo or {}).get("status"))
+    if status == "done":
+        return "这个需求关联的主人待办已完成。"
+    if status == "closed":
+        return "这个需求关联的主人待办已关闭。"
+    return GROUP_HANDOFF_EXISTING_MEMO_ACK.format(status=_memo_status_label(memo))
+
+
+_GROUP_REQUEST_TOKEN_STOPWORDS = {
+    "一下",
+    "上面",
+    "当前",
+    "已经",
+    "帮我",
+    "待办",
+    "情况",
+    "反馈",
+    "处理",
+    "确认",
+    "群聊",
+    "补充",
+    "要求",
+    "请求",
+    "这个",
+    "这些",
+    "进展",
+    "追问",
+    "需求",
+    "问题",
+    "最新",
+    "状态",
+    "结果",
+    "转单",
+}
+
+
+def _group_request_tokens(*values: object) -> set[str]:
+    text = " ".join(str(value or "").lower() for value in values)
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z0-9][a-z0-9._-]*", text):
+        token = token.strip("._-")
+        if len(token) >= 2 and token not in _GROUP_REQUEST_TOKEN_STOPWORDS:
+            tokens.add(token)
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        for index in range(0, max(0, len(chunk) - 1)):
+            token = chunk[index : index + 2]
+            if token not in _GROUP_REQUEST_TOKEN_STOPWORDS:
+                tokens.add(token)
+    return tokens
+
+
+def _numeric_tokens(tokens: set[str]) -> set[str]:
+    return {token for token in tokens if re.fullmatch(r"\d+(?:[._-]\d+)*", token)}
+
+
+def _same_request_by_text(new_text: str, existing_text: str) -> bool:
+    new_tokens = _group_request_tokens(new_text)
+    existing_tokens = _group_request_tokens(existing_text)
+    if not new_tokens or not existing_tokens:
+        return False
+    new_numbers = _numeric_tokens(new_tokens)
+    existing_numbers = _numeric_tokens(existing_tokens)
+    if new_numbers and existing_numbers and not (new_numbers & existing_numbers):
+        return False
+    shared = new_tokens & existing_tokens
+    if not shared:
+        return False
+    shared_alnum = {token for token in shared if re.search(r"[a-z0-9]", token)}
+    coverage = len(shared) / max(1, min(len(new_tokens), len(existing_tokens)))
+    if len(shared_alnum) >= 3:
+        return True
+    if len(shared_alnum) >= 2 and coverage >= 0.5:
+        return True
+    return len(shared) >= 3 and coverage >= 0.45
+
+
+def _handoff_match_text(handoff: dict) -> str:
+    return "\n".join(
+        str(value or "")
+        for value in (
+            handoff.get("request_summary"),
+            handoff.get("request_detail"),
+            handoff.get("request_preview"),
+            handoff.get("handoff_reason"),
+        )
+        if str(value or "").strip()
+    )
+
+
+def _memo_match_text(memo: dict) -> str:
+    return "\n".join(
+        str(value or "")
+        for value in (
+            memo.get("title"),
+            memo.get("description"),
+            memo.get("feishu_request_summary"),
+            memo.get("feishu_request_detail"),
+        )
+        if str(value or "").strip()
+    )
+
+
+def _same_group_requester_scope(left: dict, right: dict) -> bool:
+    return all(
+        str(left.get(key) or "") == str(right.get(key) or "")
+        for key in ("digital_run_id", "digital_task_id", "group_chat_id", "open_id", "steward_run_id", "steward_task_id")
+    )
+
+
+def _candidate_work_run_ids(root: Path, preferred_run_id: str = "") -> list[str]:
+    run_ids: list[str] = []
+    for run_id in (preferred_run_id,):
+        if str(run_id or "").strip() and run_id not in run_ids:
+            run_ids.append(str(run_id))
+    try:
+        default_run_id = resolve_feishu_work_run_id(root)
+    except (Exception, SystemExit):
+        default_run_id = ""
+    if default_run_id and default_run_id not in run_ids:
+        run_ids.append(default_run_id)
+    try:
+        options = feishu_work_run_options(root, limit=12)
+    except (Exception, SystemExit):
+        options = []
+    for option in options:
+        run_id = str(option.get("id") or "").strip() if isinstance(option, dict) else ""
+        if run_id and run_id not in run_ids:
+            run_ids.append(run_id)
+    return run_ids
+
+
+def _memo_by_id(root: Path, run_id: str, memo_id: str) -> dict | None:
+    if not run_id or not memo_id:
+        return None
+    try:
+        memo = next((item for item in read_task_memos(root, run_id) if str(item.get("id") or "") == memo_id), None)
+    except (Exception, SystemExit):
+        return None
+    if not isinstance(memo, dict):
+        return None
+    return memo
+
+
+def _memo_for_handoff(root: Path, handoff: dict, *, preferred_run_id: str = "") -> tuple[str, dict] | None:
+    memo_id = str(handoff.get("memo_id") or "").strip()
+    if not memo_id:
+        return None
+    run_ids = _candidate_work_run_ids(root, str(handoff.get("memo_run_id") or preferred_run_id or ""))
+    for run_id in run_ids:
+        memo = _memo_by_id(root, run_id, memo_id)
+        if memo is not None:
+            return run_id, memo
+    return None
+
+
+def find_existing_group_handoff_memo(root: Path, handoff: dict, *, run_id: str = "") -> dict | None:
+    if not isinstance(handoff, dict):
+        return None
+    if str(handoff.get("status") or "") == "memo_created":
+        current = _memo_for_handoff(root, handoff, preferred_run_id=run_id)
+        if current is not None:
+            memo_run_id, memo = current
+            return {"run_id": memo_run_id, "memo": memo, "handoff": handoff, "already_linked": True}
+    digital_run_id = str(handoff.get("digital_run_id") or "")
+    digital_task_id = str(handoff.get("digital_task_id") or "")
+    if not digital_run_id or not digital_task_id:
+        return None
+    try:
+        active = active_group_handoffs_for_digital_task(root, digital_run_id, digital_task_id, limit=24)
+    except (Exception, SystemExit):
+        active = []
+    candidates: list[dict] = []
+    for existing in active:
+        if str(existing.get("id") or "") == str(handoff.get("id") or ""):
+            continue
+        if str(existing.get("status") or "") != "memo_created":
+            continue
+        if not _same_group_requester_scope(handoff, existing):
+            continue
+        memo_ref = _memo_for_handoff(root, existing, preferred_run_id=run_id)
+        if memo_ref is None:
+            continue
+        memo_run_id, memo = memo_ref
+        candidates.append({"run_id": memo_run_id, "memo": memo, "handoff": existing, "already_linked": False})
+    if not candidates:
+        return None
+    new_text = _handoff_match_text(handoff)
+    for candidate in candidates:
+        existing_text = "\n".join(
+            value
+            for value in (
+                _handoff_match_text(candidate["handoff"]),
+                _memo_match_text(candidate["memo"]),
+            )
+            if value
+        )
+        if _same_request_by_text(new_text, existing_text):
+            return candidate
+    if len(candidates) == 1 and GROUP_HANDOFF_FOLLOWUP_RE.search(str(handoff.get("request_preview") or "")):
+        return candidates[0]
+    return None
+
+
+def link_group_handoff_to_existing_memo(root: Path, handoff: dict, match: dict) -> dict:
+    run_id = str(match.get("run_id") or "")
+    memo = match.get("memo") if isinstance(match.get("memo"), dict) else {}
+    memo_id = str(memo.get("id") or "")
+    if not run_id or not memo_id:
+        raise ServiceAssistantActionError("existing memo match is incomplete")
+    updated_memo = update_task_memo(root, run_id, memo_id, _group_handoff_memo_source_patch(handoff, memo=memo))
+    terminal = mark_group_handoff(
+        root,
+        str(handoff.get("id") or ""),
+        "memo_created",
+        reason=f"已复用主人待办池 memo={memo_id}",
+        memo_id=memo_id,
+        memo_run_id=run_id,
+    )
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "memo": updated_memo,
+        "handoff": terminal or handoff,
+        "reused_existing_memo": True,
+        "matched_handoff_id": str((match.get("handoff") or {}).get("id") or ""),
     }
 
 
@@ -1164,7 +1446,7 @@ def _normalized_write_arguments(
     elif operation == "update_memo":
         run_id, _plan = _target_run(root, arguments, allow_default=True)
         normalized.update({"run_id": run_id, "memo_id": _required_text(arguments, "memo_id")})
-        if not any(key in arguments for key in ("title", "description", "status", "scheduled_date", "end_date", "created_task_id")):
+        if not any(key in arguments for key in ("title", "description", "status", "scheduled_date", "end_date", "created_task_id", "source_handoff_id")):
             raise ServiceAssistantActionError("at least one memo field is required")
         if "created_task_id" in arguments:
             normalized["created_task_id"] = _validated_memo_task_link(
@@ -1172,6 +1454,14 @@ def _normalized_write_arguments(
                 run_id,
                 str(arguments.get("created_task_id") or ""),
             )
+        source_handoff_id = _source_group_handoff_id(
+            root,
+            arguments,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+        )
+        if source_handoff_id:
+            normalized["source_handoff_id"] = source_handoff_id
     elif operation == "update_safe_settings":
         if "settings" in arguments and set(arguments) != {"settings"}:
             raise ServiceAssistantActionError("settings cannot be combined with top-level setting fields")
@@ -1390,6 +1680,7 @@ def _preview(operation: str, arguments: dict) -> str:
             ("scheduled_date", "计划日期"),
             ("end_date", "结束日期"),
             ("created_task_id", "关联 Task"),
+            ("source_handoff_id", "关联转单"),
             ("backend", "Backend"),
             ("model", "Model"),
             ("collaboration_mode", "协作模式"),
@@ -2562,6 +2853,67 @@ def _trusted_result(operation: str, result: object, *, confirmed: bool = False) 
     )
 
 
+def _confirmation_result_detail(operation: str, result: object) -> str:
+    payload = result if isinstance(result, dict) else {}
+    if payload.get("ok") is False:
+        return f"操作失败：{_text(payload.get('error') or payload, 800)}"
+    if operation == "create_memo":
+        memo = payload.get("memo") if isinstance(payload.get("memo"), dict) else {}
+        action_label = "已关联已有 Memo。" if payload.get("reused_existing_memo") else "已创建 Memo。"
+        lines = [
+            action_label,
+            f"memo_id：{memo.get('id') or '-'}",
+            f"标题：{_text(memo.get('title'), 160) or '-'}",
+        ]
+        ack = payload.get("group_handoff_ack") if isinstance(payload.get("group_handoff_ack"), dict) else {}
+        if ack.get("sent"):
+            lines.append("已回群同步待办进度。" if payload.get("reused_existing_memo") else "已回群告知加入待办。")
+        elif ack.get("error"):
+            lines.append(f"回群告知失败：{_text(ack.get('error'), 300)}")
+        return "\n".join(lines)
+    if operation == "create_task":
+        task = payload.get("task") if isinstance(payload.get("task"), dict) else {}
+        lines = [
+            "已创建 Task。",
+            f"task_id：{task.get('id') or '-'}",
+            f"标题：{_text(task.get('title'), 160) or '-'}",
+        ]
+        memo = payload.get("memo") if isinstance(payload.get("memo"), dict) else {}
+        if memo.get("id"):
+            lines.append(f"已关联 Memo：{memo.get('id')}")
+        return "\n".join(lines)
+    if operation == "dismiss_feishu_group_handoff":
+        return "\n".join(
+            [
+                "已关闭数字人转单。",
+                f"handoff_id：{payload.get('handoff_id') or '-'}",
+                f"终态：{payload.get('status_label') or payload.get('status') or '-'}",
+            ]
+        )
+    if operation == "send_feishu_group_reply":
+        return "\n".join(
+            [
+                "已由数字人代发群聊回复。",
+                f"handoff_id：{payload.get('handoff_id') or '-'}",
+                f"message_id：{payload.get('message_id') or '-'}",
+            ]
+        )
+    if operation == "update_memo":
+        memo = payload.get("memo") if isinstance(payload.get("memo"), dict) else {}
+        lines = [
+            "已更新 Memo。",
+            f"memo_id：{memo.get('id') or '-'}",
+            f"标题：{_text(memo.get('title'), 160) or '-'}",
+        ]
+        ack = payload.get("group_handoff_ack") if isinstance(payload.get("group_handoff_ack"), dict) else {}
+        if ack.get("sent"):
+            lines.append("已回群同步待办进度。")
+        elif ack.get("error"):
+            lines.append(f"回群告知失败：{_text(ack.get('error'), 300)}")
+        return "\n".join(lines)
+    return ""
+
+
 def _mention_text(text: str, open_id: str) -> str:
     identity = str(open_id or "").strip()
     message = str(text or "").strip()
@@ -2570,11 +2922,12 @@ def _mention_text(text: str, open_id: str) -> str:
     return f'<at user_id="{identity}"></at> {message}'.strip()
 
 
-def _send_group_handoff_memo_ack(root: Path, handoff: dict) -> dict:
+def _send_group_handoff_memo_ack(root: Path, handoff: dict, *, memo: dict | None = None, existing: bool = False) -> dict:
     group_chat_id = str(handoff.get("group_chat_id") or "").strip()
     if not group_chat_id:
         return {"sent": False, "reason": "missing_group_chat_id"}
-    message = _mention_text(GROUP_HANDOFF_MEMO_CREATED_ACK, str(handoff.get("open_id") or ""))
+    body = group_handoff_existing_memo_reply(memo) if existing else GROUP_HANDOFF_MEMO_CREATED_ACK
+    message = _mention_text(body, str(handoff.get("open_id") or ""))
     opts = {"reply_to": str(handoff.get("group_message_id") or "")} if str(handoff.get("group_message_id") or "") else None
     try:
         result = send_direct_message(root, group_chat_id, message, opts=opts)
@@ -2902,10 +3255,38 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
             "created_task_id",
         )
         payload = {key: arguments.get(key) for key in memo_fields if key in arguments}
-        memo = create_task_memo(root, str(arguments["run_id"]), payload)
+        run_id = str(arguments["run_id"])
         handoff_terminal = None
         group_ack_result = None
         source_handoff_id = str(arguments.get("source_handoff_id") or "").strip()
+        if source_handoff_id:
+            source_handoff = get_group_handoff(root, source_handoff_id)
+            if isinstance(source_handoff, dict):
+                existing = find_existing_group_handoff_memo(root, source_handoff, run_id=run_id)
+                if existing is not None and not existing.get("already_linked"):
+                    linked = link_group_handoff_to_existing_memo(root, source_handoff, existing)
+                    group_ack_result = _send_group_handoff_memo_ack(
+                        root,
+                        linked.get("handoff") if isinstance(linked.get("handoff"), dict) else source_handoff,
+                        memo=linked.get("memo") if isinstance(linked.get("memo"), dict) else None,
+                        existing=True,
+                    )
+                    memo = linked["memo"]
+                    return {
+                        "ok": True,
+                        "memo": _memo_projection(memo),
+                        "reused_existing_memo": True,
+                        "matched_handoff_id": str(linked.get("matched_handoff_id") or ""),
+                        "group_handoff_terminal": {
+                            "handoff_id": str((linked.get("handoff") or {}).get("id") or source_handoff_id),
+                            "status": str((linked.get("handoff") or {}).get("status") or "memo_created"),
+                            "memo_id": str(memo.get("id") or ""),
+                            "memo_run_id": str(linked.get("run_id") or run_id),
+                        },
+                        "group_handoff_ack": group_ack_result,
+                    }
+                payload.update(_group_handoff_memo_source_patch(source_handoff))
+        memo = create_task_memo(root, run_id, payload)
         if source_handoff_id:
             handoff_terminal = mark_group_handoff(
                 root,
@@ -2913,8 +3294,9 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
                 "memo_created",
                 reason=f"已进入主人待办池 memo={memo.get('id') or ''}",
                 memo_id=str(memo.get("id") or ""),
+                memo_run_id=run_id,
             )
-            group_ack_result = _send_group_handoff_memo_ack(root, handoff_terminal or {})
+            group_ack_result = _send_group_handoff_memo_ack(root, handoff_terminal or {}, memo=memo)
         return {
             "ok": True,
             "memo": _memo_projection(memo),
@@ -2922,6 +3304,7 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
                 "handoff_id": str((handoff_terminal or {}).get("id") or ""),
                 "status": str((handoff_terminal or {}).get("status") or ""),
                 "memo_id": str(memo.get("id") or ""),
+                "memo_run_id": run_id,
             } if handoff_terminal is not None else None,
             "group_handoff_ack": group_ack_result,
         }
@@ -2931,8 +3314,36 @@ def _execute_write(root: Path, operation: str, arguments: dict) -> object:
             for key in ("title", "description", "status", "scheduled_date", "end_date", "created_task_id")
             if key in arguments
         }
+        source_handoff_id = str(arguments.get("source_handoff_id") or "").strip()
+        source_handoff = get_group_handoff(root, source_handoff_id) if source_handoff_id else None
+        if isinstance(source_handoff, dict):
+            current_memo = _memo_by_id(root, str(arguments["run_id"]), str(arguments["memo_id"]))
+            payload.update(_group_handoff_memo_source_patch(source_handoff, memo=current_memo))
         memo = update_task_memo(root, str(arguments["run_id"]), str(arguments["memo_id"]), payload)
-        return {"ok": True, "memo": _memo_projection(memo)}
+        handoff_terminal = None
+        group_ack_result = None
+        if isinstance(source_handoff, dict):
+            handoff_terminal = mark_group_handoff(
+                root,
+                source_handoff_id,
+                "memo_created",
+                reason=f"已关联主人待办池 memo={memo.get('id') or ''}",
+                memo_id=str(memo.get("id") or ""),
+                memo_run_id=str(arguments["run_id"]),
+            )
+            group_ack_result = _send_group_handoff_memo_ack(root, handoff_terminal or source_handoff, memo=memo, existing=True)
+        return {
+            "ok": True,
+            "memo": _memo_projection(memo),
+            "reused_existing_memo": bool(source_handoff_id),
+            "group_handoff_terminal": {
+                "handoff_id": str((handoff_terminal or {}).get("id") or ""),
+                "status": str((handoff_terminal or {}).get("status") or ""),
+                "memo_id": str(memo.get("id") or ""),
+                "memo_run_id": str(arguments["run_id"]),
+            } if handoff_terminal is not None else None,
+            "group_handoff_ack": group_ack_result,
+        }
     if operation == "update_safe_settings":
         status = update_feishu_settings(root, arguments)
         return {
@@ -3591,10 +4002,12 @@ def _group_handoff_owner_choice_tool_message(root: Path, selected_id: str, hando
         lines.extend(
             [
                 "Next step:",
-                "Draft a clear Memo for the owner's todo pool from the trusted handoff facts above.",
-                f"Issue one service_assistant create_memo action with source_handoff_id={payload['handoff_id']!r}.",
+                "First check whether an active Memo already represents the same group, same requester, and same requirement.",
+                "Use list_memos when needed. AHA already performed a deterministic duplicate check, but you must still avoid creating duplicate todo items.",
+                f"If a same-demand active Memo exists, issue one service_assistant update_memo action with that memo_id and source_handoff_id={payload['handoff_id']!r}; append useful new detail only when needed.",
+                f"If no same-demand active Memo exists, issue one service_assistant create_memo action with source_handoff_id={payload['handoff_id']!r}.",
                 "Use a concise actionable title and a readable description; do not reuse the raw group sentence as the title when the actual need can be clarified from summary/details/context.",
-                "Do not create a Task and do not send a public group reply. After the Memo is confirmed and created, AHA will automatically acknowledge the original group thread.",
+                "Do not create a Task and do not send a public group reply. AHA will acknowledge the original group thread after the Memo is confirmed or associated.",
             ]
         )
     return "\n".join(lines)
@@ -3621,16 +4034,39 @@ def _resolve_group_handoff_owner_choice(
     target_operation = ""
     next_arguments: dict = {}
     if selected_id == "create_memo":
-        target_operation = "draft_group_handoff_memo"
-        next_arguments = {"source_handoff_id": handoff_id}
-        result_payload = {
-            "ok": True,
-            "target_operation": target_operation,
-            "selected_action": selected_id,
-            "next_arguments": next_arguments,
-            "handoff_id": handoff_id,
-        }
-        tool_message = _group_handoff_owner_choice_tool_message(root, selected_id, handoff)
+        existing = find_existing_group_handoff_memo(root, handoff)
+        if existing is not None:
+            linked = link_group_handoff_to_existing_memo(root, handoff, existing)
+            group_ack = _send_group_handoff_memo_ack(
+                root,
+                linked.get("handoff") if isinstance(linked.get("handoff"), dict) else handoff,
+                memo=linked.get("memo") if isinstance(linked.get("memo"), dict) else None,
+                existing=True,
+            )
+            target_operation = "link_existing_memo"
+            result_payload = {
+                "ok": True,
+                "target_operation": target_operation,
+                "selected_action": selected_id,
+                "next_arguments": {},
+                "handoff_id": handoff_id,
+                "memo_id": str((linked.get("memo") or {}).get("id") or ""),
+                "memo_run_id": str(linked.get("run_id") or ""),
+                "reused_existing_memo": True,
+                "group_handoff_ack": group_ack,
+            }
+            tool_message = ""
+        else:
+            target_operation = "draft_group_handoff_memo"
+            next_arguments = {"source_handoff_id": handoff_id}
+            result_payload = {
+                "ok": True,
+                "target_operation": target_operation,
+                "selected_action": selected_id,
+                "next_arguments": next_arguments,
+                "handoff_id": handoff_id,
+            }
+            tool_message = _group_handoff_owner_choice_tool_message(root, selected_id, handoff)
     elif selected_id == "dismissed":
         target_operation = "dismiss_feishu_group_handoff"
         closed = mark_group_handoff(root, handoff_id, "dismissed", reason="主人选择无需处理该群聊转单")
@@ -3647,7 +4083,25 @@ def _resolve_group_handoff_owner_choice(
     else:
         finalize_confirmation_card(root, confirmation_id, "failed")
         raise ServiceAssistantActionError(f"转单处理选项不存在：{selected_id}")
-    confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", f"已选择：{selected_id}")
+    selection_detail = f"已选择：{selected_id}"
+    if selected_id == "create_memo" and result_payload.get("reused_existing_memo"):
+        selection_detail = "\n".join(
+            [
+                "已选择：整理为待办",
+                f"handoff_id：{handoff_id}",
+                f"已关联已有 Memo：{result_payload.get('memo_id') or '-'}",
+                "已回群同步待办进度。" if (result_payload.get("group_handoff_ack") or {}).get("sent") else "回群同步待办进度未完成。",
+            ]
+        )
+    if selected_id == "dismissed":
+        selection_detail = "\n".join(
+            [
+                "已选择：无需处理",
+                f"handoff_id：{handoff_id}",
+                "已关闭转单，不会回群。",
+            ]
+        )
+    confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", selection_detail)
     if assistant_run_id:
         append_event(
             root,
@@ -3904,7 +4358,12 @@ def resolve_confirmation(
     if handoff is not None and not result_ok:
         mark_service_handoff(root, str(handoff.get("id") or ""), "failed", error=str(result))
     confirmation_state = "confirmed" if result_ok else "failed"
-    confirmation_record = finalize_confirmation_card(root, confirmation_id, confirmation_state)
+    confirmation_record = finalize_confirmation_card(
+        root,
+        confirmation_id,
+        confirmation_state,
+        _confirmation_result_detail(operation, result),
+    )
     if assistant_run_id:
         append_event(
             root,

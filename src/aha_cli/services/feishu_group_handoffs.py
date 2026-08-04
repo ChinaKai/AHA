@@ -15,6 +15,7 @@ from aha_cli.store.paths import aha_home_path
 MAX_GROUP_HANDOFFS = 1024
 GROUP_HANDOFF_MERGE_WINDOW_SECONDS = 30 * 60
 GROUP_HANDOFF_ACTIVE_THREAD_SECONDS = 2 * 60 * 60
+GROUP_HANDOFF_MEMO_THREAD_SECONDS = 30 * 24 * 60 * 60
 _state_lock = threading.RLock()
 FOLLOWUP_RE = re.compile(
     r"(再\s*帮我|帮我\s*(问|催)|问一下|催(一下|一催|下)|跟进|进展|有结果|怎么样了|"
@@ -120,10 +121,12 @@ def _is_active_thread_record(record: dict, *, now_epoch: float) -> bool:
     status = str(record.get("status") or "")
     if status == "pending":
         return True
-    if status != "delivered":
-        return False
     updated_at = _record_epoch(record)
-    return bool(updated_at and now_epoch - updated_at <= GROUP_HANDOFF_ACTIVE_THREAD_SECONDS)
+    if status == "delivered":
+        return bool(updated_at and now_epoch - updated_at <= GROUP_HANDOFF_ACTIVE_THREAD_SECONDS)
+    if status == "memo_created" and str(record.get("memo_id") or ""):
+        return bool(updated_at and now_epoch - updated_at <= GROUP_HANDOFF_MEMO_THREAD_SECONDS)
+    return False
 
 
 def _same_group_handoff_scope(
@@ -463,11 +466,35 @@ def register_group_handoff(
                 merged["merge_source"] = "model"
                 return merged
         if not force_new:
+            active_memo_thread_ids = [
+                existing_id
+                for existing_id, existing in handoffs.items()
+                if str(existing.get("status") or "") == "memo_created"
+                and _same_group_handoff_scope(
+                    existing,
+                    digital_run_id=digital_run_id,
+                    digital_task_id=digital_task_id,
+                    group_chat_id=group_chat_id,
+                    open_id=open_id,
+                    steward_run_id=steward_run_id,
+                    steward_task_id=steward_task_id,
+                )
+                and _is_active_thread_record(existing, now_epoch=now_epoch)
+            ]
             for existing_id, existing in sorted(
                 handoffs.items(),
                 key=lambda item: (_record_epoch(item[1]), item[0]),
                 reverse=True,
             ):
+                existing_status = str(existing.get("status") or "")
+                should_auto_merge = existing_status == "pending" or (
+                    existing_status == "delivered"
+                    and _should_merge_group_handoff(existing, now_epoch=now_epoch, request_message=request_message)
+                ) or (
+                    existing_status == "memo_created"
+                    and len(active_memo_thread_ids) == 1
+                    and _should_merge_group_handoff(existing, now_epoch=now_epoch, request_message=request_message)
+                )
                 if not (
                     _same_group_handoff_scope(
                         existing,
@@ -479,10 +506,7 @@ def register_group_handoff(
                         steward_task_id=steward_task_id,
                     )
                     and _is_active_thread_record(existing, now_epoch=now_epoch)
-                    and (
-                        str(existing.get("status") or "") == "pending"
-                        or _should_merge_group_handoff(existing, now_epoch=now_epoch, request_message=request_message)
-                    )
+                    and should_auto_merge
                 ):
                     continue
                 handoffs[existing_id] = _merge_group_handoff(
@@ -596,6 +620,7 @@ def mark_group_handoff(
     error: str = "",
     reason: str = "",
     memo_id: str = "",
+    memo_run_id: str = "",
 ) -> dict | None:
     with _state_lock, _with_lock(root) as handle, exclusive_lock(handle):
         handoffs = _load(root)
@@ -621,6 +646,8 @@ def mark_group_handoff(
             record["terminal_reason"] = str(reason)[:1000]
         if memo_id:
             record["memo_id"] = str(memo_id)
+        if memo_run_id:
+            record["memo_run_id"] = str(memo_run_id)
         _save(root, handoffs)
     return dict(record)
 
@@ -631,6 +658,7 @@ __all__ = [
     "get_group_handoff",
     "GROUP_HANDOFF_ACTIVE_THREAD_SECONDS",
     "GROUP_HANDOFF_MERGE_WINDOW_SECONDS",
+    "GROUP_HANDOFF_MEMO_THREAD_SECONDS",
     "mark_group_handoff",
     "pending_group_handoffs_for_digital_task",
     "pending_group_handoff_for_steward_reply",

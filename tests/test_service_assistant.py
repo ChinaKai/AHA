@@ -11,7 +11,7 @@ from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task
 from aha_cli.services.feishu import FeishuError, bind_confirmation_card, remember_identity_profile
 from aha_cli.services.feishu_notifications import set_subscription
-from aha_cli.services.feishu_group_handoffs import get_group_handoff, register_group_handoff
+from aha_cli.services.feishu_group_handoffs import get_group_handoff, mark_group_handoff, register_group_handoff
 from aha_cli.services.chat import action_schema_retry_message, chat_prompt
 from aha_cli.services.run_delete import RunDeleteError, delete_run
 from aha_cli.services.run_lifecycle_actions import RunLifecycleActionError, set_run_lifecycle_status
@@ -27,7 +27,7 @@ from aha_cli.services.service_assistant_actions import (
 )
 from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.store.filesystem import append_message, create_plan, delete_task, inbox_path, iter_jsonl_from
-from aha_cli.store.paths import aha_home_path
+from aha_cli.store.paths import aha_home_path, mark_aha_home
 from aha_cli.store.runs import require_plan
 from aha_cli.store.task_memos import create_task_memo, read_task_memos
 from aha_cli.web.run_api import public_run_summaries, workspace_options
@@ -560,6 +560,12 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(confirmed["result"]["group_handoff_terminal"]["status"], "memo_created")
             self.assertTrue(confirmed["result"]["group_handoff_ack"]["sent"])
             self.assertEqual(confirmed["result"]["group_handoff_ack"]["message_id"], "om_group_ack")
+            terminal_card_json = json.dumps(confirmed["confirmation_card"], ensure_ascii=False)
+            self.assertIn("已确认并提交 AHA 执行", terminal_card_json)
+            self.assertIn("已创建 Memo", terminal_card_json)
+            self.assertIn("memo-001", terminal_card_json)
+            self.assertIn("整理 vega pipeline 文档", terminal_card_json)
+            self.assertIn("已回群告知加入待办", terminal_card_json)
             self.assertEqual(stored["status"], "memo_created")
             self.assertEqual(stored["memo_id"], "memo-001")
             group_send.assert_called_once_with(
@@ -567,6 +573,119 @@ class ServiceAssistantTests(unittest.TestCase):
                 "oc_group",
                 '<at user_id="ou_requester"></at> 主人已经加入待办，请耐心等待，有进展我会同步。',
                 opts={"reply_to": "om_group"},
+            )
+
+    def test_group_handoff_create_memo_confirmation_reuses_existing_active_memo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.service_assistant_actions.send_direct_message",
+            return_value={"message_id": "om_progress"},
+        ) as group_send:
+            root = Path(tmp)
+            mark_aha_home(root)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            work = create_plan(root, "Feishu work", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"feishu": {"default_run_id": work["id"]}}}),
+                encoding="utf-8",
+            )
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            existing_handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group_1",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="帮我催一下",
+                request_summary="跟进 VEGA Hualai 0008 OTA 包",
+                request_detail="跟进最新分支 VEGA Hualai 版型 0008 OTA 包的构建进度。",
+            )
+            memo = create_task_memo(
+                root,
+                work["id"],
+                {
+                    "title": "跟进 VEGA Hualai 0008 OTA 包",
+                    "description": "确认最新分支 VEGA Hualai 版型 0008 OTA 包构建进度并反馈。",
+                    "status": "doing",
+                    "source_handoff_id": existing_handoff["id"],
+                },
+            )
+            mark_group_handoff(root, existing_handoff["id"], "memo_created", memo_id=memo["id"], memo_run_id=work["id"])
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group_2",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="有进展吗",
+                request_summary="查询 VEGA Hualai 0008 OTA 包进展",
+                request_detail="询问最新分支 VEGA Hualai 版型 0008 OTA 包是否已有构建进展。",
+                force_new=True,
+            )
+
+            prepared = prepare_service_assistant_action(
+                root,
+                assistant_run,
+                assistant_task,
+                {
+                    "type": "service_assistant",
+                    "operation": "create_memo",
+                    "arguments": {
+                        "run_id": work["id"],
+                        "title": "查询并反馈 VEGA Hualai 0008 OTA 构建进展",
+                        "description": "查询使用最新分支为 VEGA Hualai 版型构建 0008 OTA 包的最新进度。",
+                        "status": "doing",
+                        "source_handoff_id": handoff["id"],
+                        "attributes_selected": True,
+                    },
+                },
+            )
+            bind_confirmation_card(root, prepared["confirmation_id"], message_id="om_memo", chat_id="oc_owner")
+            confirmed = resolve_confirmation(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                text="确认",
+                message_id="om_memo",
+            )
+            stored = get_group_handoff(root, handoff["id"])
+            memos = read_task_memos(root, work["id"])
+
+            self.assertTrue(prepared["confirmation_required"])
+            self.assertEqual(len(memos), 1)
+            self.assertEqual(memos[0]["id"], memo["id"])
+            self.assertTrue(confirmed["result"]["reused_existing_memo"])
+            self.assertEqual(confirmed["result"]["memo"]["id"], memo["id"])
+            self.assertEqual(stored["status"], "memo_created")
+            self.assertEqual(stored["memo_id"], memo["id"])
+            self.assertIn(handoff["id"], memos[0]["source_handoff_ids"])
+            terminal_card_json = json.dumps(confirmed["confirmation_card"], ensure_ascii=False)
+            self.assertIn("已关联已有 Memo", terminal_card_json)
+            self.assertIn("已回群同步待办进度", terminal_card_json)
+            group_send.assert_called_once_with(
+                root,
+                "oc_group",
+                '<at user_id="ou_requester"></at> 这个需求已在主人待办中，当前状态：进行中，请耐心等待，有进展我会同步。',
+                opts={"reply_to": "om_group_2"},
             )
 
     def test_dismiss_group_handoff_action_sets_terminal_status(self) -> None:
@@ -823,11 +942,116 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertNotIn("取消", card_json)
             self.assertEqual(selected["result"]["target_operation"], "draft_group_handoff_memo")
             self.assertEqual(selected["result"]["next_arguments"]["source_handoff_id"], handoff["id"])
-            self.assertIn("Draft a clear Memo", selected["tool_message"])
+            self.assertIn("First check whether an active Memo", selected["tool_message"])
+            self.assertIn("avoid creating duplicate todo items", selected["tool_message"])
             self.assertIn(f"source_handoff_id={handoff['id']!r}", selected["tool_message"])
             self.assertIn("生成 VEGA pipeline 文档", selected["tool_message"])
             self.assertIn("群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档", selected["tool_message"])
             self.assertEqual(get_group_handoff(root, handoff["id"])["status"], "pending")
+
+    def test_group_handoff_owner_card_reuses_existing_active_memo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.service_assistant_actions.send_direct_message",
+            return_value={"message_id": "om_progress"},
+        ) as group_send:
+            root = Path(tmp)
+            mark_aha_home(root)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            work = create_plan(root, "Feishu work", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"feishu": {"default_run_id": work["id"]}}}),
+                encoding="utf-8",
+            )
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            existing_handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group_1",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="帮我催一下",
+                request_summary="跟进 VEGA Hualai 0008 OTA 包",
+                request_detail="跟进最新分支 VEGA Hualai 版型 0008 OTA 包的构建进度。",
+            )
+            memo = create_task_memo(
+                root,
+                work["id"],
+                {
+                    "title": "跟进 VEGA Hualai 0008 OTA 包",
+                    "description": "确认最新分支 VEGA Hualai 版型 0008 OTA 包构建进度并反馈。",
+                    "status": "doing",
+                    "source_handoff_id": existing_handoff["id"],
+                },
+            )
+            mark_group_handoff(root, existing_handoff["id"], "memo_created", memo_id=memo["id"], memo_run_id=work["id"])
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group_2",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="有进展吗",
+                request_summary="查询 VEGA Hualai 0008 OTA 包进展",
+                request_detail="询问最新分支 VEGA Hualai 版型 0008 OTA 包是否已有构建进展。",
+                force_new=True,
+            )
+            owner_card = prepare_group_handoff_owner_card(
+                root,
+                assistant_run,
+                assistant_task["id"],
+                actor={"open_id": "ou_owner", "session_key": "tenant:p2p:ou_owner", "chat_id": "oc_owner"},
+                handoff=handoff,
+            )
+            bind_confirmation_card(root, owner_card["confirmation_id"], message_id="om_handoff_owner", chat_id="oc_owner")
+
+            selected = resolve_choice(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                message_id="om_handoff_owner",
+                choice_id="create_memo",
+            )
+            stored = get_group_handoff(root, handoff["id"])
+            stored_memo = read_task_memos(root, work["id"])[0]
+
+            self.assertEqual(selected["result"]["target_operation"], "link_existing_memo")
+            self.assertTrue(selected["result"]["reused_existing_memo"])
+            self.assertEqual(selected["result"]["memo_id"], memo["id"])
+            self.assertEqual(selected["tool_message"], "")
+            self.assertEqual(stored["status"], "memo_created")
+            self.assertEqual(stored["memo_id"], memo["id"])
+            self.assertEqual(stored["memo_run_id"], work["id"])
+            self.assertEqual(len(read_task_memos(root, work["id"])), 1)
+            self.assertIn(existing_handoff["id"], stored_memo["source_handoff_ids"])
+            self.assertIn(handoff["id"], stored_memo["source_handoff_ids"])
+            terminal_card_json = json.dumps(selected["confirmation_card"], ensure_ascii=False)
+            self.assertIn("已关联已有 Memo", terminal_card_json)
+            group_send.assert_called_once_with(
+                root,
+                "oc_group",
+                '<at user_id="ou_requester"></at> 这个需求已在主人待办中，当前状态：进行中，请耐心等待，有进展我会同步。',
+                opts={"reply_to": "om_group_2"},
+            )
 
     def test_group_handoff_owner_card_dismisses_without_group_reply_or_agent_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -878,6 +1102,10 @@ class ServiceAssistantTests(unittest.TestCase):
         self.assertEqual(selected["result"]["selected_action"], "dismissed")
         self.assertEqual(selected["result"]["status"], "dismissed")
         self.assertEqual(selected["tool_message"], "")
+        terminal_card_json = json.dumps(selected["confirmation_card"], ensure_ascii=False)
+        self.assertIn("已选择：无需处理", terminal_card_json)
+        self.assertIn(handoff["id"], terminal_card_json)
+        self.assertIn("已关闭转单，不会回群", terminal_card_json)
         self.assertEqual(stored["status"], "dismissed")
         self.assertTrue(stored["closed_at"])
 

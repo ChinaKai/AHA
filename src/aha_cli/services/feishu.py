@@ -867,7 +867,7 @@ def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict
     result = sanitize_card_payload(card)
     labels = {
         "confirmed": ("操作已确认", "grey", "已确认并提交 AHA 执行。"),
-        "selected": ("已选择方案", "grey", "已收到选择，AHA 助手将继续处理。"),
+        "selected": ("已选择方案", "grey", "已选择。"),
         "cancelled": ("操作已取消", "grey", "已取消，本操作不会执行。"),
         "expired": ("确认已失效", "grey", "已超过 24 小时有效期，请重新发起操作。"),
         "stale": ("确认已失效", "grey", "目标状态已变化，请重新发起操作。"),

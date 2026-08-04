@@ -65,6 +65,7 @@ from aha_cli.store.task_memos import normalize_memo_date, normalize_memo_status,
 from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, utc_now
 from aha_cli.web.status import TERMINAL_TASK_STATUSES
 from aha_cli.web.task_messaging import handle_send_payload
+from aha_cli.web.task_runtime import queue_backend_start
 
 ASSISTANT_QUEUE_LIMIT = 128
 ASSISTANT_RUN_TITLE = LEGACY_ASSISTANT_RUN_TITLE
@@ -72,6 +73,13 @@ ASSISTANT_TASK_TITLE = "AHA Assistant"
 FEISHU_BOT_MENU_EVENT_TYPE = "application.bot.menu_v6"
 MENU_QUERY_ACTION = "feishu_menu_query"
 MENU_QUERY_SUBMIT_CHOICE_ID = "__submit_menu_query__"
+DIRECT_TERMINAL_OPERATIONS = {
+    "create_memo",
+    "create_task",
+    "update_memo",
+    "dismiss_feishu_group_handoff",
+    "send_feishu_group_reply",
+}
 OWNER_MENU_ACTIONS = {
     "aha_create_memo": "create_memo",
     "create_memo": "create_memo",
@@ -889,6 +897,14 @@ def _handle_group_mention(root: Path, channel: Any, payload: dict, *, text: str)
             },
             command_handler=_never_handle_command,
             background_backend_start=True,
+            queued_backend_starter=lambda queued_root, queued_run_id, autostart: _queue_backend_start_with_error_reply(
+                queued_root,
+                queued_run_id,
+                autostart,
+                channel=channel,
+                chat_id=chat_id,
+                reply_to=message_id,
+            ),
         )
         _audit_inbound_resolution(
             root,
@@ -978,66 +994,49 @@ def _direct_followup_confirmation(root: Path, channel: Any, chat_id: str, confir
 def _direct_write_response(confirmation: dict) -> str:
     operation = str(confirmation.get("operation") or "")
     result = confirmation.get("result") if isinstance(confirmation.get("result"), dict) else {}
-    if operation not in {
-        "create_memo",
-        "create_task",
-        "dismiss_feishu_group_handoff",
-        "send_feishu_group_reply",
-        "handle_feishu_group_handoff",
-    }:
+    if operation not in DIRECT_TERMINAL_OPERATIONS:
         return ""
     if not bool(result.get("ok")):
         return f"操作失败：{result.get('error') or result}"
-    if operation == "create_memo":
-        memo = result.get("memo") if isinstance(result.get("memo"), dict) else {}
-        lines = [
-            "已创建 Memo。",
-            f"memo_id：{memo.get('id') or '-'}",
-            f"标题：{memo.get('title') or '-'}",
-        ]
-        ack = result.get("group_handoff_ack") if isinstance(result.get("group_handoff_ack"), dict) else {}
-        if ack.get("sent"):
-            lines.append("已回群告知加入待办。")
-        elif ack.get("error"):
-            lines.append(f"回群告知失败：{ack.get('error')}")
-        return "\n".join(lines)
-    if operation == "create_task":
-        task = result.get("task") if isinstance(result.get("task"), dict) else {}
-        lines = [
-            "已创建 Task。",
-            f"task_id：{task.get('id') or '-'}",
-            f"标题：{task.get('title') or '-'}",
-        ]
-        memo = result.get("memo") if isinstance(result.get("memo"), dict) else {}
-        if memo.get("id"):
-            lines.append(f"已关联 Memo：{memo.get('id')}")
-        return "\n".join(lines)
-    if operation == "dismiss_feishu_group_handoff":
-        return "\n".join(
-            [
-                "已关闭数字人转单。",
-                f"handoff_id：{result.get('handoff_id') or '-'}",
-                f"终态：{result.get('status_label') or result.get('status') or '-'}",
-            ]
-        )
-    if operation == "send_feishu_group_reply":
-        return "\n".join(
-            [
-                "已由数字人代发群聊回复。",
-                f"handoff_id：{result.get('handoff_id') or '-'}",
-                f"message_id：{result.get('message_id') or '-'}",
-            ]
-        )
-    if operation == "handle_feishu_group_handoff":
-        if str(result.get("selected_action") or "") == "dismissed":
-            return "\n".join(
-                [
-                    "已标记为无需处理。",
-                    f"handoff_id：{result.get('handoff_id') or '-'}",
-                    "不会回群。",
-                ]
-            )
     return ""
+
+
+def _is_direct_terminal_success(confirmation: dict) -> bool:
+    operation = str(confirmation.get("operation") or "")
+    result = confirmation.get("result") if isinstance(confirmation.get("result"), dict) else {}
+    if operation == "handle_feishu_group_handoff":
+        selected_action = str(result.get("selected_action") or "")
+        target_operation = str(result.get("target_operation") or "")
+        return bool(result.get("ok")) and not str(confirmation.get("tool_message") or "").strip() and (
+            selected_action == "dismissed" or target_operation == "link_existing_memo"
+        )
+    return operation in DIRECT_TERMINAL_OPERATIONS and bool(result.get("ok"))
+
+
+def _agent_dispatch_error_message(result: object = None, error: BaseException | None = None) -> str:
+    if error is not None:
+        return "AHA agent 启动或消息投递失败，请稍后重试。"
+    if isinstance(result, dict) and result.get("ok") is False:
+        return f"AHA agent 启动或消息投递失败：{result.get('error') or result}"
+    return ""
+
+
+def _queue_backend_start_with_error_reply(
+    root: Path,
+    run_id: str,
+    autostart: dict | None,
+    *,
+    channel: Any,
+    chat_id: str,
+    reply_to: str = "",
+) -> dict | None:
+    def notify(error: BaseException) -> None:
+        try:
+            _send_text(root, channel, chat_id, _agent_dispatch_error_message(error=error), reply_to=reply_to)
+        except Exception:  # noqa: BLE001 - the backend failure event is already persisted.
+            pass
+
+    return queue_backend_start(root, run_id, autostart, failure_callback=notify)
 
 
 def _finish_confirmation(
@@ -1060,28 +1059,42 @@ def _finish_confirmation(
         _send_text(root, channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
         return
     if confirmation.get("choice") and _direct_followup_confirmation(root, channel, chat_id, confirmation):
-        _send_text(root, channel, chat_id, "已收到选择，请继续确认最终操作。", reply_to=message_id)
         return
     direct_response = _direct_write_response(confirmation)
     if direct_response:
         _send_text(root, channel, chat_id, direct_response, reply_to=message_id)
         return
-    handle_send_payload(
-        root,
-        run_id,
-        {
-            "task_id": task_id,
-            "target": "main",
-            "sender": "aha",
-            "reply_target": "feishu",
-            "message": str(confirmation.get("tool_message") or ""),
-            "service_action_depth": 1,
-        },
-        command_handler=_never_handle_command,
-        background_backend_start=True,
-    )
-    reply = "已收到选择，AHA 助手正在继续处理。" if confirmation.get("choice") else "操作已确认并执行，AHA 助手正在整理结果。"
-    _send_text(root, channel, chat_id, reply, reply_to=message_id)
+    if _is_direct_terminal_success(confirmation):
+        return
+    try:
+        result = handle_send_payload(
+            root,
+            run_id,
+            {
+                "task_id": task_id,
+                "target": "main",
+                "sender": "aha",
+                "reply_target": "feishu",
+                "message": str(confirmation.get("tool_message") or ""),
+                "service_action_depth": 1,
+            },
+            command_handler=_never_handle_command,
+            background_backend_start=True,
+            queued_backend_starter=lambda queued_root, queued_run_id, autostart: _queue_backend_start_with_error_reply(
+                queued_root,
+                queued_run_id,
+                autostart,
+                channel=channel,
+                chat_id=chat_id,
+                reply_to=message_id,
+            ),
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - Feishu users need a visible failure instead of silence.
+        _send_text(root, channel, chat_id, _agent_dispatch_error_message(error=exc), reply_to=message_id)
+        return
+    error_message = _agent_dispatch_error_message(result)
+    if error_message:
+        _send_text(root, channel, chat_id, error_message, reply_to=message_id)
 
 
 def _card_action_form_values(payload: dict) -> dict:
@@ -1906,19 +1919,53 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
             task_id=task_id,
         )
         return
-    handle_send_payload(
-        root,
-        run_id,
-        {
-            "task_id": task_id,
-            "target": "main",
-            "sender": "feishu",
-            "message": text,
-            "feishu_attachments": payload.get("attachments") if isinstance(payload.get("attachments"), list) else [],
-        },
-        command_handler=_never_handle_command,
-        background_backend_start=True,
-    )
+    try:
+        result = handle_send_payload(
+            root,
+            run_id,
+            {
+                "task_id": task_id,
+                "target": "main",
+                "sender": "feishu",
+                "message": text,
+                "feishu_attachments": payload.get("attachments") if isinstance(payload.get("attachments"), list) else [],
+            },
+            command_handler=_never_handle_command,
+            background_backend_start=True,
+            queued_backend_starter=lambda queued_root, queued_run_id, autostart: _queue_backend_start_with_error_reply(
+                queued_root,
+                queued_run_id,
+                autostart,
+                channel=channel,
+                chat_id=chat_id,
+                reply_to=message_id,
+            ),
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - reply only when the normal agent handoff fails.
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "failed",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+            error=exc,
+        )
+        _send_text(root, channel, chat_id, _agent_dispatch_error_message(error=exc), reply_to=message_id)
+        return
+    error_message = _agent_dispatch_error_message(result)
+    if error_message:
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "failed",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+            reason="agent_dispatch_failed",
+        )
+        _send_text(root, channel, chat_id, error_message, reply_to=message_id)
+        return
     _audit_inbound_resolution(
         root,
         payload,
@@ -1927,7 +1974,6 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         run_id=run_id,
         task_id=task_id,
     )
-    _send_text(root, channel, chat_id, "已交给 AHA agent，回复会推送到本会话。", reply_to=message_id)
 
 
 __all__ = ["enqueue_card_action", "enqueue_message", "enqueue_raw_event"]

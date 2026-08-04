@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+import threading
 import tempfile
 import unittest
 from unittest import mock
@@ -16,6 +17,7 @@ from aha_cli.store.paths import config_path
 from aha_cli.web.task_runtime import (
     message_backend_autostart_config,
     prepare_task_main_autostart,
+    queue_backend_start,
     request_task_finalization_with_backend,
     start_dispatched_task_backend,
     start_prepared_backend,
@@ -28,6 +30,39 @@ class TaskRuntimeTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_queue_backend_start_reports_async_failure_to_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Runtime autostart failure", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                seen: list[str] = []
+                notified = threading.Event()
+
+                def on_failure(exc: BaseException) -> None:
+                    seen.append(str(exc))
+                    notified.set()
+
+                autostart = {
+                    "backend": "codex",
+                    "target": "main",
+                    "task_id": "task-001",
+                    "model": "gpt-test",
+                    "sandbox": "workspace-write",
+                    "approval": "never",
+                }
+                with mock.patch(
+                    "aha_cli.web.task_runtime._start_backend_from_autostart",
+                    side_effect=RuntimeError("backend start failed"),
+                ):
+                    result = queue_backend_start(root, run_id, autostart, failure_callback=on_failure)
+
+                self.assertTrue(result["queued"])
+                self.assertTrue(notified.wait(2))
+                self.assertEqual(seen, ["backend start failed"])
 
     def test_prepare_and_start_backend_uses_task_agent_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -296,6 +296,35 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
         merge_handoff_id=merge_handoff_id,
         force_new=force_new_handoff,
     )
+    try:
+        from aha_cli.services.service_assistant_actions import (
+            find_existing_group_handoff_memo,
+            group_handoff_existing_memo_reply,
+            link_group_handoff_to_existing_memo,
+        )
+
+        existing_memo = find_existing_group_handoff_memo(root, handoff)
+        if existing_memo is not None:
+            linked = link_group_handoff_to_existing_memo(root, handoff, existing_memo)
+            memo = linked.get("memo") if isinstance(linked.get("memo"), dict) else {}
+            return {
+                "type": FEISHU_GROUP_HANDOFF_ACTION,
+                "ok": True,
+                "handoff_id": str((linked.get("handoff") or handoff).get("id") or ""),
+                "merged_existing": bool(handoff.get("merged_existing")),
+                "merge_source": str(handoff.get("merge_source") or ""),
+                "linked_existing_memo": True,
+                "memo_id": str(memo.get("id") or ""),
+                "memo_run_id": str(linked.get("run_id") or ""),
+                "steward_run_id": steward_run_id,
+                "steward_task_id": str(steward_task.get("id") or ""),
+                "owner_open_id": owner_open_id,
+                "owner_card_result": {"ok": True, "sent": False, "reason": "existing_memo"},
+                "forward_result": {"ok": True, "skipped": True, "reason": "existing_memo"},
+                "user_response": group_handoff_existing_memo_reply(memo),
+            }
+    except Exception:
+        pass
     owner_card_result = _send_owner_handoff_card(
         root,
         owner_chat_id=owner_chat_id,

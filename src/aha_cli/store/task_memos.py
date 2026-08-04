@@ -175,11 +175,33 @@ def normalize_memo_max_sub_agents(value: object) -> int | None:
         return None
 
 
+def normalize_memo_string_list(value: object) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        values = value
+    elif value in (None, ""):
+        values = []
+    else:
+        values = [value]
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
 def normalize_memo(raw: dict | None = None) -> dict:
     source = raw or {}
     now = utc_now()
     scheduled_date = normalize_memo_date(source.get("scheduled_date") or source.get("date"))
     status = normalize_memo_status(source.get("status"))
+    source_handoff_id = str(source.get("source_handoff_id") or "").strip()
+    source_handoff_ids = normalize_memo_string_list(source.get("source_handoff_ids"))
+    if source_handoff_id and source_handoff_id not in source_handoff_ids:
+        source_handoff_ids.insert(0, source_handoff_id)
     return {
         "id": str(source.get("id") or "").strip(),
         "title": str(source.get("title") or "").strip(),
@@ -207,6 +229,14 @@ def normalize_memo(raw: dict | None = None) -> dict:
         "report_requested_at": str(source.get("report_requested_at") or "").strip(),
         "report_completed_at": str(source.get("report_completed_at") or "").strip(),
         "report_error": str(source.get("report_error") or "").strip(),
+        "source_handoff_id": source_handoff_id,
+        "source_handoff_ids": source_handoff_ids,
+        "feishu_group_chat_id": str(source.get("feishu_group_chat_id") or "").strip(),
+        "feishu_group_message_id": str(source.get("feishu_group_message_id") or "").strip(),
+        "feishu_group_thread_id": str(source.get("feishu_group_thread_id") or "").strip(),
+        "feishu_requester_open_id": str(source.get("feishu_requester_open_id") or "").strip(),
+        "feishu_request_summary": str(source.get("feishu_request_summary") or "").strip(),
+        "feishu_request_detail": str(source.get("feishu_request_detail") or "").strip(),
         "completed_at": normalize_memo_terminal_timestamp(source.get("completed_at"), scheduled_date) if status == "done" else "",
         "closed_at": normalize_memo_terminal_timestamp(source.get("closed_at"), scheduled_date) if status == "closed" else "",
         "created_at": str(source.get("created_at") or now).strip(),
