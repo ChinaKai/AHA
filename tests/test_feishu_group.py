@@ -153,7 +153,10 @@ class FeishuGroupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.web.task_messaging.handle_send_payload",
             return_value={"ok": True},
-        ) as send:
+        ) as send, mock.patch(
+            "aha_cli.services.feishu_group_actions._send_owner_handoff_card",
+            return_value={"ok": True, "sent": True, "message_id": "om_owner_card"},
+        ):
             root = Path(tmp)
             (root / "config.json").write_text(
                 json.dumps(
@@ -196,7 +199,11 @@ class FeishuGroupTests(unittest.TestCase):
                     "actions": [
                         {
                             "type": "feishu_group_handoff",
-                            "arguments": {"reason": "needs execution", "summary": "提交代码"},
+                            "arguments": {
+                                "reason": "needs execution",
+                                "summary": "提交代码",
+                                "details": "群成员希望 AHA 代为提交当前代码，并说明是否需要继续推送。",
+                            },
                         }
                     ],
                     "response": "",
@@ -217,6 +224,9 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertEqual(handoff["open_id"], "ou_requester")
         self.assertEqual(handoff["owner_open_id"], "ou_owner")
         self.assertEqual(handoff["owner_chat_id"], "oc_owner")
+        self.assertEqual(handoff["request_summary"], "提交代码")
+        self.assertEqual(handoff["request_detail"], "群成员希望 AHA 代为提交当前代码，并说明是否需要继续推送。")
+        self.assertEqual(handoff["handoff_reason"], "needs execution")
         self.assertEqual(send.call_args.args[1], executed[0]["steward_run_id"])
         self.assertEqual(send.call_args.args[2]["sender"], "feishu-group")
         self.assertEqual(send.call_args.args[2]["reply_target"], "feishu")
@@ -225,11 +235,17 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["feishu_chat_type"], "p2p")
         self.assertEqual(send.call_args.args[2]["feishu_session_key"], "tenant-1:p2p:ou_owner")
         self.assertEqual(send.call_args.args[2]["feishu_group_handoff_id"], handoff["id"])
+        self.assertFalse(send.call_args.kwargs["background_backend_start"])
+        self.assertTrue(send.call_args.kwargs["suppress_backend_start"])
         self.assertIn("请帮我提交代码", send.call_args.args[2]["message"])
         self.assertIn("群聊提问者 open_id：\nou_requester", send.call_args.args[2]["message"])
-        self.assertIn("处理 SOP：", send.call_args.args[2]["message"])
-        self.assertIn("计划/可延后类先 create_memo", send.call_args.args[2]["message"])
-        self.assertIn("当前群聊数字人只支持文本回复", send.call_args.args[2]["message"])
+        self.assertIn("需求详情：\n群成员希望 AHA 代为提交当前代码，并说明是否需要继续推送。", send.call_args.args[2]["message"])
+        self.assertIn("AHA 系统生成的飞书群聊转单信封", send.call_args.args[2]["message"])
+        self.assertIn("不是数字人对管家的处理指令", send.call_args.args[2]["message"])
+        self.assertIn(f"handoff_id={handoff['id']}", send.call_args.args[2]["message"])
+        self.assertNotIn("处理 SOP：", send.call_args.args[2]["message"])
+        self.assertNotIn("计划/可延后类先 create_memo", send.call_args.args[2]["message"])
+        self.assertNotIn("当前群聊数字人只支持文本回复", send.call_args.args[2]["message"])
         self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["chat_id"], "oc_owner")
         self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["task_id"], executed[0]["steward_task_id"])
 

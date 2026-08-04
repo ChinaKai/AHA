@@ -26,6 +26,7 @@ from aha_cli.services.feishu import (
     message_resource_attachments,
     record_recent_group,
     record_recent_private_chat,
+    remember_identity_profile,
     register_confirmation_card,
     refresh_identity_profiles,
     sanitize_card_payload,
@@ -157,14 +158,24 @@ def _plain_message(root: Path, message: Any) -> dict:
         "sender_is_bot": bool(getattr(message, "sender_is_bot", False)),
         "sender_name": _first_string(
             getattr(message, "sender_name", ""),
+            getattr(message, "sendname", ""),
+            getattr(message, "send_name", ""),
+            getattr(sender, "sendname", ""),
+            getattr(sender, "send_name", ""),
             getattr(sender, "name", ""),
             getattr(sender, "display_name", ""),
             getattr(sender, "nickname", ""),
             raw_message.get("sender_name"),
+            raw_message.get("sendname"),
+            raw_message.get("send_name"),
             _nested(raw_sender, "sender_name"),
+            _nested(raw_sender, "sendname"),
+            _nested(raw_sender, "send_name"),
             _nested(raw_sender, "name"),
             _nested(raw_sender, "display_name"),
             _nested(raw_sender, "user", "name"),
+            _nested(raw_sender, "user", "sendname"),
+            _nested(raw_sender, "user", "send_name"),
         ),
         "chat_name": _first_string(
             getattr(message, "chat_name", ""),
@@ -941,7 +952,7 @@ def _direct_followup_confirmation(root: Path, channel: Any, chat_id: str, confir
     result = confirmation.get("result") if isinstance(confirmation.get("result"), dict) else {}
     target_operation = str(result.get("target_operation") or "").strip()
     next_arguments = result.get("next_arguments") if isinstance(result.get("next_arguments"), dict) else {}
-    if target_operation not in {"create_memo", "create_task"} or not next_arguments:
+    if target_operation not in {"create_memo", "create_task", "dismiss_feishu_group_handoff"} or not next_arguments:
         return False
     run_id = str(confirmation.get("assistant_run_id") or "").strip()
     task_id = str(confirmation.get("assistant_task_id") or "").strip()
@@ -967,29 +978,66 @@ def _direct_followup_confirmation(root: Path, channel: Any, chat_id: str, confir
 def _direct_write_response(confirmation: dict) -> str:
     operation = str(confirmation.get("operation") or "")
     result = confirmation.get("result") if isinstance(confirmation.get("result"), dict) else {}
-    if operation not in {"create_memo", "create_task"}:
+    if operation not in {
+        "create_memo",
+        "create_task",
+        "dismiss_feishu_group_handoff",
+        "send_feishu_group_reply",
+        "handle_feishu_group_handoff",
+    }:
         return ""
     if not bool(result.get("ok")):
         return f"操作失败：{result.get('error') or result}"
     if operation == "create_memo":
         memo = result.get("memo") if isinstance(result.get("memo"), dict) else {}
+        lines = [
+            "已创建 Memo。",
+            f"memo_id：{memo.get('id') or '-'}",
+            f"标题：{memo.get('title') or '-'}",
+        ]
+        ack = result.get("group_handoff_ack") if isinstance(result.get("group_handoff_ack"), dict) else {}
+        if ack.get("sent"):
+            lines.append("已回群告知加入待办。")
+        elif ack.get("error"):
+            lines.append(f"回群告知失败：{ack.get('error')}")
+        return "\n".join(lines)
+    if operation == "create_task":
+        task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        lines = [
+            "已创建 Task。",
+            f"task_id：{task.get('id') or '-'}",
+            f"标题：{task.get('title') or '-'}",
+        ]
+        memo = result.get("memo") if isinstance(result.get("memo"), dict) else {}
+        if memo.get("id"):
+            lines.append(f"已关联 Memo：{memo.get('id')}")
+        return "\n".join(lines)
+    if operation == "dismiss_feishu_group_handoff":
         return "\n".join(
             [
-                "已创建 Memo。",
-                f"memo_id：{memo.get('id') or '-'}",
-                f"标题：{memo.get('title') or '-'}",
+                "已关闭数字人转单。",
+                f"handoff_id：{result.get('handoff_id') or '-'}",
+                f"终态：{result.get('status_label') or result.get('status') or '-'}",
             ]
         )
-    task = result.get("task") if isinstance(result.get("task"), dict) else {}
-    lines = [
-        "已创建 Task。",
-        f"task_id：{task.get('id') or '-'}",
-        f"标题：{task.get('title') or '-'}",
-    ]
-    memo = result.get("memo") if isinstance(result.get("memo"), dict) else {}
-    if memo.get("id"):
-        lines.append(f"已关联 Memo：{memo.get('id')}")
-    return "\n".join(lines)
+    if operation == "send_feishu_group_reply":
+        return "\n".join(
+            [
+                "已由数字人代发群聊回复。",
+                f"handoff_id：{result.get('handoff_id') or '-'}",
+                f"message_id：{result.get('message_id') or '-'}",
+            ]
+        )
+    if operation == "handle_feishu_group_handoff":
+        if str(result.get("selected_action") or "") == "dismissed":
+            return "\n".join(
+                [
+                    "已标记为无需处理。",
+                    f"handoff_id：{result.get('handoff_id') or '-'}",
+                    "不会回群。",
+                ]
+            )
+    return ""
 
 
 def _finish_confirmation(
@@ -1012,7 +1060,7 @@ def _finish_confirmation(
         _send_text(root, channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
         return
     if confirmation.get("choice") and _direct_followup_confirmation(root, channel, chat_id, confirmation):
-        _send_text(root, channel, chat_id, "已提交配置，请继续确认最终操作。", reply_to=message_id)
+        _send_text(root, channel, chat_id, "已收到选择，请继续确认最终操作。", reply_to=message_id)
         return
     direct_response = _direct_write_response(confirmation)
     if direct_response:
@@ -1753,6 +1801,14 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
     chat_type = str(payload.get("chat_type") or "").lower()
     if chat_type == "group" and chat_id:
         record_recent_group(root, chat_id, display_name=str(payload.get("chat_name") or ""))
+        if open_id and payload.get("sender_name"):
+            remember_identity_profile(
+                root,
+                kind="open_id",
+                identity=open_id,
+                display_name=str(payload.get("sender_name") or ""),
+                chat_type="group",
+            )
     elif chat_type == "p2p" and (chat_id or open_id):
         record_recent_private_chat(
             root,

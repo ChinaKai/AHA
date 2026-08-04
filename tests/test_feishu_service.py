@@ -130,10 +130,13 @@ class FeishuServiceTests(unittest.TestCase):
         self.assertNotIn("lookup_error", profiles["open_ids"]["ou_owner"])
 
     def test_normalize_message_event_extracts_identity_thread_and_text(self) -> None:
-        normalized = feishu.normalize_message_event(message_event(root_id="om_root"))
+        payload = message_event(root_id="om_root")
+        payload["event"]["sender"]["sendname"] = "张三"
+        normalized = feishu.normalize_message_event(payload)
 
         self.assertEqual(normalized["tenant_key"], "tenant-sender")
         self.assertEqual(normalized["open_id"], "ou_user")
+        self.assertEqual(normalized["sender_name"], "张三")
         self.assertEqual(normalized["chat_id"], "oc_chat")
         self.assertEqual(normalized["chat_type"], "p2p")
         self.assertEqual(normalized["message_id"], "om_1")

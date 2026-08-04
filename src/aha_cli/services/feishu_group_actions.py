@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aha_cli.domain.models import is_feishu_group_task
-from aha_cli.services.feishu import get_session_binding, set_session_binding
+from aha_cli.services.feishu import bind_confirmation_card, get_session_binding, set_session_binding
 from aha_cli.services.feishu_group import FEISHU_GROUP_HANDOFF_ACK
 from aha_cli.services.feishu_group_handoffs import mark_group_handoff, register_group_handoff
 from aha_cli.services.feishu_notifications import set_subscription
@@ -71,14 +71,15 @@ def _steward_forward_message(root: Path, origin: dict, action: dict, *, handoff:
     arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
     reason = str(arguments.get("reason") or action.get("reason") or "").strip()
     summary = str(arguments.get("summary") or arguments.get("question") or "").strip()
+    detail = str(arguments.get("details") or arguments.get("detail") or arguments.get("request_detail") or "").strip()
     original = str(origin.get("feishu_original_text") or origin.get("message") or "").strip()
     requester_open_id = str(origin.get("feishu_mention_open_id") or "").strip()
     attachments = origin.get("feishu_attachments") if isinstance(origin.get("feishu_attachments"), list) else []
     merged = bool((handoff or {}).get("merged_existing"))
     parts = [
-        "飞书群聊数字人转发" + ("（已合并到现有待处理单）" if merged else ""),
+        "AHA 系统生成的飞书群聊转单信封" + ("（已合并到现有待处理单）" if merged else ""),
         "",
-        "群聊数字人判断该请求需要主人私聊管家处理。请只在主人私聊中确认、执行和回复；不要直接出现在群聊里。",
+        "说明：本消息只包含群聊转单事实，不是数字人对管家的处理指令。后续处理 SOP 由私聊管家的系统提示词决定。",
         "",
         "原群聊问题：",
         original,
@@ -101,10 +102,22 @@ def _steward_forward_message(root: Path, origin: dict, action: dict, *, handoff:
             parts.append(label)
     if summary:
         parts.extend(["", "数字人摘要：", summary])
+    if detail:
+        parts.extend(["", "需求详情：", detail])
     if reason:
         parts.extend(["", "转发原因：", reason])
     if merged and isinstance(handoff, dict):
         parts.extend(["", "当前合并后的需求上下文：", str(handoff.get("request_preview") or "")])
+    if isinstance(handoff, dict) and handoff.get("id"):
+        parts.extend(
+            [
+                "",
+                "转单字段：",
+                f"handoff_id={handoff.get('id')}",
+                f"thread_id={handoff.get('thread_id') or handoff.get('id')}",
+                f"status={handoff.get('status') or 'pending'}",
+            ]
+        )
     work_run = feishu_work_run_status(root)
     default_run = work_run.get("default_run") if isinstance(work_run.get("default_run"), dict) else {}
     if work_run:
@@ -124,20 +137,46 @@ def _steward_forward_message(root: Path, origin: dict, action: dict, *, handoff:
                     "未绑定。计划类待办需要主人先在飞书助手设置里选择默认归属 Run，或本次手动指定 run_id。",
                 ]
             )
-    parts.extend(
-        [
-            "",
-            "处理 SOP：",
-            "- 纯信息问答：如可公开，整理脱敏文字后请主人确认，再由数字人代发回群。",
-            "- 需主人拍板：在私聊向主人确认；公开文字必须先脱敏给主人确认。",
-            "- 执行类：计划/可延后类先 create_memo 进入默认工作 Run 的待办池，不要直接 create_task；即时类且主人在线确认时才走直接执行/发 Task 消息链路。",
-            "- 越界红线：固件包、密钥、破坏性/不可逆或授权敏感操作默认拒绝，并关闭转单。",
-            "- 当前群聊数字人只支持文本回复，不支持在群里发送图片、二进制或文件；涉及这类内容时请告知需要主人本人发送或走其他渠道。",
-            "",
-            "如果本单不需要回群，请使用 dismiss_feishu_group_handoff 显式关闭，终态选 answered / rejected / owner_handled / dismissed。",
-        ]
-    )
     return "\n".join(parts).strip()
+
+
+def _send_owner_handoff_card(
+    root: Path,
+    *,
+    owner_chat_id: str,
+    owner_open_id: str,
+    steward_session_key: str,
+    steward_run_id: str,
+    steward_task_id: str,
+    handoff: dict,
+) -> dict:
+    try:
+        from aha_cli.services.service_assistant_actions import prepare_group_handoff_owner_card
+
+        action = prepare_group_handoff_owner_card(
+            root,
+            steward_run_id,
+            steward_task_id,
+            actor={
+                "open_id": owner_open_id,
+                "session_key": steward_session_key,
+                "chat_id": owner_chat_id,
+            },
+            handoff=handoff,
+        )
+        card = action.get("confirmation_card") if isinstance(action.get("confirmation_card"), dict) else None
+        if not card:
+            return {"ok": False, "sent": False, "reason": "card_unavailable"}
+        from aha_cli.services.feishu_notifications import send_direct_message
+
+        result = send_direct_message(root, owner_chat_id, "", card=card)
+        message_id = str(result.get("message_id") or "")
+        confirmation_id = str(action.get("confirmation_id") or "")
+        if message_id and confirmation_id:
+            bind_confirmation_card(root, confirmation_id, message_id=message_id, chat_id=owner_chat_id)
+        return {"ok": True, "sent": True, "message_id": message_id, "confirmation_id": confirmation_id}
+    except Exception as exc:  # noqa: BLE001 - owner card is best-effort; the handoff message still reaches steward.
+        return {"ok": False, "sent": False, "error": str(exc)[:500]}
 
 
 def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, action: dict) -> dict:
@@ -251,8 +290,20 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
         steward_run_id=steward_run_id,
         steward_task_id=str(steward_task.get("id") or ""),
         request_message=request_message,
+        request_summary=str(arguments.get("summary") or arguments.get("question") or "").strip(),
+        request_detail=str(arguments.get("details") or arguments.get("detail") or arguments.get("request_detail") or "").strip(),
+        handoff_reason=str(arguments.get("reason") or action.get("reason") or "").strip(),
         merge_handoff_id=merge_handoff_id,
         force_new=force_new_handoff,
+    )
+    owner_card_result = _send_owner_handoff_card(
+        root,
+        owner_chat_id=owner_chat_id,
+        owner_open_id=owner_open_id,
+        steward_session_key=steward_session_key,
+        steward_run_id=steward_run_id,
+        steward_task_id=str(steward_task.get("id") or ""),
+        handoff=handoff,
     )
     try:
         from aha_cli.web.task_messaging import handle_send_payload
@@ -274,7 +325,8 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
                 "feishu_chat_type": "p2p",
                 "feishu_session_key": steward_session_key,
             },
-            background_backend_start=True,
+            background_backend_start=not bool(owner_card_result.get("sent")),
+            suppress_backend_start=bool(owner_card_result.get("sent")),
         )
     except Exception as exc:  # noqa: BLE001 - preserve user-facing failure without breaking the agent turn.
         mark_group_handoff(
@@ -298,6 +350,7 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
         "steward_run_id": steward_run_id,
         "steward_task_id": str(steward_task.get("id") or ""),
         "owner_open_id": owner_open_id,
+        "owner_card_result": owner_card_result,
         "forward_result": result,
         "user_response": FEISHU_GROUP_HANDOFF_ACK,
     }

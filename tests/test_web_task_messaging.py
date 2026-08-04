@@ -68,6 +68,46 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertFalse(start_backend.call_args.kwargs["from_start"])
         self.assertEqual([item["message"] for item in messages], ["continue"])
 
+    def test_send_can_suppress_backend_start_and_advance_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Suppressed autostart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "awaiting_user")
+                set_agent_status(root, run_id, "task-001", "main", "completed", 0)
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "feishu-group",
+                            "message": "system handoff envelope",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        suppress_backend_start=True,
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+
+                offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
+                unread, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+                all_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+
+        self.assertTrue(result["backend_start_suppressed"])
+        self.assertNotIn("backend", result)
+        start_backend.assert_not_called()
+        self.assertEqual([item["message"] for item in all_messages], ["system handoff envelope"])
+        self.assertEqual(unread, [])
+
     def test_send_to_main_while_waiting_for_subagents_autostarts_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

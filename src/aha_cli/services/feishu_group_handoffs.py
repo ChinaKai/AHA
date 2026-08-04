@@ -334,6 +334,9 @@ def _merge_group_handoff(
     *,
     group_message_id: str,
     request_message: str,
+    request_summary: str = "",
+    request_detail: str = "",
+    handoff_reason: str = "",
     now: str,
     now_epoch: float,
 ) -> dict:
@@ -350,6 +353,12 @@ def _merge_group_handoff(
     record["request_messages"] = messages[-20:]
     record["request_preview"] = _combined_request_preview(record["request_messages"])
     record["last_request_preview"] = preview
+    if request_summary:
+        record["request_summary"] = _preview(request_summary)
+    if request_detail:
+        record["request_detail"] = _preview(request_detail, limit=1200)
+    if handoff_reason:
+        record["handoff_reason"] = _preview(handoff_reason)
     record["latest_group_message_id"] = str(group_message_id or "")
     group_message_ids = [
         str(item)
@@ -381,6 +390,9 @@ def register_group_handoff(
     steward_run_id: str,
     steward_task_id: str,
     request_message: str,
+    request_summary: str = "",
+    request_detail: str = "",
+    handoff_reason: str = "",
     owner_open_id: str = "",
     owner_chat_id: str = "",
     merge_handoff_id: str = "",
@@ -405,6 +417,9 @@ def register_group_handoff(
         "steward_task_id": str(steward_task_id or ""),
         "request_fingerprint": hashlib.sha256(str(request_message or "").encode("utf-8")).hexdigest(),
         "request_preview": request_preview,
+        "request_summary": _preview(request_summary),
+        "request_detail": _preview(request_detail, limit=1200),
+        "handoff_reason": _preview(handoff_reason),
         "request_messages": [
             _message_entry(group_message_id, request_preview, kind="original", at=now, at_epoch=now_epoch)
         ],
@@ -436,6 +451,9 @@ def register_group_handoff(
                     existing,
                     group_message_id=group_message_id,
                     request_message=request_message,
+                    request_summary=request_summary,
+                    request_detail=request_detail,
+                    handoff_reason=handoff_reason,
                     now=now,
                     now_epoch=now_epoch,
                 )
@@ -471,6 +489,9 @@ def register_group_handoff(
                     existing,
                     group_message_id=group_message_id,
                     request_message=request_message,
+                    request_summary=request_summary,
+                    request_detail=request_detail,
+                    handoff_reason=handoff_reason,
                     now=now,
                     now_epoch=now_epoch,
                 )
@@ -589,7 +610,9 @@ def mark_group_handoff(
         record["updated_at_epoch"] = now_epoch
         if status == "delivered":
             record["delivered_at"] = record["updated_at"]
-        if status in {"answered", "rejected", "owner_handled", "dismissed"}:
+        if status == "answered":
+            record["delivered_at"] = record.get("delivered_at") or record["updated_at"]
+        if status in {"answered", "rejected", "owner_handled", "dismissed", "memo_created", "task_created"}:
             record["closed_at"] = record["updated_at"]
             record[f"{status}_at"] = record["updated_at"]
         if error:

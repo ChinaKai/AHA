@@ -8,7 +8,13 @@ import unittest
 from unittest import mock
 
 from aha_cli.services import feishu_assistant
-from aha_cli.services.feishu import confirmation_card_for_message, get_session_binding, make_session_key, set_session_binding
+from aha_cli.services.feishu import (
+    confirmation_card_for_message,
+    get_session_binding,
+    identity_profiles,
+    make_session_key,
+    set_session_binding,
+)
 from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
 from aha_cli.services.feishu_owner import cleanup_feishu_identity_state, feishu_owner_state_path, remember_owner_private_chat
 from aha_cli.store.filesystem import create_plan
@@ -88,6 +94,27 @@ def _payload(**changes: object) -> dict:
 
 
 class FeishuAssistantTests(unittest.TestCase):
+    def test_plain_message_extracts_sender_sendname_alias(self) -> None:
+        class Sender:
+            open_id = "ou_member"
+            sendname = "李四"
+
+        class Message:
+            sender = Sender()
+            sender_id = "ou_member"
+            chat_id = "oc_chat"
+            chat_type = "group"
+            message_id = "om_1"
+            message_type = "text"
+            content = json.dumps({"text": "hello"})
+            mentioned_bot = True
+            sender_is_bot = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = feishu_assistant._plain_message(Path(tmp), Message())
+
+        self.assertEqual(payload["sender_name"], "李四")
+
     def test_bot_menu_event_is_normalized_from_raw_custom_event(self) -> None:
         payload = feishu_assistant._plain_menu_event(
             {
@@ -893,6 +920,7 @@ class FeishuAssistantTests(unittest.TestCase):
                 _payload(chat_type="group", open_id="ou_member", is_at_bot=True, sender_name="张三"),
             )
             binding = get_session_binding(root, "tenant-1:feishu-group-user:ou_member")
+            profiles = identity_profiles(root)
 
         self.assertEqual(send.call_args.args[2]["task_id"], "task-group")
         self.assertEqual(send.call_args.args[1], "run-001")
@@ -903,6 +931,8 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["feishu_channel"], "group_digital_human")
         self.assertEqual(binding["active_task_id"], "task-group")
         self.assertEqual(ensure.call_args.kwargs["display_name"], "张三")
+        self.assertEqual(profiles["open_ids"]["ou_member"]["display_name"], "张三")
+        self.assertEqual(profiles["open_ids"]["ou_member"]["chat_type"], "group")
         subscribe.assert_not_called()
         self.assertEqual(channel.sent, [])
 
@@ -1174,6 +1204,55 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["task_id"], "task-006")
         self.assertEqual(send.call_args.args[2]["message"], "trusted choice")
         self.assertIn("已收到选择", channel.sent[-1][1]["text"])
+
+    def test_group_handoff_dismissed_choice_does_not_start_assistant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.resolve_choice",
+            return_value={
+                "choice": True,
+                "cancelled": False,
+                "operation": "handle_feishu_group_handoff",
+                "result": {
+                    "ok": True,
+                    "selected_action": "dismissed",
+                    "handoff_id": "ugh_1",
+                    "status": "dismissed",
+                },
+            },
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send:
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            set_subscription(
+                root,
+                "tenant-1:p2p:ou_user",
+                chat_id="oc_chat",
+                open_id="ou_user",
+                run_id="run-001",
+                task_id="task-006",
+            )
+            channel = FakeChannel()
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_chat",
+                    "message_id": "om_choice",
+                    "open_id": "ou_user",
+                    "action": {
+                        "kind": "aha_service_choice",
+                        "choice_id": "dismissed",
+                    },
+                },
+            )
+
+        send.assert_not_called()
+        self.assertIn("已标记为无需处理", channel.sent[-1][1]["text"])
+        self.assertIn("不会回群", channel.sent[-1][1]["text"])
 
     def test_choice_card_action_passes_form_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

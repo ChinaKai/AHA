@@ -226,6 +226,7 @@ def handle_send_payload(
     prepared_backend_starter: PreparedBackendStarter | None = None,
     queued_backend_starter: QueuedBackendStarter | None = None,
     background_backend_start: bool = False,
+    suppress_backend_start: bool = False,
     debug_logger: DebugLogger = realtime_debug_log,
     trusted_request_policy: dict | None = None,
 ) -> dict:
@@ -258,7 +259,10 @@ def handle_send_payload(
         backend_autostart = command_payload.pop("backend_autostart", None)
         backend = None
         backend_start = None
-        if background_backend_start:
+        if suppress_backend_start:
+            if backend_autostart:
+                command_payload["backend_start_suppressed"] = True
+        elif background_backend_start:
             queue_prepared = queued_backend_starter or _default_queue_prepared_backend
             backend_start = queue_prepared(root, run_id, backend_autostart)
             if backend_start:
@@ -359,7 +363,11 @@ def handle_send_payload(
     if supervision_host_message and task_id:
         save_chat_offset_after_message(root, run_id, task_id, target_id)
     if autostart:
-        if background_backend_start:
+        if suppress_backend_start:
+            if task_id:
+                save_chat_offset_after_message(root, run_id, task_id, target_id)
+            response["backend_start_suppressed"] = True
+        elif background_backend_start:
             queue_prepared = queued_backend_starter or _default_queue_prepared_backend
             backend_start = queue_prepared(root, run_id, autostart)
             if backend_start:

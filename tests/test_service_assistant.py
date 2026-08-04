@@ -9,7 +9,7 @@ from unittest import mock
 
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.domain.models import is_service_assistant_run, is_service_assistant_task
-from aha_cli.services.feishu import FeishuError, bind_confirmation_card
+from aha_cli.services.feishu import FeishuError, bind_confirmation_card, remember_identity_profile
 from aha_cli.services.feishu_notifications import set_subscription
 from aha_cli.services.feishu_group_handoffs import get_group_handoff, register_group_handoff
 from aha_cli.services.chat import action_schema_retry_message, chat_prompt
@@ -19,7 +19,12 @@ from aha_cli.services.run_retention import RunRetentionError, apply_run_retentio
 from aha_cli.services.orchestrator import execute_actions
 from aha_cli.services import service_assistant_actions
 from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task, session_task_title
-from aha_cli.services.service_assistant_actions import prepare_service_assistant_action, resolve_choice, resolve_confirmation
+from aha_cli.services.service_assistant_actions import (
+    prepare_group_handoff_owner_card,
+    prepare_service_assistant_action,
+    resolve_choice,
+    resolve_confirmation,
+)
 from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.store.filesystem import append_message, create_plan, delete_task, inbox_path, iter_jsonl_from
 from aha_cli.store.paths import aha_home_path
@@ -459,8 +464,11 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(stored_task["max_sub_agents"], 3)
             self.assertEqual(read_task_memos(root, target["id"])[0]["created_task_id"], created["id"])
 
-    def test_feishu_group_handoff_memo_defaults_to_bound_work_run_and_closes_handoff(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+    def test_feishu_group_handoff_memo_defaults_to_bound_work_run_closes_handoff_and_acknowledges_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.service_assistant_actions.send_direct_message",
+            return_value={"message_id": "om_group_ack"},
+        ) as group_send:
             root = Path(tmp)
             (root / "config.json").write_text(json.dumps({"integrations": {"feishu": {}}}), encoding="utf-8")
             assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
@@ -549,9 +557,17 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(memo["title"], "整理 vega pipeline 文档")
             self.assertEqual(memo["status"], "todo")
             self.assertTrue(memo["scheduled_date"])
-            self.assertEqual(confirmed["result"]["group_handoff_terminal"]["status"], "owner_handled")
-            self.assertEqual(stored["status"], "owner_handled")
+            self.assertEqual(confirmed["result"]["group_handoff_terminal"]["status"], "memo_created")
+            self.assertTrue(confirmed["result"]["group_handoff_ack"]["sent"])
+            self.assertEqual(confirmed["result"]["group_handoff_ack"]["message_id"], "om_group_ack")
+            self.assertEqual(stored["status"], "memo_created")
             self.assertEqual(stored["memo_id"], "memo-001")
+            group_send.assert_called_once_with(
+                root,
+                "oc_group",
+                '<at user_id="ou_requester"></at> 主人已经加入待办，请耐心等待，有进展我会同步。',
+                opts={"reply_to": "om_group"},
+            )
 
     def test_dismiss_group_handoff_action_sets_terminal_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -736,7 +752,134 @@ class ServiceAssistantTests(unittest.TestCase):
         )
         self.assertTrue(confirmed["result"]["ok"])
         self.assertEqual(confirmed["result"]["message_id"], "om_public")
-        self.assertEqual(stored["status"], "delivered")
+        self.assertEqual(stored["status"], "answered")
+        self.assertTrue(stored["closed_at"])
+
+    def test_group_handoff_owner_card_routes_memo_choice_back_to_assistant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            remember_identity_profile(root, kind="chat_id", identity="oc_group", display_name="AHA-TEST", chat_type="group")
+            remember_identity_profile(root, kind="open_id", identity="ou_requester", display_name="张三", chat_type="group")
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="整理一份 vega pipeline 文档",
+                request_summary="生成 VEGA pipeline 文档",
+                request_detail="群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档，要求说明主要链路和输出。",
+                handoff_reason="需要主人确认是否整理并公开发送",
+            )
+            owner_card = prepare_group_handoff_owner_card(
+                root,
+                assistant_run,
+                assistant_task["id"],
+                actor={"open_id": "ou_owner", "session_key": "tenant:p2p:ou_owner", "chat_id": "oc_owner"},
+                handoff=handoff,
+            )
+            bind_confirmation_card(root, owner_card["confirmation_id"], message_id="om_handoff_owner", chat_id="oc_owner")
+
+            selected = resolve_choice(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                message_id="om_handoff_owner",
+                choice_id="create_memo",
+            )
+
+            self.assertTrue(owner_card["choice_required"])
+            self.assertIn("收到一条飞书群聊数字人转单", owner_card["confirmation_card"]["body"]["elements"][0]["content"])
+            card_json = json.dumps(owner_card["confirmation_card"], ensure_ascii=False)
+            self.assertIn("oc_group.AHA-TEST", card_json)
+            self.assertIn("ou_requester.张三", card_json)
+            self.assertIn("需求摘要", card_json)
+            self.assertIn("生成 VEGA pipeline 文档", card_json)
+            self.assertIn("需求详情", card_json)
+            self.assertIn("群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档", card_json)
+            self.assertIn("整理为待办", card_json)
+            self.assertIn("交给主人私聊助手整理 Memo 草稿", card_json)
+            self.assertIn("无需处理", card_json)
+            self.assertIn("不创建待办、不创建 Task，也不回群", card_json)
+            self.assertNotIn("立即创建可执行 Task", card_json)
+            self.assertNotIn("准备代发回复", card_json)
+            self.assertNotIn("拒绝关闭", card_json)
+            self.assertNotIn("取消", card_json)
+            self.assertEqual(selected["result"]["target_operation"], "draft_group_handoff_memo")
+            self.assertEqual(selected["result"]["next_arguments"]["source_handoff_id"], handoff["id"])
+            self.assertIn("Draft a clear Memo", selected["tool_message"])
+            self.assertIn(f"source_handoff_id={handoff['id']!r}", selected["tool_message"])
+            self.assertIn("生成 VEGA pipeline 文档", selected["tool_message"])
+            self.assertIn("群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档", selected["tool_message"])
+            self.assertEqual(get_group_handoff(root, handoff["id"])["status"], "pending")
+
+    def test_group_handoff_owner_card_dismisses_without_group_reply_or_agent_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            set_subscription(
+                root,
+                "tenant:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=assistant_run,
+                task_id=assistant_task["id"],
+            )
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=assistant_task["id"],
+                request_message="误触发",
+            )
+            owner_card = prepare_group_handoff_owner_card(
+                root,
+                assistant_run,
+                assistant_task["id"],
+                actor={"open_id": "ou_owner", "session_key": "tenant:p2p:ou_owner", "chat_id": "oc_owner"},
+                handoff=handoff,
+            )
+            bind_confirmation_card(root, owner_card["confirmation_id"], message_id="om_handoff_owner", chat_id="oc_owner")
+
+            selected = resolve_choice(
+                root,
+                open_id="ou_owner",
+                session_key="tenant:p2p:ou_owner",
+                message_id="om_handoff_owner",
+                choice_id="dismissed",
+            )
+            stored = get_group_handoff(root, handoff["id"])
+
+        self.assertTrue(selected["choice"])
+        self.assertEqual(selected["result"]["selected_action"], "dismissed")
+        self.assertEqual(selected["result"]["status"], "dismissed")
+        self.assertEqual(selected["tool_message"], "")
+        self.assertEqual(stored["status"], "dismissed")
+        self.assertTrue(stored["closed_at"])
 
     def test_group_reply_action_asks_owner_to_choose_ambiguous_pending_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -751,6 +894,8 @@ class ServiceAssistantTests(unittest.TestCase):
                 run_id=assistant_run,
                 task_id=assistant_task["id"],
             )
+            remember_identity_profile(root, kind="chat_id", identity="oc_group_2", display_name="测试群2", chat_type="group")
+            remember_identity_profile(root, kind="open_id", identity="ou_requester_2", display_name="李四", chat_type="group")
             handoffs = []
             for index in (1, 2):
                 handoffs.append(
@@ -803,6 +948,9 @@ class ServiceAssistantTests(unittest.TestCase):
         self.assertTrue(prepared["choice_required"])
         self.assertIn("无需填写内部 handoff_id", prepared["user_response"])
         self.assertEqual(prepared["confirmation_card"]["header"]["title"]["content"], "请选择方案")
+        card_json = json.dumps(prepared["confirmation_card"], ensure_ascii=False)
+        self.assertIn("oc_group_2.测试群2", card_json)
+        self.assertIn("ou_requester_2.李四", card_json)
         self.assertEqual(selected["operation"], "select_feishu_group_handoff_for_reply")
         self.assertIn(handoffs[1]["id"], selected["tool_message"])
         self.assertIn('"message": "公开口径"', selected["tool_message"])
