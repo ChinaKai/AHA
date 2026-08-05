@@ -942,6 +942,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   border-radius: 8px;
   font-size: 12px;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 .feishu-console-message.error {
   border: 1px solid #fecdca;
@@ -1073,11 +1074,14 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-popover {
   gap: 6px;
 }
 .feishu-console-settings-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto;
   align-items: center;
+  justify-content: start;
   gap: 10px;
 }
 .feishu-console-settings-actions small {
+  grid-column: 1 / -1;
   color: #667085;
   font-size: 12px;
   line-height: 1.5;
@@ -9076,9 +9080,13 @@ body.empty-run .panel {
   .observe-proxy-config-grid,
   .feishu-console-grid,
   .feishu-console-settings-grid,
+  .feishu-console-settings-actions,
   .feishu-console-toggle-list,
   .weixin-console-grid {
     grid-template-columns: 1fr;
+  }
+  .feishu-console-settings-actions button {
+    width: 100%;
   }
   .feishu-console-popover,
   .weixin-console-popover,

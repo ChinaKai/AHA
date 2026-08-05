@@ -35,6 +35,13 @@ class _SendResult:
     message_id = "om_reply"
 
 
+class _DynamicSendResult:
+    success = True
+
+    def __init__(self, message_id: str) -> None:
+        self.message_id = message_id
+
+
 class FakeChannel:
     def __init__(self) -> None:
         self.sent: list[tuple[str, object, object]] = []
@@ -50,6 +57,12 @@ class FakeChannel:
 
     def schedule(self, coroutine) -> _CompletedFuture:
         return _CompletedFuture(asyncio.run(coroutine))
+
+
+class SequencedChannel(FakeChannel):
+    async def send(self, target: str, message: object, opts: object = None) -> _DynamicSendResult:
+        self.sent.append((target, message, opts))
+        return _DynamicSendResult(f"om_reply_{len(self.sent)}")
 
 
 def _write_config(
@@ -198,6 +211,7 @@ class FeishuAssistantTests(unittest.TestCase):
                         "integrations": {
                             "feishu": {
                                 "enabled": True,
+                                "app_id": "tenant-1",
                                 "allowed_open_ids": ["ou_owner"],
                                 "owner_open_id": "ou_owner",
                                 "owner_chat_id": "oc_owner",
@@ -264,6 +278,7 @@ class FeishuAssistantTests(unittest.TestCase):
                         "integrations": {
                             "feishu": {
                                 "enabled": True,
+                                "app_id": "tenant-1",
                                 "allowed_open_ids": ["ou_owner"],
                                 "owner_open_id": "ou_owner",
                                 "default_run_id": work["id"],
@@ -312,6 +327,7 @@ class FeishuAssistantTests(unittest.TestCase):
                         "integrations": {
                             "feishu": {
                                 "enabled": True,
+                                "app_id": "tenant-current",
                                 "owner_open_id": "ou_owner",
                                 "allowed_open_ids": ["ou_old", "ou_owner", "ou_future"],
                                 "allowed_chat_ids": ["oc_group"],
@@ -390,6 +406,91 @@ class FeishuAssistantTests(unittest.TestCase):
             self.assertEqual(result["removed_allowed_open_id_count"], 1)
             self.assertEqual(result["removed_subscription_count"], 1)
 
+    def test_cleanup_feishu_identity_state_dry_run_and_prunes_same_owner_old_app(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "tenant-current",
+                                "owner_open_id": "ou_owner",
+                                "allowed_open_ids": ["ou_owner"],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current_session = make_session_key(
+                tenant_key="tenant-current",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+            old_session = make_session_key(
+                tenant_key="tenant-old",
+                open_id="ou_owner",
+                chat_id="oc_old_owner",
+                chat_type="p2p",
+            )
+            remember_owner_private_chat(
+                root,
+                tenant_key="tenant-current",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                session_key=current_session,
+            )
+            remember_owner_private_chat(
+                root,
+                tenant_key="tenant-old",
+                open_id="ou_owner",
+                chat_id="oc_old_owner",
+                session_key=old_session,
+            )
+            set_subscription(
+                root,
+                current_session,
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id="run-current",
+                task_id="task-current",
+                chat_type="p2p",
+            )
+            set_subscription(
+                root,
+                old_session,
+                chat_id="oc_old_owner",
+                open_id="ou_owner",
+                run_id="run-old",
+                task_id="task-old",
+                chat_type="p2p",
+                mode="task_chat",
+            )
+
+            preview = cleanup_feishu_identity_state(root, dry_run=True)
+            preview_owner_state = json.loads(feishu_owner_state_path(root).read_text(encoding="utf-8"))
+            preview_subscriptions = load_subscription_state(root)["subscriptions"]
+            result = cleanup_feishu_identity_state(root)
+            owner_state = json.loads(feishu_owner_state_path(root).read_text(encoding="utf-8"))
+            subscriptions = load_subscription_state(root)["subscriptions"]
+
+        self.assertTrue(preview["ok"])
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["removed_owner_record_count"], 1)
+        self.assertEqual(preview["removed_private_chat_count"], 1)
+        self.assertEqual(preview["removed_subscription_count"], 1)
+        self.assertIn("tenant-old", preview_owner_state["owners"])
+        self.assertIn(old_session, preview_subscriptions)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["dry_run"])
+        self.assertEqual(set(owner_state["owners"]), {"tenant-current"})
+        self.assertEqual(set(owner_state["private_chats"]), {"tenant-current:ou_owner"})
+        self.assertIn(current_session, subscriptions)
+        self.assertNotIn(old_session, subscriptions)
+
     def test_owner_menu_rejects_non_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -430,6 +531,7 @@ class FeishuAssistantTests(unittest.TestCase):
                         "integrations": {
                             "feishu": {
                                 "enabled": True,
+                                "app_id": "tenant-1",
                                 "allowed_open_ids": ["ou_owner"],
                                 "owner_open_id": "ou_owner",
                                 "owner_chat_id": "oc_owner",
@@ -485,7 +587,51 @@ class FeishuAssistantTests(unittest.TestCase):
             result_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
             self.assertIn("Work.", result_json)
             self.assertIn("Check task", result_json)
+            self.assertIn("选中进入 Chat", result_json)
             self.assertIn("不调用 agent/backend 模型", result_json)
+
+    def test_owner_menu_query_uses_current_app_session_when_event_tenant_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            work = create_plan(root, "Work", 1, "implementation", ["Check task"], [], backend="stub")
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "current-app",
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            channel = FakeChannel()
+
+            feishu_assistant._handle_menu_action(
+                root,
+                "",
+                channel,
+                {
+                    "kind": "menu_action",
+                    "tenant_key": "stale-app",
+                    "open_id": "ou_owner",
+                    "chat_id": "oc_owner",
+                    "message_id": "ev-stale-menu",
+                    "event_key": "aha_list_tasks",
+                },
+            )
+            record = confirmation_card_for_message(root, "om_reply")
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record["session_key"], "current-app:p2p:ou_owner")
 
     def test_owner_menu_query_returns_memo_form_then_limited_result_card_without_agent_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -555,12 +701,345 @@ class FeishuAssistantTests(unittest.TestCase):
 
             send.assert_not_called()
             self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "Memo 列表")
-            self.assertEqual(len(channel.sent[-1][1]["card"]["body"]["elements"]), 12)
             card_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
             self.assertIn("**数量**：10 / 上限 10", card_json)
             self.assertIn("Check memo", card_json)
             self.assertIn("Memo body", card_json)
+            self.assertIn("选中编辑", card_json)
             self.assertIn("不调用 agent/backend 模型", card_json)
+
+    def test_memo_query_result_selection_opens_update_form(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+        ) as send:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            work = create_plan(root, "Work", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            memo = create_task_memo(
+                root,
+                work["id"],
+                {"title": "Editable memo", "description": "Memo body", "status": "doing"},
+            )
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            channel = SequencedChannel()
+
+            feishu_assistant._handle_menu_action(
+                root,
+                "",
+                channel,
+                {
+                    "kind": "menu_action",
+                    "tenant_key": "tenant-1",
+                    "open_id": "ou_owner",
+                    "chat_id": "oc_owner",
+                    "message_id": "ev-menu-memo-select",
+                    "event_key": "aha_list_memos",
+                },
+            )
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_1",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_menu_query", "choice_id": "__submit_menu_query__"},
+                    "form_values": {"run_id": work["id"], "status": "all", "limit": "10"},
+                },
+            )
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_2",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_menu_query", "choice_id": f"select_memo:{memo['id']}"},
+                },
+            )
+
+            send.assert_not_called()
+            self.assertEqual(channel.updated[-1][0], "om_reply_2")
+            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "配置 Memo 修改")
+            card_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
+            self.assertIn("Editable memo", card_json)
+            self.assertIn("提交修改", card_json)
+            self.assertIn(memo["id"], card_json)
+
+    def test_task_query_selection_confirms_and_routes_task_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            work = create_plan(root, "Work", 1, "implementation", ["Chat task"], [], backend="stub")
+            task_id = str(work["tasks"][0]["id"])
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "tenant-1",
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            channel = SequencedChannel()
+
+            feishu_assistant._handle_menu_action(
+                root,
+                "",
+                channel,
+                {
+                    "kind": "menu_action",
+                    "tenant_key": "tenant-1",
+                    "open_id": "ou_owner",
+                    "chat_id": "oc_owner",
+                    "message_id": "ev-menu-task-select",
+                    "event_key": "aha_list_tasks",
+                },
+            )
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_1",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_menu_query", "choice_id": "__submit_menu_query__"},
+                    "form_values": {"run_id": work["id"], "status": "all", "limit": "10"},
+                },
+            )
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_2",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_menu_query", "choice_id": f"select_task:{task_id}"},
+                },
+            )
+            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "进入 Task Chat")
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_3",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_task_chat", "choice_id": "confirm"},
+                },
+            )
+            subscription = load_subscription_state(root)["subscriptions"][
+                make_session_key(tenant_key="tenant-1", open_id="ou_owner", chat_id="oc_owner", chat_type="p2p")
+            ]
+            self.assertEqual(subscription["mode"], "task_chat")
+            self.assertEqual(subscription["run_id"], work["id"])
+            self.assertEqual(subscription["task_id"], task_id)
+
+            feishu_assistant._handle_message(
+                root,
+                "",
+                channel,
+                _payload(open_id="ou_owner", chat_id="oc_owner", message_id="om_task_chat_msg", text="继续处理"),
+            )
+
+            self.assertEqual(send.call_args.args[1], work["id"])
+            self.assertEqual(send.call_args.args[2]["task_id"], task_id)
+            self.assertEqual(send.call_args.args[2]["reply_target"], "feishu")
+            self.assertEqual(send.call_args.args[2]["message"], "继续处理")
+            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "进入 Task Chat")
+
+            feishu_assistant._handle_message(
+                root,
+                "",
+                channel,
+                _payload(open_id="ou_owner", chat_id="oc_owner", message_id="om_task_chat_exit", text="退出 task"),
+            )
+            restored = load_subscription_state(root)["subscriptions"][
+                make_session_key(tenant_key="tenant-1", open_id="ou_owner", chat_id="oc_owner", chat_type="p2p")
+            ]
+            self.assertNotEqual(restored.get("mode"), "task_chat")
+            self.assertIn("已退出 Task Chat", channel.sent[-1][1]["text"])
+
+    def test_task_chat_confirmation_bound_to_stale_session_writes_current_app_subscription(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            work = create_plan(root, "Work", 1, "implementation", ["Chat task"], [], backend="stub")
+            task = work["tasks"][0]
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "current-app",
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            channel = SequencedChannel()
+            stale_session = make_session_key(
+                tenant_key="stale-app",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+            feishu_assistant._send_menu_card(
+                root,
+                channel,
+                "oc_owner",
+                feishu_assistant._prepare_task_chat_confirmation(
+                    root,
+                    run_id=work["id"],
+                    task=task,
+                    open_id="ou_owner",
+                    session_key=stale_session,
+                ),
+            )
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_1",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_task_chat", "choice_id": "confirm"},
+                },
+            )
+
+            subscriptions = load_subscription_state(root)["subscriptions"]
+            current_session = make_session_key(
+                tenant_key="current-app",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+        self.assertEqual(subscriptions[current_session]["mode"], "task_chat")
+        self.assertEqual(subscriptions[current_session]["run_id"], work["id"])
+        self.assertEqual(subscriptions[current_session]["task_id"], task["id"])
+
+    def test_task_chat_message_migrates_stale_app_subscription(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            work = create_plan(root, "Work", 1, "implementation", ["Chat task"], [], backend="stub")
+            task_id = str(work["tasks"][0]["id"])
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "current-app",
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stale_session = make_session_key(
+                tenant_key="stale-app",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+            current_session = make_session_key(
+                tenant_key="current-app",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+            set_subscription(
+                root,
+                stale_session,
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=work["id"],
+                task_id=task_id,
+                chat_type="p2p",
+                mode="task_chat",
+            )
+            set_subscription(
+                root,
+                current_session,
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=work["id"],
+                task_id=task_id,
+                chat_type="p2p",
+            )
+
+            feishu_assistant._handle_message(
+                root,
+                "",
+                FakeChannel(),
+                _payload(
+                    tenant_key="current-app",
+                    open_id="ou_owner",
+                    chat_id="oc_owner",
+                    message_id="om_current_task_chat",
+                    text="继续处理",
+                ),
+            )
+
+            subscriptions = load_subscription_state(root)["subscriptions"]
+        self.assertEqual(send.call_args.args[1], work["id"])
+        self.assertEqual(send.call_args.args[2]["task_id"], task_id)
+        self.assertEqual(send.call_args.args[2]["reply_target"], "feishu")
+        self.assertEqual(send.call_args.args[2]["message"], "继续处理")
+        self.assertEqual(subscriptions[current_session]["mode"], "task_chat")
+        self.assertNotIn(stale_session, subscriptions)
 
     def test_group_message_without_bot_mention_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

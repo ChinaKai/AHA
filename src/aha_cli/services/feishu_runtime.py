@@ -421,6 +421,16 @@ def update_feishu_notifications_enabled(root: Path, enabled: bool) -> dict:
     return feishu_status(root)
 
 
+def cleanup_feishu_old_app_state(root: Path, *, dry_run: bool = False) -> dict:
+    from aha_cli.services.feishu_owner import cleanup_feishu_identity_state
+
+    cleanup = cleanup_feishu_identity_state(root, dry_run=dry_run)
+    return {
+        "cleanup": cleanup,
+        "feishu": feishu_status(root),
+    }
+
+
 def active_feishu_channel(root: Path) -> Any | None:
     with _channels_lock:
         return _channels.get(str(aha_home_path(root).resolve()))
@@ -627,6 +637,7 @@ __all__ = [
     "refresh_confirmation_cards",
     "send_via_active_channel",
     "update_card_via_active_channel",
+    "cleanup_feishu_old_app_state",
     "update_feishu_settings",
     "update_feishu_notifications_enabled",
 ]

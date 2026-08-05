@@ -157,6 +157,7 @@ message: agent 最后一条回复
   `open_id` 只用于数字人 per-user 记忆，不会被当成主人。
 - `allowed_open_ids` 表示谁可以私聊使用飞书助手；`owner_open_id` 是其中唯一主人。保存 Feishu 设置时，
   AHA 会自动保证 owner 在 allowed 列表中，并基于 owner 私聊状态清理旧 app/旧 owner 留下的 p2p 订阅和 owner 状态。
+  飞书助手设置面板也提供“清理旧 App 状态”按钮，执行前会预览将清理的授权用户、owner 记录、私聊记录和订阅数量。
   群订阅不参与这类清理，群聊访问仍由 `allowed_chat_ids` 和 `group_access_mode` 控制。
 - 直接问答：模型判断可公开回答时，数字人在原群、原消息下回复，并由服务端自动携带提问者飞书 `@`。
 - 数字人问答的信息源包括 AHA 知识库索引、已配置 `workspace_roots`/已注册 workspace 的项目路径索引、

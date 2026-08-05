@@ -355,6 +355,26 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertFalse(body["feishu"]["notifications_enabled"])
         update.assert_called_once_with(root, False)
 
+    def test_system_route_cleans_old_feishu_app_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.web.system_routes.cleanup_feishu_old_app_state",
+            return_value={"cleanup": {"ok": True, "dry_run": True}, "feishu": {"configured": True}},
+        ) as cleanup:
+            root = Path(tmp)
+            response = system_route_response(
+                root,
+                "",
+                "POST",
+                "/api/feishu/cleanup-old-app",
+                {},
+                json.dumps({"dry_run": True}).encode("utf-8"),
+            )
+            body = json_response_body(response)
+
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["cleanup"]["dry_run"])
+        cleanup.assert_called_once_with(root, dry_run=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -68,6 +68,8 @@ CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION = "select_create_task_attributes"
 CREATE_TASK_CONFIG_CHOICE_OPERATION = "configure_create_task"
 CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID = "__submit_memo_config__"
 CREATE_TASK_CONFIG_SUBMIT_CHOICE_ID = "__submit_task_config__"
+UPDATE_MEMO_CONFIG_CHOICE_OPERATION = "configure_update_memo"
+UPDATE_MEMO_CONFIG_SUBMIT_CHOICE_ID = "__submit_update_memo_config__"
 MAX_ACTION_RESULT_CHARS = 12_000
 MAX_ACTION_RESULT_ITEMS = 20
 MAX_ACTION_DEPTH = 3
@@ -2026,7 +2028,18 @@ def _task_config_card(prompt: str, fields: dict) -> dict:
     }
 
 
-def _memo_config_card(prompt: str, fields: dict) -> dict:
+def _memo_config_card(
+    prompt: str,
+    fields: dict,
+    *,
+    title: str = "配置 Memo 创建",
+    submit_choice_id: str = CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID,
+    submit_label: str = "提交配置",
+    submit_element_id: str = "aha_memo_config_submit",
+    cancel_element_id: str = "aha_memo_config_cancel",
+    include_created_at: bool = True,
+    footer: str = "提交后还需要最终确认；日期不选则按默认规则处理。",
+) -> dict:
     safe_prompt = str(prompt).replace("```", "''' ")
 
     def button(label: str, choice_id: str, button_type: str, element_id: str, *, submit: bool = False) -> dict:
@@ -2056,15 +2069,64 @@ def _memo_config_card(prompt: str, fields: dict) -> dict:
         _field_input("description", "正文", fields.get("description"), multiline=True, max_length=1000),
         _field_select("run_id", "Run", fields.get("runs") or [], fields.get("run_id")),
         _field_select("status", "状态", fields.get("statuses") or [], fields.get("status")),
-        _field_date_picker("created_at", "创建日期", fields.get("created_at")),
         _field_date_picker("scheduled_date", "开始日期", fields.get("scheduled_date")),
         _field_date_picker("end_date", "结束日期", fields.get("end_date")),
         _field_select("created_task_id", "关联 Task", fields.get("tasks") or [], fields.get("created_task_id")),
     ]
+    form_body = [
+        {"tag": "markdown", "content": "**标题**"},
+        form_elements[0],
+        {"tag": "markdown", "content": "**正文**"},
+        form_elements[1],
+        {"tag": "markdown", "content": "**Run**"},
+        form_elements[2],
+        {"tag": "markdown", "content": "**状态**"},
+        form_elements[3],
+    ]
+    if include_created_at:
+        form_body.extend(
+            [
+                {"tag": "markdown", "content": "**创建日期**"},
+                _field_date_picker("created_at", "创建日期", fields.get("created_at")),
+            ]
+        )
+    form_body.extend(
+        [
+            {"tag": "markdown", "content": "**开始日期**"},
+            form_elements[4],
+            {"tag": "markdown", "content": "**结束日期**"},
+            form_elements[5],
+            {"tag": "markdown", "content": "**关联 Task**"},
+            form_elements[6],
+            {
+                "tag": "column_set",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "auto",
+                        "elements": [
+                            button(
+                                submit_label,
+                                submit_choice_id,
+                                "primary",
+                                submit_element_id,
+                                submit=True,
+                            )
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "auto",
+                        "elements": [button("取消", "__cancel__", "default", cancel_element_id)],
+                    },
+                ],
+            },
+        ]
+    )
     return {
         "schema": "2.0",
         "header": {
-            "title": {"tag": "plain_text", "content": "配置 Memo 创建"},
+            "title": {"tag": "plain_text", "content": title},
             "template": "blue",
         },
         "body": {
@@ -2073,49 +2135,9 @@ def _memo_config_card(prompt: str, fields: dict) -> dict:
                 {
                     "tag": "form",
                     "name": "aha_create_memo_config",
-                    "elements": [
-                        {"tag": "markdown", "content": "**标题**"},
-                        form_elements[0],
-                        {"tag": "markdown", "content": "**正文**"},
-                        form_elements[1],
-                        {"tag": "markdown", "content": "**Run**"},
-                        form_elements[2],
-                        {"tag": "markdown", "content": "**状态**"},
-                        form_elements[3],
-                        {"tag": "markdown", "content": "**创建日期**"},
-                        form_elements[4],
-                        {"tag": "markdown", "content": "**开始日期**"},
-                        form_elements[5],
-                        {"tag": "markdown", "content": "**结束日期**"},
-                        form_elements[6],
-                        {"tag": "markdown", "content": "**关联 Task**"},
-                        form_elements[7],
-                        {
-                            "tag": "column_set",
-                            "columns": [
-                                {
-                                    "tag": "column",
-                                    "width": "auto",
-                                    "elements": [
-                                        button(
-                                            "提交配置",
-                                            CREATE_MEMO_CONFIG_SUBMIT_CHOICE_ID,
-                                            "primary",
-                                            "aha_memo_config_submit",
-                                            submit=True,
-                                        )
-                                    ],
-                                },
-                                {
-                                    "tag": "column",
-                                    "width": "auto",
-                                    "elements": [button("取消", "__cancel__", "default", "aha_memo_config_cancel")],
-                                },
-                            ],
-                        },
-                    ],
+                    "elements": form_body,
                 },
-                {"tag": "markdown", "content": "<font color='grey'>提交后还需要最终确认；日期不选则按默认规则处理。</font>"},
+                {"tag": "markdown", "content": f"<font color='grey'>{footer}</font>"},
             ]
         },
     }
@@ -2822,6 +2844,97 @@ def _prepare_create_attribute_choice(
     }
 
 
+def _prepare_update_memo_config_choice(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    actor: dict,
+    arguments: dict,
+) -> dict:
+    current_run_id = str(arguments.get("run_id") or "")
+    memo_id = str(arguments.get("memo_id") or "")
+    created_task_id = str(arguments.get("created_task_id") or "").strip()
+    task_options = _memo_task_link_options(root, current_run_id, current_task_id=created_task_id)
+    if created_task_id not in {str(option.get("value") or "") for option in task_options}:
+        created_task_id = ""
+    fields = {
+        "title": str(arguments.get("title") or ""),
+        "description": str(arguments.get("description") or ""),
+        "run_id": current_run_id,
+        "memo_id": memo_id,
+        "status": normalize_memo_status(arguments.get("status")),
+        "scheduled_date": normalize_memo_date(arguments.get("scheduled_date")),
+        "end_date": normalize_memo_date(arguments.get("end_date")),
+        "created_task_id": created_task_id,
+        "runs": _ordinary_run_options(root, current_run_id),
+        "statuses": _memo_status_options(),
+        "tasks": task_options,
+    }
+    confirmation_id = secrets.token_urlsafe(18)
+    prompt = "\n".join(
+        [
+            "请重填需要修改的 Memo 属性。提交后系统会生成最终确认卡。",
+            "",
+            _preview("update_memo", arguments),
+        ]
+    )
+    card = _memo_config_card(
+        prompt,
+        fields,
+        title="配置 Memo 修改",
+        submit_choice_id=UPDATE_MEMO_CONFIG_SUBMIT_CHOICE_ID,
+        submit_label="提交修改",
+        submit_element_id="aha_memo_update_submit",
+        cancel_element_id="aha_memo_update_cancel",
+        include_created_at=False,
+        footer="提交后还需要最终确认；输入框留空会沿用当前值。",
+    )
+    context = {
+        "operation": UPDATE_MEMO_CONFIG_CHOICE_OPERATION,
+        "arguments": {
+            "target_operation": "update_memo",
+            "base_arguments": arguments,
+            "fields": fields,
+        },
+        "assistant_run_id": run_id,
+        "assistant_task_id": task_id,
+        "confirmation_id": confirmation_id,
+        "chat_id": actor["chat_id"],
+    }
+    issue_action_token(
+        root,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        context=context,
+    )
+    register_confirmation_card(
+        root,
+        confirmation_id,
+        open_id=actor["open_id"],
+        session_key=actor["session_key"],
+        action=SERVICE_ASSISTANT_CHOICE,
+        card=card,
+        expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+    )
+    return {
+        "type": "service_assistant",
+        "operation": "update_memo",
+        "ok": True,
+        "choice_required": True,
+        "confirmation_id": confirmation_id,
+        "confirmation_card": card,
+        "user_response": "\n".join(
+            [
+                "请先在飞书卡片中修改 Memo。",
+                "",
+                "提交后还会生成最终确认卡；裸文本确认不会执行操作。",
+            ]
+        ),
+    }
+
+
 def _actor_for_task(root: Path, run_id: str, task_id: str) -> dict:
     state = load_subscription_state(root)
     for session_key, subscription in state.get("subscriptions", {}).items():
@@ -2834,6 +2947,39 @@ def _actor_for_task(root: Path, run_id: str, task_id: str) -> dict:
                 "chat_id": str(subscription.get("chat_id") or ""),
             }
     raise ServiceAssistantActionError("Feishu session subscription is unavailable; send another message and retry")
+
+
+def prepare_memo_edit_action(root: Path, run_id: str, task: dict, *, memo_run_id: str, memo_id: str) -> dict:
+    if not is_service_assistant_task(task):
+        return {
+            "type": "service_assistant",
+            "operation": "update_memo",
+            "ok": False,
+            "user_response": "当前 Task 不是 AHA 服务管家，不能执行系统助手操作。",
+        }
+    target_run_id, _plan = _target_run(root, {"run_id": memo_run_id})
+    memo = _memo_by_id(root, target_run_id, memo_id)
+    if memo is None:
+        raise ServiceAssistantActionError(f"memo not found: {memo_id}")
+    actor = _actor_for_task(root, run_id, str(task.get("id") or ""))
+    arguments = {
+        "run_id": target_run_id,
+        "memo_id": str(memo.get("id") or memo_id),
+        "title": str(memo.get("title") or ""),
+        "description": str(memo.get("description") or ""),
+        "status": normalize_memo_status(memo.get("status")),
+        "scheduled_date": normalize_memo_date(memo.get("scheduled_date")),
+        "end_date": normalize_memo_date(memo.get("end_date")),
+        "created_task_id": str(memo.get("created_task_id") or ""),
+    }
+    return _prepare_update_memo_config_choice(
+        root,
+        run_id,
+        str(task.get("id") or ""),
+        actor=actor,
+        arguments=arguments,
+    )
+
 
 
 def _trusted_result(operation: str, result: object, *, confirmed: bool = False) -> str:
@@ -3465,6 +3611,8 @@ def _group_handoff_reply_choice_tool_message(arguments: dict, handoff: dict) -> 
 
 
 def _create_attribute_choice_tool_message(target_operation: str, selected: dict, next_arguments: dict) -> str:
+    action_label = "updated" if target_operation == "update_memo" else "created"
+    detail_label = "update" if target_operation == "update_memo" else "creation"
     payload = {
         "target_operation": target_operation,
         "selected_id": selected.get("id"),
@@ -3479,14 +3627,14 @@ def _create_attribute_choice_tool_message(target_operation: str, selected: dict,
     }
     return "\n".join(
         [
-            "AHA service-assistant create form configuration result (trusted system envelope).",
-            "The owner submitted creation fields in the Feishu form card.",
-            "The memo/task has not been created yet; it still requires the normal confirmation card.",
+            f"AHA service-assistant {detail_label} form configuration result (trusted system envelope).",
+            f"The owner submitted {detail_label} fields in the Feishu form card.",
+            f"The memo/task has not been {action_label} yet; it still requires the normal confirmation card.",
             "data:",
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str),
             "next_service_action:",
             json.dumps(next_action, ensure_ascii=False, indent=2, sort_keys=True, default=str),
-            "Issue exactly this service_assistant action next unless the owner changes the requested creation details.",
+            f"Issue exactly this service_assistant action next unless the owner changes the requested {detail_label} details.",
         ]
     )
 
@@ -3922,6 +4070,123 @@ def _resolve_create_attribute_choice(
     }
 
 
+def _resolve_update_memo_config_choice(
+    root: Path,
+    *,
+    arguments: dict,
+    selected_id: str,
+    form_values: dict | None,
+    assistant_run_id: str,
+    assistant_task_id: str,
+    confirmation_id: str,
+    confirmation_message_id: str,
+) -> dict:
+    if selected_id != UPDATE_MEMO_CONFIG_SUBMIT_CHOICE_ID:
+        confirmation_record = finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError(f"Memo 修改配置选项不存在：{selected_id}")
+    target_operation = str(arguments.get("target_operation") or "").strip()
+    if target_operation != "update_memo":
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("Memo 修改配置卡缺少目标操作")
+    base_arguments = arguments.get("base_arguments") if isinstance(arguments.get("base_arguments"), dict) else {}
+    fields = arguments.get("fields") if isinstance(arguments.get("fields"), dict) else {}
+    memo_id = str(base_arguments.get("memo_id") or fields.get("memo_id") or "").strip()
+    if not memo_id:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("Memo 修改配置卡缺少 memo_id")
+
+    title = _form_value(form_values, "title", fields.get("title") or base_arguments.get("title"))
+    description = _form_value(form_values, "description", fields.get("description") or base_arguments.get("description"))
+    run_id = _form_value(form_values, "run_id", fields.get("run_id") or base_arguments.get("run_id"))
+    if run_id not in _allowed_option_values(fields.get("runs")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的 Run 不在本次配置卡可用范围内")
+    run_id, _plan = _target_run(root, {"run_id": run_id})
+
+    status = normalize_memo_status(_form_value(form_values, "status", fields.get("status") or base_arguments.get("status") or "todo"))
+    if status not in _allowed_option_values(fields.get("statuses")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的状态不在本次配置卡可用范围内")
+    scheduled_date = _validated_memo_form_date(
+        _form_value(form_values, "scheduled_date", fields.get("scheduled_date")),
+        "开始日期",
+    )
+    end_date = _validated_memo_form_date(_form_value(form_values, "end_date", fields.get("end_date")), "结束日期")
+    if end_date and scheduled_date and end_date < scheduled_date:
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("结束日期不能早于开始日期")
+    created_task_id = _form_value(form_values, "created_task_id", fields.get("created_task_id"))
+    if created_task_id not in _allowed_option_values(fields.get("tasks")):
+        finalize_confirmation_card(root, confirmation_id, "failed")
+        raise ServiceAssistantActionError("选择的 Task 不在本次配置卡可用范围内")
+    created_task_id = _validated_memo_task_link(root, run_id, created_task_id)
+    next_arguments = {
+        **base_arguments,
+        "run_id": run_id,
+        "memo_id": memo_id,
+        "title": title,
+        "description": description,
+        "status": status,
+    }
+    if scheduled_date:
+        next_arguments["scheduled_date"] = scheduled_date
+    else:
+        next_arguments.pop("scheduled_date", None)
+    if end_date:
+        next_arguments["end_date"] = end_date
+    else:
+        next_arguments.pop("end_date", None)
+    if created_task_id:
+        next_arguments["created_task_id"] = created_task_id
+    else:
+        next_arguments.pop("created_task_id", None)
+    selected_payload = {
+        "memo_id": memo_id,
+        "title": title,
+        "description": description,
+        "run": _selected_option_label(fields.get("runs"), run_id),
+        "status": _selected_option_label(fields.get("statuses"), status),
+        "scheduled_date": scheduled_date,
+        "end_date": end_date,
+        "created_task": _selected_option_label(fields.get("tasks"), created_task_id),
+    }
+    confirmation_record = finalize_confirmation_card(root, confirmation_id, "selected", "已提交 Memo 修改配置")
+    if assistant_run_id:
+        append_event(
+            root,
+            assistant_run_id,
+            "service_assistant_choice",
+            {
+                "task_id": assistant_task_id,
+                "operation": target_operation,
+                "decision": "selected",
+                "memo_id": memo_id,
+                "run_id": run_id,
+                "status": status,
+                "scheduled_date": scheduled_date,
+                "end_date": end_date,
+                "created_task_id": created_task_id,
+            },
+        )
+    return {
+        "choice": True,
+        "cancelled": False,
+        "operation": target_operation,
+        "assistant_run_id": assistant_run_id,
+        "assistant_task_id": assistant_task_id,
+        "confirmation_id": confirmation_id,
+        "confirmation_message_id": confirmation_message_id or str((confirmation_record or {}).get("message_id") or ""),
+        "confirmation_card": (confirmation_record or {}).get("terminal_card"),
+        "tool_message": _create_attribute_choice_tool_message(target_operation, selected_payload, next_arguments),
+        "result": {
+            "ok": True,
+            "target_operation": target_operation,
+            "selected": selected_payload,
+            "next_arguments": next_arguments,
+        },
+    }
+
+
 def _resolve_group_handoff_reply_choice(
     root: Path,
     *,
@@ -4180,6 +4445,8 @@ def resolve_choice(
                 if operation == CREATE_TASK_CONFIG_CHOICE_OPERATION
                 else "已取消本次 Task 运行配置选择。"
                 if operation == CREATE_TASK_RUNTIME_CHOICE_OPERATION
+                else "已取消本次 Memo 修改配置。"
+                if operation == UPDATE_MEMO_CONFIG_CHOICE_OPERATION
                 else "已取消本次创建字段配置。"
                 if operation in {CREATE_MEMO_ATTRIBUTE_CHOICE_OPERATION, CREATE_TASK_ATTRIBUTE_CHOICE_OPERATION}
                 else "已取消本次方案选择。"
@@ -4221,6 +4488,17 @@ def resolve_choice(
             root,
             arguments=arguments,
             selected_id=selected_id,
+            assistant_run_id=assistant_run_id,
+            assistant_task_id=assistant_task_id,
+            confirmation_id=confirmation_id,
+            confirmation_message_id=confirmation_message_id,
+        )
+    if operation == UPDATE_MEMO_CONFIG_CHOICE_OPERATION:
+        return _resolve_update_memo_config_choice(
+            root,
+            arguments=arguments,
+            selected_id=selected_id,
+            form_values=form_values,
             assistant_run_id=assistant_run_id,
             assistant_task_id=assistant_task_id,
             confirmation_id=confirmation_id,
@@ -4401,6 +4679,7 @@ __all__ = [
     "WRITE_OPERATIONS",
     "parse_confirmation_text",
     "prepare_group_handoff_owner_card",
+    "prepare_memo_edit_action",
     "prepare_service_assistant_action",
     "resolve_choice",
     "resolve_confirmation",

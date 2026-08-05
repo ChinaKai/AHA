@@ -9,7 +9,12 @@ from pathlib import Path
 from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
-from aha_cli.services.feishu_runtime import feishu_status, update_feishu_notifications_enabled, update_feishu_settings
+from aha_cli.services.feishu_runtime import (
+    cleanup_feishu_old_app_state,
+    feishu_status,
+    update_feishu_notifications_enabled,
+    update_feishu_settings,
+)
 from aha_cli.services.proxy import apply_proxy_environment, core_proxy_config, proxy_configured
 from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
 from aha_cli.services.weixin import (
@@ -769,6 +774,15 @@ def system_route_response(
         except OSError as exc:
             return json_response({"error": str(exc)}, "500 Internal Server Error")
         return json_response({"ok": True, "feishu": status})
+    if method == "POST" and path == "/api/feishu/cleanup-old-app":
+        payload = parse_json_body(body) if body.strip() else {}
+        dry_run = payload.get("dry_run")
+        dry_run = dry_run if isinstance(dry_run, bool) else str(dry_run or "").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            result = cleanup_feishu_old_app_state(root, dry_run=dry_run)
+        except (OSError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
+        return json_response({"ok": True, **result})
     if method == "POST" and path == "/api/feishu/notifications":
         payload = parse_json_body(body) if body.strip() else {}
         raw_enabled = payload.get("enabled")

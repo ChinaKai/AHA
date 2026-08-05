@@ -13,6 +13,7 @@
     let open = false;
     let loading = false;
     let savingSettings = false;
+    let cleaningOldApp = false;
     let loaded = false;
     let error = "";
     let notice = "";
@@ -233,6 +234,29 @@
       return t("feishu.connected_hint", "The Feishu assistant is ready to receive messages and push subscribed task replies.");
     }
 
+    function cleanupCount(cleanup, key) {
+      const value = Number(cleanup?.[key] ?? 0);
+      return Number.isFinite(value) ? value : 0;
+    }
+
+    function cleanupOldAppSummary(cleanup) {
+      return [
+        `${t("feishu.cleanup_removed_allowed", "Allowed users")}: ${cleanupCount(cleanup, "removed_allowed_open_id_count")}`,
+        `${t("feishu.cleanup_removed_owner", "Owner records")}: ${cleanupCount(cleanup, "removed_owner_record_count")}`,
+        `${t("feishu.cleanup_removed_private", "Private chats")}: ${cleanupCount(cleanup, "removed_private_chat_count")}`,
+        `${t("feishu.cleanup_removed_subscriptions", "Subscriptions")}: ${cleanupCount(cleanup, "removed_subscription_count")}`
+      ].join("\n");
+    }
+
+    function cleanupOldAppTotal(cleanup) {
+      return [
+        "removed_allowed_open_id_count",
+        "removed_owner_record_count",
+        "removed_private_chat_count",
+        "removed_subscription_count"
+      ].reduce((sum, key) => sum + cleanupCount(cleanup, key), 0);
+    }
+
     function renderPopover() {
       const popover = elements.feishuConsolePopoverEl;
       if (!popover) return;
@@ -417,6 +441,7 @@
             </fieldset>
             <div class="feishu-console-settings-actions">
               <button type="submit" ${loading || savingSettings ? "disabled" : ""}>${escapeHtml(savingSettings ? t("feishu.saving", "Saving...") : t("common.save", "Save"))}</button>
+              <button class="button-ghost" type="button" data-feishu-action="cleanup-old-app" ${loading || cleaningOldApp ? "disabled" : ""}>${escapeHtml(cleaningOldApp ? t("feishu.cleanup_running", "Cleaning...") : t("feishu.cleanup_old_app", "Clean old App state"))}</button>
               <small>${escapeHtml(t("feishu.restart_hint", "Restart for credential or connection changes; access and delivery changes apply to subsequent messages."))}</small>
             </div>
           </form>
@@ -503,6 +528,64 @@
       }
     }
 
+    async function cleanupOldApp() {
+      if (cleaningOldApp) return;
+      cleaningOldApp = true;
+      error = "";
+      notice = "";
+      renderPopover();
+      try {
+        const endpoint = deps.apiUrl?.("/api/feishu/cleanup-old-app", {}, { runScoped: false }) || "/api/feishu/cleanup-old-app";
+        const preview = await deps.fetchJson?.(
+          endpoint,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dry_run: true })
+          },
+          t("feishu.cleanup_failed", "Failed to clean old Feishu App state")
+        );
+        const previewCleanup = preview?.cleanup && typeof preview.cleanup === "object" ? preview.cleanup : {};
+        if (preview?.feishu && typeof preview.feishu === "object") status = preview.feishu;
+        if (!previewCleanup.ok) {
+          throw new Error(previewCleanup.reason || t("feishu.cleanup_failed", "Failed to clean old Feishu App state"));
+        }
+        const total = cleanupOldAppTotal(previewCleanup);
+        if (!total) {
+          notice = t("feishu.cleanup_empty", "No old Feishu App state found.");
+          const windowRef = deps.windowRef || window;
+          windowRef.alert?.(notice);
+          return;
+        }
+        const confirmMessage = `${t("feishu.cleanup_confirm", "Clean the following old Feishu App state?")}\n\n${cleanupOldAppSummary(previewCleanup)}`;
+        const windowRef = deps.windowRef || window;
+        if (windowRef.confirm && !windowRef.confirm(confirmMessage)) {
+          notice = t("feishu.cleanup_cancelled", "Cleanup cancelled.");
+          return;
+        }
+        const response = await deps.fetchJson?.(
+          endpoint,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dry_run: false })
+          },
+          t("feishu.cleanup_failed", "Failed to clean old Feishu App state")
+        );
+        const cleanup = response?.cleanup && typeof response.cleanup === "object" ? response.cleanup : {};
+        if (response?.feishu && typeof response.feishu === "object") status = response.feishu;
+        if (!cleanup.ok) {
+          throw new Error(cleanup.reason || t("feishu.cleanup_failed", "Failed to clean old Feishu App state"));
+        }
+        notice = `${t("feishu.cleanup_done", "Old Feishu App state cleaned.")}\n${cleanupOldAppSummary(cleanup)}`;
+      } catch (err) {
+        error = err?.message || String(err || t("feishu.cleanup_failed", "Failed to clean old Feishu App state"));
+      } finally {
+        cleaningOldApp = false;
+        if (open) renderPopover();
+      }
+    }
+
     function setOpen(nextOpen) {
       open = Boolean(nextOpen && elements.feishuConsolePopoverEl);
       if (!elements.feishuConsolePopoverEl) return;
@@ -532,6 +615,7 @@
       const action = target?.closest("[data-feishu-action]")?.getAttribute("data-feishu-action") || "";
       if (action === "close") setOpen(false);
       if (action === "refresh") void loadStatus();
+      if (action === "cleanup-old-app") void cleanupOldApp();
       if (action === "add-group") {
         const button = target?.closest('[data-feishu-action="add-group"]');
         const chatId = String(button?.getAttribute("data-feishu-chat-id") || "").trim();

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import queue
+import re
 import secrets
 import sys
 import threading
@@ -33,7 +34,7 @@ from aha_cli.services.feishu import (
     set_session_binding,
 )
 from aha_cli.services.feishu_audit import audit_feishu_channel
-from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
+from aha_cli.services.feishu_notifications import load_subscription_state, remove_subscriptions, set_subscription
 from aha_cli.services.feishu_owner import remember_owner_private_chat, resolve_feishu_owner, resolve_feishu_owner_by_open_id
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
 from aha_cli.services.feishu_work_run import feishu_work_run_options, resolve_feishu_work_run_id
@@ -53,6 +54,7 @@ from aha_cli.services.service_assistant import (
 )
 from aha_cli.services.service_assistant_actions import (
     ServiceAssistantActionError,
+    prepare_memo_edit_action,
     prepare_service_assistant_action,
     resolve_choice,
     resolve_confirmation,
@@ -73,6 +75,14 @@ ASSISTANT_TASK_TITLE = "AHA Assistant"
 FEISHU_BOT_MENU_EVENT_TYPE = "application.bot.menu_v6"
 MENU_QUERY_ACTION = "feishu_menu_query"
 MENU_QUERY_SUBMIT_CHOICE_ID = "__submit_menu_query__"
+MENU_QUERY_SELECT_MEMO_PREFIX = "select_memo:"
+MENU_QUERY_SELECT_TASK_PREFIX = "select_task:"
+TASK_CHAT_CONFIRM_ACTION = "feishu_task_chat_confirm"
+TASK_CHAT_CARD_ACTION_KIND = "aha_task_chat"
+TASK_CHAT_CONFIRM_CHOICE_ID = "confirm"
+TASK_CHAT_CANCEL_CHOICE_ID = "cancel"
+TASK_CHAT_MODE = "task_chat"
+TASK_CHAT_EXIT_RE = re.compile(r"^\s*(?:/exit(?:_task)?|退出\s*(?:task|任务|chat|对话|task\s*chat)?)\s*$", re.IGNORECASE)
 DIRECT_TERMINAL_OPERATIONS = {
     "create_memo",
     "create_task",
@@ -151,7 +161,7 @@ def _plain_message(root: Path, message: Any) -> dict:
     if not text and attachments:
         text = message_attachment_summary(attachments)
     return {
-        "tenant_key": str(header.get("tenant_key") or app_id or "local"),
+        "tenant_key": str(app_id or header.get("tenant_key") or "local"),
         "open_id": str(getattr(message, "sender_id", "") or getattr(sender, "open_id", "") or ""),
         "chat_id": str(getattr(message, "chat_id", "") or ""),
         "chat_type": str(getattr(message, "chat_type", "") or "unknown").lower(),
@@ -626,6 +636,37 @@ def _unauthorized_message(chat_type: str, open_id: str, reason: str) -> str:
     return f"{base}\n本次消息检测到的 open_id：{detected}"
 
 
+def _tenant_from_session_key(session_key: object) -> str:
+    return str(session_key or "").split(":", 1)[0].strip()
+
+
+def _configured_tenant_key(root: Path, config: dict | None = None) -> str:
+    app_id, _secret = feishu_credentials(config if isinstance(config, dict) else feishu_config(root))
+    return str(app_id or "").strip()
+
+
+def _owner_p2p_session_key(
+    root: Path,
+    *,
+    chat_id: str,
+    open_id: str,
+    fallback_session_key: str = "",
+    config: dict | None = None,
+) -> str:
+    tenant_key = _configured_tenant_key(root, config) or _tenant_from_session_key(fallback_session_key) or "local"
+    if not chat_id or not open_id:
+        return str(fallback_session_key or "").strip()
+    session_key = make_session_key(tenant_key=tenant_key, open_id=open_id, chat_id=chat_id, chat_type="p2p")
+    remember_owner_private_chat(
+        root,
+        tenant_key=tenant_key,
+        open_id=open_id,
+        chat_id=chat_id,
+        session_key=session_key,
+    )
+    return session_key
+
+
 def _session_key(payload: dict) -> str:
     return make_session_key(
         tenant_key=str(payload.get("tenant_key") or "local"),
@@ -968,7 +1009,7 @@ def _direct_followup_confirmation(root: Path, channel: Any, chat_id: str, confir
     result = confirmation.get("result") if isinstance(confirmation.get("result"), dict) else {}
     target_operation = str(result.get("target_operation") or "").strip()
     next_arguments = result.get("next_arguments") if isinstance(result.get("next_arguments"), dict) else {}
-    if target_operation not in {"create_memo", "create_task", "dismiss_feishu_group_handoff"} or not next_arguments:
+    if target_operation not in {"create_memo", "update_memo", "create_task", "dismiss_feishu_group_handoff"} or not next_arguments:
         return False
     run_id = str(confirmation.get("assistant_run_id") or "").strip()
     task_id = str(confirmation.get("assistant_task_id") or "").strip()
@@ -1108,12 +1149,215 @@ def _card_action_form_values(payload: dict) -> dict:
     return {}
 
 
+def _menu_query_selection(choice_id: str) -> tuple[str, str]:
+    if choice_id.startswith(MENU_QUERY_SELECT_MEMO_PREFIX):
+        return "memo", choice_id[len(MENU_QUERY_SELECT_MEMO_PREFIX) :].strip()
+    if choice_id.startswith(MENU_QUERY_SELECT_TASK_PREFIX):
+        return "task", choice_id[len(MENU_QUERY_SELECT_TASK_PREFIX) :].strip()
+    return "", ""
+
+
+def _ensure_owner_assistant_task_for_session(
+    root: Path,
+    *,
+    chat_id: str,
+    open_id: str,
+    session_key: str,
+) -> tuple[str, dict]:
+    session_key = _owner_p2p_session_key(root, chat_id=chat_id, open_id=open_id, fallback_session_key=session_key)
+    run_id = _dedicated_run(root)
+    if not run_id or not run_exists(root, run_id):
+        raise ServiceAssistantActionError("AHA 尚无可用管家 Run，请先在 Web 中创建或启动飞书助手")
+    binding = _binding(root, session_key, open_id, run_id)
+    task = _ensure_agent_task(root, run_id, session_key, open_id, binding, display_name=_open_id_display_name(root, open_id))
+    task_id = str(task.get("id") or "")
+    set_subscription(
+        root,
+        session_key,
+        chat_id=chat_id,
+        open_id=open_id,
+        run_id=run_id,
+        task_id=task_id,
+        chat_type="p2p",
+    )
+    remember_owner_private_chat(
+        root,
+        tenant_key=str(session_key or "local").split(":", 1)[0] or "local",
+        open_id=open_id,
+        chat_id=chat_id,
+        session_key=session_key,
+    )
+    return run_id, task
+
+
+def _handle_menu_memo_selection(
+    root: Path,
+    channel: Any,
+    *,
+    chat_id: str,
+    open_id: str,
+    session_key: str,
+    arguments: dict,
+    memo_id: str,
+) -> None:
+    assistant_run_id, assistant_task = _ensure_owner_assistant_task_for_session(
+        root,
+        chat_id=chat_id,
+        open_id=open_id,
+        session_key=session_key,
+    )
+    action = prepare_memo_edit_action(
+        root,
+        assistant_run_id,
+        assistant_task,
+        memo_run_id=str(arguments.get("run_id") or ""),
+        memo_id=memo_id,
+    )
+    if action.get("confirmation_card"):
+        _send_menu_card(root, channel, chat_id, action)
+        return
+    response = str(action.get("user_response") or "").strip()
+    if response:
+        _send_text(root, channel, chat_id, response)
+
+
+def _task_for_chat(root: Path, run_id: str, task_id: str) -> dict:
+    plan = require_plan(root, run_id)
+    if plan.get("system_managed"):
+        raise ServiceAssistantActionError("system-managed runs are not available through Task Chat")
+    for task in plan.get("tasks", []):
+        if not isinstance(task, dict) or str(task.get("id") or "") != task_id:
+            continue
+        if task.get("deleted_at") or task.get("hidden"):
+            raise ServiceAssistantActionError(f"task not found: {task_id}")
+        if is_service_assistant_task(task) or is_feishu_group_task(task):
+            raise ServiceAssistantActionError("system-managed tasks are not available through Task Chat")
+        return task
+    raise ServiceAssistantActionError(f"task not found: {task_id}")
+
+
+def _task_chat_confirmation_card(run_id: str, task: dict) -> dict:
+    task_id = str(task.get("id") or "")
+    title = _brief_menu_text(task.get("title"), limit=120, fallback="未命名 Task")
+    status = _brief_menu_text(task.get("status"), limit=40, fallback="-")
+
+    def button(label: str, choice_id: str, button_type: str, element_id: str) -> dict:
+        return {
+            "tag": "button",
+            "element_id": element_id,
+            "text": {"tag": "plain_text", "content": label},
+            "type": button_type,
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "kind": TASK_CHAT_CARD_ACTION_KIND,
+                        "choice_id": choice_id,
+                    },
+                }
+            ],
+        }
+
+    return {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": "进入 Task Chat"}, "template": "blue"},
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(
+                        [
+                            f"**Task**：`{run_id} / {task_id}`",
+                            f"**标题**：{title}",
+                            f"**状态**：{status}",
+                            "",
+                            "确认后，当前飞书私聊将进入该 Task 的 Chat 模式。",
+                            "后续直接发送文本会转给该 Task；发送 `退出 task` 可退出并回到 AHA 管家。",
+                        ]
+                    ),
+                },
+                {
+                    "tag": "column_set",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "auto",
+                            "elements": [button("确认进入", TASK_CHAT_CONFIRM_CHOICE_ID, "primary", "aha_task_chat_confirm")],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "auto",
+                            "elements": [button("取消", TASK_CHAT_CANCEL_CHOICE_ID, "default", "aha_task_chat_cancel")],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def _prepare_task_chat_confirmation(
+    root: Path,
+    *,
+    run_id: str,
+    task: dict,
+    open_id: str,
+    session_key: str,
+) -> dict:
+    confirmation_id = secrets.token_urlsafe(18)
+    card = _task_chat_confirmation_card(run_id, task)
+    context = {
+        "operation": TASK_CHAT_CONFIRM_ACTION,
+        "run_id": run_id,
+        "task_id": str(task.get("id") or ""),
+        "confirmation_id": confirmation_id,
+    }
+    issue_action_token(
+        root,
+        open_id=open_id,
+        session_key=session_key,
+        action=TASK_CHAT_CONFIRM_ACTION,
+        context=context,
+    )
+    register_confirmation_card(
+        root,
+        confirmation_id,
+        open_id=open_id,
+        session_key=session_key,
+        action=TASK_CHAT_CONFIRM_ACTION,
+        card=card,
+        expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+    )
+    return {"confirmation_id": confirmation_id, "confirmation_card": card}
+
+
+def _handle_menu_task_selection(
+    root: Path,
+    channel: Any,
+    *,
+    chat_id: str,
+    open_id: str,
+    session_key: str,
+    arguments: dict,
+    task_id: str,
+) -> None:
+    run_id = str(arguments.get("run_id") or "").strip()
+    task = _task_for_chat(root, run_id, task_id)
+    _send_menu_card(
+        root,
+        channel,
+        chat_id,
+        _prepare_task_chat_confirmation(root, run_id=run_id, task=task, open_id=open_id, session_key=session_key),
+    )
+
+
 def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, value: dict) -> None:
     chat_id = str(payload.get("chat_id") or "")
     message_id = str(payload.get("message_id") or "")
     open_id = str(payload.get("open_id") or "")
     choice_id = str(value.get("choice_id") or "").strip()
-    if choice_id not in {MENU_QUERY_SUBMIT_CHOICE_ID, "__cancel__"}:
+    selection_kind, selected_item_id = _menu_query_selection(choice_id)
+    if choice_id not in {MENU_QUERY_SUBMIT_CHOICE_ID, "__cancel__"} and not selection_kind:
         _audit_inbound_resolution(root, payload, "rejected", reason="invalid_menu_query_choice")
         _send_text(root, channel, chat_id, "无法处理查询卡片：操作数据不完整。", reply_to=message_id)
         return
@@ -1138,6 +1382,60 @@ def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, valu
             decision=choice_id,
         )
         confirmation_id = str(context.get("confirmation_id") or "")
+        operation = str(context.get("operation") or "")
+        next_session_key = _owner_p2p_session_key(
+            root,
+            chat_id=chat_id,
+            open_id=open_id,
+            fallback_session_key=session_key,
+        )
+        if selection_kind:
+            arguments = context.get("arguments") if isinstance(context.get("arguments"), dict) else {}
+            allowed_item_ids = {str(item) for item in context.get("allowed_item_ids") or []}
+            expected_operation = "list_memos" if selection_kind == "memo" else "list_tasks"
+            if operation != expected_operation or not selected_item_id or selected_item_id not in allowed_item_ids:
+                finalize_confirmation_card(root, confirmation_id, "failed")
+                raise ServiceAssistantActionError("选择项不属于本次查询结果")
+            record = finalize_confirmation_card(
+                root,
+                confirmation_id,
+                "selected",
+                f"已选择 {'Memo' if selection_kind == 'memo' else 'Task'}：{selected_item_id}",
+            )
+            if isinstance((record or {}).get("terminal_card"), dict):
+                _update_confirmation_card(root, channel, record or {})
+            if selection_kind == "memo":
+                _handle_menu_memo_selection(
+                    root,
+                    channel,
+                    chat_id=chat_id,
+                    open_id=open_id,
+                    session_key=next_session_key,
+                    arguments=arguments,
+                    memo_id=selected_item_id,
+                )
+                reason = "menu_memo_selected"
+            else:
+                _handle_menu_task_selection(
+                    root,
+                    channel,
+                    chat_id=chat_id,
+                    open_id=open_id,
+                    session_key=next_session_key,
+                    arguments=arguments,
+                    task_id=selected_item_id,
+                )
+                reason = "menu_task_selected"
+            _audit_inbound_resolution(
+                root,
+                payload,
+                "handled",
+                reason=reason,
+                session_key=next_session_key,
+                run_id=str(arguments.get("run_id") or ""),
+                task_id=selected_item_id if selection_kind == "task" else "",
+            )
+            return
         if choice_id == "__cancel__":
             record = finalize_confirmation_card(root, confirmation_id, "cancelled")
             if isinstance((record or {}).get("terminal_card"), dict):
@@ -1145,19 +1443,23 @@ def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, valu
             _send_text(root, channel, chat_id, "已取消本次查询。", reply_to=message_id)
             _audit_inbound_resolution(root, payload, "handled", reason="menu_query_cancelled", session_key=session_key)
             return
-        operation = str(context.get("operation") or "")
         fields = context.get("fields") if isinstance(context.get("fields"), dict) else {}
         arguments = _menu_query_arguments(operation, fields, _card_action_form_values(payload))
         record = finalize_confirmation_card(root, confirmation_id, "selected", "已提交查询条件")
         if isinstance((record or {}).get("terminal_card"), dict):
             _update_confirmation_card(root, channel, record or {})
-        _send(root, channel, chat_id, {"card": _menu_list_card(root, operation, arguments)})
+        _send_menu_card(
+            root,
+            channel,
+            chat_id,
+            _prepare_menu_query_result_card(root, operation, arguments, open_id=open_id, session_key=next_session_key),
+        )
         _audit_inbound_resolution(
             root,
             payload,
             "handled",
             reason="menu_query_submitted",
-            session_key=session_key,
+            session_key=next_session_key,
             run_id=str(arguments.get("run_id") or ""),
         )
     except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
@@ -1171,11 +1473,103 @@ def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, valu
         _send_text(root, channel, chat_id, f"无法处理查询：{exc}", reply_to=message_id)
 
 
+def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value: dict) -> None:
+    chat_id = str(payload.get("chat_id") or "")
+    message_id = str(payload.get("message_id") or "")
+    open_id = str(payload.get("open_id") or "")
+    choice_id = str(value.get("choice_id") or "").strip().lower()
+    if choice_id not in {TASK_CHAT_CONFIRM_CHOICE_ID, TASK_CHAT_CANCEL_CHOICE_ID}:
+        _audit_inbound_resolution(root, payload, "rejected", reason="invalid_task_chat_choice")
+        _send_text(root, channel, chat_id, "无法处理 Task Chat 卡片：操作数据不完整。", reply_to=message_id)
+        return
+    try:
+        session_key, subscription = _confirmation_subscription_for_card(root, chat_id, open_id, message_id)
+        authorization_error = _authorization_error(
+            feishu_config(root),
+            chat_type=str(subscription.get("chat_type") or "p2p"),
+            chat_id=chat_id,
+            open_id=open_id,
+        )
+        if authorization_error:
+            _audit_inbound_resolution(root, payload, "rejected", reason=authorization_error, session_key=session_key)
+            _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
+            return
+        context = consume_confirmation_card(
+            root,
+            message_id=message_id,
+            open_id=open_id,
+            session_key=session_key,
+            action=TASK_CHAT_CONFIRM_ACTION,
+            decision=choice_id,
+        )
+        confirmation_id = str(context.get("confirmation_id") or "")
+        run_id = str(context.get("run_id") or "")
+        task_id = str(context.get("task_id") or "")
+        target_session_key = _owner_p2p_session_key(
+            root,
+            chat_id=chat_id,
+            open_id=open_id,
+            fallback_session_key=session_key,
+        )
+        if choice_id == TASK_CHAT_CANCEL_CHOICE_ID:
+            record = finalize_confirmation_card(root, confirmation_id, "cancelled")
+            if isinstance((record or {}).get("terminal_card"), dict):
+                _update_confirmation_card(root, channel, record or {})
+            _audit_inbound_resolution(root, payload, "handled", reason="task_chat_cancelled", session_key=target_session_key)
+            return
+        task = _task_for_chat(root, run_id, task_id)
+        set_subscription(
+            root,
+            target_session_key,
+            chat_id=chat_id,
+            open_id=open_id,
+            run_id=run_id,
+            task_id=task_id,
+            chat_type="p2p",
+            mode=TASK_CHAT_MODE,
+        )
+        record = finalize_confirmation_card(
+            root,
+            confirmation_id,
+            "confirmed",
+            "\n".join(
+                [
+                    f"已进入 Task Chat：{run_id} / {task_id}",
+                    f"标题：{_brief_menu_text(task.get('title'), limit=120, fallback='未命名 Task')}",
+                    "后续飞书文本会直接转给该 Task；发送 `退出 task` 可退出。",
+                ]
+            ),
+        )
+        if isinstance((record or {}).get("terminal_card"), dict):
+            _update_confirmation_card(root, channel, record or {})
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "handled",
+            reason="task_chat_enabled",
+            session_key=target_session_key,
+            run_id=run_id,
+            task_id=task_id,
+        )
+    except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        _audit_inbound_resolution(root, payload, "failed", error=exc)
+        record = confirmation_card_for_message(root, message_id)
+        if record is not None and isinstance(record.get("terminal_card"), dict):
+            try:
+                _update_confirmation_card(root, channel, record)
+            except (FeishuError, RuntimeError, TimeoutError):
+                pass
+        _send_text(root, channel, chat_id, f"无法进入 Task Chat：{exc}", reply_to=message_id)
+
+
 def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
     value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
     action_kind = str(value.get("kind") or "")
     if action_kind == "aha_menu_query":
         _handle_menu_query_card_action(root, channel, payload, value)
+        return
+    if action_kind == TASK_CHAT_CARD_ACTION_KIND:
+        _handle_task_chat_card_action(root, channel, payload, value)
         return
     if action_kind not in {"aha_service_confirmation", "aha_service_choice"}:
         _audit_inbound_resolution(root, payload, "ignored", reason="unsupported_card_action")
@@ -1284,15 +1678,14 @@ def _owner_menu_private_context(
 ) -> tuple[str, str, str, str]:
     config = feishu_config(root)
     raw_tenant_key = str(payload.get("tenant_key") or "").strip()
-    tenant_key = raw_tenant_key or "local"
+    tenant_key = _configured_tenant_key(root, config) or raw_tenant_key or "local"
     open_id = str(payload.get("open_id") or "").strip()
     owner = resolve_feishu_owner(root, tenant_key=tenant_key, config=config)
     configured_owner = str(config.get("owner_open_id") or "").strip()
-    if open_id and (not raw_tenant_key or not str(owner.get("chat_id") or "").strip()):
+    if open_id and (not str(owner.get("chat_id") or "").strip()):
         owner_by_open_id = resolve_feishu_owner_by_open_id(root, open_id=open_id, config=config)
         if str(owner_by_open_id.get("open_id") or "").strip() == open_id:
             owner = {**owner, **owner_by_open_id}
-            tenant_key = str(owner.get("tenant_key") or tenant_key).strip() or tenant_key
     expected_owner = str(configured_owner or owner.get("open_id") or "").strip()
     if not expected_owner:
         raise ServiceAssistantActionError("请先在飞书助手设置里配置唯一 owner_open_id")
@@ -1301,9 +1694,14 @@ def _owner_menu_private_context(
     chat_id = str(payload.get("chat_id") or owner.get("chat_id") or config.get("owner_chat_id") or "").strip()
     if not chat_id:
         raise ServiceAssistantActionError("无法定位 owner 私聊，请先给飞书助手发送一条私聊消息")
-    session_key = str(owner.get("session_key") or "").strip()
-    if not session_key:
-        session_key = make_session_key(tenant_key=tenant_key, open_id=open_id, chat_id=chat_id, chat_type="p2p")
+    session_key = _owner_p2p_session_key(
+        root,
+        chat_id=chat_id,
+        open_id=open_id,
+        fallback_session_key=str(owner.get("session_key") or ""),
+        config=config,
+    )
+    tenant_key = _tenant_from_session_key(session_key) or tenant_key
     payload["tenant_key"] = tenant_key
     payload["chat_id"] = chat_id
     return tenant_key, open_id, chat_id, session_key
@@ -1426,6 +1824,24 @@ def _menu_query_button(label: str, choice_id: str, button_type: str, element_id:
         payload["form_action_type"] = "submit"
         payload["name"] = "form_submit"
     return payload
+
+
+def _menu_query_select_button(label: str, choice_id: str, element_id: str) -> dict:
+    return {
+        "tag": "button",
+        "element_id": element_id,
+        "text": {"tag": "plain_text", "content": label},
+        "type": "primary",
+        "behaviors": [
+            {
+                "type": "callback",
+                "value": {
+                    "kind": "aha_menu_query",
+                    "choice_id": choice_id,
+                },
+            }
+        ],
+    }
 
 
 def _menu_query_run_options(root: Path, default_run_id: str) -> list[dict]:
@@ -1679,7 +2095,7 @@ def _task_query_date(task: dict) -> str:
     return normalize_memo_date(task.get("created_at"))
 
 
-def _menu_list_card(root: Path, operation: str, arguments: dict) -> dict:
+def _menu_list_data(root: Path, operation: str, arguments: dict) -> dict:
     run_id = str(arguments.get("run_id") or "").strip() or resolve_feishu_work_run_id(root)
     plan = require_plan(root, run_id)
     if plan.get("system_managed"):
@@ -1698,9 +2114,9 @@ def _menu_list_card(root: Path, operation: str, arguments: dict) -> dict:
         ][:limit]
         title = "Memo 列表"
         empty = "当前 Run 暂无 Memo。"
-        body = [_memo_menu_line(item, index) for index, item in enumerate(items, start=1)]
+        lines = [_memo_menu_line(item, index) for index, item in enumerate(items, start=1)]
     elif operation == "list_tasks":
-        tasks = [
+        items = [
             task
             for task in reversed(plan.get("tasks", []))
             if isinstance(task, dict)
@@ -1713,23 +2129,97 @@ def _menu_list_card(root: Path, operation: str, arguments: dict) -> dict:
         ][:limit]
         title = "Task 列表"
         empty = "当前 Run 暂无可见 Task。"
-        body = [_task_menu_line(item, index) for index, item in enumerate(tasks, start=1)]
+        lines = [_task_menu_line(item, index) for index, item in enumerate(items, start=1)]
     else:
         raise ServiceAssistantActionError(f"不支持的飞书菜单查询：{operation or '-'}")
+    return {
+        "run_id": run_id,
+        "run_label": run_label,
+        "title": title,
+        "empty": empty,
+        "items": items,
+        "lines": lines,
+        "limit": limit,
+        "status_filter": status_filter,
+    }
+
+
+def _menu_list_card(root: Path, operation: str, arguments: dict) -> dict:
+    data = _menu_list_data(root, operation, arguments)
+    items = list(data.get("items") or [])
+    lines = list(data.get("lines") or [])
+    limit = int(data.get("limit") or 10)
+    status_filter = str(data.get("status_filter") or "all")
     elements = [
-        {"tag": "markdown", "content": f"**Run**：{run_label}\n**状态**：{status_filter or 'all'}\n**数量**：{len(body)} / 上限 {limit}"},
+        {
+            "tag": "markdown",
+            "content": f"**Run**：{data['run_label']}\n**状态**：{status_filter or 'all'}\n**数量**：{len(lines)} / 上限 {limit}",
+        },
     ]
-    if body:
-        for item in body:
-            elements.append({"tag": "markdown", "content": item})
+    if lines:
+        for index, (item, line) in enumerate(zip(items, lines), start=1):
+            item_id = str((item if isinstance(item, dict) else {}).get("id") or "").strip()
+            elements.append({"tag": "markdown", "content": line})
+            if not item_id:
+                continue
+            if operation == "list_memos":
+                choice_id = f"{MENU_QUERY_SELECT_MEMO_PREFIX}{item_id}"
+                button_label = "选中编辑"
+                element_id = f"aha_menu_select_memo_{index}"
+            else:
+                choice_id = f"{MENU_QUERY_SELECT_TASK_PREFIX}{item_id}"
+                button_label = "选中进入 Chat"
+                element_id = f"aha_menu_select_task_{index}"
+            elements.append(
+                {
+                    "tag": "column_set",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "auto",
+                            "elements": [_menu_query_select_button(button_label, choice_id, element_id)],
+                        }
+                    ],
+                }
+            )
     else:
-        elements.append({"tag": "markdown", "content": empty})
+        elements.append({"tag": "markdown", "content": str(data.get("empty") or "无结果。")})
     elements.append({"tag": "markdown", "content": "<font color='grey'>该菜单查询由 AHA 直接读取本地状态，不调用 agent/backend 模型。</font>"})
     return {
         "schema": "2.0",
-        "header": {"title": {"tag": "plain_text", "content": title}, "template": "blue"},
+        "header": {"title": {"tag": "plain_text", "content": str(data.get("title") or "列表")}, "template": "blue"},
         "body": {"elements": elements},
     }
+
+
+def _prepare_menu_query_result_card(root: Path, operation: str, arguments: dict, *, open_id: str, session_key: str) -> dict:
+    data = _menu_list_data(root, operation, arguments)
+    confirmation_id = secrets.token_urlsafe(18)
+    item_ids = [str(item.get("id") or "") for item in data.get("items") or [] if isinstance(item, dict) and item.get("id")]
+    card = _menu_list_card(root, operation, arguments)
+    context = {
+        "operation": operation,
+        "arguments": arguments,
+        "allowed_item_ids": item_ids,
+        "confirmation_id": confirmation_id,
+    }
+    issue_action_token(
+        root,
+        open_id=open_id,
+        session_key=session_key,
+        action=MENU_QUERY_ACTION,
+        context=context,
+    )
+    register_confirmation_card(
+        root,
+        confirmation_id,
+        open_id=open_id,
+        session_key=session_key,
+        action=MENU_QUERY_ACTION,
+        card=card,
+        expires_at=time.time() + ACTION_TOKEN_TTL_SECONDS,
+    )
+    return {"confirmation_id": confirmation_id, "confirmation_card": card}
 
 
 def _menu_error_message(payload: dict, exc: BaseException) -> str:
@@ -1803,6 +2293,187 @@ def _handle_menu_action(root: Path, server_default_run_id: str, channel: Any, pa
             _send_text(root, channel, chat_id, _menu_error_message(payload, exc))
 
 
+def _valid_task_chat_subscription(subscription: object) -> dict | None:
+    if not isinstance(subscription, dict) or not subscription.get("enabled"):
+        return None
+    if str(subscription.get("mode") or "") != TASK_CHAT_MODE:
+        return None
+    run_id = str(subscription.get("run_id") or "")
+    task_id = str(subscription.get("task_id") or "")
+    if not run_id or not task_id:
+        return None
+    return dict(subscription)
+
+
+def _active_task_chat_subscription(
+    root: Path,
+    session_key: str,
+    *,
+    chat_id: str = "",
+    open_id: str = "",
+) -> dict | None:
+    state = load_subscription_state(root)
+    subscriptions = state.get("subscriptions", {}) if isinstance(state.get("subscriptions"), dict) else {}
+    exact = _valid_task_chat_subscription(subscriptions.get(session_key))
+    if exact is not None:
+        return exact
+    if not chat_id or not open_id:
+        return None
+    for stale_session_key, subscription in subscriptions.items():
+        candidate = _valid_task_chat_subscription(subscription)
+        if candidate is None:
+            continue
+        if str(stale_session_key) == str(session_key):
+            continue
+        if str(candidate.get("chat_id") or "") != chat_id or str(candidate.get("open_id") or "") != open_id:
+            continue
+        migrated = set_subscription(
+            root,
+            session_key,
+            chat_id=chat_id,
+            open_id=open_id,
+            run_id=str(candidate.get("run_id") or ""),
+            task_id=str(candidate.get("task_id") or ""),
+            chat_type="p2p",
+            mode=TASK_CHAT_MODE,
+        )
+        remove_subscriptions(root, {str(stale_session_key)})
+        return migrated
+    return None
+
+
+def _restore_assistant_chat_subscription(
+    root: Path,
+    *,
+    chat_id: str,
+    open_id: str,
+    session_key: str,
+) -> tuple[str, str]:
+    run_id, task = _ensure_owner_assistant_task_for_session(
+        root,
+        chat_id=chat_id,
+        open_id=open_id,
+        session_key=session_key,
+    )
+    return run_id, str(task.get("id") or "")
+
+
+def _is_task_chat_exit_text(text: str) -> bool:
+    return bool(TASK_CHAT_EXIT_RE.fullmatch(str(text or "")))
+
+
+def _handle_task_chat_message(
+    root: Path,
+    channel: Any,
+    payload: dict,
+    *,
+    text: str,
+    session_key: str,
+    subscription: dict,
+) -> None:
+    chat_id = str(payload.get("chat_id") or "")
+    message_id = str(payload.get("message_id") or "")
+    open_id = str(payload.get("open_id") or "")
+    if _is_task_chat_exit_text(text):
+        run_id, task_id = _restore_assistant_chat_subscription(
+            root,
+            chat_id=chat_id,
+            open_id=open_id,
+            session_key=session_key,
+        )
+        _send_text(root, channel, chat_id, "已退出 Task Chat，已回到 AHA 管家。", reply_to=message_id)
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "handled",
+            reason="task_chat_exited",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+        )
+        return
+    run_id = str(subscription.get("run_id") or "")
+    task_id = str(subscription.get("task_id") or "")
+    try:
+        _task_for_chat(root, run_id, task_id)
+    except (KeyError, SystemExit, ValueError, ServiceAssistantActionError) as exc:
+        restored_run_id, restored_task_id = _restore_assistant_chat_subscription(
+            root,
+            chat_id=chat_id,
+            open_id=open_id,
+            session_key=session_key,
+        )
+        _audit_inbound_resolution(root, payload, "failed", session_key=session_key, run_id=run_id, task_id=task_id, error=exc)
+        _send_text(root, channel, chat_id, "当前 Task Chat 已失效，已退出并回到 AHA 管家。", reply_to=message_id)
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "handled",
+            reason="task_chat_restored",
+            session_key=session_key,
+            run_id=restored_run_id,
+            task_id=restored_task_id,
+        )
+        return
+    try:
+        result = handle_send_payload(
+            root,
+            run_id,
+            {
+                "task_id": task_id,
+                "target": "main",
+                "sender": "feishu",
+                "reply_target": "feishu",
+                "message": text,
+                "feishu_attachments": payload.get("attachments") if isinstance(payload.get("attachments"), list) else [],
+            },
+            command_handler=_never_handle_command,
+            background_backend_start=True,
+            queued_backend_starter=lambda queued_root, queued_run_id, autostart: _queue_backend_start_with_error_reply(
+                queued_root,
+                queued_run_id,
+                autostart,
+                channel=channel,
+                chat_id=chat_id,
+                reply_to=message_id,
+            ),
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - reply only when the task handoff fails.
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "failed",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+            error=exc,
+        )
+        _send_text(root, channel, chat_id, _agent_dispatch_error_message(error=exc), reply_to=message_id)
+        return
+    error_message = _agent_dispatch_error_message(result)
+    if error_message:
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "failed",
+            session_key=session_key,
+            run_id=run_id,
+            task_id=task_id,
+            reason="task_chat_dispatch_failed",
+        )
+        _send_text(root, channel, chat_id, error_message, reply_to=message_id)
+        return
+    _audit_inbound_resolution(
+        root,
+        payload,
+        "accepted",
+        reason="task_chat_message",
+        session_key=session_key,
+        run_id=run_id,
+        task_id=task_id,
+    )
+
+
 def _handle_message(root: Path, server_default_run_id: str, channel: Any, payload: dict) -> None:
     config = feishu_config(root)
     chat_id = str(payload.get("chat_id") or "")
@@ -1860,6 +2531,17 @@ def _handle_message(root: Path, server_default_run_id: str, channel: Any, payloa
         return
 
     session_key = _session_key(payload)
+    task_chat_subscription = _active_task_chat_subscription(root, session_key, chat_id=chat_id, open_id=open_id)
+    if task_chat_subscription is not None:
+        _handle_task_chat_message(
+            root,
+            channel,
+            payload,
+            text=text,
+            session_key=session_key,
+            subscription=task_chat_subscription,
+        )
+        return
     binding = _binding(root, session_key, open_id, server_default_run_id)
     run_id = str(binding.get("active_run_id") or "")
     if not run_id or not run_exists(root, run_id):

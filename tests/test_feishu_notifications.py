@@ -188,6 +188,72 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertIn("status: awaiting->busy", message)
         self.assertIn("message: -", message)
 
+    def test_task_chat_subscription_forwards_only_chat_message_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-task-chat"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            config["integrations"]["feishu"]["owner_chat_id"] = "oc-user"
+            (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                mode="task_chat",
+            )
+
+            result = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 20,
+                    "type": "message",
+                    "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "task chat reply"},
+                },
+            )
+            send.assert_called_once_with(root, "oc-user", "task chat reply", card=None)
+            self.assertTrue(result["sent"])
+
+            send.reset_mock()
+            echo = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 21,
+                    "type": "message",
+                    "data": {"task_id": "task-001", "sender": "feishu", "target": "main", "message": "owner input"},
+                },
+            )
+            self.assertEqual(echo["reason"], "ignored_event")
+            send.assert_not_called()
+
+            for index, event_type in enumerate(("agent_command_started", "backend_started", "agent_usage"), start=22):
+                result = notify_event(
+                    root,
+                    run_id,
+                    {"event_id": index, "type": event_type, "data": {"task_id": "task-001", "message": event_type}},
+                )
+                self.assertEqual(result["reason"], "ignored_event")
+            send.assert_not_called()
+
+            status_result = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 30,
+                    "type": "task_status_changed",
+                    "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+                },
+            )
+            self.assertEqual(status_result["reason"], "no_subscription")
+            send.assert_not_called()
+
     def test_entering_busy_contains_triggering_user_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

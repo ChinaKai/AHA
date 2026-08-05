@@ -9,7 +9,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.locking import exclusive_lock
 from aha_cli.services.feishu import FeishuError, make_session_key
 from aha_cli.services.feishu_notifications import load_subscription_state, remove_subscriptions
-from aha_cli.services.feishu_runtime import feishu_config
+from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import aha_home_path, config_path
 
@@ -433,7 +433,7 @@ def resolve_feishu_owner_by_open_id(root: Path, *, open_id: str, config: dict | 
     return {"ok": False, "reason": "owner_unresolved", "open_id": owner}
 
 
-def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None) -> dict:
+def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None, dry_run: bool = False) -> dict:
     """Prune stale owner/user private-chat state after the Feishu app or owner changes.
 
     Group subscriptions are intentionally left untouched: group access is governed by
@@ -445,12 +445,21 @@ def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None) -> 
     if not owner_open_id:
         return {"ok": False, "reason": "owner_open_id_missing"}
 
-    owner = resolve_feishu_owner_by_open_id(root, open_id=owner_open_id, config=integration)
-    owner_chat_id = str(owner.get("chat_id") or integration.get("owner_chat_id") or "").strip()
-    owner_session_key = str(owner.get("session_key") or "").strip()
-    current_tenants = _tenant_keys_for_open_id(root, owner_open_id)
-    if str(owner.get("tenant_key") or "").strip():
-        current_tenants.add(str(owner.get("tenant_key") or "").strip())
+    current_app_id, _app_secret = feishu_credentials(integration)
+    current_app_id = str(current_app_id or "").strip()
+    if current_app_id:
+        owner_chat_id = _subscription_chat_for_owner(root, current_app_id, owner_open_id)
+        if not owner_chat_id:
+            owner_chat_id = str(_private_chat_state(root, current_app_id, owner_open_id).get("chat_id") or "").strip()
+        owner_session_key = _session_key(current_app_id, owner_open_id)
+        current_tenants = {current_app_id}
+    else:
+        owner = resolve_feishu_owner_by_open_id(root, open_id=owner_open_id, config=integration)
+        owner_chat_id = str(owner.get("chat_id") or integration.get("owner_chat_id") or "").strip()
+        owner_session_key = str(owner.get("session_key") or "").strip()
+        current_tenants = _tenant_keys_for_open_id(root, owner_open_id)
+        if str(owner.get("tenant_key") or "").strip():
+            current_tenants.add(str(owner.get("tenant_key") or "").strip())
 
     allowed = _configured_allowed_open_ids(integration)
     kept_allowed: list[str] = []
@@ -469,6 +478,7 @@ def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None) -> 
     kept_allowed = list(dict.fromkeys(kept_allowed))
 
     config_updated = False
+    config_would_update = False
     path = config_path(root)
     try:
         raw_config = read_json(path)
@@ -479,7 +489,8 @@ def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None) -> 
         integrations = dict(integrations) if isinstance(integrations, dict) else {}
         feishu = integrations.get("feishu")
         feishu = dict(feishu) if isinstance(feishu, dict) else {}
-        if _configured_allowed_open_ids(feishu) != kept_allowed:
+        config_would_update = _configured_allowed_open_ids(feishu) != kept_allowed
+        if config_would_update and not dry_run:
             feishu["allowed_open_ids"] = kept_allowed
             integrations["feishu"] = feishu
             raw_config["integrations"] = integrations
@@ -490,23 +501,26 @@ def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None) -> 
         state = _load(root)
         original_owner_count = len(state["owners"])
         original_private_count = len(state["private_chats"])
-        state["owners"] = {
+        next_owners = {
             str(tenant): record
             for tenant, record in state["owners"].items()
             if isinstance(record, dict)
             and str(record.get("open_id") or "").strip() == owner_open_id
             and (not current_tenants or str(tenant or "").strip() in current_tenants)
         }
-        state["private_chats"] = {
+        next_private_chats = {
             str(key): record
             for key, record in state["private_chats"].items()
             if isinstance(record, dict)
             and str(record.get("open_id") or "").strip() == owner_open_id
             and (not current_tenants or str(record.get("tenant_key") or "").strip() in current_tenants)
         }
-        removed_owner_records = original_owner_count - len(state["owners"])
-        removed_private_chats = original_private_count - len(state["private_chats"])
-        if removed_owner_records or removed_private_chats:
+        removed_owner_records = original_owner_count - len(next_owners)
+        removed_private_chats = original_private_count - len(next_private_chats)
+        if not dry_run:
+            state["owners"] = next_owners
+            state["private_chats"] = next_private_chats
+        if not dry_run and (removed_owner_records or removed_private_chats):
             _save(root, state)
 
     remove_subscription_keys: set[str] = set()
@@ -539,12 +553,18 @@ def cleanup_feishu_identity_state(root: Path, *, config: dict | None = None) -> 
         elif current_tenants and tenant and tenant not in current_tenants and open_id not in kept_allowed:
             remove_subscription_keys.add(str(session_key))
 
-    removed_subscriptions = remove_subscriptions(root, remove_subscription_keys).get("removed_count", 0)
+    if dry_run:
+        removed_subscriptions = len(remove_subscription_keys)
+    else:
+        removed_subscriptions = remove_subscriptions(root, remove_subscription_keys).get("removed_count", 0)
     return {
         "ok": True,
+        "dry_run": bool(dry_run),
+        "current_app_id": _fingerprint(current_app_id),
         "owner_open_id": _fingerprint(owner_open_id),
         "owner_chat_id": _fingerprint(owner_chat_id),
         "current_tenant_count": len(current_tenants),
+        "would_update_config": config_would_update,
         "config_updated": config_updated,
         "allowed_open_id_count": len(kept_allowed),
         "removed_allowed_open_id_count": len(removed_allowed),

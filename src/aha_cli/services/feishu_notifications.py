@@ -101,6 +101,7 @@ def set_subscription(
     task_id: str | None,
     chat_type: str | None = None,
     enabled: bool = True,
+    mode: str | None = None,
 ) -> dict:
     key = str(session_key or "").strip()
     if not key or not chat_id or not run_id:
@@ -108,7 +109,7 @@ def set_subscription(
     with _locked_subscription_state(root):
         state = _load_subscription_state_unlocked(root)
         if enabled:
-            state["subscriptions"][key] = {
+            subscription = {
                 "session_key": key,
                 "tenant_key": _session_tenant_key(key),
                 "chat_id": str(chat_id),
@@ -119,6 +120,10 @@ def set_subscription(
                 "enabled": True,
                 "updated_at": utc_now(),
             }
+            normalized_mode = str(mode or "").strip()
+            if normalized_mode:
+                subscription["mode"] = normalized_mode
+            state["subscriptions"][key] = subscription
         else:
             state["subscriptions"].pop(key, None)
         state["updated_at"] = utc_now()
@@ -333,6 +338,35 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     return _trim_notification(message)
 
 
+def _task_chat_message_for_event(event: dict, task_id: str) -> str:
+    if str(event.get("type") or "") != "message":
+        return ""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if str(data.get("task_id") or "") != str(task_id or ""):
+        return ""
+    sender, _target = _message_route(data)
+    if sender == "feishu":
+        return ""
+    message = _message_text(data)
+    if not message:
+        return ""
+    return _trim_notification(message)
+
+
+def _has_task_chat_subscription(root: Path, run_id: str, task_id: str) -> bool:
+    if not run_id or not task_id:
+        return False
+    state = load_subscription_state(root)
+    for subscription in state.get("subscriptions", {}).values():
+        if not isinstance(subscription, dict) or not subscription.get("enabled"):
+            continue
+        if str(subscription.get("mode") or "") != "task_chat":
+            continue
+        if str(subscription.get("run_id") or "") == run_id and str(subscription.get("task_id") or "") == task_id:
+            return True
+    return False
+
+
 def _send(root: Path, chat_id: str, text: str, *, card: dict | None = None, opts: dict | None = None) -> dict:
     try:
         message = {"card": card} if isinstance(card, dict) and card else {"text": text}
@@ -502,7 +536,10 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
     message = notification_message_for_event(root, run_id, event)
     card = data.get("feishu_card") if isinstance(data.get("feishu_card"), dict) else None
     confirmation_id = str(data.get("feishu_confirmation_id") or "")
-    if not message and not card:
+    task_chat_message = _task_chat_message_for_event(event, str(data.get("task_id") or ""))
+    if task_chat_message and not _has_task_chat_subscription(root, run_id, str(data.get("task_id") or "")):
+        task_chat_message = ""
+    if not message and not card and not task_chat_message:
         return {"ok": True, "sent": False, "reason": "ignored_event"}
     task_id = str(data.get("task_id") or "")
     event_key = _event_key(run_id, event)
@@ -525,6 +562,8 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             if _subscription_chat_type(session_key, subscription) == "group":
                 skipped_group_count += 1
                 continue
+            if is_status_event and str(subscription.get("mode") or "") == "task_chat":
+                continue
             # Status notifications go only to the resolved owner private chat.
             # Direct assistant replies remain scoped to the originating
             # run/task private conversation.
@@ -541,6 +580,11 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                 continue
             if is_status_event and chat_id in suppressed_chats:
                 continue
+            outbound_message = message
+            if not is_status_event and str(subscription.get("mode") or "") == "task_chat":
+                outbound_message = task_chat_message
+            if not outbound_message and not card:
+                continue
             recipient_key = _status_recipient_key(chat_id) if is_status_event else session_key
             if recipient_key in visited_recipients:
                 continue
@@ -549,7 +593,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             if sent_key in state["sent"]:
                 continue
             try:
-                result = _send(root, chat_id, message, card=card)
+                result = _send(root, chat_id, outbound_message, card=card)
             except Exception as exc:  # noqa: BLE001 - one stale Feishu chat must not block valid subscribers.
                 failed_count += 1
                 audit_feishu_channel(
@@ -562,7 +606,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                     session_key=str(session_key),
                     run_id=run_id,
                     task_id=task_id,
-                    content={"card": card} if card else message,
+                    content={"card": card} if card else outbound_message,
                     error=exc,
                     reason=str(event.get("type") or ""),
                 )
@@ -578,7 +622,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                 session_key=str(session_key),
                 run_id=run_id,
                 task_id=task_id,
-                content={"card": card} if card else message,
+                content={"card": card} if card else outbound_message,
                 reason=str(event.get("type") or ""),
             )
             if confirmation_id and result.get("message_id"):
