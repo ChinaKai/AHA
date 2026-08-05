@@ -1091,6 +1091,8 @@ def cmd_browser(args: argparse.Namespace) -> int:
         request_args["ref"] = args.ref
     elif action == "fill":
         request_args.update({"ref": args.ref, "text": args.text})
+    elif action == "upload":
+        request_args.update({"ref": args.ref, "path": str(Path(args.path).expanduser().resolve())})
     elif action == "press":
         request_args["key"] = args.key
     elif action == "screenshot":

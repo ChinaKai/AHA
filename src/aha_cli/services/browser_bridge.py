@@ -723,6 +723,7 @@ class BrowserBridgeDaemon:
             "navigate",
             "click",
             "fill",
+            "upload",
             "press",
             "back",
             "forward",
@@ -904,6 +905,7 @@ class BrowserBridgeDaemon:
                 "data": base64.b64encode(data).decode("ascii"),
             }
         accepts_text_input: bool | None = None
+        upload_result: dict[str, object] | None = None
         if action == "navigate":
             url = str(args.get("url") or "").strip()
             if not self._url_allowed(url, config):
@@ -915,6 +917,22 @@ class BrowserBridgeDaemon:
         elif action == "fill":
             ref = validated_browser_ref(args.get("ref"), self.revision)
             await page.locator(f'[data-aha-browser-ref="{ref}"]').first.fill(str(args.get("text") or ""), timeout=15000)
+        elif action == "upload":
+            if str(config.get("uploads") or "deny") != "allow":
+                raise BrowserBridgeError("upload_denied", "File uploads are disabled for this task browser.")
+            ref = validated_browser_ref(args.get("ref"), self.revision)
+            upload_path = Path(str(args.get("path") or ""))
+            if not upload_path.is_absolute() or not upload_path.is_file():
+                raise BrowserBridgeError("upload_file_not_found", "The selected upload file does not exist.")
+            upload_path = upload_path.resolve()
+            await page.locator(f'[data-aha-browser-ref="{ref}"]').first.set_input_files(
+                str(upload_path),
+                timeout=30000,
+            )
+            upload_result = {
+                "filename": upload_path.name,
+                "size": upload_path.stat().st_size,
+            }
         elif action == "press":
             await page.keyboard.press(str(args.get("key") or ""))
         elif action == "back":
@@ -973,6 +991,8 @@ class BrowserBridgeDaemon:
         }
         if accepts_text_input is not None:
             result["accepts_text_input"] = accepts_text_input
+        if upload_result is not None:
+            result["upload"] = upload_result
         return result
 
     async def _close(self) -> None:

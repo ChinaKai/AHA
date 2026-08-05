@@ -42,6 +42,23 @@ from aha_cli.store.filesystem import create_plan, update_task_browser_control_co
 
 
 class BrowserPolicyTests(unittest.TestCase):
+    def test_browser_upload_parser_accepts_ref_and_path(self) -> None:
+        handler = lambda _args: 0
+        parser = build_parser(defaultdict(lambda: handler))
+
+        args = parser.parse_args([
+            "browser",
+            "upload",
+            "run-001",
+            "task-001",
+            "4:b12",
+            "artifact.zip",
+        ])
+
+        self.assertEqual(args.browser_action, "upload")
+        self.assertEqual(args.ref, "4:b12")
+        self.assertEqual(args.path, "artifact.zip")
+
     def test_page_text_focus_is_reported_without_reading_field_content(self) -> None:
         ignored = mock.Mock()
         ignored.evaluate = mock.AsyncMock(side_effect=RuntimeError("cross-origin frame"))
@@ -220,6 +237,47 @@ class BrowserPolicyTests(unittest.TestCase):
             with self.assertRaises(BrowserBridgeError) as preempted:
                 asyncio.run(daemon._execute("reload", {}, source="agent", agent_id="main"))
         self.assertEqual(preempted.exception.code, "control_preempted")
+
+    def test_upload_requires_policy_and_sets_file_input(self) -> None:
+        daemon = BrowserBridgeDaemon(Path("/tmp/aha-browser-test"), "run-001", "task-001")
+        page = mock.Mock()
+        page.url = "https://example.com/compose"
+        page.title = mock.AsyncMock(return_value="Compose")
+        locator = mock.Mock()
+        locator.first = locator
+        locator.set_input_files = mock.AsyncMock()
+        page.locator.return_value = locator
+        daemon.pages = {"page-001": page}
+        daemon.page_ids = {id(page): "page-001"}
+        daemon.active_page_id = "page-001"
+        daemon._write_state = mock.Mock()  # type: ignore[method-assign]
+        daemon._broadcast_state = mock.AsyncMock()  # type: ignore[method-assign]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            upload = Path(tmp) / "artifact.zip"
+            upload.write_bytes(b"artifact")
+            with self.assertRaises(BrowserBridgeError) as denied:
+                asyncio.run(
+                    daemon._execute_locked(
+                        "upload",
+                        {"ref": "0:b12", "path": str(upload.resolve())},
+                        {"uploads": "deny"},
+                    )
+                )
+            self.assertEqual(denied.exception.code, "upload_denied")
+
+            result = asyncio.run(
+                daemon._execute_locked(
+                    "upload",
+                    {"ref": "0:b12", "path": str(upload.resolve())},
+                    {"uploads": "allow"},
+                )
+            )
+
+        page.locator.assert_called_once_with('[data-aha-browser-ref="b12"]')
+        locator.set_input_files.assert_awaited_once_with(str(upload.resolve()), timeout=30000)
+        self.assertEqual(result["upload"], {"filename": "artifact.zip", "size": 8})
+        self.assertEqual(result["revision"], 1)
 
     def test_frame_loop_streams_1080p_without_waiting_for_action_lock(self) -> None:
         daemon = BrowserBridgeDaemon(Path("/tmp/aha-browser-test"), "run-001", "task-001")

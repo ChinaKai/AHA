@@ -83,8 +83,9 @@ Profile。Runtime、显示方式、设备模式、下载、上传和代理放在
   为 360×640（9:16）；task/named profile 的登录态保留。
 - `allowed_hosts`: 协议兼容字段，空数组允许任意 HTTP(S) 主机；支持精确主机
   和 `*.example.com` 子域通配。Web UI 不再暴露该高级限制。
-- `downloads`、`uploads`: 默认拒绝。当前 MVP 对下载实施 bridge 级阻断；
-  文件上传操作尚未暴露给 agent CLI。
+- `downloads`、`uploads`: 默认拒绝。下载由 bridge 级策略阻断；上传仅在
+  `uploads=allow`、agent 具有 `read_write` 权限且使用最新 snapshot 的文件输入
+  ref 时，才允许通过 `aha browser upload` 选择一个本地文件。
 - `proxy_mode`: `direct|inherit|custom`。`inherit` 由 task 的
   `preferred_proxy_enabled` 开关控制，并按 `preferred_backend` 读取 Core
   Settings 中对应的 `codex.proxy` 或 `claude.proxy`；旧 task/run proxy 仅作
@@ -225,14 +226,16 @@ aha browser snapshot <run-id> <task-id>
 aha browser navigate <run-id> <task-id> https://example.com
 aha browser click <run-id> <task-id> '3:b12'
 aha browser fill <run-id> <task-id> '3:b15' 'hello'
+aha browser upload <run-id> <task-id> '3:b18' ./artifact.zip
 aha browser press <run-id> <task-id> Enter
 aha browser focus-window <run-id> <task-id>
 aha browser screenshot <run-id> <task-id> --output page.png
 ```
 
 元素 ref 与 snapshot revision 绑定。页面变化后使用旧 ref 会收到
-`stale_ref`，应重新 snapshot。用户操作会提升 control epoch；排队中的 agent
-写操作会收到 `control_preempted`。
+`stale_ref`，应重新 snapshot。`upload` 还要求任务配置 `uploads=allow`，目标 ref
+必须是 `input type=file`，本地文件路径必须存在。用户操作会提升 control epoch；
+排队中的 agent 写操作会收到 `control_preempted`。
 
 ## 安全与数据
 
