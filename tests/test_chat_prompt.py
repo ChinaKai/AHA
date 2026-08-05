@@ -4,6 +4,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -45,14 +47,49 @@ from aha_cli.store.filesystem import (
 from aha_cli.store.knowledge import entry_dir, knowledge_root, write_entry
 from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
 from aha_cli.store.paths import config_path
+from tests.helpers import isolated_cli_environment
 
 
 class ChatPromptTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
-        with mock.patch("sys.stdout", out):
+        with isolated_cli_environment(allow_temp_aha_home=False), mock.patch("sys.stdout", out):
             code = main(list(args))
         return code, out.getvalue()
+
+    def test_run_cli_does_not_write_to_inherited_aha_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            inherited_home = Path(tmp) / "production-home"
+            root.mkdir()
+            inherited_home.mkdir()
+
+            with mock.patch.dict(os.environ, {"AHA_HOME": str(inherited_home)}, clear=False), mock.patch(
+                "pathlib.Path.cwd", return_value=root
+            ):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Isolated chat prompt run", "--agents", "1")
+
+            self.assertEqual(code, 0)
+            run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+            self.assertTrue((root / ".aha" / "runs" / run_id / "plan.json").exists())
+            self.assertFalse((inherited_home / "runs").exists())
+
+    def test_test_package_scrubs_inherited_aha_home_for_unittest(self) -> None:
+        env = os.environ.copy()
+        env["AHA_HOME"] = str(Path.cwd() / "production-home-canary")
+        completed = subprocess.run(
+            [sys.executable, "-c", "import os, tests; print(os.environ.get('AHA_HOME', ''))"],
+            cwd=Path.cwd(),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "")
 
     def test_chat_offset_persists_unprocessed_messages_across_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,17 +12,7 @@ from unittest import mock
 from aha_cli.store.filesystem import append_jsonl, set_agent_status, set_task_status
 from aha_cli.web.server import handle_ui_client
 from aha_cli.websocket.server import handle_ws_client, ws_read_text
-
-AHA_RUNTIME_ENV_KEYS = (
-    "AHA_HOME",
-    "AHA_ROOT",
-    "AHA_RUN_ID",
-    "AHA_TASK_ID",
-    "AHA_AGENT_ID",
-    "AHA_BACKEND",
-    "AHA_MODEL",
-    "AHA_GENERATED_BY",
-)
+from tests import AHA_RUNTIME_ENV_KEYS
 
 
 def _is_temp_path(value: str) -> bool:
