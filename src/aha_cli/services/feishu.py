@@ -866,7 +866,7 @@ def terminal_confirmation_card(card: dict, state: str, detail: str = "") -> dict
     """Return a Schema 2.0 card with actions removed and a terminal status."""
     result = sanitize_card_payload(card)
     labels = {
-        "confirmed": ("操作已确认", "grey", "已确认并提交 AHA 执行。"),
+        "confirmed": ("操作已处理", "grey", "AHA 已完成本次操作。"),
         "selected": ("已选择方案", "grey", "已选择。"),
         "cancelled": ("操作已取消", "grey", "已取消，本操作不会执行。"),
         "expired": ("确认已失效", "grey", "已超过 24 小时有效期，请重新发起操作。"),
@@ -967,12 +967,17 @@ def register_confirmation_card(
 
 def bind_confirmation_card(root: Path, confirmation_id: str, *, message_id: str, chat_id: str) -> dict:
     identity = str(confirmation_id or "").strip()
+    bound_message_id = str(message_id or "").strip()
     with _locked_state(root):
         records = _confirmation_records(_read_json(confirmation_cards_path(root)))
         record = records.get(identity)
         if not isinstance(record, dict):
             raise FeishuError("confirmation card 不存在", code="confirmation_not_found")
-        record["message_id"] = str(message_id or "").strip()
+        for other_id, other in records.items():
+            if other_id != identity and str(other.get("message_id") or "") == bound_message_id:
+                other["message_id"] = ""
+                other["chat_id"] = ""
+        record["message_id"] = bound_message_id
         record["chat_id"] = str(chat_id or "").strip()
         _write_secret_json(confirmation_cards_path(root), {"version": 1, "confirmations": records})
     return dict(record)

@@ -24,7 +24,7 @@ from aha_cli.services.feishu_group_handoffs import (
     pending_group_handoffs_for_steward_reply,
     register_group_handoff,
 )
-from aha_cli.services.feishu_notifications import load_subscription_state
+from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
 from aha_cli.services.feishu_owner import remember_owner_private_chat
 from aha_cli.services.orchestrator import execute_actions
 from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task
@@ -228,6 +228,16 @@ class FeishuGroupTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            set_subscription(
+                root,
+                "tenant-1:p2p:ou_owner",
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id="run-task-chat",
+                task_id="task-chat",
+                chat_type="p2p",
+                mode="task_chat",
+            )
             run_id = ensure_feishu_group_run(root, {"backend": "stub"})
             session_key = "tenant-1:feishu-group-user:ou_requester"
             task = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
@@ -302,7 +312,9 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertNotIn("计划/可延后类先 create_memo", send.call_args.args[2]["message"])
         self.assertNotIn("当前群聊数字人只支持文本回复", send.call_args.args[2]["message"])
         self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["chat_id"], "oc_owner")
-        self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["task_id"], executed[0]["steward_task_id"])
+        self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["mode"], "task_chat")
+        self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["run_id"], "run-task-chat")
+        self.assertEqual(subscriptions["tenant-1:p2p:ou_owner"]["task_id"], "task-chat")
 
     def test_group_handoff_action_replies_with_existing_terminal_memo_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

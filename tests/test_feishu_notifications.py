@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.services import feishu_notifications
-from aha_cli.services.feishu_notifications import notification_message_for_event, notify_event, set_subscription
+from aha_cli.services.feishu_notifications import load_subscription_state, notification_message_for_event, notify_event, set_subscription
 from aha_cli.locking import exclusive_lock
 from aha_cli.services.service_assistant_handoffs import register_service_handoff, service_handoffs_path
 from aha_cli.services.feishu_group_handoffs import feishu_group_handoffs_path, register_group_handoff
@@ -104,6 +104,7 @@ class FeishuNotificationTests(unittest.TestCase):
                 },
             )
             event = {
+                "ts": "2026-08-05T15:48:41+00:00",
                 "type": "task_status_changed",
                 "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
             }
@@ -113,7 +114,7 @@ class FeishuNotificationTests(unittest.TestCase):
 
         self.assertEqual(
             message,
-            "run-a task-001:\nstatus: busy->awaiting\nmessage: 最后一条 agent 回复",
+            "Time: 2026-08-05 15:48:41+00:00\nTask: Run A.task-001\nTask Title: Task 1\nStatus: busy -> awaiting\nMessage: 最后一条 agent 回复",
         )
 
     def test_persisted_event_offset_finds_reply_before_current_status(self) -> None:
@@ -153,7 +154,7 @@ class FeishuNotificationTests(unittest.TestCase):
 
             message = notification_message_for_event(root, run_id, event)
 
-        self.assertIn("message: 真实最终回复", message)
+        self.assertIn("Message: 真实最终回复", message)
         self.assertNotIn("未来回复", message)
 
     def test_status_change_does_not_reuse_reply_from_previous_turn(self) -> None:
@@ -185,10 +186,10 @@ class FeishuNotificationTests(unittest.TestCase):
 
             message = notification_message_for_event(root, run_id, event)
 
-        self.assertIn("status: awaiting->busy", message)
-        self.assertIn("message: -", message)
+        self.assertIn("Status: awaiting -> busy", message)
+        self.assertIn("Message: -", message)
 
-    def test_task_chat_subscription_forwards_only_chat_message_events(self) -> None:
+    def test_task_chat_forwards_replies_uses_control_card_and_keeps_other_statuses(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",
             return_value={"message_id": "om-task-chat"},
@@ -251,8 +252,69 @@ class FeishuNotificationTests(unittest.TestCase):
                     "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
                 },
             )
-            self.assertEqual(status_result["reason"], "no_subscription")
-            send.assert_not_called()
+            self.assertEqual(status_result["reason"], "sent")
+            control_card = send.call_args.kwargs["card"]
+            self.assertEqual(control_card["header"]["title"]["content"], "Task Chat 等待操作")
+            self.assertEqual(
+                control_card["body"]["elements"][1]["columns"][1]["elements"][0]["behaviors"][0]["value"],
+                {"kind": "aha_task_chat_control", "choice_id": "exit"},
+            )
+            send.reset_mock()
+
+            other_status = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 31,
+                    "type": "task_status_changed",
+                    "data": {"task_id": "task-002", "previous_status": "running", "status": "awaiting_user"},
+                },
+            )
+            self.assertTrue(other_status["sent"])
+            self.assertIn("task-002", send.call_args.args[2])
+
+    def test_task_chat_control_card_is_invalidated_by_running_and_recreated_afterwards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-control"},
+        ) as send, mock.patch("aha_cli.services.feishu_notifications._update_card") as update:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            config["integrations"]["feishu"]["owner_chat_id"] = "oc-user"
+            (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                mode="task_chat",
+            )
+            transitions = [
+                ("running", "awaiting_user"),
+                ("awaiting_user", "running"),
+                ("running", "completed"),
+            ]
+            results = [
+                notify_event(
+                    root,
+                    run_id,
+                    {
+                        "event_id": 40 + index,
+                        "type": "task_status_changed",
+                        "data": {"task_id": "task-001", "previous_status": previous, "status": status},
+                    },
+                )
+                for index, (previous, status) in enumerate(transitions)
+            ]
+
+        self.assertEqual([result["reason"] for result in results], ["sent", "updated", "sent"])
+        self.assertEqual(send.call_count, 2)
+        update.assert_called_once()
+        self.assertEqual(update.call_args.args[1], "om-control")
+        self.assertIn("Task 正在处理中", json.dumps(update.call_args.args[2], ensure_ascii=False))
 
     def test_entering_busy_contains_triggering_user_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -288,8 +350,8 @@ class FeishuNotificationTests(unittest.TestCase):
 
             message = notification_message_for_event(root, run_id, event)
 
-        self.assertIn("status: awaiting->busy", message)
-        self.assertIn("message: 请继续修复 这个问题", message)
+        self.assertIn("Status: awaiting -> busy", message)
+        self.assertIn("Message: 请继续修复 这个问题", message)
 
     def test_service_assistant_routed_status_uses_request_and_target_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -314,7 +376,7 @@ class FeishuNotificationTests(unittest.TestCase):
                 "data": {"task_id": "task-001", "previous_status": "awaiting_user", "status": "running"},
             }
             append_jsonl(event_path(root, run_id), busy)
-            self.assertIn("message: 请调研卡片置灰", notification_message_for_event(root, run_id, busy))
+            self.assertIn("Message: 请调研卡片置灰", notification_message_for_event(root, run_id, busy))
 
             append_jsonl(
                 event_path(root, run_id),
@@ -338,8 +400,8 @@ class FeishuNotificationTests(unittest.TestCase):
 
             message = notification_message_for_event(root, run_id, awaiting)
 
-        self.assertIn("message: 调研完成，方案可行", message)
-        self.assertNotIn("message: -", message)
+        self.assertIn("Message: 调研完成，方案可行", message)
+        self.assertNotIn("Message: -", message)
 
     def test_system_status_uses_event_reason_when_no_chat_message_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -359,8 +421,8 @@ class FeishuNotificationTests(unittest.TestCase):
 
             message = notification_message_for_event(root, run_id, event)
 
-        self.assertIn("status: pending->failed", message)
-        self.assertIn("message: backend launch failed", message)
+        self.assertIn("Status: pending -> failed", message)
+        self.assertIn("Message: backend launch failed", message)
 
     def test_system_managed_run_status_change_is_not_pushed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -708,7 +770,7 @@ class FeishuNotificationTests(unittest.TestCase):
 
         self.assertTrue(result["sent"])
         send.assert_called_once()
-        self.assertIn("run-a task-001", send.call_args.args[2])
+        self.assertIn("Task: Run A.task-001", send.call_args.args[2])
 
     def test_owner_status_push_reaches_subscriber_from_another_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -735,7 +797,7 @@ class FeishuNotificationTests(unittest.TestCase):
 
         self.assertTrue(result["sent"])
         send.assert_called_once()
-        self.assertIn("run-b task-002", send.call_args.args[2])
+        self.assertIn("Task: run-b.task-002", send.call_args.args[2])
 
     def test_status_push_ignores_subscriptions_from_other_feishu_app(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

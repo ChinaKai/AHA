@@ -9,17 +9,20 @@ from unittest import mock
 
 from aha_cli.services import feishu_assistant
 from aha_cli.services.feishu import (
+    bind_confirmation_card,
     confirmation_card_for_message,
     get_session_binding,
     identity_profiles,
     make_session_key,
     set_session_binding,
 )
-from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
+from aha_cli.services.feishu_notifications import load_subscription_state, notify_event, set_subscription, subscription_state_path
+from aha_cli.services.feishu_group_handoffs import get_group_handoff, register_group_handoff
 from aha_cli.services.feishu_owner import cleanup_feishu_identity_state, feishu_owner_state_path, remember_owner_private_chat
+from aha_cli.services.service_assistant_actions import prepare_group_handoff_owner_card
 from aha_cli.store.filesystem import create_plan
-from aha_cli.store.paths import aha_home_path
-from aha_cli.store.task_memos import create_task_memo
+from aha_cli.store.paths import aha_home_path, mark_aha_home
+from aha_cli.store.task_memos import create_task_memo, read_task_memos
 
 
 class _CompletedFuture:
@@ -583,8 +586,10 @@ class FeishuAssistantTests(unittest.TestCase):
             )
 
             send.assert_not_called()
-            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "Task 列表")
-            result_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
+            self.assertEqual(len(channel.sent), 1)
+            self.assertEqual(channel.updated[-1][0], "om_reply")
+            self.assertEqual(channel.updated[-1][1]["header"]["title"]["content"], "Task 列表")
+            result_json = json.dumps(channel.updated[-1][1], ensure_ascii=False)
             self.assertIn("Work.", result_json)
             self.assertIn("Check task", result_json)
             self.assertIn("选中进入 Chat", result_json)
@@ -700,8 +705,10 @@ class FeishuAssistantTests(unittest.TestCase):
             )
 
             send.assert_not_called()
-            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "Memo 列表")
-            card_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
+            self.assertEqual(len(channel.sent), 1)
+            self.assertEqual(channel.updated[-1][0], "om_reply")
+            self.assertEqual(channel.updated[-1][1]["header"]["title"]["content"], "Memo 列表")
+            card_json = json.dumps(channel.updated[-1][1], ensure_ascii=False)
             self.assertIn("**数量**：10 / 上限 10", card_json)
             self.assertIn("Check memo", card_json)
             self.assertIn("Memo body", card_json)
@@ -770,19 +777,52 @@ class FeishuAssistantTests(unittest.TestCase):
                 {
                     "kind": "card_action",
                     "chat_id": "oc_owner",
-                    "message_id": "om_reply_2",
+                    "message_id": "om_reply_1",
                     "open_id": "ou_owner",
                     "action": {"kind": "aha_menu_query", "choice_id": f"select_memo:{memo['id']}"},
                 },
             )
 
             send.assert_not_called()
-            self.assertEqual(channel.updated[-1][0], "om_reply_2")
+            self.assertEqual(channel.updated[-1][0], "om_reply_1")
             self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "配置 Memo 修改")
             card_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
             self.assertIn("Editable memo", card_json)
             self.assertIn("提交修改", card_json)
             self.assertIn(memo["id"], card_json)
+
+    def test_menu_query_cancel_updates_card_without_extra_text_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._confirmation_subscription_for_card",
+            return_value=("tenant-1:p2p:ou_user", {"chat_type": "p2p"}),
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.consume_confirmation_card",
+            return_value={"confirmation_id": "confirm-query", "operation": "list_tasks"},
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.finalize_confirmation_card",
+            return_value={"confirmation_id": "confirm-query", "terminal_card": {"schema": "2.0"}},
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant._update_confirmation_card",
+            return_value=True,
+        ) as update:
+            root = Path(tmp)
+            _write_config(root, ["ou_user"])
+            channel = FakeChannel()
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_chat",
+                    "message_id": "om_query",
+                    "open_id": "ou_user",
+                    "action": {"kind": "aha_menu_query", "choice_id": "__cancel__"},
+                },
+            )
+
+        update.assert_called_once()
+        self.assertEqual(channel.sent, [])
 
     def test_task_query_selection_confirms_and_routes_task_chat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
@@ -844,7 +884,7 @@ class FeishuAssistantTests(unittest.TestCase):
                 {
                     "kind": "card_action",
                     "chat_id": "oc_owner",
-                    "message_id": "om_reply_2",
+                    "message_id": "om_reply_1",
                     "open_id": "ou_owner",
                     "action": {"kind": "aha_menu_query", "choice_id": f"select_task:{task_id}"},
                 },
@@ -857,7 +897,7 @@ class FeishuAssistantTests(unittest.TestCase):
                 {
                     "kind": "card_action",
                     "chat_id": "oc_owner",
-                    "message_id": "om_reply_3",
+                    "message_id": "om_reply_2",
                     "open_id": "ou_owner",
                     "action": {"kind": "aha_task_chat", "choice_id": "confirm"},
                 },
@@ -893,6 +933,113 @@ class FeishuAssistantTests(unittest.TestCase):
             ]
             self.assertNotEqual(restored.get("mode"), "task_chat")
             self.assertIn("已退出 Task Chat", channel.sent[-1][1]["text"])
+
+    def test_task_chat_control_card_can_stay_reject_stale_and_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            work = create_plan(root, "Work", 1, "implementation", ["Chat task"], [], backend="stub")
+            task_id = str(work["tasks"][0]["id"])
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "tenant-1",
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            session_key = make_session_key(
+                tenant_key="tenant-1",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+            set_subscription(
+                root,
+                session_key,
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=work["id"],
+                task_id=task_id,
+                chat_type="p2p",
+                mode="task_chat",
+            )
+            channel = SequencedChannel()
+            state = load_subscription_state(root)
+            state["subscriptions"][session_key]["task_chat_control"] = {
+                "active": True,
+                "message_id": "om-control-1",
+                "run_id": work["id"],
+                "task_id": task_id,
+                "status": "awaiting_user",
+            }
+            subscription_state_path(root).write_text(json.dumps(state), encoding="utf-8")
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om-control-1",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_task_chat_control", "choice_id": "stay"},
+                },
+            )
+            stayed = load_subscription_state(root)["subscriptions"][session_key]
+            self.assertEqual(stayed["mode"], "task_chat")
+            self.assertFalse(stayed["task_chat_control"]["active"])
+            self.assertEqual(channel.updated[-1][1]["header"]["title"]["content"], "已保留 Task Chat")
+
+            state = load_subscription_state(root)
+            state["subscriptions"][session_key]["task_chat_control"] = {
+                "active": True,
+                "message_id": "om-control-2",
+                "run_id": work["id"],
+                "task_id": task_id,
+                "status": "awaiting_user",
+            }
+            subscription_state_path(root).write_text(json.dumps(state), encoding="utf-8")
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om-control-1",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_task_chat_control", "choice_id": "exit"},
+                },
+            )
+            current = load_subscription_state(root)["subscriptions"][session_key]
+            self.assertEqual(current["mode"], "task_chat")
+            self.assertTrue(current["task_chat_control"]["active"])
+            self.assertIn("已失效", channel.sent[-1][1]["text"])
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om-control-2",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_task_chat_control", "choice_id": "exit"},
+                },
+            )
+            restored = load_subscription_state(root)["subscriptions"][session_key]
+
+        self.assertNotEqual(restored.get("mode"), "task_chat")
+        self.assertEqual(channel.updated[-1][1]["header"]["title"]["content"], "已退出 Task Chat")
 
     def test_task_chat_confirmation_bound_to_stale_session_writes_current_app_subscription(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1630,6 +1777,9 @@ class FeishuAssistantTests(unittest.TestCase):
                 "cancelled": False,
                 "operation": "create_memo",
                 "result": {"ok": True, "memo": {"id": "memo-001", "title": "Direct memo"}},
+                "confirmation_id": "confirm-1",
+                "confirmation_message_id": "om_card",
+                "confirmation_card": {"schema": "2.0", "header": {"template": "grey"}},
             },
         ), mock.patch(
             "aha_cli.services.feishu_assistant.handle_send_payload",
@@ -1832,7 +1982,7 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[2]["message"], "确认")
         self.assertEqual(channel.sent, [])
 
-    def test_resolved_confirmation_updates_original_card_before_reply(self) -> None:
+    def test_resolved_confirmation_updates_original_card_without_extra_cancel_reply(self) -> None:
         channel = FakeChannel()
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_assistant.mark_confirmation_card_updated",
@@ -1856,7 +2006,87 @@ class FeishuAssistantTests(unittest.TestCase):
         self.assertEqual(channel.updated[0][0], "om_card")
         self.assertEqual(channel.updated[0][1]["header"]["template"], "grey")
         marked.assert_called_once_with(Path(tmp), "confirmation-1")
+        self.assertEqual(channel.sent, [])
+
+    def test_cancelled_confirmation_uses_text_when_card_update_fails(self) -> None:
+        channel = FakeChannel()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._update_confirmation_card",
+            side_effect=RuntimeError("card update failed"),
+        ):
+            feishu_assistant._finish_confirmation(
+                Path(tmp),
+                channel,
+                chat_id="oc_chat",
+                message_id="om_card",
+                run_id="run-001",
+                task_id="task-006",
+                confirmation={
+                    "cancelled": True,
+                    "confirmation_id": "confirmation-1",
+                    "confirmation_message_id": "om_card",
+                    "confirmation_card": {"schema": "2.0"},
+                    "user_response": "已取消。",
+                },
+            )
+
         self.assertIn("已取消", channel.sent[-1][1]["text"])
+
+    def test_successful_confirmation_card_suppresses_redundant_agent_reply(self) -> None:
+        channel = FakeChannel()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+        ) as send:
+            feishu_assistant._finish_confirmation(
+                Path(tmp),
+                channel,
+                chat_id="oc_chat",
+                message_id="om_card",
+                run_id="run-001",
+                task_id="task-006",
+                confirmation={
+                    "cancelled": False,
+                    "operation": "complete_task",
+                    "result": {"ok": True, "message": "Task completed"},
+                    "tool_message": "trusted result",
+                    "confirmation_id": "confirmation-1",
+                    "confirmation_message_id": "om_card",
+                    "confirmation_card": {"schema": "2.0", "header": {"template": "grey"}},
+                },
+            )
+
+        self.assertEqual(channel.updated[0][0], "om_card")
+        self.assertEqual(channel.sent, [])
+        send.assert_not_called()
+
+    def test_successful_confirmation_uses_agent_reply_when_card_update_fails(self) -> None:
+        channel = FakeChannel()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant._update_confirmation_card",
+            side_effect=RuntimeError("card update failed"),
+        ), mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ) as send:
+            feishu_assistant._finish_confirmation(
+                Path(tmp),
+                channel,
+                chat_id="oc_chat",
+                message_id="om_card",
+                run_id="run-001",
+                task_id="task-006",
+                confirmation={
+                    "cancelled": False,
+                    "operation": "complete_task",
+                    "result": {"ok": True, "message": "Task completed"},
+                    "tool_message": "trusted result",
+                    "confirmation_id": "confirmation-1",
+                    "confirmation_message_id": "om_card",
+                    "confirmation_card": {"schema": "2.0"},
+                },
+            )
+
+        self.assertEqual(send.call_args.args[2]["message"], "trusted result")
 
     def test_choice_followup_card_is_sent_without_extra_text_reply(self) -> None:
         channel = FakeChannel()
@@ -1928,6 +2158,156 @@ class FeishuAssistantTests(unittest.TestCase):
             active = feishu_assistant._active_task(Path(tmp), "run-001", "task-002")
 
         self.assertIsNone(active)
+
+    def test_group_handoff_memo_choice_opens_config_card_during_task_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+        ) as send, mock.patch(
+            "aha_cli.services.service_assistant_actions.send_direct_message",
+            return_value={"message_id": "om_group_ack"},
+        ) as group_send:
+            root = Path(tmp)
+            mark_aha_home(root)
+            work = create_plan(root, "Work", 1, "implementation", ["Chat task"], [], backend="stub")
+            task_id = str(work["tasks"][0]["id"])
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "tenant-1",
+                                "allowed_open_ids": ["ou_owner"],
+                                "owner_open_id": "ou_owner",
+                                "owner_chat_id": "oc_owner",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assistant_run = feishu_assistant.ensure_service_assistant_run(root, {"backend": "stub"})
+            assistant_task = feishu_assistant.ensure_service_assistant_task(
+                root,
+                assistant_run,
+                "tenant-1:p2p:ou_owner",
+                {"backend": "stub"},
+            )
+            session_key = make_session_key(
+                tenant_key="tenant-1",
+                open_id="ou_owner",
+                chat_id="oc_owner",
+                chat_type="p2p",
+            )
+            set_subscription(
+                root,
+                session_key,
+                chat_id="oc_owner",
+                open_id="ou_owner",
+                run_id=work["id"],
+                task_id=task_id,
+                chat_type="p2p",
+                mode="task_chat",
+            )
+            handoff = register_group_handoff(
+                root,
+                digital_run_id="run-digital",
+                digital_task_id="task-digital",
+                digital_session_key="tenant-1:feishu-group-user:ou_requester",
+                group_chat_id="oc_group",
+                group_message_id="om_group",
+                open_id="ou_requester",
+                owner_open_id="ou_owner",
+                owner_chat_id="oc_owner",
+                steward_run_id=assistant_run,
+                steward_task_id=str(assistant_task["id"]),
+                request_message="整理一份 pipeline 文档",
+                request_summary="生成 pipeline 文档",
+                request_detail="基于群聊上下文整理主要链路和输出。",
+            )
+            owner_card = prepare_group_handoff_owner_card(
+                root,
+                assistant_run,
+                str(assistant_task["id"]),
+                actor={"open_id": "ou_owner", "session_key": session_key, "chat_id": "oc_owner"},
+                handoff=handoff,
+            )
+            bind_confirmation_card(
+                root,
+                owner_card["confirmation_id"],
+                message_id="om_handoff_owner",
+                chat_id="oc_owner",
+            )
+            channel = SequencedChannel()
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_handoff_owner",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_service_choice", "choice_id": "create_memo"},
+                },
+            )
+
+            send.assert_not_called()
+            self.assertEqual(channel.updated[-1][0], "om_handoff_owner")
+            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "配置 Memo 创建")
+            config_json = json.dumps(channel.sent[-1][1]["card"], ensure_ascii=False)
+            self.assertIn("生成 pipeline 文档", config_json)
+            self.assertIn("基于群聊上下文整理主要链路和输出", config_json)
+            subscription = load_subscription_state(root)["subscriptions"][session_key]
+            self.assertEqual(subscription["mode"], "task_chat")
+            self.assertEqual(subscription["run_id"], work["id"])
+            self.assertEqual(subscription["task_id"], task_id)
+            self.assertEqual(get_group_handoff(root, handoff["id"])["status"], "pending")
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_1",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_service_choice", "choice_id": "__submit_memo_config__"},
+                    "form_values": {
+                        "title": "生成 pipeline 文档",
+                        "description": "基于群聊上下文整理主要链路和输出。",
+                        "run_id": work["id"],
+                        "status": "todo",
+                        "created_task_id": "",
+                    },
+                },
+            )
+            self.assertEqual(channel.sent[-1][1]["card"]["header"]["title"]["content"], "请确认 AHA 操作")
+
+            feishu_assistant._handle_card_action(
+                root,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_owner",
+                    "message_id": "om_reply_2",
+                    "open_id": "ou_owner",
+                    "action": {"kind": "aha_service_confirmation", "decision": "confirm"},
+                },
+            )
+
+            send.assert_not_called()
+            group_send.assert_called_once()
+            memo = read_task_memos(root, work["id"])[0]
+            self.assertEqual(memo["title"], "生成 pipeline 文档")
+            self.assertEqual(memo["source_handoff_id"], handoff["id"])
+            self.assertEqual(get_group_handoff(root, handoff["id"])["status"], "memo_created")
+            final_subscription = load_subscription_state(root)["subscriptions"][session_key]
+            self.assertEqual(final_subscription["mode"], "task_chat")
+            self.assertEqual(final_subscription["run_id"], work["id"])
+            self.assertEqual(final_subscription["task_id"], task_id)
 
 
 if __name__ == "__main__":

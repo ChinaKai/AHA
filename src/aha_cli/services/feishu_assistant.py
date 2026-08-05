@@ -34,7 +34,16 @@ from aha_cli.services.feishu import (
     set_session_binding,
 )
 from aha_cli.services.feishu_audit import audit_feishu_channel
-from aha_cli.services.feishu_notifications import load_subscription_state, remove_subscriptions, set_subscription
+from aha_cli.services.feishu_notifications import (
+    TASK_CHAT_CONTROL_ACTION_KIND,
+    TASK_CHAT_CONTROL_EXIT_CHOICE_ID,
+    TASK_CHAT_CONTROL_STAY_CHOICE_ID,
+    load_subscription_state,
+    remove_subscriptions,
+    resolve_task_chat_control,
+    set_subscription,
+    task_chat_control_terminal_card,
+)
 from aha_cli.services.feishu_owner import remember_owner_private_chat, resolve_feishu_owner, resolve_feishu_owner_by_open_id
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
 from aha_cli.services.feishu_work_run import feishu_work_run_options, resolve_feishu_work_run_id
@@ -572,11 +581,9 @@ def _refresh_identity_profiles_background(root: Path, config: dict, payload: dic
     threading.Thread(target=refresh, name="aha-feishu-identity-refresh", daemon=True).start()
 
 
-def _update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> None:
-    message_id = str(confirmation.get("confirmation_message_id") or confirmation.get("message_id") or "")
-    card = confirmation.get("confirmation_card") or confirmation.get("terminal_card")
+def _update_card(root: Path, channel: Any, message_id: str, card: dict) -> bool:
     if not message_id or not isinstance(card, dict):
-        return
+        return False
     card = sanitize_card_payload(card)
     try:
         result = channel.schedule(channel.update_card(message_id, card)).result(timeout=20)
@@ -603,7 +610,24 @@ def _update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> N
         message_id=message_id,
         content={"card": card},
     )
+    return True
+
+
+def _update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> bool:
+    message_id = str(confirmation.get("confirmation_message_id") or confirmation.get("message_id") or "")
+    card = confirmation.get("confirmation_card") or confirmation.get("terminal_card")
+    if not message_id or not isinstance(card, dict):
+        return False
+    _update_card(root, channel, message_id, card)
     mark_confirmation_card_updated(root, str(confirmation.get("confirmation_id") or ""))
+    return True
+
+
+def _try_update_confirmation_card(root: Path, channel: Any, confirmation: dict) -> bool:
+    try:
+        return _update_confirmation_card(root, channel, confirmation)
+    except Exception:  # noqa: BLE001 - update failure is audited; the text/new-card path remains as fallback.
+        return False
 
 
 def _authorization_error(config: dict, *, chat_type: str, chat_id: str, open_id: str) -> str:
@@ -1016,11 +1040,23 @@ def _direct_followup_confirmation(root: Path, channel: Any, chat_id: str, confir
     if not run_id or not task_id:
         return False
     task = task_snapshot(root, run_id, task_id)["task"]
+    confirmation_message_id = str(confirmation.get("confirmation_message_id") or "").strip()
+    confirmation_record = confirmation_card_for_message(root, confirmation_message_id) if confirmation_message_id else None
+    actor_override = None
+    if isinstance(confirmation_record, dict):
+        candidate = {
+            "session_key": str(confirmation_record.get("session_key") or "").strip(),
+            "open_id": str(confirmation_record.get("open_id") or "").strip(),
+            "chat_id": str(confirmation_record.get("chat_id") or chat_id).strip(),
+        }
+        if all(candidate.values()):
+            actor_override = candidate
     action = prepare_service_assistant_action(
         root,
         run_id,
         task,
         {"operation": target_operation, "arguments": next_arguments},
+        actor_override=actor_override,
     )
     if action.get("confirmation_card"):
         _send_menu_card(root, channel, chat_id, action)
@@ -1090,14 +1126,10 @@ def _finish_confirmation(
     task_id: str,
     confirmation: dict,
 ) -> None:
-    try:
-        _update_confirmation_card(root, channel, confirmation)
-    except (FeishuError, RuntimeError, TimeoutError):
-        # Runtime sweep retries terminal card updates; execution state must not
-        # be rolled back merely because the visual update failed.
-        pass
+    card_updated = _try_update_confirmation_card(root, channel, confirmation)
     if confirmation.get("cancelled"):
-        _send_text(root, channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
+        if not card_updated:
+            _send_text(root, channel, chat_id, str(confirmation.get("user_response") or "已取消。"), reply_to=message_id)
         return
     if confirmation.get("choice") and _direct_followup_confirmation(root, channel, chat_id, confirmation):
         return
@@ -1105,7 +1137,11 @@ def _finish_confirmation(
     if direct_response:
         _send_text(root, channel, chat_id, direct_response, reply_to=message_id)
         return
-    if _is_direct_terminal_success(confirmation):
+    result_payload = confirmation.get("result") if isinstance(confirmation.get("result"), dict) else {}
+    direct_terminal_success = _is_direct_terminal_success(confirmation)
+    if card_updated and (bool(result_payload.get("ok")) or direct_terminal_success):
+        return
+    if direct_terminal_success and not str(confirmation.get("tool_message") or "").strip():
         return
     try:
         result = handle_send_payload(
@@ -1403,7 +1439,7 @@ def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, valu
                 f"已选择 {'Memo' if selection_kind == 'memo' else 'Task'}：{selected_item_id}",
             )
             if isinstance((record or {}).get("terminal_card"), dict):
-                _update_confirmation_card(root, channel, record or {})
+                _try_update_confirmation_card(root, channel, record or {})
             if selection_kind == "memo":
                 _handle_menu_memo_selection(
                     root,
@@ -1438,22 +1474,39 @@ def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, valu
             return
         if choice_id == "__cancel__":
             record = finalize_confirmation_card(root, confirmation_id, "cancelled")
-            if isinstance((record or {}).get("terminal_card"), dict):
-                _update_confirmation_card(root, channel, record or {})
-            _send_text(root, channel, chat_id, "已取消本次查询。", reply_to=message_id)
+            card_updated = (
+                _try_update_confirmation_card(root, channel, record or {})
+                if isinstance((record or {}).get("terminal_card"), dict)
+                else False
+            )
+            if not card_updated:
+                _send_text(root, channel, chat_id, "已取消本次查询。", reply_to=message_id)
             _audit_inbound_resolution(root, payload, "handled", reason="menu_query_cancelled", session_key=session_key)
             return
         fields = context.get("fields") if isinstance(context.get("fields"), dict) else {}
         arguments = _menu_query_arguments(operation, fields, _card_action_form_values(payload))
-        record = finalize_confirmation_card(root, confirmation_id, "selected", "已提交查询条件")
-        if isinstance((record or {}).get("terminal_card"), dict):
-            _update_confirmation_card(root, channel, record or {})
-        _send_menu_card(
+        result_action = _prepare_menu_query_result_card(
             root,
-            channel,
-            chat_id,
-            _prepare_menu_query_result_card(root, operation, arguments, open_id=open_id, session_key=next_session_key),
+            operation,
+            arguments,
+            open_id=open_id,
+            session_key=next_session_key,
         )
+        record = finalize_confirmation_card(root, confirmation_id, "selected", "已提交查询条件")
+        result_card = result_action.get("confirmation_card")
+        result_confirmation_id = str(result_action.get("confirmation_id") or "")
+        try:
+            _update_card(root, channel, message_id, result_card)
+        except Exception:  # noqa: BLE001 - card replacement failure is audited; sending a new result card is the fallback.
+            _send_menu_card(root, channel, chat_id, result_action)
+        else:
+            bind_confirmation_card(
+                root,
+                result_confirmation_id,
+                message_id=message_id,
+                chat_id=chat_id,
+            )
+        mark_confirmation_card_updated(root, str((record or {}).get("confirmation_id") or confirmation_id))
         _audit_inbound_resolution(
             root,
             payload,
@@ -1513,8 +1566,13 @@ def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value
         )
         if choice_id == TASK_CHAT_CANCEL_CHOICE_ID:
             record = finalize_confirmation_card(root, confirmation_id, "cancelled")
-            if isinstance((record or {}).get("terminal_card"), dict):
-                _update_confirmation_card(root, channel, record or {})
+            card_updated = (
+                _try_update_confirmation_card(root, channel, record or {})
+                if isinstance((record or {}).get("terminal_card"), dict)
+                else False
+            )
+            if not card_updated:
+                _send_text(root, channel, chat_id, "已取消进入 Task Chat。", reply_to=message_id)
             _audit_inbound_resolution(root, payload, "handled", reason="task_chat_cancelled", session_key=target_session_key)
             return
         task = _task_for_chat(root, run_id, task_id)
@@ -1528,20 +1586,26 @@ def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value
             chat_type="p2p",
             mode=TASK_CHAT_MODE,
         )
+        terminal_detail = "\n".join(
+            [
+                f"已进入 Task Chat：{run_id} / {task_id}",
+                f"标题：{_brief_menu_text(task.get('title'), limit=120, fallback='未命名 Task')}",
+                "后续飞书文本会直接转给该 Task；发送 `退出 task` 可退出。",
+            ]
+        )
         record = finalize_confirmation_card(
             root,
             confirmation_id,
             "confirmed",
-            "\n".join(
-                [
-                    f"已进入 Task Chat：{run_id} / {task_id}",
-                    f"标题：{_brief_menu_text(task.get('title'), limit=120, fallback='未命名 Task')}",
-                    "后续飞书文本会直接转给该 Task；发送 `退出 task` 可退出。",
-                ]
-            ),
+            terminal_detail,
         )
-        if isinstance((record or {}).get("terminal_card"), dict):
-            _update_confirmation_card(root, channel, record or {})
+        card_updated = (
+            _try_update_confirmation_card(root, channel, record or {})
+            if isinstance((record or {}).get("terminal_card"), dict)
+            else False
+        )
+        if not card_updated:
+            _send_text(root, channel, chat_id, terminal_detail, reply_to=message_id)
         _audit_inbound_resolution(
             root,
             payload,
@@ -1562,6 +1626,79 @@ def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value
         _send_text(root, channel, chat_id, f"无法进入 Task Chat：{exc}", reply_to=message_id)
 
 
+def _handle_task_chat_control_action(root: Path, channel: Any, payload: dict, value: dict) -> None:
+    chat_id = str(payload.get("chat_id") or "")
+    message_id = str(payload.get("message_id") or "")
+    open_id = str(payload.get("open_id") or "")
+    choice_id = str(value.get("choice_id") or "").strip().lower()
+    if choice_id not in {TASK_CHAT_CONTROL_STAY_CHOICE_ID, TASK_CHAT_CONTROL_EXIT_CHOICE_ID}:
+        _audit_inbound_resolution(root, payload, "rejected", reason="invalid_task_chat_control_choice")
+        _send_text(root, channel, chat_id, "无法处理 Task Chat 控制卡：操作数据不完整。", reply_to=message_id)
+        return
+    try:
+        authorization_error = _authorization_error(
+            feishu_config(root),
+            chat_type="p2p",
+            chat_id=chat_id,
+            open_id=open_id,
+        )
+        if authorization_error:
+            _audit_inbound_resolution(root, payload, "rejected", reason=authorization_error)
+            _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
+            return
+        resolved = resolve_task_chat_control(
+            root,
+            message_id=message_id,
+            chat_id=chat_id,
+            open_id=open_id,
+            choice_id=choice_id,
+        )
+        matched_session_key = str(resolved.get("session_key") or "")
+        subscription = resolved.get("subscription") if isinstance(resolved.get("subscription"), dict) else {}
+        control = resolved.get("control") if isinstance(resolved.get("control"), dict) else {}
+        run_id = str(subscription.get("run_id") or control.get("run_id") or "")
+        task_id = str(subscription.get("task_id") or control.get("task_id") or "")
+        if choice_id == TASK_CHAT_CONTROL_EXIT_CHOICE_ID:
+            target_session_key = _owner_p2p_session_key(
+                root,
+                chat_id=chat_id,
+                open_id=open_id,
+                fallback_session_key=matched_session_key,
+            )
+            _restore_assistant_chat_subscription(
+                root,
+                chat_id=chat_id,
+                open_id=open_id,
+                session_key=target_session_key,
+            )
+            if matched_session_key and matched_session_key != target_session_key:
+                remove_subscriptions(root, {matched_session_key})
+            outcome = "exit"
+            reason = "task_chat_control_exited"
+        else:
+            outcome = "stay"
+            reason = "task_chat_control_stayed"
+        try:
+            card_updated = _update_card(root, channel, message_id, task_chat_control_terminal_card(control, outcome))
+        except Exception:  # noqa: BLE001 - state is already resolved; send a concise fallback instead.
+            card_updated = False
+        if not card_updated:
+            fallback = "已退出 Task Chat，后续文本将发给 AHA 管家。" if outcome == "exit" else "已保留 Task Chat。"
+            _send_text(root, channel, chat_id, fallback, reply_to=message_id)
+        _audit_inbound_resolution(
+            root,
+            payload,
+            "handled",
+            reason=reason,
+            session_key=matched_session_key,
+            run_id=run_id,
+            task_id=task_id,
+        )
+    except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        _audit_inbound_resolution(root, payload, "failed", error=exc)
+        _send_text(root, channel, chat_id, f"无法处理 Task Chat 控制卡：{exc}", reply_to=message_id)
+
+
 def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
     value = payload.get("action") if isinstance(payload.get("action"), dict) else {}
     action_kind = str(value.get("kind") or "")
@@ -1570,6 +1707,9 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
         return
     if action_kind == TASK_CHAT_CARD_ACTION_KIND:
         _handle_task_chat_card_action(root, channel, payload, value)
+        return
+    if action_kind == TASK_CHAT_CONTROL_ACTION_KIND:
+        _handle_task_chat_control_action(root, channel, payload, value)
         return
     if action_kind not in {"aha_service_confirmation", "aha_service_choice"}:
         _audit_inbound_resolution(root, payload, "ignored", reason="unsupported_card_action")

@@ -312,7 +312,9 @@ class ServiceAssistantTests(unittest.TestCase):
             root = Path(tmp)
             workspace_root = root / "workspaces"
             project = workspace_root / "project"
+            alternate_project = workspace_root / "z-alternate-project"
             project.mkdir(parents=True)
+            alternate_project.mkdir()
             config = {
                 "backend": "codex",
                 "workspace_roots": [str(workspace_root)],
@@ -354,16 +356,20 @@ class ServiceAssistantTests(unittest.TestCase):
                 task_id=assistant_task["id"],
             )
 
-            config_prepared = prepare_service_assistant_action(
-                root,
-                assistant_run,
-                assistant_task,
-                {
-                    "type": "service_assistant",
-                    "operation": "create_task",
-                    "arguments": {"title": "Read docs", "source_memo_id": source_memo["id"]},
-                },
-            )
+            with mock.patch(
+                "aha_cli.services.service_assistant_actions._run_workspace",
+                return_value=str(root.resolve()),
+            ):
+                config_prepared = prepare_service_assistant_action(
+                    root,
+                    assistant_run,
+                    assistant_task,
+                    {
+                        "type": "service_assistant",
+                        "operation": "create_task",
+                        "arguments": {"title": "Read docs", "source_memo_id": source_memo["id"]},
+                    },
+                )
             card_json = json.dumps(config_prepared["confirmation_card"], ensure_ascii=False)
             bind_confirmation_card(root, config_prepared["confirmation_id"], message_id="om_task_config", chat_id="oc_chat")
             config_selected = resolve_choice(
@@ -376,7 +382,7 @@ class ServiceAssistantTests(unittest.TestCase):
                     "title": "Read docs from form",
                     "description": "Task body from Feishu form",
                     "run_id": target["id"],
-                    "workspace_path": str(project.resolve()),
+                    "workspace_path": str(alternate_project.resolve()),
                     "backend_model": f"codex::{CODEX_DEFAULT_MODEL}",
                     "reasoning_effort": "high",
                     "proxy_enabled": "true",
@@ -415,6 +421,7 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertNotIn(f"AHA Assistant.{assistant_run}", card_json)
             self.assertIn(f"Run（默认：User run.{target['id']}）", card_json)
             self.assertIn("workspaces/project", card_json)
+            self.assertNotIn(str(root.resolve()), card_json)
             self.assertIn("gpt-env (openai)", card_json)
             self.assertIn("思考深度", card_json)
             self.assertIn('"tag": "input"', card_json)
@@ -432,6 +439,10 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(config_selected["result"]["next_arguments"]["model"], CODEX_DEFAULT_MODEL)
             self.assertEqual(config_selected["result"]["next_arguments"]["title"], "Read docs from form")
             self.assertEqual(config_selected["result"]["next_arguments"]["description"], "Task body from Feishu form")
+            self.assertEqual(
+                config_selected["result"]["next_arguments"]["workspace_path"],
+                str(alternate_project.resolve()),
+            )
             self.assertEqual(config_selected["result"]["next_arguments"]["source_memo_id"], source_memo["id"])
             self.assertEqual(config_selected["result"]["next_arguments"]["reasoning_effort"], "high")
             self.assertTrue(config_selected["result"]["next_arguments"]["proxy_enabled"])
@@ -448,6 +459,7 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertEqual(created["backend"], "codex")
             self.assertEqual(created["model"], CODEX_DEFAULT_MODEL)
             self.assertEqual(created["reasoning_effort"], "high")
+            self.assertEqual(created["workspace_path"], str(alternate_project.resolve()))
             self.assertTrue(created["proxy_enabled"])
             self.assertEqual(created["status"], "pending")
             self.assertEqual(confirmed["result"]["memo"]["created_task_id"], created["id"])
@@ -561,7 +573,7 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertTrue(confirmed["result"]["group_handoff_ack"]["sent"])
             self.assertEqual(confirmed["result"]["group_handoff_ack"]["message_id"], "om_group_ack")
             terminal_card_json = json.dumps(confirmed["confirmation_card"], ensure_ascii=False)
-            self.assertIn("已确认并提交 AHA 执行", terminal_card_json)
+            self.assertIn("AHA 已完成本次操作", terminal_card_json)
             self.assertIn("已创建 Memo", terminal_card_json)
             self.assertIn("memo-001", terminal_card_json)
             self.assertIn("整理 vega pipeline 文档", terminal_card_json)
@@ -877,8 +889,14 @@ class ServiceAssistantTests(unittest.TestCase):
     def test_group_handoff_owner_card_routes_memo_choice_back_to_assistant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            mark_aha_home(root)
             assistant_run = ensure_service_assistant_run(root, {"backend": "stub"})
             assistant_task = ensure_service_assistant_task(root, assistant_run, "tenant:p2p:ou_owner", {"backend": "stub"})
+            work = create_plan(root, "Feishu work", 1, "implementation", [], [], backend="stub", create_default_tasks=False)
+            (root / "config.json").write_text(
+                json.dumps({"integrations": {"feishu": {"default_run_id": work["id"]}}}),
+                encoding="utf-8",
+            )
             set_subscription(
                 root,
                 "tenant:p2p:ou_owner",
@@ -933,20 +951,22 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertIn("需求详情", card_json)
             self.assertIn("群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档", card_json)
             self.assertIn("整理为待办", card_json)
-            self.assertIn("交给主人私聊助手整理 Memo 草稿", card_json)
+            self.assertIn("打开可编辑的 Memo 配置卡", card_json)
             self.assertIn("无需处理", card_json)
             self.assertIn("不创建待办、不创建 Task，也不回群", card_json)
             self.assertNotIn("立即创建可执行 Task", card_json)
             self.assertNotIn("准备代发回复", card_json)
             self.assertNotIn("拒绝关闭", card_json)
             self.assertNotIn("取消", card_json)
-            self.assertEqual(selected["result"]["target_operation"], "draft_group_handoff_memo")
+            self.assertEqual(selected["result"]["target_operation"], "create_memo")
             self.assertEqual(selected["result"]["next_arguments"]["source_handoff_id"], handoff["id"])
-            self.assertIn("First check whether an active Memo", selected["tool_message"])
-            self.assertIn("avoid creating duplicate todo items", selected["tool_message"])
-            self.assertIn(f"source_handoff_id={handoff['id']!r}", selected["tool_message"])
-            self.assertIn("生成 VEGA pipeline 文档", selected["tool_message"])
-            self.assertIn("群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档", selected["tool_message"])
+            self.assertEqual(selected["result"]["next_arguments"]["run_id"], work["id"])
+            self.assertEqual(selected["result"]["next_arguments"]["title"], "生成 VEGA pipeline 文档")
+            self.assertIn(
+                "群成员希望基于当前公开上下文整理一份 VEGA pipeline 文档",
+                selected["result"]["next_arguments"]["description"],
+            )
+            self.assertEqual(selected["tool_message"], "")
             self.assertEqual(get_group_handoff(root, handoff["id"])["status"], "pending")
 
     def test_group_handoff_owner_card_reuses_existing_active_memo(self) -> None:

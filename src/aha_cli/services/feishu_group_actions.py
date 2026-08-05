@@ -6,7 +6,7 @@ from aha_cli.domain.models import is_feishu_group_task
 from aha_cli.services.feishu import bind_confirmation_card, get_session_binding, set_session_binding
 from aha_cli.services.feishu_group import FEISHU_GROUP_HANDOFF_ACK
 from aha_cli.services.feishu_group_handoffs import mark_group_handoff, register_group_handoff
-from aha_cli.services.feishu_notifications import set_subscription
+from aha_cli.services.feishu_notifications import load_subscription_state, set_subscription
 from aha_cli.services.feishu_owner import resolve_feishu_owner
 from aha_cli.services.feishu_runtime import feishu_config
 from aha_cli.services.feishu_work_run import feishu_work_run_status
@@ -253,15 +253,22 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
         active_task_id=str(steward_task.get("id") or ""),
         acl_subject=owner_open_id,
     )
-    set_subscription(
-        root,
-        steward_session_key,
-        chat_id=owner_chat_id,
-        open_id=owner_open_id,
-        run_id=steward_run_id,
-        task_id=str(steward_task.get("id") or ""),
-        chat_type="p2p",
+    current_subscription = load_subscription_state(root).get("subscriptions", {}).get(steward_session_key)
+    active_task_chat = (
+        isinstance(current_subscription, dict)
+        and current_subscription.get("enabled")
+        and str(current_subscription.get("mode") or "") == "task_chat"
     )
+    if not active_task_chat:
+        set_subscription(
+            root,
+            steward_session_key,
+            chat_id=owner_chat_id,
+            open_id=owner_open_id,
+            run_id=steward_run_id,
+            task_id=str(steward_task.get("id") or ""),
+            chat_type="p2p",
+        )
     request_message = str(origin.get("feishu_original_text") or origin.get("message") or "")
     attachments = origin.get("feishu_attachments") if isinstance(origin.get("feishu_attachments"), list) else []
     if attachments:

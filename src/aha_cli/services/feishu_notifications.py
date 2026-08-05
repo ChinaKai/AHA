@@ -9,9 +9,20 @@ import threading
 from aha_cli.locking import exclusive_lock
 from aha_cli.domain.models import is_system_managed, utc_now
 from aha_cli.domain.models import is_service_assistant_task
-from aha_cli.services.feishu import FeishuError, bind_confirmation_card, send_card_message, send_text_message
+from aha_cli.services.feishu import (
+    FeishuError,
+    bind_confirmation_card,
+    send_card_message,
+    send_text_message,
+    update_card_message,
+)
 from aha_cli.services.feishu_audit import audit_feishu_channel
-from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials, send_via_active_channel
+from aha_cli.services.feishu_runtime import (
+    feishu_config,
+    feishu_credentials,
+    send_via_active_channel,
+    update_card_via_active_channel,
+)
 from aha_cli.services.service_assistant_handoffs import (
     consume_status_suppressions,
     mark_service_handoff,
@@ -33,6 +44,10 @@ USER_TRIGGER_ROUTES = {
     for target in ("main", "host")
 }
 MAX_NOTIFICATION_CHARS = 1800
+TASK_CHAT_CONTROL_ACTION_KIND = "aha_task_chat_control"
+TASK_CHAT_CONTROL_STAY_CHOICE_ID = "stay"
+TASK_CHAT_CONTROL_EXIT_CHOICE_ID = "exit"
+TASK_CHAT_CONTROL_STATUSES = {"awaiting_user", "completed", "failed", "blocked"}
 
 _state_lock = threading.RLock()
 
@@ -145,6 +160,44 @@ def remove_subscriptions(root: Path, session_keys: list[str] | set[str] | tuple[
             state["updated_at"] = utc_now()
             _write_subscription_state_unlocked(root, state)
     return {"removed_count": removed_count}
+
+
+def resolve_task_chat_control(
+    root: Path,
+    *,
+    message_id: str,
+    chat_id: str,
+    open_id: str,
+    choice_id: str,
+) -> dict:
+    identity = str(message_id or "").strip()
+    choice = str(choice_id or "").strip().lower()
+    if not identity or choice not in {TASK_CHAT_CONTROL_STAY_CHOICE_ID, TASK_CHAT_CONTROL_EXIT_CHOICE_ID}:
+        raise FeishuError("Task Chat 控制卡片操作无效", code="invalid_task_chat_control")
+    with _locked_subscription_state(root):
+        state = _load_subscription_state_unlocked(root)
+        for session_key, subscription in state["subscriptions"].items():
+            if not isinstance(subscription, dict) or not subscription.get("enabled"):
+                continue
+            if str(subscription.get("mode") or "") != "task_chat":
+                continue
+            if str(subscription.get("chat_id") or "") != str(chat_id or ""):
+                continue
+            if str(subscription.get("open_id") or "") != str(open_id or ""):
+                continue
+            control = subscription.get("task_chat_control")
+            if not isinstance(control, dict) or str(control.get("message_id") or "") != identity:
+                continue
+            if not control.get("active"):
+                raise FeishuError("该 Task Chat 控制卡片已失效，请使用最新卡片", code="stale_task_chat_control")
+            control["active"] = False
+            control["choice_id"] = choice
+            control["resolved_at"] = utc_now()
+            subscription["task_chat_control"] = control
+            state["updated_at"] = utc_now()
+            _write_subscription_state_unlocked(root, state)
+            return {"session_key": str(session_key), "subscription": dict(subscription), "control": dict(control)}
+    raise FeishuError("该 Task Chat 控制卡片已失效，请使用最新卡片", code="stale_task_chat_control")
 
 
 def _session_tenant_key(session_key: object) -> str:
@@ -328,11 +381,16 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
         source_message = _last_task_message(root, run_id, task_id, event, USER_REPLY_ROUTES) or reason
     else:
         source_message = reason or _last_task_message(root, run_id, task_id, event, USER_REPLY_ROUTES)
+    event_time = " ".join(str(event.get("ts") or "").split()).replace("T", " ", 1) or "-"
+    run_name = " ".join(str(plan.get("goal") or plan.get("name") or run_id).split()) or run_id
+    task_title = " ".join(str(task.get("title") or "").split()) or "-"
     message = "\n".join(
         [
-            f"{run_id} {task_id}:",
-            f"status: {previous}->{current}",
-            f"message: {source_message or '-'}",
+            f"Time: {event_time}",
+            f"Task: {run_name}.{task_id}",
+            f"Task Title: {task_title}",
+            f"Status: {previous} -> {current}",
+            f"Message: {source_message or '-'}",
         ]
     )
     return _trim_notification(message)
@@ -365,6 +423,130 @@ def _has_task_chat_subscription(root: Path, run_id: str, task_id: str) -> bool:
         if str(subscription.get("run_id") or "") == run_id and str(subscription.get("task_id") or "") == task_id:
             return True
     return False
+
+
+def _task_chat_control_button(label: str, choice_id: str, button_type: str) -> dict:
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": label},
+        "type": button_type,
+        "behaviors": [
+            {
+                "type": "callback",
+                "value": {"kind": TASK_CHAT_CONTROL_ACTION_KIND, "choice_id": choice_id},
+            }
+        ],
+    }
+
+
+def _task_chat_control_card(run_id: str, task: dict, status: str) -> dict:
+    task_id = str(task.get("id") or "")
+    title = " ".join(str(task.get("title") or "未命名 Task").split())[:120]
+    terminal = status in {"completed", "failed", "blocked"}
+    prompt = (
+        "该 Task 已进入终态。你可以退出 Task Chat 回到 AHA 管家，或暂时保留当前会话。"
+        if terminal
+        else "当前回合已结束。继续发送文本仍会转给该 Task；也可以退出并回到 AHA 管家。"
+    )
+    stay_label = "暂不退出" if terminal else "继续当前 Task"
+    return {
+        "schema": "2.0",
+        "header": {
+            "title": {"tag": "plain_text", "content": "Task Chat 等待操作"},
+            "template": "grey" if terminal else "orange",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(
+                        [
+                            f"**Task**：`{run_id} / {task_id}`",
+                            f"**标题**：{title}",
+                            f"**状态**：{status}",
+                            "",
+                            prompt,
+                        ]
+                    ),
+                },
+                {
+                    "tag": "column_set",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "auto",
+                            "elements": [
+                                _task_chat_control_button(
+                                    stay_label,
+                                    TASK_CHAT_CONTROL_STAY_CHOICE_ID,
+                                    "default",
+                                )
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "auto",
+                            "elements": [
+                                _task_chat_control_button(
+                                    "退出 Task Chat",
+                                    TASK_CHAT_CONTROL_EXIT_CHOICE_ID,
+                                    "primary",
+                                )
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def task_chat_control_terminal_card(control: dict, outcome: str) -> dict:
+    run_id = str(control.get("run_id") or "")
+    task_id = str(control.get("task_id") or "")
+    status = str(control.get("status") or "-")
+    stay_detail = (
+        "会话已保留；如需继续发送消息，请先在 Web 中重新打开该 Task。"
+        if status in {"completed", "failed", "blocked"}
+        else "后续文本仍会发给当前 Task。"
+    )
+    labels = {
+        "stay": ("已保留 Task Chat", "blue", stay_detail),
+        "exit": ("已退出 Task Chat", "green", "后续文本将发给 AHA 管家。"),
+        "running": ("Task 正在处理中", "blue", "本轮控制卡已失效，处理结束后会发送新的控制卡。"),
+        "superseded": ("控制卡已更新", "grey", "请使用聊天底部最新的 Task Chat 控制卡。"),
+    }
+    title, template, detail = labels.get(str(outcome or ""), labels["superseded"])
+    return {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": template},
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(
+                        [
+                            f"**Task**：`{run_id} / {task_id}`",
+                            f"**状态**：{status}",
+                            "",
+                            detail,
+                        ]
+                    ),
+                }
+            ]
+        },
+    }
+
+
+def _update_card(root: Path, message_id: str, card: dict) -> dict:
+    try:
+        return update_card_via_active_channel(root, message_id, card)
+    except (RuntimeError, TimeoutError):
+        config = feishu_config(root)
+        app_id, app_secret = feishu_credentials(config)
+        if not app_id or not app_secret:
+            raise FeishuError("飞书 App ID 或 App Secret 未配置")
+        return update_card_message(root, app_id, app_secret, message_id, card)
 
 
 def _send(root: Path, chat_id: str, text: str, *, card: dict | None = None, opts: dict | None = None) -> dict:
@@ -527,23 +709,30 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             "reason": "service_handoff_closed",
         }
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    task_id = str(data.get("task_id") or "")
     is_status_event = str(event.get("type") or "") == "task_status_changed"
-    suppressed_chats = (
-        consume_status_suppressions(root, run_id, str(data.get("task_id") or ""))
-        if is_status_event
-        else set()
-    )
+    suppressed_chats = consume_status_suppressions(root, run_id, task_id) if is_status_event else set()
     message = notification_message_for_event(root, run_id, event)
     card = data.get("feishu_card") if isinstance(data.get("feishu_card"), dict) else None
     confirmation_id = str(data.get("feishu_confirmation_id") or "")
-    task_chat_message = _task_chat_message_for_event(event, str(data.get("task_id") or ""))
-    if task_chat_message and not _has_task_chat_subscription(root, run_id, str(data.get("task_id") or "")):
+    task_chat_message = _task_chat_message_for_event(event, task_id)
+    has_task_chat = _has_task_chat_subscription(root, run_id, task_id)
+    if task_chat_message and not has_task_chat:
         task_chat_message = ""
-    if not message and not card and not task_chat_message:
+    task_chat_status = str(data.get("status") or "").strip().lower() if is_status_event and has_task_chat else ""
+    if task_chat_status not in TASK_CHAT_CONTROL_STATUSES | {"running"}:
+        task_chat_status = ""
+    _plan, event_task = _event_plan_and_task(root, run_id, task_id)
+    task_chat_control_card = (
+        _task_chat_control_card(run_id, event_task or {"id": task_id}, task_chat_status)
+        if task_chat_status in TASK_CHAT_CONTROL_STATUSES
+        else None
+    )
+    if not message and not card and not task_chat_message and not task_chat_status:
         return {"ok": True, "sent": False, "reason": "ignored_event"}
-    task_id = str(data.get("task_id") or "")
     event_key = _event_key(run_id, event)
     sent_count = 0
+    updated_count = 0
     failed_count = 0
     skipped_tenant_count = 0
     current_tenant_key = _current_tenant_key(root)
@@ -562,7 +751,104 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             if _subscription_chat_type(session_key, subscription) == "group":
                 skipped_group_count += 1
                 continue
-            if is_status_event and str(subscription.get("mode") or "") == "task_chat":
+            mode = str(subscription.get("mode") or "")
+            chat_id = str(subscription.get("chat_id") or "")
+            if not chat_id:
+                continue
+            subscribed_task = str(subscription.get("task_id") or "")
+            if (
+                is_status_event
+                and mode == "task_chat"
+                and str(subscription.get("run_id") or "") == run_id
+                and subscribed_task == task_id
+            ):
+                if not task_chat_status:
+                    continue
+                recipient_key = str(session_key)
+                if recipient_key in visited_recipients:
+                    continue
+                visited_recipients.add(recipient_key)
+                sent_key = f"{recipient_key}:{event_key}"
+                if sent_key in state["sent"]:
+                    continue
+                previous_control = (
+                    dict(subscription.get("task_chat_control") or {})
+                    if isinstance(subscription.get("task_chat_control"), dict)
+                    else {}
+                )
+                previous_message_id = str(previous_control.get("message_id") or "")
+                if task_chat_status == "running":
+                    if not previous_control.get("active") or not previous_message_id:
+                        continue
+                    previous_control["active"] = False
+                    previous_control["invalidated_at"] = utc_now()
+                    previous_control["invalidated_by"] = "running"
+                    subscription["task_chat_control"] = previous_control
+                    try:
+                        _update_card(root, previous_message_id, task_chat_control_terminal_card(previous_control, "running"))
+                    except Exception:  # noqa: BLE001 - stale card rejection remains enforced by persisted state.
+                        pass
+                    state["sent"][sent_key] = {"sent_at": utc_now(), "message_id": previous_message_id}
+                    updated_count += 1
+                    continue
+                try:
+                    result = _send(root, chat_id, "", card=task_chat_control_card)
+                except Exception as exc:  # noqa: BLE001 - one stale Feishu chat must not block valid subscribers.
+                    failed_count += 1
+                    audit_feishu_channel(
+                        root,
+                        direction="outbound",
+                        kind="task_chat_control",
+                        status="failed",
+                        transport="notification",
+                        chat_id=chat_id,
+                        session_key=str(session_key),
+                        run_id=run_id,
+                        task_id=task_id,
+                        content={"card": task_chat_control_card},
+                        error=exc,
+                        reason=str(event.get("type") or ""),
+                    )
+                    continue
+                message_id = str(result.get("message_id") or "")
+                control = {
+                    "active": True,
+                    "message_id": message_id,
+                    "run_id": run_id,
+                    "task_id": task_id,
+                    "status": task_chat_status,
+                    "event_key": event_key,
+                    "sent_at": utc_now(),
+                }
+                subscription["task_chat_control"] = control
+                if previous_control.get("active") and previous_message_id and previous_message_id != message_id:
+                    previous_control["active"] = False
+                    previous_control["invalidated_at"] = utc_now()
+                    previous_control["invalidated_by"] = "superseded"
+                    try:
+                        _update_card(
+                            root,
+                            previous_message_id,
+                            task_chat_control_terminal_card(previous_control, "superseded"),
+                        )
+                    except Exception:  # noqa: BLE001 - latest message id still rejects stale callbacks.
+                        pass
+                audit_feishu_channel(
+                    root,
+                    direction="outbound",
+                    kind="task_chat_control",
+                    status="delivered",
+                    transport=str(result.get("transport") or "unknown"),
+                    message_id=message_id,
+                    chat_id=chat_id,
+                    session_key=str(session_key),
+                    run_id=run_id,
+                    task_id=task_id,
+                    content={"card": task_chat_control_card},
+                    reason=str(event.get("type") or ""),
+                )
+                state["sent"][sent_key] = {"sent_at": utc_now(), "message_id": message_id}
+                sent_count += 1
                 continue
             # Status notifications go only to the resolved owner private chat.
             # Direct assistant replies remain scoped to the originating
@@ -572,11 +858,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                 continue
             if not is_status_event and str(subscription.get("run_id") or "") != run_id:
                 continue
-            subscribed_task = str(subscription.get("task_id") or "")
             if not is_status_event and subscribed_task and subscribed_task != task_id:
-                continue
-            chat_id = str(subscription.get("chat_id") or "")
-            if not chat_id:
                 continue
             if is_status_event and chat_id in suppressed_chats:
                 continue
@@ -641,11 +923,12 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             state["sent"] = dict(list(state["sent"].items())[-4096:])
         state["updated_at"] = utc_now()
         _write_subscription_state_unlocked(root, state)
-    reason = "sent" if sent_count else "send_failed" if failed_count else "no_subscription"
+    reason = "sent" if sent_count else "updated" if updated_count else "send_failed" if failed_count else "no_subscription"
     return {
-        "ok": not failed_count or sent_count > 0,
+        "ok": not failed_count or sent_count > 0 or updated_count > 0,
         "sent": sent_count > 0,
         "sent_count": sent_count,
+        "updated_count": updated_count,
         "failed_count": failed_count,
         "skipped_tenant_count": skipped_tenant_count,
         "skipped_group_count": skipped_group_count,
@@ -655,12 +938,17 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
 
 
 __all__ = [
+    "TASK_CHAT_CONTROL_ACTION_KIND",
+    "TASK_CHAT_CONTROL_EXIT_CHOICE_ID",
+    "TASK_CHAT_CONTROL_STAY_CHOICE_ID",
     "load_subscription_state",
     "notification_message_for_event",
     "notify_event",
     "remove_subscriptions",
+    "resolve_task_chat_control",
     "send_direct_message",
     "set_subscription",
     "subscription_state_lock_path",
     "subscription_state_path",
+    "task_chat_control_terminal_card",
 ]
