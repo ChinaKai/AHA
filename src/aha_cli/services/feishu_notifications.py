@@ -28,6 +28,7 @@ from aha_cli.services.service_assistant_handoffs import (
     mark_service_handoff,
     pending_handoff_for_reply,
 )
+from aha_cli.store.event_views import conversation_event_visible, is_aha_action_envelope_text
 from aha_cli.store.io import iter_jsonl_reverse, read_json, write_json
 from aha_cli.store.paths import aha_home_path, event_path, plan_path
 
@@ -48,6 +49,8 @@ TASK_CHAT_CONTROL_ACTION_KIND = "aha_task_chat_control"
 TASK_CHAT_CONTROL_STAY_CHOICE_ID = "stay"
 TASK_CHAT_CONTROL_EXIT_CHOICE_ID = "exit"
 TASK_CHAT_CONTROL_STATUSES = {"awaiting_user", "completed", "failed", "blocked"}
+TASK_CHAT_MIRROR_LIMIT = 64
+TASK_CHAT_MIRROR_EVENT_WINDOW = 256
 
 _state_lock = threading.RLock()
 
@@ -438,18 +441,105 @@ def _status_notification_card(message: str, event: dict) -> dict:
 
 
 def _task_chat_message_for_event(event: dict, task_id: str) -> str:
-    if str(event.get("type") or "") != "message":
-        return ""
+    event_type = str(event.get("type") or "")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    if str(data.get("task_id") or "") != str(task_id or ""):
+    if not conversation_event_visible(event, str(task_id or ""), "main", {"chat"}):
         return ""
-    sender, _target = _message_route(data)
-    if sender == "feishu":
+    if event_type == "message":
+        sender, _target = _message_route(data)
+        if sender == "feishu":
+            return ""
+        message = _message_text(data)
+    elif event_type == "agent_message":
+        message = str(data.get("text") or "").strip()
+        if is_aha_action_envelope_text(message):
+            return ""
+    elif event_type == "agent_error":
+        error = str(data.get("message") or data.get("error") or data.get("text") or "").strip()
+        target = str(data.get("target") or data.get("agent_id") or "main").strip() or "main"
+        message = f"Agent error ({target})\n{error}" if error else f"Agent error ({target})"
+    else:
         return ""
-    message = _message_text(data)
     if not message:
         return ""
     return _trim_notification(message)
+
+
+def _event_id_number(event: dict) -> int | None:
+    try:
+        return int(event.get("event_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _task_chat_mirror_source(event: dict) -> tuple[str, str] | None:
+    if str(event.get("type") or "") != "agent_message":
+        return None
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    text = str(data.get("text") or "").strip()
+    agent = str(data.get("target") or "main").strip().lower() or "main"
+    return (agent, text) if text and not is_aha_action_envelope_text(text) else None
+
+
+def _task_chat_mirror_candidate(event: dict) -> tuple[str, str] | None:
+    if str(event.get("type") or "") != "message":
+        return None
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    sender, _target = _message_route(data)
+    text = _message_text(data)
+    return (sender, text) if sender and text else None
+
+
+def _remember_task_chat_mirror(subscription: dict, event: dict) -> None:
+    source = _task_chat_mirror_source(event)
+    if source is None:
+        return
+    agent, text = source
+    pending = subscription.get("task_chat_pending_mirrors")
+    mirrors = list(pending) if isinstance(pending, list) else []
+    mirrors.append(
+        {
+            "agent": agent,
+            "text": text,
+            "event_id": _event_id_number(event),
+            "recorded_at": utc_now(),
+        }
+    )
+    subscription["task_chat_pending_mirrors"] = mirrors[-TASK_CHAT_MIRROR_LIMIT:]
+
+
+def _consume_task_chat_mirror(subscription: dict, event: dict) -> bool:
+    candidate = _task_chat_mirror_candidate(event)
+    pending = subscription.get("task_chat_pending_mirrors")
+    if candidate is None or not isinstance(pending, list):
+        return False
+    sender, text = candidate
+    current_event_id = _event_id_number(event)
+    mirrors = [item for item in pending if isinstance(item, dict)]
+    match_index: int | None = None
+    kept: list[dict] = []
+    for item in mirrors:
+        source_event_id = item.get("event_id") if isinstance(item.get("event_id"), int) else None
+        if (
+            current_event_id is not None
+            and source_event_id is not None
+            and current_event_id - source_event_id > TASK_CHAT_MIRROR_EVENT_WINDOW
+        ):
+            continue
+        kept.append(item)
+    for index in range(len(kept) - 1, -1, -1):
+        item = kept[index]
+        source_event_id = item.get("event_id") if isinstance(item.get("event_id"), int) else None
+        follows_source = current_event_id is None or source_event_id is None or current_event_id >= source_event_id
+        if follows_source and str(item.get("agent") or "") == sender and str(item.get("text") or "") == text:
+            match_index = index
+            break
+    if match_index is None:
+        subscription["task_chat_pending_mirrors"] = kept[-TASK_CHAT_MIRROR_LIMIT:]
+        return False
+    kept.pop(match_index)
+    subscription["task_chat_pending_mirrors"] = kept[-TASK_CHAT_MIRROR_LIMIT:]
+    return True
 
 
 def _has_task_chat_subscription(root: Path, run_id: str, task_id: str) -> bool:
@@ -779,6 +869,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
     event_key = _event_key(run_id, event)
     sent_count = 0
     updated_count = 0
+    deduplicated_count = 0
     failed_count = 0
     skipped_tenant_count = 0
     current_tenant_key = _current_tenant_key(root)
@@ -920,6 +1011,11 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             sent_key = f"{recipient_key}:{event_key}"
             if sent_key in state["sent"]:
                 continue
+            is_task_chat_message = not is_status_event and mode == "task_chat"
+            if is_task_chat_message and _consume_task_chat_mirror(subscription, event):
+                state["sent"][sent_key] = {"sent_at": utc_now(), "deduplicated": True}
+                deduplicated_count += 1
+                continue
             try:
                 result = _send(root, chat_id, outbound_message, card=card)
             except Exception as exc:  # noqa: BLE001 - one stale Feishu chat must not block valid subscribers.
@@ -964,17 +1060,30 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                 "sent_at": utc_now(),
                 "message_id": result.get("message_id"),
             }
+            if is_task_chat_message:
+                _remember_task_chat_mirror(subscription, event)
             sent_count += 1
         if len(state["sent"]) > 4096:
             state["sent"] = dict(list(state["sent"].items())[-4096:])
         state["updated_at"] = utc_now()
         _write_subscription_state_unlocked(root, state)
-    reason = "sent" if sent_count else "updated" if updated_count else "send_failed" if failed_count else "no_subscription"
+    reason = (
+        "sent"
+        if sent_count
+        else "updated"
+        if updated_count
+        else "deduplicated"
+        if deduplicated_count
+        else "send_failed"
+        if failed_count
+        else "no_subscription"
+    )
     return {
         "ok": not failed_count or sent_count > 0 or updated_count > 0,
         "sent": sent_count > 0,
         "sent_count": sent_count,
         "updated_count": updated_count,
+        "deduplicated_count": deduplicated_count,
         "failed_count": failed_count,
         "skipped_tenant_count": skipped_tenant_count,
         "skipped_group_count": skipped_group_count,

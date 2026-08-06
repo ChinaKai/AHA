@@ -2324,6 +2324,20 @@ def _menu_list_card(root: Path, operation: str, arguments: dict) -> dict:
             )
     else:
         elements.append({"tag": "markdown", "content": str(data.get("empty") or "无结果。")})
+    elements.append(
+        {
+            "tag": "column_set",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "auto",
+                    "elements": [
+                        _menu_query_button("取消", "__cancel__", "default", "aha_menu_query_result_cancel")
+                    ],
+                }
+            ],
+        }
+    )
     elements.append({"tag": "markdown", "content": "<font color='grey'>该菜单查询由 AHA 直接读取本地状态，不调用 agent/backend 模型。</font>"})
     return {
         "schema": "2.0",

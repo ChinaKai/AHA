@@ -517,7 +517,7 @@ class WebSystemRoutesTests(unittest.TestCase):
                         "POST",
                         "/api/web/upgrade",
                         {},
-                        json.dumps({"confirm": "upgrade"}).encode("utf-8"),
+                        json.dumps({"confirm": "upgrade", "proxy_enabled": True}).encode("utf-8"),
                     )
                     upgrade_call = run_upgrade.call_args
                 upgrade_restart_requested = consume_web_restart_requested()
@@ -558,6 +558,7 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertEqual(upgrade_body["command"], expected_upgrade_command)
         self.assertEqual(upgrade_call.args[0], root)
         self.assertEqual(upgrade_call.args[1], expected_upgrade_command)
+        self.assertIs(upgrade_call.kwargs["proxy_enabled"], True)
         self.assertIn('"source": "client"', log_text)
         self.assertIn('"seq": 7', log_text)
         self.assertNotIn("ignored", log_text)
@@ -611,7 +612,13 @@ class WebSystemRoutesTests(unittest.TestCase):
                     return_value={"system": "Windows", "release": "11", "machine": "AMD64", "python_version": "3.12.4", "label": "Windows 11 (AMD64)"},
                 ),
             ):
-                response = system_route_response(root, run_id, "GET", "/api/web/upgrade/status", {})
+                response = system_route_response(
+                    root,
+                    run_id,
+                    "GET",
+                    "/api/web/upgrade/status",
+                    {"proxy_enabled": ["false"]},
+                )
 
         self.assertTrue(response and response.startswith(b"HTTP/1.1 200 OK"))
         body = json_response_body(response)
@@ -619,6 +626,8 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertEqual(body["current_version"], "v0.1.0.old")
         self.assertEqual(body["latest_version"], "v0.2.0.new")
         self.assertEqual(body["platform"]["label"], "Windows 11 (AMD64)")
+        self.assertFalse(body["proxy_enabled"])
+        self.assertIs(run_upgrade.call_args.kwargs["proxy_enabled"], False)
         self.assertIn("--check-only", run_upgrade.call_args.args[1] if len(run_upgrade.call_args.args) > 1 else run_upgrade.call_args.args[0])
 
     def test_web_upgrade_requires_explicit_confirmation(self) -> None:
@@ -634,6 +643,39 @@ class WebSystemRoutesTests(unittest.TestCase):
 
         self.assertTrue(response and response.startswith(b"HTTP/1.1 400 Bad Request"))
         run_upgrade.assert_not_called()
+
+    def test_web_upgrade_status_failure_still_exposes_proxy_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Upgrade status proxy fallback", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+            config_path = root / ".aha" / "config.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["proxy"] = {
+                "enabled": False,
+                "http_proxy": "http://127.0.0.1:7897",
+                "https_proxy": "http://127.0.0.1:7897",
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            install_bin = root / "bin" / "aha"
+            install_bin.parent.mkdir(parents=True)
+            install_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            with (
+                mock.patch.dict(os.environ, {"AHA_SOURCE_ROOT": "", "AHA_INSTALL_BIN": str(install_bin)}, clear=False),
+                mock.patch(
+                    "aha_cli.web.system_routes._run_web_upgrade_command",
+                    side_effect=RuntimeError("GitHub unavailable"),
+                ),
+            ):
+                response = system_route_response(root, run_id, "GET", "/api/web/upgrade/status", {})
+
+        self.assertTrue(response and response.startswith(b"HTTP/1.1 502 Bad Gateway"))
+        body = json_response_body(response)
+        self.assertTrue(body["proxy_configured"])
+        self.assertFalse(body["proxy_enabled"])
 
     def test_web_upgrade_command_requires_installed_onebin_for_source_runtime(self) -> None:
         with (
@@ -777,6 +819,37 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertEqual(env["http_proxy"], "http://127.0.0.1:7897")
         self.assertEqual(env["https_proxy"], "http://127.0.0.1:7897")
         self.assertEqual(env["no_proxy"], "localhost,127.0.0.1,::1")
+
+    def test_web_upgrade_env_explicit_switch_overrides_core_default_and_process_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_home = root / ".aha"
+            aha_home.mkdir()
+            (aha_home / "config.json").write_text(
+                json.dumps(
+                    {
+                        "proxy": {
+                            "enabled": False,
+                            "http_proxy": "http://127.0.0.1:7897",
+                            "https_proxy": "http://127.0.0.1:7897",
+                            "no_proxy": "localhost,127.0.0.1,::1",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"HTTP_PROXY": "http://process", "HTTPS_PROXY": "http://process", "ALL_PROXY": "socks5://process"},
+                clear=False,
+            ):
+                enabled_env = system_routes._web_upgrade_env(root, True)
+                disabled_env = system_routes._web_upgrade_env(root, False)
+
+        self.assertEqual(enabled_env["HTTP_PROXY"], "http://127.0.0.1:7897")
+        self.assertEqual(enabled_env["HTTPS_PROXY"], "http://127.0.0.1:7897")
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            self.assertNotIn(key, disabled_env)
 
     def test_realtime_debug_rejects_deleted_run_without_recreating_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

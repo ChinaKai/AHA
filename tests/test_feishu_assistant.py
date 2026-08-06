@@ -593,6 +593,8 @@ class FeishuAssistantTests(unittest.TestCase):
             self.assertIn("Work.", result_json)
             self.assertIn("Check task", result_json)
             self.assertIn("选中进入 Chat", result_json)
+            self.assertIn("取消", result_json)
+            self.assertIn("__cancel__", result_json)
             self.assertIn("不调用 agent/backend 模型", result_json)
 
     def test_owner_menu_query_uses_current_app_session_when_event_tenant_is_stale(self) -> None:
@@ -713,6 +715,8 @@ class FeishuAssistantTests(unittest.TestCase):
             self.assertIn("Check memo", card_json)
             self.assertIn("Memo body", card_json)
             self.assertIn("选中编辑", card_json)
+            self.assertIn("取消", card_json)
+            self.assertIn("__cancel__", card_json)
             self.assertIn("不调用 agent/backend 模型", card_json)
 
     def test_memo_query_result_selection_opens_update_form(self) -> None:

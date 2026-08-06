@@ -356,7 +356,7 @@
       try {
         const body = publish
           ? (options.tag ? { tag: String(options.tag || "").trim() } : {})
-          : { confirm: "upgrade" };
+          : { confirm: "upgrade", proxy_enabled: Boolean(options.proxyEnabled) };
         const request = {
           method: "POST",
           headers: { "Content-Type": "application/json" },

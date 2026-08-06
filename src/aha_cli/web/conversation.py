@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from aha_cli.services.backend_runtime import backend_status
 from aha_cli.services.prompt_artifacts import read_prompt_artifact
-from aha_cli.store.event_views import conversation_events_page, event_agent_refs, event_task_id
+from aha_cli.store.event_views import (
+    conversation_events_page,
+    event_agent_refs,
+    event_task_id,
+    is_aha_action_envelope_text,
+)
 from aha_cli.store.filesystem import (
     event_path,
     event_stream_page,
@@ -52,19 +56,6 @@ def conversation_turn_events(root: Path, run_id: str, task_id: str, target: str,
             if event.get("type") == "agent_started" or len(events) >= safe_limit:
                 break
     return list(reversed(events))
-
-
-def is_aha_action_envelope_text(text: str) -> bool:
-    stripped = text.strip()
-    if not stripped.startswith("{") or '"actions"' not in stripped or '"response"' not in stripped:
-        return False
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(payload, dict):
-        return False
-    return isinstance(payload.get("actions"), list) and isinstance(payload.get("response"), str)
 
 
 def is_raw_action_agent_message(event: dict) -> bool:

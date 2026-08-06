@@ -130,8 +130,9 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
 - owner 私聊机器人菜单是同一套管家入口的显式触发方式，只支持 owner。飞书开放平台可配置事件型菜单：
   `aha_create_memo`、`aha_create_task`、`aha_list_memos`、`aha_list_tasks`。创建菜单复用上面的表单卡和最终确认；
   菜单创建 Memo/Task 时会在表单内提供标题和正文输入，其他属性与 Web 创建表单使用同一套真实字段；
-  Memo/Task 查询提交后会把原查询表单卡直接替换为结果卡，不再额外展示“已选择方案”；卡片更新失败时发送新结果卡兜底；
-  查询 Task 后可确认进入 `Task Chat`，后续私聊文本直接发给所选普通 Task。Task Chat 期间目标 Task 的 agent 正文即时送达；
+  Memo/Task 查询提交后会把原查询表单卡直接替换为结果卡，不再额外展示“已选择方案”；结果卡可直接取消并结束本次查询，卡片更新失败时发送新结果卡兜底；
+  查询 Task 后可确认进入 `Task Chat`，后续私聊文本直接发给所选普通 Task。Task Chat 会逐条即时转发 Web 当前主 Agent 会话在 `Chat` 筛选下可见的普通消息、Agent update 和 Agent error，不合并、不限频；
+  飞书入站文本不回显，原始 AHA action 信封不转发，Agent update 后生成的同文最终消息只保留一份；
   普通状态文本不推送，但 `awaiting_user` 和终态仍发送退出/保留控制卡，重新进入 `running` 时只使旧控制卡失效。
   这些状态不排队、退出后也不补发；其他 Task 的状态仍按 owner 全局推送规则处理。
   数字人转单卡可即时送达，但不会覆盖或退出当前 Task Chat。发送 `退出 task` 可显式返回 AHA 管家。

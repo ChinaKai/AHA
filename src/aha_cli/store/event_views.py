@@ -162,6 +162,21 @@ def conversation_event_category(event_type: str) -> str:
     return "runtime"
 
 
+def is_aha_action_envelope_text(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped.startswith("{") or '"actions"' not in stripped or '"response"' not in stripped:
+        return False
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("actions"), list)
+        and isinstance(payload.get("response"), str)
+    )
+
+
 def _message_endpoint(data: dict, *keys: str) -> str:
     for key in keys:
         value = str(data.get(key) or "").strip()
@@ -246,7 +261,7 @@ def _category_allowed(event_type: str, categories: set[str] | None) -> bool:
     return categories is None or conversation_event_category(event_type) in categories
 
 
-def _conversation_event_matches(event: dict, task_id: str, target: str, categories: set[str] | None) -> bool:
+def conversation_event_visible(event: dict, task_id: str, target: str, categories: set[str] | None = None) -> bool:
     event_type = str(event.get("type") or "")
     return (
         _category_allowed(event_type, categories)
@@ -262,7 +277,7 @@ def _main_host_mirror_keys(root: Path, run_id: str, task_id: str, target: str, b
     path = event_path(root, run_id)
     keys: set[tuple[str, str, str]] = set()
     for _offset, event in iter_jsonl_reverse(path, before=before) or ():
-        if not _conversation_event_matches(event, task_id, target, categories):
+        if not conversation_event_visible(event, task_id, target, categories):
             continue
         key = _main_host_mirror_key(event)
         if key:
@@ -288,7 +303,7 @@ def conversation_events_page(
     matches: list[dict] = []
     for offset, event in iter_jsonl_reverse(path, before=end_offset) or ():
         event_type = str(event.get("type") or "")
-        if _conversation_event_matches(event, task_id, target or "main", allowed_categories):
+        if conversation_event_visible(event, task_id, target or "main", allowed_categories):
             if _main_browser_mirror_key(event) in main_host_mirror_keys:
                 continue
             item = dict(event)
@@ -336,10 +351,12 @@ def searchable_conversation_messages(root: Path, run_id: str) -> Iterator[dict]:
 
 __all__ = [
     "conversation_event_category",
+    "conversation_event_visible",
     "conversation_events_page",
     "event_agent_refs",
     "event_task_id",
     "format_event_log_line",
+    "is_aha_action_envelope_text",
     "searchable_conversation_messages",
     "task_event_log_page",
 ]

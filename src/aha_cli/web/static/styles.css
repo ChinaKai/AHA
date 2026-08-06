@@ -1683,6 +1683,13 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   gap: 8px;
   justify-content: flex-end;
 }
+.web-upgrade-proxy-field {
+  display: grid;
+  gap: 2px;
+}
+.web-upgrade-proxy-field .checkbox-line {
+  min-height: 28px;
+}
 .web-publish-message {
   padding: 8px 10px;
   border: 1px solid var(--color-border-subtle);

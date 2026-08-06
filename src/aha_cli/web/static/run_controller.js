@@ -33,6 +33,7 @@
     let webPublishError = "";
     let webPublishNotice = "";
     let webPublishTag = "";
+    let webUpgradeProxyEnabled = null;
 
     function t(key, fallback = "") {
       return window.AHAI18n?.t?.(key, fallback) || fallback;
@@ -537,6 +538,11 @@
           : (updateKnown ? t("run.upgrade_current", "Up to date") : t("run.upgrade_unknown", "Unable to determine")));
       const updateClass = updateAvailable ? "warning" : (updateKnown ? "success" : "");
       const busy = webPublishLoading || Boolean(deps.webRestartInFlight?.());
+      const proxyConfigured = status.proxy_configured === true;
+      const proxyChecked = webUpgradeProxyEnabled === true;
+      const proxyHint = proxyConfigured
+        ? t("run.upgrade_proxy_hint", "Use the Core proxy configured in AHA Settings for GitHub access.")
+        : t("run.upgrade_proxy_unavailable", "Configure a Core proxy in AHA Settings to enable this option.");
       const noteHtml = webPublishNotice ? `<div class="web-publish-message success">${escapeHtml(webPublishNotice)}</div>` : "";
       const errorHtml = webPublishError ? `<div class="web-publish-message error">${escapeHtml(webPublishError)}</div>` : "";
       panel.innerHTML = `<section class="web-publish-panel">
@@ -553,6 +559,13 @@
           <section><span>${escapeHtml(t("run.upgrade_latest_version", "Latest version"))}</span><code>${escapeHtml(latestVersion)}</code></section>
           <section><span>${escapeHtml(t("run.upgrade_platform", "Platform"))}</span><strong>${escapeHtml(platformLabel)}</strong></section>
           <section><span>${escapeHtml(t("run.upgrade_status", "Update status"))}</span><strong class="${updateClass}">${escapeHtml(updateLabel)}</strong></section>
+        </div>
+        <div class="web-upgrade-proxy-field">
+          <label class="checkbox-line">
+            <input id="web-upgrade-proxy-enabled" type="checkbox" ${proxyChecked ? "checked" : ""} ${busy || !proxyConfigured ? "disabled" : ""}>
+            <span>${escapeHtml(t("run.upgrade_use_proxy", "Use proxy"))}</span>
+          </label>
+          <span class="meta">${escapeHtml(proxyHint)}</span>
         </div>
         <div class="web-publish-actions">
           <button class="button-ghost" type="button" data-web-publish-action="refresh" ${busy ? "disabled" : ""}>${escapeHtml(t("common.refresh", "Refresh"))}</button>
@@ -634,10 +647,22 @@
         const failedText = publish
           ? t("run.publish_status_failed", "Failed to load publish status")
           : t("run.upgrade_status_failed", "Failed to check for updates");
-        const payload = await deps.fetchJson?.(deps.apiUrl?.(endpoint), { cache: "no-store" }, failedText);
+        const statusParams = !publish && webUpgradeProxyEnabled !== null
+          ? { proxy_enabled: String(webUpgradeProxyEnabled) }
+          : {};
+        const payload = await deps.fetchJson?.(deps.apiUrl?.(endpoint, statusParams), { cache: "no-store" }, failedText);
         webPublishStatus = payload || null;
         if (publish && !options.keepTag) webPublishTag = String(payload?.next_tag || "");
+        if (!publish && webUpgradeProxyEnabled === null) webUpgradeProxyEnabled = Boolean(payload?.proxy_enabled);
       } catch (err) {
+        if (!publish && typeof err?.payload?.proxy_configured === "boolean") {
+          webPublishStatus = {
+            ...(webPublishStatus || {}),
+            proxy_configured: err.payload.proxy_configured,
+            proxy_enabled: err.payload.proxy_enabled === true,
+          };
+          if (webUpgradeProxyEnabled === null) webUpgradeProxyEnabled = err.payload.proxy_enabled === true;
+        }
         webPublishError = err?.message || String(err || (publish
           ? t("run.publish_status_failed", "Failed to load publish status")
           : t("run.upgrade_status_failed", "Failed to check for updates")));
@@ -657,6 +682,7 @@
         webPublishNotice = "";
       } else {
         webPublishStatus = null;
+        webUpgradeProxyEnabled = null;
       }
       renderWebPublishConsole();
       if (nextOpen && options.load !== false) void loadWebPublishStatus();
@@ -708,6 +734,7 @@
       const currentVersion = String(status.current_version || deps.currentAppVersion?.() || "-");
       const latestVersion = String(status.latest_version || "-");
       const platformLabel = String(status.platform?.label || "-");
+      const proxyEnabled = webUpgradeProxyEnabled === true;
       const confirmed = await (deps.confirmDialogAction?.({
         title: t("run.upgrade_confirm_title", "Upgrade AHA?"),
         message: t("run.upgrade_confirm_message", "AHA will replace the current onebin and restart the Web process."),
@@ -716,6 +743,7 @@
           [t("run.upgrade_current_version", "Current version"), currentVersion],
           [t("run.upgrade_latest_version", "Latest version"), latestVersion],
           [t("run.upgrade_platform", "Platform"), platformLabel],
+          [t("run.upgrade_use_proxy", "Use proxy"), proxyEnabled ? t("common.yes", "Yes") : t("common.no", "No")],
         ],
       }) ?? Promise.resolve(true));
       if (!confirmed) return;
@@ -724,7 +752,7 @@
       webPublishNotice = "";
       renderWebPublishConsole();
       try {
-        await deps.upgradeWebService?.();
+        await deps.upgradeWebService?.({ proxyEnabled });
       } catch (err) {
         webPublishError = err?.message || String(err || t("run.upgrade_failed", "Failed to upgrade Web"));
       } finally {
@@ -1087,6 +1115,10 @@
       elements.webPublishConsoleEl?.addEventListener("input", event => {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.id === "web-publish-tag") webPublishTag = target.value || "";
+        if (target?.id === "web-upgrade-proxy-enabled") {
+          webUpgradeProxyEnabled = Boolean(target.checked);
+          void loadWebPublishStatus({ keepNotice: true });
+        }
       });
       elements.webPublishConsoleEl?.addEventListener("submit", event => {
         const target = event.target instanceof Element ? event.target : null;

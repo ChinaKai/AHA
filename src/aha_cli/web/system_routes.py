@@ -33,7 +33,7 @@ from aha_cli.store.runs import run_exists
 from aha_cli.store.ui_state import read_global_ui_state, read_ui_state, update_global_ui_state, update_ui_state
 from aha_cli.web.conversation import MAX_EVENTS_LIMIT, conversation_view_page, event_stream_view_page, prompt_artifact_view
 from aha_cli.web.global_search import global_search_snapshot
-from aha_cli.web.http_utils import http_response, json_response, parse_json_body
+from aha_cli.web.http_utils import http_response, json_response, parse_json_body, parse_optional_bool
 from aha_cli.web.run_api import default_api_run_id, require_api_run_id
 from aha_cli.web.session_debug import realtime_debug_log
 from aha_cli.web.auth import bind_host_exposes_network
@@ -257,14 +257,32 @@ def _web_upgrade_check_command() -> list[str]:
     return web_upgrade_check_command()
 
 
-def _web_upgrade_env(root: Path) -> dict[str, str]:
+def _web_upgrade_proxy_status(root: Path) -> dict[str, bool]:
+    try:
+        proxy = core_proxy_config(load_config(root))
+    except Exception:  # noqa: BLE001 - upgrade remains available when optional proxy config cannot be loaded.
+        return {"proxy_configured": False, "proxy_enabled": False}
+    configured = proxy_configured(proxy)
+    return {
+        "proxy_configured": configured,
+        "proxy_enabled": bool(proxy.get("enabled") and configured),
+    }
+
+
+def _web_upgrade_env(root: Path, proxy_enabled: bool | None = None) -> dict[str, str]:
     env = os.environ.copy()
     try:
         config = load_config(root)
     except Exception:  # noqa: BLE001 - upgrade should still run without optional proxy config.
-        return env
+        return apply_proxy_environment(env, {}) if proxy_enabled is False else env
     proxy = core_proxy_config(config)
-    if not (proxy.get("enabled") and proxy_configured(proxy)):
+    configured = proxy_configured(proxy)
+    use_proxy = bool(proxy.get("enabled") and configured) if proxy_enabled is None else proxy_enabled
+    if not use_proxy:
+        return apply_proxy_environment(env, {}) if proxy_enabled is False else env
+    if not configured:
+        if proxy_enabled is True:
+            raise RuntimeError("AHA Core proxy is not configured")
         return env
     values = {
         "HTTP_PROXY": proxy.get("http_proxy"),
@@ -280,12 +298,17 @@ def _web_upgrade_env(root: Path) -> dict[str, str]:
     return apply_proxy_environment(env, proxy_env)
 
 
-def _run_web_upgrade_command(root: Path, command: list[str]) -> tuple[dict, str, str]:
+def _run_web_upgrade_command(
+    root: Path,
+    command: list[str],
+    *,
+    proxy_enabled: bool | None = None,
+) -> tuple[dict, str, str]:
     try:
         result = subprocess.run(
             command,
             cwd=Path.home(),
-            env=_web_upgrade_env(root),
+            env=_web_upgrade_env(root, proxy_enabled),
             capture_output=True,
             text=True,
             timeout=WEB_UPGRADE_TIMEOUT_SECONDS,
@@ -308,21 +331,31 @@ def _run_web_upgrade_command(root: Path, command: list[str]) -> tuple[dict, str,
     return payload, stdout, stderr
 
 
-def web_upgrade_check_payload(root: Path, run_id: str) -> dict:
-    payload, _stdout, _stderr = _run_web_upgrade_command(root, _web_upgrade_check_command())
+def web_upgrade_check_payload(root: Path, run_id: str, *, proxy_enabled: bool | None = None) -> dict:
+    proxy_status = _web_upgrade_proxy_status(root)
+    effective_proxy_enabled = proxy_status["proxy_enabled"] if proxy_enabled is None else proxy_enabled
+    payload, _stdout, _stderr = _run_web_upgrade_command(
+        root,
+        _web_upgrade_check_command(),
+        proxy_enabled=proxy_enabled,
+    )
     return {
         "run_id": run_id,
         **payload,
         "platform": runtime_platform_status(),
+        **proxy_status,
+        "proxy_enabled": effective_proxy_enabled,
     }
 
 
-def request_web_upgrade(root: Path, run_id: str) -> dict:
+def request_web_upgrade(root: Path, run_id: str, *, proxy_enabled: bool | None = None) -> dict:
     command = _web_upgrade_command()
     log_dir = root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "web-upgrade.log"
-    result, stdout, stderr = _run_web_upgrade_command(root, command)
+    result, stdout, stderr = _run_web_upgrade_command(root, command, proxy_enabled=proxy_enabled)
+    proxy_status = _web_upgrade_proxy_status(root)
+    effective_proxy_enabled = proxy_status["proxy_enabled"] if proxy_enabled is None else proxy_enabled
     with log_path.open("a", encoding="utf-8") as log_file:
         log_file.write(f"\n--- AHA web upgrade requested for {run_id} ---\n")
         log_file.write(stdout)
@@ -335,6 +368,8 @@ def request_web_upgrade(root: Path, run_id: str) -> dict:
         "cwd": str(Path.home()),
         "log_path": str(log_path),
         "platform": runtime_platform_status(),
+        **proxy_status,
+        "proxy_enabled": effective_proxy_enabled,
         **result,
         **restart,
     }
@@ -713,20 +748,39 @@ def system_route_response(
         if str(payload.get("confirm") or "").strip().lower() != "upgrade":
             return json_response({"error": "confirm must be 'upgrade'"}, "400 Bad Request")
         try:
-            upgrade = request_web_upgrade(root, run_id)
+            proxy_enabled = parse_optional_bool(payload.get("proxy_enabled"), "proxy_enabled") if "proxy_enabled" in payload else None
+            upgrade = request_web_upgrade(root, run_id, proxy_enabled=proxy_enabled)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
         except FileNotFoundError as exc:
-            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "409 Conflict")
+            return json_response(
+                {"error": str(exc), "web_upgrade": web_upgrade_status(), **_web_upgrade_proxy_status(root)},
+                "409 Conflict",
+            )
         except RuntimeError as exc:
-            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "502 Bad Gateway")
+            return json_response(
+                {"error": str(exc), "web_upgrade": web_upgrade_status(), **_web_upgrade_proxy_status(root)},
+                "502 Bad Gateway",
+            )
         return json_response({"ok": True, **upgrade})
     if method in {"GET", "HEAD"} and path == "/api/web/upgrade/status":
         run_id = require_api_run_id(root, default_run_id, query)
         try:
-            status = web_upgrade_check_payload(root, run_id)
+            proxy_value = query.get("proxy_enabled", [None])[0]
+            proxy_enabled = parse_optional_bool(proxy_value, "proxy_enabled") if proxy_value is not None else None
+            status = web_upgrade_check_payload(root, run_id, proxy_enabled=proxy_enabled)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
         except FileNotFoundError as exc:
-            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "409 Conflict")
+            return json_response(
+                {"error": str(exc), "web_upgrade": web_upgrade_status(), **_web_upgrade_proxy_status(root)},
+                "409 Conflict",
+            )
         except RuntimeError as exc:
-            return json_response({"error": str(exc), "web_upgrade": web_upgrade_status()}, "502 Bad Gateway")
+            return json_response(
+                {"error": str(exc), "web_upgrade": web_upgrade_status(), **_web_upgrade_proxy_status(root)},
+                "502 Bad Gateway",
+            )
         return head_or_json(method, {"ok": True, **status}, request_headers=headers)
     if method in {"GET", "HEAD"} and path == "/api/web/publish/status":
         run_id = require_api_run_id(root, default_run_id, query)

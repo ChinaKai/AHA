@@ -337,6 +337,122 @@ class FeishuNotificationTests(unittest.TestCase):
             self.assertTrue(other_status["sent"])
             self.assertIn("task-002", send.call_args.args[2])
 
+    def test_task_chat_forwards_all_visible_chat_events_without_merging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-task-chat"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                mode="task_chat",
+            )
+
+            first = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 50,
+                    "type": "agent_message",
+                    "data": {"task_id": "task-001", "target": "main", "text": "first update"},
+                },
+            )
+            second = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 51,
+                    "type": "agent_message",
+                    "data": {"task_id": "task-001", "target": "main", "text": "second update"},
+                },
+            )
+            error = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 52,
+                    "type": "agent_error",
+                    "data": {"task_id": "task-001", "target": "sub-001", "message": "worker failed"},
+                },
+            )
+
+        self.assertEqual([first["reason"], second["reason"], error["reason"]], ["sent", "sent", "sent"])
+        self.assertEqual(
+            [call.args[2] for call in send.call_args_list],
+            ["first update", "second update", "Agent error (sub-001)\nworker failed"],
+        )
+
+    def test_task_chat_matches_web_chat_visibility_and_deduplicates_final_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-task-chat"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                mode="task_chat",
+            )
+
+            update = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 60,
+                    "type": "agent_message",
+                    "data": {"task_id": "task-001", "target": "main", "text": "final reply"},
+                },
+            )
+            mirror = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 61,
+                    "type": "message",
+                    "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "final reply"},
+                },
+            )
+            action_envelope = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 62,
+                    "type": "agent_message",
+                    "data": {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "text": json.dumps({"actions": [], "response": "hidden"}),
+                    },
+                },
+            )
+            private_sub_update = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 63,
+                    "type": "agent_message",
+                    "data": {"task_id": "task-001", "target": "sub-001", "text": "private"},
+                },
+            )
+
+        self.assertEqual(update["reason"], "sent")
+        self.assertEqual(mirror["reason"], "deduplicated")
+        self.assertEqual(mirror["deduplicated_count"], 1)
+        self.assertEqual(action_envelope["reason"], "ignored_event")
+        self.assertEqual(private_sub_update["reason"], "ignored_event")
+        send.assert_called_once_with(root, "oc-user", "final reply", card=None)
+
     def test_task_chat_control_card_is_invalidated_by_running_and_recreated_afterwards(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",
