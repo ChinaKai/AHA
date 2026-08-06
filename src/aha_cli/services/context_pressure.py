@@ -124,6 +124,11 @@ def context_pressure(
     runtime_effective_input_tokens = runtime_input_tokens
     if normalized_backend == "claude" and runtime_input_tokens is not None:
         runtime_effective_input_tokens = runtime_input_tokens + int(runtime_cached_input_tokens or 0) + int(runtime_cache_creation_input_tokens or 0)
+    runtime_context_consistent = (
+        runtime_effective_input_tokens <= context_window
+        if runtime_effective_input_tokens is not None and context_window is not None
+        else None
+    )
     input_tokens = runtime_effective_input_tokens or prompt_tokens
     backend_input_tokens = runtime_effective_input_tokens
     estimated_backend_history_tokens = None
@@ -134,7 +139,7 @@ def context_pressure(
             aha_overhead_ratio = round(prompt_tokens / backend_input_tokens, 6)
     runtime_ratio = (
         (runtime_effective_input_tokens / context_window)
-        if runtime_effective_input_tokens is not None and context_window
+        if runtime_effective_input_tokens is not None and context_window and runtime_context_consistent is not False
         else None
     )
     prompt_estimate_ratio = (
@@ -142,7 +147,11 @@ def context_pressure(
         if prompt_tokens is not None and context_window
         else None
     )
-    ratio = runtime_ratio if runtime_ratio is not None else prompt_estimate_ratio
+    ratio = (
+        None
+        if runtime_context_consistent is False
+        else runtime_ratio if runtime_ratio is not None else prompt_estimate_ratio
+    )
 
     def level_for_ratio(value: float | None) -> str:
         if value is None:
@@ -154,7 +163,9 @@ def context_pressure(
         return "ok"
 
     level = level_for_ratio(ratio)
-    if runtime_effective_input_tokens is not None:
+    if runtime_context_consistent is False:
+        pressure_source = "runtime.last_token_usage.inconsistent_with_context_window"
+    elif runtime_effective_input_tokens is not None:
         pressure_source = "runtime.last_token_usage.effective_input_tokens" if normalized_backend == "claude" else "runtime.last_token_usage.input_tokens"
     elif prompt_tokens is not None:
         pressure_source = "prompt_metrics.tokens"
@@ -176,6 +187,7 @@ def context_pressure(
         "runtime_cached_input_tokens": runtime_cached_input_tokens,
         "runtime_cache_creation_input_tokens": runtime_cache_creation_input_tokens,
         "runtime_total_tokens": runtime_total_tokens,
+        "runtime_context_consistent": runtime_context_consistent,
         "runtime_ratio": round(runtime_ratio, 6) if runtime_ratio is not None else None,
         "runtime_percent": round(runtime_ratio * 100, 2) if runtime_ratio is not None else None,
         "runtime_level": level_for_ratio(runtime_ratio),
@@ -184,7 +196,11 @@ def context_pressure(
         "prompt_estimate_percent": round(prompt_estimate_ratio * 100, 2) if prompt_estimate_ratio is not None else None,
         "prompt_estimate_level": level_for_ratio(prompt_estimate_ratio),
         "pressure_is_runtime": runtime_ratio is not None,
-        "pressure_is_estimate": runtime_ratio is None and prompt_estimate_ratio is not None,
+        "pressure_is_estimate": (
+            runtime_context_consistent is not False
+            and runtime_ratio is None
+            and prompt_estimate_ratio is not None
+        ),
         "prompt_chars": prompt_chars,
         "prompt_bytes": prompt_bytes,
         "prompt_lines": prompt_lines,

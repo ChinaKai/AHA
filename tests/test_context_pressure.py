@@ -109,6 +109,30 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["context_window_source"], "runtime")
         self.assertEqual(pressure["percent"], 50.0)
 
+    def test_inconsistent_claude_runtime_usage_keeps_pressure_unknown(self) -> None:
+        pressure = context_pressure(
+            "claude-chat",
+            "gateway-model",
+            {"total": {"tokens": 500}},
+            runtime_context_window=200000,
+            runtime_token_usage={
+                "input_tokens": 1101,
+                "cache_read_input_tokens": 345600,
+            },
+            prefer_runtime_context_window=True,
+        )
+
+        self.assertEqual(pressure["runtime_effective_input_tokens"], 346701)
+        self.assertFalse(pressure["runtime_context_consistent"])
+        self.assertIsNone(pressure["runtime_percent"])
+        self.assertIsNone(pressure["percent"])
+        self.assertEqual(pressure["level"], "unknown")
+        self.assertEqual(
+            pressure["pressure_source"],
+            "runtime.last_token_usage.inconsistent_with_context_window",
+        )
+        self.assertFalse(pressure["pressure_is_estimate"])
+
     def test_prompt_chars_without_tokens_keeps_pressure_unknown(self) -> None:
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"chars": 120000, "bytes": 130000}})
 
