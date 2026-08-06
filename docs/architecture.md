@@ -9,7 +9,7 @@ The browser UI now has three operating modes:
 ```text
 First Run bootstrap
   create .aha/config.json
-  Core Settings: Default backend (codex/claude), Task concurrency, and backend-specific HTTP proxy values
+  Core Settings: Default backend (codex/claude), Task concurrency, shared HTTP proxy values, and backend switches
   set workspace roots, Codex bin, and Claude bin
   choose default Codex/Claude model sources from official models or custom env groups
   add named Codex and Claude env groups for third-party compatible providers
@@ -100,7 +100,7 @@ Current user message
 
 Each task also records a `workspace_path`. Backend agents execute from that workspace when starting a new scoped session, so task context points at the project being worked on rather than the AHA tool repository.
 
-Core proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are stored in `.aha/config.json` under `codex.proxy` and `claude.proxy`, so each backend can use the right provider/network endpoint. Tasks and agents store only `proxy_enabled` switches. Assisted-supervision hosts keep their own `host_proxy_enabled` switch in the supervision policy, separate from the task default for main and future sub-agents. Backend launches and per-turn executions read the proxy values for the selected backend and apply them only when the selected task/agent switch is enabled. Older global/run/task proxy fields remain a compatibility fallback for existing configs, archives, and runs.
+Core proxy values (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) are stored once in `.aha/config.json` under the top-level `proxy` object. `codex.proxy.enabled` and `claude.proxy.enabled` contain only each backend's default switch. `knowledge.git.proxy_enabled` independently applies the same shared values to Knowledge Git remote commands. Tasks and agents store their own `proxy_enabled` switches. Assisted-supervision hosts keep `host_proxy_enabled` separately from the task default for main and future sub-agents. Backend launches and per-turn executions apply the shared values only when the selected task/agent switch is enabled. Existing backend-specific proxy values are migrated in memory, preferring the configured default backend, while old run/task fields remain archive/runtime compatibility fallbacks.
 
 Agent `sandbox`, `approval`, and `proxy_enabled` are backend startup settings. Updating them does not mutate a running child process. The UI therefore lets users either save the new value for the next backend start or save and restart the current backend immediately.
 
@@ -402,10 +402,12 @@ with `--skip-upgrade-validation` for onebin or `--skip-version-validation` for
 source, and the post-restart health poll can be disabled with
 `--no-health-check`.
 
-The Web upgrade panel first calls `GET /api/web/upgrade/status`. Its per-upgrade
-`Use proxy` switch applies the configured Core proxy to both the version check
+Opening the Web upgrade panel performs no remote request. The user explicitly
+clicks `Check version` to call `GET /api/web/upgrade/status`. Its per-upgrade
+`Use proxy` switch applies the shared Core proxy to both that version check
 and the confirmed install; turning it off strips inherited proxy environment
-variables for those subprocesses. A check-only
+variables for those subprocesses. Its initial state follows the default backend's
+proxy switch. A check-only
 `aha service upgrade-user` subprocess downloads and validates the configured
 release without replacing the installed file, then reports the current and
 latest versions plus the runtime platform. Version ordering compares release

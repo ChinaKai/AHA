@@ -184,6 +184,7 @@ sidecar 产出的 `solutions` 正文建议使用更偏行动的固定段落：
     "path": None,               # None -> ~/.aha/knowledge
     "git": {
         "enabled": False,
+        "proxy_enabled": False, # 远端 Git 命令是否复用顶层共享代理
         "remote": None,         # e.g. git@github.com:user/aha-kb.git
         "branch": "main",
         "auto_commit": False,   # 默认不自动 commit，用户在 KB 设置页手动同步
@@ -319,7 +320,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 ### Phase 4b — Web UI ✅（待提交 review）
 - [x] KB HTTP API（`web/knowledge_routes.py`，root-scoped，沿用 system_routes 约定，接到 server.py 分发）：
       `GET /api/kb/status|entries|entry|pending|config`、`POST /api/kb/approve|reject`、`PATCH /api/kb/config`
-- [x] `PATCH /api/kb/config` 允许列表合并 enabled/path/git{enabled,remote,branch,auto_pull,auto_commit,auto_push}/curation.gate，写回 config.json 且保留其余键；非法 gate 返回 400
+- [x] `PATCH /api/kb/config` 允许列表合并 enabled/path/git{enabled,proxy_enabled,remote,branch,auto_pull,auto_commit,auto_push}/curation.gate，写回 config.json 且保留其余键；非法 gate 返回 400
 - [x] approve 经 API 复用同身份去重(created/updated) + git enabled 时 auto_commit
 - [x] **自包含前端控制台 `web/static/knowledge.html`**：条目浏览(scope/kind/project 模糊过滤 + 标题/标签/正文搜索 + 查看正文)、正式条目 edit/deprecate/mark stale/restore/delete/copy id/path、待审 approve/reject、knowledge 设置表单；不侵入主 SPA(降低风险)，经 `/static/knowledge.html` 访问
 - [x] PATCH config 对手写坏配置加固：`knowledge.git`/`knowledge.curation` 非 dict 时按空 dict 合并（不再 500），加测试
@@ -398,14 +399,14 @@ task 收尾 / round finalize 或 memo completion report 完成
 - **开关**：编辑 AHA home 的 `config.json`，把 `knowledge.enabled` 设为 `true`；
   或用 Web 控制台「设置」页（见下）；或 `PATCH /api/kb/config`。
 - **git 远端同步（可选）**：设 `knowledge.git.enabled=true` 与 `knowledge.git.remote=<url>`；
-  默认 `auto_pull=off / auto_commit=off / auto_push=off`。用户在 KB 设置页点击“立即同步”时显式执行 commit/pull/push。
+  默认 `auto_pull=off / auto_commit=off / auto_push=off`。`knowledge.git.proxy_enabled=true` 时，远端 `ls-remote/fetch/push` 复用 AHA Settings 的共享代理地址；本地 Git 命令不注入代理。用户在 KB 设置页点击“立即同步”时显式执行 commit/pull/push。
 - **curation gate**：默认 `manual`（候选先入 `.pending` 待人工批准）；可设 `auto`（直写）/`off`（不沉淀）。
 - 初始化骨架：`aha kb init`（首次由 finalize 触发时也会自动建骨架与 `.gitignore`）。
 
 ### 11.2 Web 控制台
 - 启动 UI：`PYTHONPATH=src python3 -m aha_cli ui --host 127.0.0.1 --port 8788`。
 - 入口：主面板顶部 **Integrations 区的「知识库 / Knowledge base」**按钮 → 新标签打开整页控制台 `/static/knowledge.html`（自包含,样式继承全站 token,与微信操作台视觉一致；不接入 SPA 控制器图谱）。
-- 功能：条目浏览、`.pending` 审核（批准/拒绝）、knowledge 设置表单（enabled/path/git remote+branch/curation gate）、同步状态提示（未提交/领先/落后/远端错误）和手动“立即同步”按钮。
+- 功能：条目浏览、`.pending` 审核（批准/拒绝）、knowledge 设置表单（enabled/path/git remote+branch/共享代理开关/curation gate）、同步状态提示（未提交/领先/落后/远端错误）和手动“立即同步”按钮。
 
 ### 11.3 常用命令
 - `aha kb status`：路径 / 条目数 / pending / stale / git 状态。

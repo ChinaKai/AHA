@@ -750,6 +750,7 @@ def _knowledge_settings(cfg: dict) -> dict:
         "path": kb.get("path"),
         "git": {
             "enabled": bool(git.get("enabled")),
+            "proxy_enabled": bool(git.get("proxy_enabled")),
             "remote": git.get("remote"),
             "branch": git.get("branch"),
             "auto_pull": bool(git.get("auto_pull")),
@@ -822,6 +823,9 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
     if isinstance(git_patch, dict):
         if "enabled" in git_patch:
             kb["git"]["enabled"] = bool(git_patch["enabled"])
+        if "proxy_enabled" in git_patch:
+            value = _optional_bool(git_patch.get("proxy_enabled"), "git.proxy_enabled")
+            kb["git"]["proxy_enabled"] = False if value is None else value
         if "remote" in git_patch:
             remote = git_patch["remote"]
             kb["git"]["remote"] = str(remote).strip() or None if remote is not None else None

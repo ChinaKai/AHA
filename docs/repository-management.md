@@ -63,7 +63,7 @@ Rules for store edits:
   visibility filtering, host routing, and host decision application.
 - `services/orchestrator.py` owns AHA action execution and sub-agent
   coordination.
-- `services/proxy.py` owns backend-specific Core proxy normalization and backend environment
+- `services/proxy.py` owns shared Core proxy normalization, backend default switches, and backend environment
   injection.
 - `services/run_archive.py` owns import/export archive behavior.
 - `services/run_retention_policy.py` owns retention policy thresholds,

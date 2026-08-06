@@ -535,14 +535,18 @@
         ? t("run.upgrade_checking", "Checking for updates...")
         : (updateAvailable
           ? t("run.upgrade_available", "Update available")
-          : (updateKnown ? t("run.upgrade_current", "Up to date") : t("run.upgrade_unknown", "Unable to determine")));
+          : (updateKnown
+            ? t("run.upgrade_current", "Up to date")
+            : (webPublishError
+              ? t("run.upgrade_unknown", "Unable to determine")
+              : t("run.upgrade_not_checked", "Not checked"))));
       const updateClass = updateAvailable ? "warning" : (updateKnown ? "success" : "");
       const busy = webPublishLoading || Boolean(deps.webRestartInFlight?.());
       const proxyConfigured = status.proxy_configured === true;
       const proxyChecked = webUpgradeProxyEnabled === true;
       const proxyHint = proxyConfigured
-        ? t("run.upgrade_proxy_hint", "Use the Core proxy configured in AHA Settings for GitHub access.")
-        : t("run.upgrade_proxy_unavailable", "Configure a Core proxy in AHA Settings to enable this option.");
+        ? t("run.upgrade_proxy_hint", "Use the shared proxy configured in AHA Settings for GitHub access.")
+        : t("run.upgrade_proxy_unavailable", "Configure the shared proxy in AHA Settings to enable this option.");
       const noteHtml = webPublishNotice ? `<div class="web-publish-message success">${escapeHtml(webPublishNotice)}</div>` : "";
       const errorHtml = webPublishError ? `<div class="web-publish-message error">${escapeHtml(webPublishError)}</div>` : "";
       panel.innerHTML = `<section class="web-publish-panel">
@@ -568,7 +572,7 @@
           <span class="meta">${escapeHtml(proxyHint)}</span>
         </div>
         <div class="web-publish-actions">
-          <button class="button-ghost" type="button" data-web-publish-action="refresh" ${busy ? "disabled" : ""}>${escapeHtml(t("common.refresh", "Refresh"))}</button>
+          <button class="button-ghost" type="button" data-web-publish-action="refresh" ${busy ? "disabled" : ""}>${escapeHtml(t("run.upgrade_check_version", "Check version"))}</button>
           <button type="button" data-web-upgrade-action="install" ${busy || !updateAvailable ? "disabled" : ""}>${escapeHtml(t("run.upgrade_install", "Upgrade now"))}</button>
         </div>
         ${webPublishLoading ? `<div class="web-publish-message">${escapeHtml(t("run.upgrade_checking", "Checking for updates..."))}</div>` : ""}
@@ -681,11 +685,21 @@
         webPublishError = "";
         webPublishNotice = "";
       } else {
-        webPublishStatus = null;
-        webUpgradeProxyEnabled = null;
+        if (webUpgradeAction() === "publish") {
+          webPublishStatus = null;
+          webUpgradeProxyEnabled = null;
+        } else {
+          const capability = deps.webUpgradeCapability?.() || {};
+          webPublishStatus = {
+            current_version: deps.currentAppVersion?.() || "-",
+            proxy_configured: capability.proxy_configured === true,
+            proxy_enabled: capability.proxy_enabled === true,
+          };
+          webUpgradeProxyEnabled = capability.proxy_enabled === true;
+        }
       }
       renderWebPublishConsole();
-      if (nextOpen && options.load !== false) void loadWebPublishStatus();
+      if (nextOpen && options.load !== false && webUpgradeAction() === "publish") void loadWebPublishStatus();
     }
 
     async function submitWebPublish(form) {
@@ -1117,7 +1131,6 @@
         if (target?.id === "web-publish-tag") webPublishTag = target.value || "";
         if (target?.id === "web-upgrade-proxy-enabled") {
           webUpgradeProxyEnabled = Boolean(target.checked);
-          void loadWebPublishStatus({ keepNotice: true });
         }
       });
       elements.webPublishConsoleEl?.addEventListener("submit", event => {

@@ -1586,11 +1586,12 @@ def test_config_get_and_patch(tmp_path: Path):
     cfg = _get(home, "/api/kb/config")
     assert cfg["enabled"] is True
     assert cfg["git"]["auto_push"] is False
+    assert cfg["git"]["proxy_enabled"] is False
 
     resp = knowledge_route_response(
         home, "PATCH", "/api/kb/config", {},
         json.dumps({
-            "git": {"enabled": True, "remote": "git@h:u/r.git", "auto_push": True},
+            "git": {"enabled": True, "proxy_enabled": True, "remote": "git@h:u/r.git", "auto_push": True},
             "project_nav": {"enabled": False},
             "curation": {"gate": "auto"},
         }).encode(), {},
@@ -1599,11 +1600,13 @@ def test_config_get_and_patch(tmp_path: Path):
     assert out["ok"]
     assert out["knowledge"]["git"]["remote"] == "git@h:u/r.git"
     assert out["knowledge"]["git"]["auto_push"] is True
+    assert out["knowledge"]["git"]["proxy_enabled"] is True
     assert out["knowledge"]["project_nav"]["enabled"] is False
     assert out["knowledge"]["curation"]["gate"] == "auto"
     # Persisted to disk and other defaults preserved (branch).
     saved = read_json(config_path(home))["knowledge"]
     assert saved["git"]["remote"] == "git@h:u/r.git"
+    assert saved["git"]["proxy_enabled"] is True
     assert saved["project_nav"]["enabled"] is False
     assert load_config(home)["knowledge"]["git"]["branch"] == "main"
 

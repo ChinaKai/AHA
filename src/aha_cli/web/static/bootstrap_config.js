@@ -89,7 +89,7 @@
     return rows.map((item, index) => bootstrapConfigRowHtml(`${backend}.env`, item, index, options)).join("");
   }
 
-  function bootstrapProxyFieldsHtml(prefix, proxy = {}) {
+  function bootstrapBackendProxySwitchHtml(prefix, proxy = {}) {
     const label = prefix === "claude" ? "Claude" : "Codex";
     return `
       <label class="field-label checkbox-field">
@@ -99,42 +99,45 @@
           <span>Enable by default for new ${escapeHtml(label)} tasks and agents</span>
         </span>
       </label>
+    `;
+  }
+
+  function bootstrapSharedProxyFieldsHtml(proxy = {}) {
+    return `
       <label class="field-label">
         <span>HTTP proxy</span>
-        <input data-bootstrap-config-field="${escapeHtml(prefix)}.proxy.http_proxy" placeholder="${escapeHtml(defaultBootstrapHttpProxy)}" value="${escapeHtml(configString(proxy.http_proxy))}">
+        <input data-bootstrap-config-field="proxy.http_proxy" placeholder="${escapeHtml(defaultBootstrapHttpProxy)}" value="${escapeHtml(configString(proxy.http_proxy))}">
       </label>
       <label class="field-label">
         <span>HTTPS proxy</span>
-        <input data-bootstrap-config-field="${escapeHtml(prefix)}.proxy.https_proxy" placeholder="${escapeHtml(defaultBootstrapHttpsProxy)}" value="${escapeHtml(configString(proxy.https_proxy))}">
+        <input data-bootstrap-config-field="proxy.https_proxy" placeholder="${escapeHtml(defaultBootstrapHttpsProxy)}" value="${escapeHtml(configString(proxy.https_proxy))}">
       </label>
       <label class="field-label">
         <span>NO_PROXY</span>
-        <input data-bootstrap-config-field="${escapeHtml(prefix)}.proxy.no_proxy" placeholder="${escapeHtml(defaultBootstrapNoProxy)}" value="${escapeHtml(configString(proxy.no_proxy))}">
+        <input data-bootstrap-config-field="proxy.no_proxy" placeholder="${escapeHtml(defaultBootstrapNoProxy)}" value="${escapeHtml(configString(proxy.no_proxy))}">
       </label>
     `;
   }
 
   function bootstrapProxyFieldParts(input) {
     const field = String(input?.dataset?.bootstrapConfigField || "");
-    const match = /^(codex|claude)\.proxy\.(enabled|http_proxy|https_proxy|no_proxy)$/.exec(field);
-    return match ? { backend: match[1], name: match[2] } : null;
+    const match = /^proxy\.(http_proxy|https_proxy|no_proxy)$/.exec(field);
+    return match ? { name: match[1] } : null;
   }
 
-  function bootstrapProxyField(form, backend, name) {
-    if (!form || !backend || !name) return null;
-    return form.querySelector(`[data-bootstrap-config-field="${backend}.proxy.${name}"]`);
+  function bootstrapProxyField(form, name) {
+    if (!form || !name) return null;
+    return form.querySelector(`[data-bootstrap-config-field="proxy.${name}"]`);
   }
 
   function syncBootstrapProxyDefaultsForInput(input) {
     const parts = bootstrapProxyFieldParts(input);
     if (!parts || (parts.name !== "http_proxy" && parts.name !== "https_proxy")) return false;
     const form = input.closest("[data-bootstrap-config-form]");
-    const httpProxy = bootstrapProxyField(form, parts.backend, "http_proxy");
-    const httpsProxy = bootstrapProxyField(form, parts.backend, "https_proxy");
-    const noProxy = bootstrapProxyField(form, parts.backend, "no_proxy");
-    const enabled = bootstrapProxyField(form, parts.backend, "enabled");
+    const httpProxy = bootstrapProxyField(form, "http_proxy");
+    const httpsProxy = bootstrapProxyField(form, "https_proxy");
+    const noProxy = bootstrapProxyField(form, "no_proxy");
     const configured = Boolean(httpProxy?.value.trim() || httpsProxy?.value.trim());
-    if (configured && enabled && !enabled.checked) enabled.checked = true;
     if (configured && noProxy && !noProxy.value.trim()) {
       noProxy.value = defaultBootstrapNoProxy;
       return true;
@@ -316,8 +319,8 @@
     const codex = cfg.codex || {};
     const claude = cfg.claude || {};
     const proxy = cfg.proxy || {};
-    const codexProxy = codex.proxy || proxy;
-    const claudeProxy = claude.proxy || proxy;
+    const codexProxy = codex.proxy || {};
+    const claudeProxy = claude.proxy || {};
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
     const codexDetailsOpen = mode === "settings" ? "" : " open";
@@ -339,6 +342,13 @@
               <div class="field-help">Default number of tasks AHA may run in parallel.</div>
             </label>
           </div>
+        </details>
+        <details class="bootstrap-config-section" open>
+          <summary>Proxy Settings</summary>
+          <div class="bootstrap-config-grid">
+            ${bootstrapSharedProxyFieldsHtml(proxy)}
+          </div>
+          <div class="field-help">Shared by Codex, Claude, Web upgrades, and other AHA network operations.</div>
         </details>
         <details class="bootstrap-config-section" open>
           <summary>Workspaces</summary>
@@ -376,7 +386,7 @@
             </label>
           </div>
           <div class="bootstrap-config-grid">
-            ${bootstrapProxyFieldsHtml("codex", codexProxy)}
+            ${bootstrapBackendProxySwitchHtml("codex", codexProxy)}
           </div>
           <label class="field-label">
             <span>Provider groups</span>
@@ -407,7 +417,7 @@
             </label>
           </div>
           <div class="bootstrap-config-grid">
-            ${bootstrapProxyFieldsHtml("claude", claudeProxy)}
+            ${bootstrapBackendProxySwitchHtml("claude", claudeProxy)}
           </div>
           <label class="field-label">
             <span>Env groups</span>
@@ -548,6 +558,11 @@
       default_parallel: Number(bootstrapConfigText(form, "default_parallel") || 10),
       workspace_roots: bootstrapConfigRoots(form),
       webgame_workspace: bootstrapConfigText(form, "webgame_workspace"),
+      proxy: {
+        http_proxy: bootstrapConfigText(form, "proxy.http_proxy"),
+        https_proxy: bootstrapConfigText(form, "proxy.https_proxy"),
+        no_proxy: bootstrapConfigText(form, "proxy.no_proxy")
+      },
       retention_policy: config.retention_policy || {},
       codex: {
         bin: bootstrapConfigText(form, "codex.bin") || "codex",
@@ -560,10 +575,7 @@
         env_active: bootstrapConfigCodexActiveEnvGroup(form, context),
         env: bootstrapConfigEnvGroups(form, "codex", context),
         proxy: {
-          enabled: Boolean(bootstrapConfigField(form, "codex.proxy.enabled")?.checked),
-          http_proxy: bootstrapConfigText(form, "codex.proxy.http_proxy"),
-          https_proxy: bootstrapConfigText(form, "codex.proxy.https_proxy"),
-          no_proxy: bootstrapConfigText(form, "codex.proxy.no_proxy")
+          enabled: Boolean(bootstrapConfigField(form, "codex.proxy.enabled")?.checked)
         }
       },
       claude: {
@@ -576,10 +588,7 @@
         env_active: bootstrapConfigClaudeActiveEnvGroup(form, context),
         env: bootstrapConfigEnvGroups(form, "claude", context),
         proxy: {
-          enabled: Boolean(bootstrapConfigField(form, "claude.proxy.enabled")?.checked),
-          http_proxy: bootstrapConfigText(form, "claude.proxy.http_proxy"),
-          https_proxy: bootstrapConfigText(form, "claude.proxy.https_proxy"),
-          no_proxy: bootstrapConfigText(form, "claude.proxy.no_proxy")
+          enabled: Boolean(bootstrapConfigField(form, "claude.proxy.enabled")?.checked)
         }
       },
       integrations: config.integrations || {}

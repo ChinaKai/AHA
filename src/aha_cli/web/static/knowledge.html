@@ -719,6 +719,8 @@
         <div>
           <label class="kb-field" for="s-git-enabled" data-i18n="knowledge.enable_git">Enable git sync</label>
           <select id="s-git-enabled"><option value="on">on</option><option value="off">off</option></select>
+          <label class="kb-field" for="s-git-proxy-enabled" data-i18n="knowledge.git_proxy">Use shared proxy for Git sync</label>
+          <select id="s-git-proxy-enabled"><option value="on">on</option><option value="off">off</option></select>
           <label class="kb-field" for="s-remote" data-i18n="knowledge.git_remote">Git remote</label>
           <input type="text" id="s-remote" placeholder="git@github.com:user/aha-kb.git" />
           <label class="kb-field" for="s-branch" data-i18n="knowledge.git_branch">Git branch</label>
@@ -739,7 +741,7 @@
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/search_highlight.js?v=global-search-v4"></script>
-  <script src="/static/i18n.js"></script>
+  <script src="/static/i18n.js?v=knowledge-proxy-v3"></script>
   <script>
     const $ = (s) => document.querySelector(s);
     const t = (key, fallback) => window.AHAI18n?.t?.(key, fallback) || fallback || key;
@@ -3637,6 +3639,7 @@
       $("#s-gate").value = s.curation.gate || "manual";
       $("#s-project-nav-enabled").value = boolMode(s.project_nav?.enabled !== false);
       $("#s-git-enabled").value = boolMode(s.git.enabled);
+      $("#s-git-proxy-enabled").value = boolMode(s.git.proxy_enabled);
       $("#s-remote").value = s.git.remote || "";
       $("#s-branch").value = s.git.branch || "main";
       await loadSyncStatus();
@@ -3651,6 +3654,7 @@
         project_nav: { enabled: modeBool("#s-project-nav-enabled") },
         git: {
           enabled: modeBool("#s-git-enabled"),
+          proxy_enabled: modeBool("#s-git-proxy-enabled"),
           remote: $("#s-remote").value.trim() || null,
           branch: $("#s-branch").value.trim() || "main",
           auto_pull: false,

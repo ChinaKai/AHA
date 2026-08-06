@@ -58,6 +58,39 @@ def test_run_git_hides_helper_console_on_windows(tmp_path: Path, monkeypatch: py
     assert captured["creationflags"] == 0x08000000
 
 
+def test_knowledge_git_proxy_switch_uses_shared_proxy_for_remote_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _config("https://github.com/example/aha-kb.git", proxy_enabled=True)
+    cfg["proxy"] = {
+        "http_proxy": "http://127.0.0.1:7890",
+        "https_proxy": "http://127.0.0.1:7890",
+        "no_proxy": "localhost,127.0.0.1",
+    }
+    calls: list[dict] = []
+
+    monkeypatch.setattr(kg, "ensure_repo", lambda root, config=None: {"ok": True})
+    monkeypatch.setattr(kg, "knowledge_root", lambda root, config=None: tmp_path / "knowledge")
+
+    def fake_run_git(repo, args, *, author=None, env=None):
+        calls.append({"repo": repo, "args": args, "env": env})
+        return {"ok": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(kg, "_run_git", fake_run_git)
+
+    result = kg.push(tmp_path, cfg)
+
+    assert result["ok"] is True
+    assert calls[0]["args"][:2] == ["push", "-u"]
+    assert calls[0]["env"]["HTTP_PROXY"] == "http://127.0.0.1:7890"
+    assert calls[0]["env"]["HTTPS_PROXY"] == "http://127.0.0.1:7890"
+    assert calls[0]["env"]["http_proxy"] == "http://127.0.0.1:7890"
+
+    cfg["knowledge"]["git"]["proxy_enabled"] = False
+    monkeypatch.setenv("HTTP_PROXY", "http://inherited.invalid:9999")
+    env = kg._network_git_env(cfg)
+    assert "HTTP_PROXY" not in env
+    assert "http_proxy" not in env
+
+
 def test_ensure_repo_inits_branch_and_remote(tmp_path: Path):
     root = tmp_path / ".aha"
     remote = _bare_remote(tmp_path / "remote.git")

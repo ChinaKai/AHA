@@ -9,10 +9,12 @@ import unittest
 from unittest import mock
 
 from aha_cli.services import feishu_notifications
+from aha_cli.services.channel_notifications import wait_for_notification_queue
 from aha_cli.services.feishu_notifications import load_subscription_state, notification_message_for_event, notify_event, set_subscription
 from aha_cli.locking import exclusive_lock
 from aha_cli.services.service_assistant_handoffs import register_service_handoff, service_handoffs_path
 from aha_cli.services.feishu_group_handoffs import feishu_group_handoffs_path, register_group_handoff
+from aha_cli.store.filesystem import append_event_to_file
 from aha_cli.store.io import append_jsonl
 from aha_cli.store.paths import event_path, plan_path
 
@@ -387,6 +389,33 @@ class FeishuNotificationTests(unittest.TestCase):
             [call.args[2] for call in send.call_args_list],
             ["first update", "second update", "Agent error (sub-001)\nworker failed"],
         )
+
+    def test_backend_event_file_agent_update_enters_task_chat_notification_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-backend-update"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                mode="task_chat",
+            )
+
+            append_event_to_file(
+                event_path(root, run_id),
+                run_id,
+                "agent_message",
+                {"task_id": "task-001", "target": "main", "text": "backend update"},
+            )
+            self.assertTrue(wait_for_notification_queue(timeout_seconds=2))
+
+        send.assert_called_once_with(root, "oc-user", "backend update", card=None)
 
     def test_task_chat_matches_web_chat_visibility_and_deduplicates_final_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

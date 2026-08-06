@@ -292,6 +292,27 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(head_response and head_response.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual(head_response.split(b"\r\n\r\n", 1)[1], b"")
 
+    def test_health_upgrade_capability_exposes_local_proxy_summary_without_version_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            with (
+                mock.patch(
+                    "aha_cli.web.system_routes.web_upgrade_status",
+                    return_value={"available": True, "action": "upgrade", "mode": "installed-onebin"},
+                ),
+                mock.patch(
+                    "aha_cli.web.system_routes._web_upgrade_proxy_status",
+                    return_value={"proxy_configured": True, "proxy_enabled": False},
+                ),
+            ):
+                response = system_route_response(root, "", "GET", "/api/health", {})
+
+        body = json_response_body(response)
+        self.assertTrue(body["web_upgrade"]["available"])
+        self.assertTrue(body["web_upgrade"]["proxy_configured"])
+        self.assertFalse(body["web_upgrade"]["proxy_enabled"])
+
     def test_access_control_route_reports_bind_risk_from_host_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
@@ -655,10 +676,10 @@ class WebSystemRoutesTests(unittest.TestCase):
             config_path = root / ".aha" / "config.json"
             config = json.loads(config_path.read_text(encoding="utf-8"))
             config["proxy"] = {
-                "enabled": False,
                 "http_proxy": "http://127.0.0.1:7897",
                 "https_proxy": "http://127.0.0.1:7897",
             }
+            config["codex"]["proxy"] = {"enabled": True}
             config_path.write_text(json.dumps(config), encoding="utf-8")
             install_bin = root / "bin" / "aha"
             install_bin.parent.mkdir(parents=True)
@@ -675,7 +696,7 @@ class WebSystemRoutesTests(unittest.TestCase):
         self.assertTrue(response and response.startswith(b"HTTP/1.1 502 Bad Gateway"))
         body = json_response_body(response)
         self.assertTrue(body["proxy_configured"])
-        self.assertFalse(body["proxy_enabled"])
+        self.assertTrue(body["proxy_enabled"])
 
     def test_web_upgrade_command_requires_installed_onebin_for_source_runtime(self) -> None:
         with (
@@ -792,7 +813,7 @@ class WebSystemRoutesTests(unittest.TestCase):
             self.assertTrue(invalid and invalid.startswith(b"HTTP/1.1 400 Bad Request"))
             self.assertIn("vX.Y.Z", json_response_body(invalid)["error"])
 
-    def test_web_upgrade_env_uses_core_proxy_config(self) -> None:
+    def test_web_upgrade_env_migrates_default_backend_proxy_to_shared_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             aha_home = root / ".aha"
@@ -800,12 +821,15 @@ class WebSystemRoutesTests(unittest.TestCase):
             (aha_home / "config.json").write_text(
                 json.dumps(
                     {
-                        "proxy": {
-                            "enabled": True,
-                            "http_proxy": "http://127.0.0.1:7897",
-                            "https_proxy": "http://127.0.0.1:7897",
-                            "no_proxy": "localhost,127.0.0.1,::1",
-                        }
+                        "backend": "codex",
+                        "codex": {
+                            "proxy": {
+                                "enabled": True,
+                                "http_proxy": "http://127.0.0.1:7897",
+                                "https_proxy": "http://127.0.0.1:7897",
+                                "no_proxy": "localhost,127.0.0.1,::1",
+                            }
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -828,12 +852,13 @@ class WebSystemRoutesTests(unittest.TestCase):
             (aha_home / "config.json").write_text(
                 json.dumps(
                     {
+                        "backend": "codex",
                         "proxy": {
-                            "enabled": False,
                             "http_proxy": "http://127.0.0.1:7897",
                             "https_proxy": "http://127.0.0.1:7897",
                             "no_proxy": "localhost,127.0.0.1,::1",
-                        }
+                        },
+                        "codex": {"proxy": {"enabled": False}},
                     }
                 ),
                 encoding="utf-8",

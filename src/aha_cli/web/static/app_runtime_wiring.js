@@ -1030,6 +1030,7 @@ const runController = window.AHARunController.createRunController({
   updateRunLifecycleFromMenu: runActions.updateRunLifecycleFromMenu,
   webRestartInFlight: () => webRestartInFlight,
   webUpgradeAction,
+  webUpgradeCapability,
   weixinConsoleOpen: () => weixinConsoleController.isOpen()
 });
 // Translate a keydown into the bytes a serial terminal would send. Returns null for keys

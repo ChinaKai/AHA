@@ -5,23 +5,45 @@ from pathlib import Path
 
 from aha_cli import platform
 from aha_cli.domain.models import default_config, normalize_integrations_config
-from aha_cli.services.proxy import proxy_configured
+from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.store.io import read_json
 from aha_cli.store.paths import config_path
 
 
-def _merge_backend_config(defaults: dict, loaded: dict, legacy_proxy: dict) -> dict:
+def _loaded_proxy(value: object) -> dict[str, object]:
+    raw = value if isinstance(value, dict) else {}
+    return normalize_proxy_config(
+        raw.get("enabled", raw.get("proxy_enabled", False)),
+        raw.get("http_proxy"),
+        raw.get("https_proxy"),
+        raw.get("no_proxy"),
+    )
+
+
+def _shared_proxy_config(defaults: dict, loaded: dict) -> dict:
+    shared = defaults | _loaded_proxy(loaded.get("proxy"))
+    if proxy_configured(shared):
+        return shared
+    selected = str(loaded.get("backend") or "").strip().lower()
+    backend_order = [selected] if selected in {"codex", "claude"} else []
+    backend_order.extend(name for name in ("codex", "claude") if name not in backend_order)
+    for name in backend_order:
+        section = loaded.get(name) if isinstance(loaded.get(name), dict) else {}
+        candidate = _loaded_proxy(section.get("proxy"))
+        if proxy_configured(candidate):
+            return defaults | candidate
+    return shared
+
+
+def _merge_backend_config(defaults: dict, loaded: dict, shared_proxy: dict) -> dict:
     cfg = defaults | loaded
-    loaded_proxy = loaded.get("proxy", {})
-    cfg["proxy"] = defaults["proxy"] | (loaded_proxy if isinstance(loaded_proxy, dict) else {})
-    if isinstance(loaded_proxy, dict) and "enabled" not in loaded_proxy and "proxy_enabled" not in loaded_proxy and legacy_proxy.get("enabled") is not None:
-        cfg["proxy"]["enabled"] = bool(legacy_proxy.get("enabled"))
-    if not proxy_configured(cfg["proxy"]) and proxy_configured(legacy_proxy):
-        cfg["proxy"] = defaults["proxy"] | {
-            key: legacy_proxy.get(key)
-            for key in ("enabled", "http_proxy", "https_proxy", "no_proxy")
-            if legacy_proxy.get(key) is not None
-        }
+    loaded_proxy = loaded.get("proxy") if isinstance(loaded.get("proxy"), dict) else {}
+    fallback_enabled = shared_proxy.get("enabled", defaults["proxy"].get("enabled", False))
+    enabled = loaded_proxy.get(
+        "enabled",
+        loaded_proxy.get("proxy_enabled", fallback_enabled),
+    )
+    cfg["proxy"] = {"enabled": normalize_proxy_config(enabled).get("enabled", False)}
     return cfg
 
 
@@ -43,8 +65,7 @@ def load_config(root: Path) -> dict:
         return defaults
     loaded = read_json(path)
     cfg = defaults | {key: value for key, value in loaded.items() if key not in {"codex", "claude", "integrations"}}
-    loaded_proxy = loaded.get("proxy", {})
-    cfg["proxy"] = defaults["proxy"] | (loaded_proxy if isinstance(loaded_proxy, dict) else {})
+    cfg["proxy"] = _shared_proxy_config(defaults["proxy"], loaded)
     cfg["codex"] = _merge_backend_config(defaults["codex"], loaded.get("codex", {}), cfg["proxy"])
     cfg["claude"] = _merge_backend_config(defaults["claude"], loaded.get("claude", {}), cfg["proxy"])
     loaded_retention_policy = loaded.get("retention_policy", {})

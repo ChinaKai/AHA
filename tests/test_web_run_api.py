@@ -213,14 +213,14 @@ class WebRunApiTests(unittest.TestCase):
                         "default_parallel": 2,
                         "default_mode": "implementation",
                         "workspace_roots": [str(workspace_root)],
+                        "proxy": {
+                            "http_proxy": "http://shared.proxy:7890",
+                            "https_proxy": "http://shared.proxy:7890",
+                            "no_proxy": "localhost,127.0.0.1",
+                        },
                         "codex": {
                             "model": "gpt-5.5",
-                            "proxy": {
-                                "enabled": True,
-                                "http_proxy": "http://codex.proxy:7890",
-                                "https_proxy": "http://codex.proxy:7890",
-                                "no_proxy": "localhost,127.0.0.1",
-                            },
+                            "proxy": {"enabled": True},
                             "env_active": "openai",
                             "env": [
                                 {
@@ -238,12 +238,7 @@ class WebRunApiTests(unittest.TestCase):
                         },
                         "claude": {
                             "model": "env:work",
-                            "proxy": {
-                                "enabled": False,
-                                "http_proxy": "http://claude.proxy:7890",
-                                "https_proxy": "http://claude.proxy:7890",
-                                "no_proxy": "localhost,127.0.0.1",
-                            },
+                            "proxy": {"enabled": False},
                             "env_active": "work",
                             "env": [
                                 {
@@ -266,11 +261,11 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(cfg["default_parallel"], 2)
         self.assertEqual(cfg["default_mode"], "implementation")
         self.assertEqual(cfg["workspace_roots"], [str(workspace_root)])
-        self.assertIsNone(cfg["proxy"]["http_proxy"])
-        self.assertTrue(cfg["codex"]["proxy"]["enabled"])
-        self.assertEqual(cfg["codex"]["proxy"]["http_proxy"], "http://codex.proxy:7890")
-        self.assertFalse(cfg["claude"]["proxy"]["enabled"])
-        self.assertEqual(body["config"]["claude"]["proxy"]["https_proxy"], "http://claude.proxy:7890")
+        self.assertEqual(cfg["proxy"]["http_proxy"], "http://shared.proxy:7890")
+        self.assertEqual(cfg["proxy"]["https_proxy"], "http://shared.proxy:7890")
+        self.assertEqual(cfg["codex"]["proxy"], {"enabled": True})
+        self.assertEqual(cfg["claude"]["proxy"], {"enabled": False})
+        self.assertEqual(body["config"]["proxy"]["https_proxy"], "http://shared.proxy:7890")
         self.assertEqual(cfg["codex"]["model"], "gpt-5.5")
         self.assertEqual(cfg["codex"]["env_active"], "openai")
         self.assertEqual(
@@ -300,6 +295,42 @@ class WebRunApiTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_api_bootstrap_migrates_backend_proxy_addresses_to_shared_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "claude",
+                        "codex": {
+                            "proxy": {
+                                "enabled": False,
+                                "http_proxy": "http://codex.proxy:7890",
+                            }
+                        },
+                        "claude": {
+                            "proxy": {
+                                "enabled": True,
+                                "http_proxy": "http://claude.proxy:7890",
+                                "https_proxy": "http://claude.proxy:7890",
+                                "no_proxy": "localhost,127.0.0.1",
+                            }
+                        },
+                    },
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 201 Created"))
+        self.assertEqual(cfg["proxy"]["http_proxy"], "http://claude.proxy:7890")
+        self.assertEqual(cfg["proxy"]["https_proxy"], "http://claude.proxy:7890")
+        self.assertEqual(cfg["codex"]["proxy"], {"enabled": False})
+        self.assertEqual(cfg["claude"]["proxy"], {"enabled": True})
 
     def test_api_bootstrap_rejects_invalid_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,11 +22,13 @@ Design rules:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 from aha_cli import platform
+from aha_cli.services.proxy import apply_proxy_environment, core_proxy_config
 from aha_cli.store.knowledge import PROJECTS_DIR, init_knowledge_base, knowledge_config, knowledge_root
 
 _GIT_TIMEOUT = 120
@@ -49,7 +51,13 @@ def _author_flags(git_cfg: dict) -> list[str]:
     return ["-c", f"user.name={name}", "-c", f"user.email={email}"]
 
 
-def _run_git(repo: Path, args: list[str], *, author: dict | None = None) -> dict:
+def _run_git(
+    repo: Path,
+    args: list[str],
+    *,
+    author: dict | None = None,
+    env: dict[str, str] | None = None,
+) -> dict:
     """Run a git command in ``repo``. Returns a result dict; never raises."""
     cmd = ["git", "-C", str(repo)]
     if author is not None:
@@ -63,6 +71,7 @@ def _run_git(repo: Path, args: list[str], *, author: dict | None = None) -> dict
             encoding="utf-8",
             errors="replace",
             timeout=_GIT_TIMEOUT,
+            env=env,
             **platform.hidden_subprocess_kwargs(),
         )
     except FileNotFoundError:
@@ -78,6 +87,25 @@ def _run_git(repo: Path, args: list[str], *, author: dict | None = None) -> dict
         "stderr": proc.stderr.strip(),
         "args": args,
     }
+
+
+def _network_git_env(config: dict | None) -> dict[str, str]:
+    env = os.environ.copy()
+    if not _git_cfg(config).get("proxy_enabled", False):
+        return apply_proxy_environment(env, {})
+    proxy = core_proxy_config(config)
+    values = {
+        "HTTP_PROXY": proxy.get("http_proxy"),
+        "HTTPS_PROXY": proxy.get("https_proxy"),
+        "NO_PROXY": proxy.get("no_proxy"),
+    }
+    proxy_env: dict[str, str] = {}
+    for key, value in values.items():
+        text = str(value or "").strip()
+        if text:
+            proxy_env[key] = text
+            proxy_env[key.lower()] = text
+    return apply_proxy_environment(env, proxy_env)
 
 
 def is_repo(repo: Path) -> bool:
@@ -201,7 +229,7 @@ def sync_status(root: Path, config: dict | None = None, *, check_remote: bool = 
         status["local_head"] = local["stdout"]
 
     if check_remote and remote:
-        fetch = _run_git(repo, ["fetch", "origin", branch])
+        fetch = _run_git(repo, ["fetch", "origin", branch], env=_network_git_env(config))
         if not fetch["ok"]:
             status["ok"] = False
             status["remote_error"] = f"fetch failed: {fetch['stderr']}"
@@ -401,18 +429,19 @@ def pull(root: Path, config: dict | None = None) -> dict:
         return {"ok": False, "pulled": False, "error": ensured.get("error")}
     repo = knowledge_root(root, config)
     branch = git_cfg.get("branch") or "main"
+    network_env = _network_git_env(config)
 
     # Distinguish an unreachable remote (a real failure) from an empty remote
     # that simply has no branch yet (safe to skip). `ls-remote` exits 0 with
     # empty output when the remote is reachable but the branch is absent, and
     # exits non-zero when the remote cannot be reached at all.
-    ls = _run_git(repo, ["ls-remote", "--heads", "origin", branch])
+    ls = _run_git(repo, ["ls-remote", "--heads", "origin", branch], env=network_env)
     if not ls["ok"]:
         return {"ok": False, "pulled": False, "error": f"remote unreachable: {ls['stderr']}"}
     if not ls["stdout"]:
         return {"ok": True, "pulled": False, "reason": "remote has no such branch yet"}
 
-    fetch = _run_git(repo, ["fetch", "origin", branch])
+    fetch = _run_git(repo, ["fetch", "origin", branch], env=network_env)
     if not fetch["ok"]:
         return {"ok": False, "pulled": False, "error": f"fetch failed: {fetch['stderr']}"}
 
@@ -454,10 +483,11 @@ def _adopt_remote_base(root: Path, config: dict | None = None) -> dict | None:
         return None
     branch = git_cfg.get("branch") or "main"
     repo = knowledge_root(root, config)
-    ls = _run_git(repo, ["ls-remote", "--heads", "origin", branch])
+    network_env = _network_git_env(config)
+    ls = _run_git(repo, ["ls-remote", "--heads", "origin", branch], env=network_env)
     if not ls["ok"] or not ls["stdout"]:
         return None
-    fetch = _run_git(repo, ["fetch", "origin", branch])
+    fetch = _run_git(repo, ["fetch", "origin", branch], env=network_env)
     if not fetch["ok"]:
         return {"ok": False, "error": f"fetch failed: {fetch['stderr']}"}
     reset = _run_git(repo, ["reset", "--hard", f"origin/{branch}"])
@@ -477,7 +507,7 @@ def push(root: Path, config: dict | None = None) -> dict:
     repo = knowledge_root(root, config)
     branch = git_cfg.get("branch") or "main"
 
-    res = _run_git(repo, ["push", "-u", "origin", branch])
+    res = _run_git(repo, ["push", "-u", "origin", branch], env=_network_git_env(config))
     if not res["ok"]:
         return {"ok": False, "pushed": False, "error": f"git push failed: {res['stderr']}"}
     return {"ok": True, "pushed": True}

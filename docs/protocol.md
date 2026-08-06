@@ -589,22 +589,24 @@ Every task starts with `round-001`:
 
 ## Proxy Configuration
 
-Proxy values live in the AHA Core Settings config, split by backend:
+Proxy values live once in AHA Core Settings. Codex and Claude keep only their
+independent default switches:
 
 ```json
 {
+  "proxy": {
+    "http_proxy": "http://127.0.0.1:7890",
+    "https_proxy": "http://127.0.0.1:7890",
+    "no_proxy": "localhost,127.0.0.1,::1"
+  },
   "codex": {
     "proxy": {
-      "http_proxy": "http://127.0.0.1:7890",
-      "https_proxy": "http://127.0.0.1:7890",
-      "no_proxy": "localhost,127.0.0.1,::1"
+      "enabled": true
     }
   },
   "claude": {
     "proxy": {
-      "http_proxy": "http://127.0.0.1:7891",
-      "https_proxy": "http://127.0.0.1:7891",
-      "no_proxy": "localhost,127.0.0.1,::1"
+      "enabled": false
     }
   }
 }
@@ -626,7 +628,7 @@ Assisted supervision hosts also mirror their agent proxy switch in
 `supervision.host_proxy_enabled`, keeping the host proxy setting independent
 from `preferred_proxy_enabled` for task-main and future sub-agents.
 
-When the selected backend has Core Settings proxy values and the agent switch is enabled, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and lowercase variants into the child backend environment. Old global/run/task-level proxy value fields are still read as a config/archive/runtime compatibility fallback.
+When the shared Core proxy is configured and the agent switch is enabled, AHA injects `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and lowercase variants into the child backend environment. Existing backend-specific values are migrated to the shared config in memory, preferring the current default backend; old run/task-level values remain archive/runtime compatibility fallbacks.
 
 ## Run Archives
 

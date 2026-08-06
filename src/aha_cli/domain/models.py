@@ -88,6 +88,7 @@ def default_knowledge_config() -> dict:
         "path": None,
         "git": {
             "enabled": False,
+            "proxy_enabled": False,
             "remote": None,
             "branch": "main",
             "auto_commit": False,
@@ -199,9 +200,6 @@ def default_config() -> dict:
             "env": [],
             "proxy": {
                 "enabled": False,
-                "http_proxy": None,
-                "https_proxy": None,
-                "no_proxy": None,
             },
         },
         "claude": {
@@ -215,9 +213,6 @@ def default_config() -> dict:
             "env": [],
             "proxy": {
                 "enabled": False,
-                "http_proxy": None,
-                "https_proxy": None,
-                "no_proxy": None,
             },
         },
     }

@@ -125,6 +125,7 @@ from aha_cli.store.tasks import (
 from aha_cli.store.workspaces import add_workspace, get_workspace, list_workspaces, resolve_workspace_path
 
 UNSET = object()
+_CHANNEL_NOTIFICATION_FILE_EVENT_TYPES = frozenset({"agent_message", "agent_error"})
 
 
 def _model_value(value: object) -> str | None:
@@ -132,8 +133,7 @@ def _model_value(value: object) -> str | None:
     return text or None
 
 
-def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
-    event = _append_event(root, run_id, event_type, data, ts=utc_now())
+def _enqueue_channel_notification(root: Path, run_id: str, event: dict) -> None:
     try:
         from aha_cli.services.channel_notifications import enqueue_notification_event
 
@@ -150,11 +150,27 @@ def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
             },
             ts=utc_now(),
         )
+
+
+def append_event(root: Path, run_id: str, event_type: str, data: dict) -> dict:
+    event = _append_event(root, run_id, event_type, data, ts=utc_now())
+    _enqueue_channel_notification(root, run_id, event)
     return event
 
 
 def append_event_to_file(events_file: Path | None, run_id: str, event_type: str, data: dict) -> dict:
-    return _append_event_to_file(events_file, run_id, event_type, data, ts=utc_now())
+    event = _append_event_to_file(events_file, run_id, event_type, data, ts=utc_now())
+    if events_file is None or event_type not in _CHANNEL_NOTIFICATION_FILE_EVENT_TYPES:
+        return event
+    resolved_events_file = events_file.resolve()
+    try:
+        root = resolved_events_file.parents[2]
+    except IndexError:
+        return event
+    if event_path(root, run_id).resolve() != resolved_events_file:
+        return event
+    _enqueue_channel_notification(root, run_id, event)
+    return event
 
 
 def ensure_session(

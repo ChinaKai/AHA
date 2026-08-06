@@ -87,8 +87,8 @@ Profile。Runtime、显示方式、设备模式、下载、上传和代理放在
   `uploads=allow`、agent 具有 `read_write` 权限且使用最新 snapshot 的文件输入
   ref 时，才允许通过 `aha browser upload` 选择一个本地文件。
 - `proxy_mode`: `direct|inherit|custom`。`inherit` 由 task 的
-  `preferred_proxy_enabled` 开关控制，并按 `preferred_backend` 读取 Core
-  Settings 中对应的 `codex.proxy` 或 `claude.proxy`；旧 task/run proxy 仅作
+  `preferred_proxy_enabled` 开关控制，从 Core Settings 顶层 `proxy` 读取共享
+  地址；`codex.proxy.enabled` / `claude.proxy.enabled` 只决定新 task/agent 的默认开关，旧 backend/task/run proxy 仅作
   兼容回退。Chromium 要求继承的 HTTP 与 HTTPS 地址一致。`custom` 支持
   HTTP(S)、SOCKS4、SOCKS5 server，以及 bypass、用户名和密码。
   `user_chrome` 的启动参数不能安全携带代理认证信息，因此该 runtime 只支持

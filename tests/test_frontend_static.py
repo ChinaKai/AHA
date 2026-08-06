@@ -411,6 +411,63 @@ if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.fei
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_global_settings_render_shared_proxy_with_backend_switches(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+const html = config.bootstrapConfigFormHtml({
+  mode: "settings",
+  config: {
+    backend: "codex",
+    proxy: { http_proxy: "http://shared:7890", https_proxy: "http://shared:7890", no_proxy: "localhost" },
+    codex: { proxy: { enabled: true } },
+    claude: { proxy: { enabled: false } }
+  }
+});
+if ((html.match(/data-bootstrap-config-field="proxy\.http_proxy"/g) || []).length !== 1) process.exit(1);
+if (html.includes('data-bootstrap-config-field="codex.proxy.http_proxy"')) process.exit(1);
+if (html.includes('data-bootstrap-config-field="claude.proxy.http_proxy"')) process.exit(1);
+if (!html.includes('data-bootstrap-config-field="codex.proxy.enabled" type="checkbox" checked')) process.exit(1);
+if (!html.includes('data-bootstrap-config-field="claude.proxy.enabled" type="checkbox"')) process.exit(1);
+const fields = {
+  backend: { value: "codex" },
+  default_parallel: { value: "10" },
+  "proxy.http_proxy": { value: "http://shared:7890" },
+  "proxy.https_proxy": { value: "http://shared:7890" },
+  "proxy.no_proxy": { value: "localhost" },
+  "codex.proxy.enabled": { checked: true },
+  "claude.proxy.enabled": { checked: false }
+};
+const form = {
+  dataset: { bootstrapConfigMode: "settings" },
+  querySelector(selector) {
+    const match = selector.match(/data-bootstrap-config-field="([^"]+)"/);
+    return match ? (fields[match[1]] || { value: "", checked: false }) : { value: "", checked: false };
+  },
+  querySelectorAll() { return []; }
+};
+const payload = config.bootstrapConfigPayload(form, { config: {} });
+if (payload.proxy.http_proxy !== "http://shared:7890") process.exit(1);
+if (payload.codex.proxy.enabled !== true || Object.keys(payload.codex.proxy).length !== 1) process.exit(1);
+if (payload.claude.proxy.enabled !== false || Object.keys(payload.claude.proxy).length !== 1) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_web_upgrade_button_sits_next_to_restart(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
@@ -447,6 +504,7 @@ if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.fei
         self.assertIn("bootstrapData?.web_upgrade || statusData?.web_upgrade", setup)
         self.assertIn("webUpgradeAction,", wiring)
         self.assertIn("webUpgradeAvailable,", wiring)
+        self.assertIn("webUpgradeCapability,", wiring)
         self.assertIn("webPublishConsoleEl: \"web-publish-console\"", registry)
         self.assertIn('upgradeAction === "publish" ? t("run.publish_web", "Publish") : t("run.upgrade_web", "Upgrade")', controller)
         self.assertIn('const endpoint = publish ? "/api/web/publish/status" : "/api/web/upgrade/status";', controller)
@@ -456,6 +514,9 @@ if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.fei
         self.assertIn('id="web-upgrade-proxy-enabled"', controller)
         self.assertIn("webUpgradeProxyEnabled", controller)
         self.assertIn("proxy_enabled: String(webUpgradeProxyEnabled)", controller)
+        self.assertIn('webUpgradeAction() === "publish") void loadWebPublishStatus()', controller)
+        self.assertNotIn("if (nextOpen && options.load !== false) void loadWebPublishStatus();", controller)
+        self.assertNotIn("if (target?.id === \"web-upgrade-proxy-enabled\") {\n          webUpgradeProxyEnabled = Boolean(target.checked);\n          void loadWebPublishStatus", controller)
         self.assertIn('typeof err?.payload?.proxy_configured === "boolean"', controller)
         self.assertIn("confirmDialogAction", controller)
         self.assertIn('deps.upgradeWebService?.({ tag })', controller)
@@ -464,6 +525,9 @@ if (config.bootstrapConfigPayload(form(), { config: existing }).integrations.fei
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
         self.assertIn('"run.upgrade_use_proxy": "Use proxy"', i18n)
         self.assertIn('"run.upgrade_use_proxy": "使用代理"', i18n)
+        self.assertIn('"run.upgrade_check_version": "Check version"', i18n)
+        self.assertIn('"run.upgrade_check_version": "查询版本"', i18n)
+        self.assertIn('"run.upgrade_not_checked": "尚未查询"', i18n)
         self.assertIn(".web-publish-status-grid", styles)
         self.assertIn("elements.webUpgradeEl.hidden = !upgradeAvailable;", controller)
         self.assertIn("elements.webUpgradeEl.disabled = !upgradeAvailable", controller)
@@ -885,7 +949,7 @@ controller.unmount();
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
         self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=web-upgrade-proxy-v1">', html)
-        self.assertIn('<script src="/static/i18n.js?v=web-upgrade-proxy-v1"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=knowledge-proxy-v3"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -1080,7 +1144,11 @@ controller.unmount();
         html = (root / "knowledge.html").read_text(encoding="utf-8")
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
 
-        self.assertIn('<script src="/static/i18n.js"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=knowledge-proxy-v3"></script>', html)
+        self.assertIn('id="s-git-proxy-enabled"', html)
+        self.assertIn('$("#s-git-proxy-enabled").value = boolMode(s.git.proxy_enabled);', html)
+        self.assertIn('proxy_enabled: modeBool("#s-git-proxy-enabled")', html)
+        self.assertIn('"knowledge.git_proxy": "Git 同步使用共享代理"', i18n)
         # Capture notes reuse the shared memo markdown renderer for in-body images.
         self.assertIn('<script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>', html)
         self.assertIn('<script src="/static/task_memo_markdown.js"></script>', html)
@@ -4478,11 +4546,16 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn("data-bootstrap-config-field", script)
         self.assertIn("Core Settings", script)
         self.assertIn("Task concurrency", script)
-        self.assertIn('bootstrapProxyFieldsHtml("codex"', script)
-        self.assertIn('bootstrapProxyFieldsHtml("claude"', script)
+        self.assertIn("Proxy Settings", script)
+        self.assertIn("bootstrapSharedProxyFieldsHtml(proxy)", script)
+        self.assertIn('bootstrapBackendProxySwitchHtml("codex"', script)
+        self.assertIn('bootstrapBackendProxySwitchHtml("claude"', script)
         self.assertIn('data-bootstrap-config-field="${escapeHtml(prefix)}.proxy.enabled"', script)
-        self.assertIn('bootstrapConfigText(form, "codex.proxy.http_proxy")', script)
-        self.assertIn('bootstrapConfigText(form, "claude.proxy.http_proxy")', script)
+        self.assertIn('bootstrapConfigText(form, "proxy.http_proxy")', script)
+        self.assertIn('bootstrapConfigText(form, "proxy.https_proxy")', script)
+        self.assertIn('bootstrapConfigText(form, "proxy.no_proxy")', script)
+        self.assertNotIn('bootstrapConfigText(form, "codex.proxy.http_proxy")', script)
+        self.assertNotIn('bootstrapConfigText(form, "claude.proxy.http_proxy")', script)
         self.assertIn('enabled: Boolean(bootstrapConfigField(form, "codex.proxy.enabled")?.checked)', script)
         self.assertIn('enabled: Boolean(bootstrapConfigField(form, "claude.proxy.enabled")?.checked)', script)
         self.assertIn('const defaultBootstrapHttpProxy = "http://127.0.0.1:7890"', script)
@@ -4517,7 +4590,10 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertLess(defaults_idx, create_proxy_idx)
         self.assertLess(create_proxy_idx, advanced_idx)
         self.assertNotIn("Enable proxy for this task's agents", html)
-        self.assertNotIn('data-bootstrap-config-field="proxy.http_proxy"', script)
+        self.assertIn('data-bootstrap-config-field="proxy.http_proxy"', script)
+        self.assertIn('data-bootstrap-config-field="proxy.https_proxy"', script)
+        self.assertIn('data-bootstrap-config-field="proxy.no_proxy"', script)
+        self.assertNotIn('${escapeHtml(prefix)}.proxy.http_proxy', script)
         self.assertNotIn('data-bootstrap-config-field="proxy.enabled"', script)
         self.assertIn("proxy: {", script)
         self.assertIn('data-bootstrap-config-field="codex.model"', script)
@@ -5240,10 +5316,10 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=web-upgrade-proxy-v1"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=knowledge-proxy-v3"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=feishu-settings-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=shared-proxy-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
@@ -5290,7 +5366,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
         self.assertIn('<script src="/static/settings_controller.js?v=token-saving-v8"></script>', html)
-        self.assertIn('<script src="/static/run_controller.js?v=web-upgrade-proxy-v13"></script>', html)
+        self.assertIn('<script src="/static/run_controller.js?v=manual-upgrade-check-v15"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
@@ -5298,7 +5374,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/app_bridge.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/app_controller_factory.js?v=feishu-agent-v1"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=global-search-v4"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=global-search-v4"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=manual-upgrade-check-v5"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

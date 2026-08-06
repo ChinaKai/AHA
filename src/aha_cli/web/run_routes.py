@@ -550,6 +550,16 @@ def _proxy_config_from_payload(value: object, field_name: str, fallback: dict | 
     )
 
 
+def _backend_proxy_switch_from_payload(value: object, field_name: str, fallback: bool = False) -> dict:
+    payload = _object_value(value, field_name)
+    return {
+        "enabled": parse_optional_bool(
+            payload.get("enabled", payload.get("proxy_enabled", fallback)),
+            f"{field_name}.enabled",
+        )
+    }
+
+
 def _bootstrap_config_from_payload(payload: dict) -> dict:
     defaults = default_config()
     backend = _string_or_default(payload.get("backend"), "codex")
@@ -566,8 +576,15 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
     codex_payload = _object_value(payload.get("codex"), "codex")
     codex_defaults = defaults["codex"]
     codex_env = _codex_env_groups(codex_payload.get("env"))
-    legacy_proxy = _proxy_config_from_payload(payload.get("proxy"), "proxy")
-    proxy_fallback = legacy_proxy if proxy_configured(legacy_proxy) else None
+    shared_proxy = _proxy_config_from_payload(payload.get("proxy"), "proxy")
+    codex_input_proxy = _proxy_config_from_payload(codex_payload.get("proxy"), "codex.proxy")
+    claude_payload = _object_value(payload.get("claude"), "claude")
+    claude_input_proxy = _proxy_config_from_payload(claude_payload.get("proxy"), "claude.proxy")
+    if not proxy_configured(shared_proxy):
+        candidates = [codex_input_proxy, claude_input_proxy]
+        if backend == "claude":
+            candidates.reverse()
+        shared_proxy = next((candidate for candidate in candidates if proxy_configured(candidate)), shared_proxy)
     codex = {
         "bin": _string_or_default(codex_payload.get("bin"), str(codex_defaults["bin"])),
         "model": _optional_string(codex_payload.get("model")),
@@ -578,12 +595,15 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "session_policy": _session_policy(codex_payload.get("session_policy"), str(codex_defaults["session_policy"])),
         "env_active": _optional_string(codex_payload.get("env_active")),
         "env": codex_env,
-        "proxy": _proxy_config_from_payload(codex_payload.get("proxy"), "codex.proxy", proxy_fallback),
+        "proxy": _backend_proxy_switch_from_payload(
+            codex_payload.get("proxy"),
+            "codex.proxy",
+            bool(shared_proxy.get("enabled")),
+        ),
     }
     if codex["approval"] not in APPROVAL_OPTIONS:
         raise ValueError(f"unknown approval: {codex['approval']}")
 
-    claude_payload = _object_value(payload.get("claude"), "claude")
     claude_defaults = defaults["claude"]
     claude_env = _claude_env_groups(claude_payload.get("env"))
     claude = {
@@ -595,7 +615,11 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "session_policy": _session_policy(claude_payload.get("session_policy"), str(claude_defaults["session_policy"])),
         "env_active": _optional_string(claude_payload.get("env_active")),
         "env": claude_env,
-        "proxy": _proxy_config_from_payload(claude_payload.get("proxy"), "claude.proxy", proxy_fallback),
+        "proxy": _backend_proxy_switch_from_payload(
+            claude_payload.get("proxy"),
+            "claude.proxy",
+            bool(shared_proxy.get("enabled")),
+        ),
     }
     integrations = normalize_integrations_config(_object_value(payload.get("integrations"), "integrations"))
 
@@ -606,7 +630,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "default_mode": mode,
         "workspace_roots": _string_list(payload.get("workspace_roots"), "workspace_roots"),
         "webgame_workspace": _optional_string(payload.get("webgame_workspace")),
-        "proxy": legacy_proxy,
+        "proxy": shared_proxy,
         "context_windows": _object_value(payload.get("context_windows"), "context_windows"),
         "retention_policy": retention_policy_schedule_config(payload.get("retention_policy")),
         "integrations": integrations,

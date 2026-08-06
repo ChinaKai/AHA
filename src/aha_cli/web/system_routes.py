@@ -15,7 +15,12 @@ from aha_cli.services.feishu_runtime import (
     update_feishu_notifications_enabled,
     update_feishu_settings,
 )
-from aha_cli.services.proxy import apply_proxy_environment, core_proxy_config, proxy_configured
+from aha_cli.services.proxy import (
+    apply_proxy_environment,
+    backend_proxy_config,
+    core_proxy_config,
+    proxy_configured,
+)
 from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
 from aha_cli.services.weixin import (
     WeixinError,
@@ -141,6 +146,9 @@ def service_health_payload(
     selected_run_id = default_api_run_id(root, default_run_id)
     bind_host_text = str(bind_host or "").strip()
     bind_port_text = str(bind_port or "").strip()
+    upgrade = web_upgrade_status()
+    if upgrade.get("action") == "upgrade":
+        upgrade = {**upgrade, **_web_upgrade_proxy_status(root)}
     return {
         "ok": True,
         "service": "aha-web",
@@ -150,7 +158,7 @@ def service_health_payload(
         "bind_host": bind_host_text,
         "bind_port": bind_port_text,
         "bind_network_visible": bind_host_exposes_network(bind_host_text) if bind_host_text else False,
-        "web_upgrade": web_upgrade_status(),
+        "web_upgrade": upgrade,
         "initialized": (root / "config.json").exists(),
         "default_run_id": selected_run_id,
         "default_run_available": bool(selected_run_id),
@@ -259,13 +267,15 @@ def _web_upgrade_check_command() -> list[str]:
 
 def _web_upgrade_proxy_status(root: Path) -> dict[str, bool]:
     try:
-        proxy = core_proxy_config(load_config(root))
+        config = load_config(root)
+        proxy = core_proxy_config(config)
+        default_backend_proxy = backend_proxy_config(config, config.get("backend"))
     except Exception:  # noqa: BLE001 - upgrade remains available when optional proxy config cannot be loaded.
         return {"proxy_configured": False, "proxy_enabled": False}
     configured = proxy_configured(proxy)
     return {
         "proxy_configured": configured,
-        "proxy_enabled": bool(proxy.get("enabled") and configured),
+        "proxy_enabled": bool(default_backend_proxy.get("enabled") and configured),
     }
 
 
@@ -277,7 +287,8 @@ def _web_upgrade_env(root: Path, proxy_enabled: bool | None = None) -> dict[str,
         return apply_proxy_environment(env, {}) if proxy_enabled is False else env
     proxy = core_proxy_config(config)
     configured = proxy_configured(proxy)
-    use_proxy = bool(proxy.get("enabled") and configured) if proxy_enabled is None else proxy_enabled
+    default_backend_proxy = backend_proxy_config(config, config.get("backend"))
+    use_proxy = bool(default_backend_proxy.get("enabled") and configured) if proxy_enabled is None else proxy_enabled
     if not use_proxy:
         return apply_proxy_environment(env, {}) if proxy_enabled is False else env
     if not configured:
