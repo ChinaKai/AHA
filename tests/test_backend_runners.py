@@ -62,6 +62,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
                         "ANTHROPIC_API_KEY": "prod-key",
                         "ANTHROPIC_BASE_URL": "https://prod.example",
                         "ANTHROPIC_MODEL": "claude-prod",
+                        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+                        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+                        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
                     },
                 ],
             }
@@ -70,6 +73,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(env["ANTHROPIC_API_KEY"], "prod-key")
         self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://prod.example")
         self.assertEqual(env["ANTHROPIC_MODEL"], "claude-prod")
+        self.assertEqual(env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"], "1")
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "200000")
+        self.assertEqual(env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "64000")
 
     def test_claude_config_env_can_disable_env_groups_for_official_claude(self) -> None:
         env = claude_config_env(

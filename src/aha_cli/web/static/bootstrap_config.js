@@ -2,7 +2,14 @@
   const backendOptions = ["codex", "claude"];
   const claudeEnvModelPrefix = "env:";
   const codexEnvGroupFields = ["OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY"];
-  const claudeEnvGroupFields = ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY"];
+  const claudeEnvGroupFields = [
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+  ];
   const defaultBootstrapHttpProxy = "http://127.0.0.1:7890";
   const defaultBootstrapHttpsProxy = defaultBootstrapHttpProxy;
   const defaultBootstrapNoProxy = "localhost,127.0.0.1,::1";
@@ -281,6 +288,20 @@
               <input data-bootstrap-env-field="CODEX_ENV_KEY" placeholder="OPENAI_API_KEY" value="${escapeHtml(configString(data.CODEX_ENV_KEY, "OPENAI_API_KEY"))}">
             </label>
       ` : "";
+      const claudeExtraFields = backend === "claude" ? `
+            <label class="field-label">
+              <span>Gateway model discovery</span>
+              <input data-bootstrap-env-field="CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" placeholder="1" value="${escapeHtml(configString(data.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY))}">
+            </label>
+            <label class="field-label">
+              <span>Max context tokens</span>
+              <input data-bootstrap-env-field="CLAUDE_CODE_MAX_CONTEXT_TOKENS" inputmode="numeric" placeholder="200000" value="${escapeHtml(configString(data.CLAUDE_CODE_MAX_CONTEXT_TOKENS))}">
+            </label>
+            <label class="field-label">
+              <span>Max output tokens</span>
+              <input data-bootstrap-env-field="CLAUDE_CODE_MAX_OUTPUT_TOKENS" inputmode="numeric" placeholder="64000" value="${escapeHtml(configString(data.CLAUDE_CODE_MAX_OUTPUT_TOKENS))}">
+            </label>
+      ` : "";
       return `
         <div class="bootstrap-env-group" data-bootstrap-row="${escapeHtml(kind)}">
           <div class="bootstrap-env-group-head">
@@ -305,6 +326,7 @@
               <input data-bootstrap-env-field="${escapeHtml(secretKey)}" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
             </label>
             ${codexExtraFields}
+            ${claudeExtraFields}
           </div>
         </div>
       `;

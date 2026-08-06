@@ -274,6 +274,9 @@ class WebRunApiTests(unittest.TestCase):
                                     "ANTHROPIC_BASE_URL": "https://claude.test",
                                     "ANTHROPIC_MODEL": "claude-sonnet",
                                     "ANTHROPIC_API_KEY": "test-key",
+                                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+                                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+                                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
                                 }
                             ],
                         },
@@ -320,6 +323,9 @@ class WebRunApiTests(unittest.TestCase):
                     "ANTHROPIC_BASE_URL": "https://claude.test",
                     "ANTHROPIC_MODEL": "claude-sonnet",
                     "ANTHROPIC_API_KEY": "test-key",
+                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
                 }
             ],
         )
@@ -522,6 +528,9 @@ class WebRunApiTests(unittest.TestCase):
                                     "ANTHROPIC_BASE_URL": "https://claude.test",
                                     "ANTHROPIC_MODEL": "claude-sonnet",
                                     "ANTHROPIC_API_KEY": "test-key",
+                                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+                                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+                                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
                                 }
                             ],
                         },
