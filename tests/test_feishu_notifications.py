@@ -117,6 +117,70 @@ class FeishuNotificationTests(unittest.TestCase):
             "Time: 2026-08-05 15:48:41+00:00\nTask: Run A.task-001\nTask Title: Task 1\nStatus: busy -> awaiting\nMessage: 最后一条 agent 回复",
         )
 
+    def test_status_change_is_sent_as_read_only_card(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch(
+                "aha_cli.services.feishu_notifications._send",
+                return_value={"message_id": "om-status"},
+            ) as send,
+            mock.patch("aha_cli.services.feishu_notifications.audit_feishu_channel") as audit,
+        ):
+            root = Path(tmp)
+            run_id = _setup(root)
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-chat",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            event = {
+                "event_id": 3,
+                "ts": "2026-08-05T15:48:41+00:00",
+                "type": "task_status_changed",
+                "data": {
+                    "task_id": "task-001",
+                    "previous_status": "running",
+                    "status": "awaiting_user",
+                    "reason": "等待用户确认",
+                },
+            }
+
+            result = notify_event(root, run_id, event)
+
+        self.assertTrue(result["sent"])
+        send.assert_called_once()
+        self.assertIn("Status: busy -> awaiting", send.call_args.args[2])
+        card = send.call_args.kwargs["card"]
+        self.assertEqual(card["schema"], "2.0")
+        self.assertEqual(card["header"]["template"], "orange")
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn("AHA Task 状态更新", rendered)
+        self.assertIn("Run A.task-001", rendered)
+        self.assertIn("等待用户确认", rendered)
+        self.assertNotIn('"tag": "button"', rendered)
+        self.assertEqual(audit.call_args.kwargs["kind"], "status_card")
+
+    def test_status_card_header_color_follows_status(self) -> None:
+        message = "Time: -\nTask: Run A.task-001\nTask Title: Task 1\nStatus: pending -> busy\nMessage: -"
+        expected_templates = {
+            "running": "blue",
+            "awaiting_user": "orange",
+            "completed": "green",
+            "failed": "red",
+            "blocked": "red",
+            "pending": "grey",
+        }
+        for status, expected in expected_templates.items():
+            with self.subTest(status=status):
+                card = feishu_notifications._status_notification_card(
+                    message,
+                    {"data": {"status": status}},
+                )
+                self.assertEqual(card["header"]["template"], expected)
+
     def test_persisted_event_offset_finds_reply_before_current_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -396,6 +396,47 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     return _trim_notification(message)
 
 
+def _status_notification_card(message: str, event: dict) -> dict:
+    fields: dict[str, str] = {}
+    for line in str(message or "").splitlines():
+        key, separator, value = line.partition(": ")
+        if separator:
+            fields[key] = value
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    status = str(data.get("status") or "").strip().lower()
+    template = {
+        "running": "blue",
+        "awaiting_user": "orange",
+        "completed": "green",
+        "failed": "red",
+        "blocked": "red",
+    }.get(status, "grey")
+    return {
+        "schema": "2.0",
+        "header": {
+            "title": {"tag": "plain_text", "content": "AHA Task 状态更新"},
+            "template": template,
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(
+                        [
+                            f"**Time**：{fields.get('Time', '-')}",
+                            f"**Task**：`{fields.get('Task', '-')}`",
+                            f"**Task Title**：{fields.get('Task Title', '-')}",
+                            f"**Status**：`{fields.get('Status', '-')}`",
+                            "",
+                            f"**Message**\n{fields.get('Message', '-')}",
+                        ]
+                    ),
+                }
+            ]
+        },
+    }
+
+
 def _task_chat_message_for_event(event: dict, task_id: str) -> str:
     if str(event.get("type") or "") != "message":
         return ""
@@ -714,6 +755,11 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
     suppressed_chats = consume_status_suppressions(root, run_id, task_id) if is_status_event else set()
     message = notification_message_for_event(root, run_id, event)
     card = data.get("feishu_card") if isinstance(data.get("feishu_card"), dict) else None
+    if is_status_event and message and card is None:
+        card = _status_notification_card(message, event)
+    notification_kind = (
+        "status_card" if is_status_event and card else "confirmation_card" if card else "notification"
+    )
     confirmation_id = str(data.get("feishu_confirmation_id") or "")
     task_chat_message = _task_chat_message_for_event(event, task_id)
     has_task_chat = _has_task_chat_subscription(root, run_id, task_id)
@@ -881,7 +927,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                 audit_feishu_channel(
                     root,
                     direction="outbound",
-                    kind="confirmation_card" if card else "notification",
+                    kind=notification_kind,
                     status="failed",
                     transport="notification",
                     chat_id=chat_id,
@@ -896,7 +942,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             audit_feishu_channel(
                 root,
                 direction="outbound",
-                kind="confirmation_card" if card else "notification",
+                kind=notification_kind,
                 status="delivered",
                 transport=str(result.get("transport") or "unknown"),
                 message_id=str(result.get("message_id") or ""),

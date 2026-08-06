@@ -48,7 +48,7 @@ Integrations → 飞书助手，启用接入并配置：
 - `Group member access`：默认“仅授权用户”，即群 `chat_id` 和发送者 `open_id` 都必须获授权；选择
   “授权群内全部成员”后，该群任何成员均可使用助手，但私聊仍只接受 `Allowed open IDs` 中的用户。
 - `Only handle group @mentions`：建议保持开启，群聊只响应 `@机器人`。
-- `Push task status changes`：在普通项目 run 的 task 状态改变时，只向 owner 私聊推送 run/task、新旧状态和变更来源；系统 Run/Task、群聊和其他授权用户私聊不会收到状态推送。进入 `busy` 显示用户触发消息，离开 `busy` 显示 agent 最后回复，系统迁移显示事件原因。关闭后仍会送达飞书助手对话的直接回复。
+- `Push task status changes`：在普通项目 run 的 task 状态改变时，只向 owner 私聊推送只读状态卡，展示 run/task、新旧状态和变更来源；系统 Run/Task、群聊和其他授权用户私聊不会收到状态推送。进入 `busy` 显示用户触发消息，离开 `busy` 显示 agent 最后回复，系统迁移显示事件原因。关闭后仍会送达飞书助手对话的直接文本回复。
 - `Default work Run`：飞书默认归属 Run。候选来自普通 Run 列表，系统管理的服务管家 Run 和
   `feishu-group` Run 不可选择。数字人转发待办、主人私聊创建 memo、主人私聊创建 task 默认落到这个 Run；
   单次操作仍可手动指定其他普通项目 Run。
@@ -139,8 +139,10 @@ AHA home 的 `config.json`，请限制该文件和 Web 控制台的访问权限�
   操作失败、需要下一步表单或存在实际后续结果时仍会发送新消息。
   群聊仍只响应 `@机器人`，不开放菜单管理入口。
 
-状态推送开启时，非系统 run/task 的状态变化只会推送到已解析的 owner 私聊；
-`running` 对外显示为 `busy`，`awaiting_user` 显示为 `awaiting`：
+状态推送开启时，非系统 run/task 的状态变化只会以只读卡片推送到已解析的 owner 私聊；
+卡片不包含按钮，标题颜色按当前状态区分：`running` 蓝色、`awaiting_user` 橙色、`completed` 绿色、
+`failed/blocked` 红色，其他状态灰色。`running` 对外显示为 `busy`，`awaiting_user` 显示为
+`awaiting`，正文保留以下字段：
 
 ```text
 Time: 2026-08-05 15:48:41+00:00
@@ -150,8 +152,8 @@ Status: busy -> awaiting
 Message: agent 最后一条回复
 ```
 
-开关开启时，agent 最终回复与状态变化合并为一条飞书消息，避免重复推送；关闭时
-不发状态通知，但助手对话的直接 agent 回复仍正常送达。
+开关开启时，agent 最终回复与状态变化合并为一张状态卡，避免重复推送；关闭时
+不发状态通知，但助手对话的直接 agent 文本回复仍正常送达。确认卡和 Task Chat 控制卡不受影响。
 
 ## 群聊数字人模式
 
