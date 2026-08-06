@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from pathlib import Path
 
+from aha_cli import locking
 from aha_cli.domain.models import utc_now
 from aha_cli.services.subagent_state import task_has_incomplete_sub_agents
 from aha_cli.store.filesystem import iter_jsonl_from, read_json, task_snapshot, write_json
@@ -21,22 +25,157 @@ def chat_offset_path(run: Path, target: str, task_id: str | None = None) -> Path
     return run / "runtime" / f"chat-offset-{target_name}.json"
 
 
+def chat_consumer_lock_path(run: Path, target: str, task_id: str | None = None) -> Path:
+    target_name = safe_target_name(target)
+    task_name = f"{safe_target_name(task_id)}-" if task_id else ""
+    return run / "runtime" / f"chat-consumer-{task_name}{target_name}.lock"
+
+
+def acquire_chat_consumer(run: Path, target: str, task_id: str | None = None) -> int | None:
+    """Claim the single durable inbox consumer for one task/agent worker."""
+
+    path = chat_consumer_lock_path(run, target, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        locking.acquire(handle, blocking=False)
+    except BlockingIOError:
+        os.close(handle)
+        return None
+    return handle
+
+
+def release_chat_consumer(handle: int | None) -> None:
+    if handle is None:
+        return
+    try:
+        locking.release(handle)
+    finally:
+        os.close(handle)
+
+
+def chat_turn_checkpoint_path(run: Path, target: str, task_id: str | None = None) -> Path:
+    target_name = safe_target_name(target)
+    task_name = f"{safe_target_name(task_id)}-" if task_id else ""
+    return run / "runtime" / f"chat-turn-{task_name}{target_name}.json"
+
+
+def chat_turn_identity(item_offset: int, item: dict) -> str:
+    payload = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()[:24]
+    return f"{max(0, int(item_offset))}:{digest}"
+
+
+def load_chat_turn_checkpoint(path: Path, item_offset: int, item: dict) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        checkpoint = read_json(path)
+    except (OSError, ValueError):
+        return None
+    if checkpoint.get("identity") != chat_turn_identity(item_offset, item):
+        return None
+    if checkpoint.get("phase") not in {"executed", "finished"}:
+        return None
+    return checkpoint
+
+
+def save_chat_turn_result(
+    path: Path,
+    item_offset: int,
+    item: dict,
+    *,
+    exit_code: int,
+    reply: str,
+    prompt_metrics: dict | None = None,
+    prompt_event: dict | None = None,
+    git_before: dict | None = None,
+) -> dict:
+    checkpoint = {
+        "version": 1,
+        "identity": chat_turn_identity(item_offset, item),
+        "item_offset": max(0, int(item_offset)),
+        "phase": "executed",
+        "exit_code": int(exit_code),
+        "reply": str(reply or ""),
+        "prompt_metrics": dict(prompt_metrics or {}),
+        "prompt_event": dict(prompt_event or {}),
+        "git_before": dict(git_before or {}),
+        "executed_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    write_json(path, checkpoint)
+    return checkpoint
+
+
+def finish_chat_turn(path: Path, item_offset: int, item: dict) -> dict | None:
+    checkpoint = load_chat_turn_checkpoint(path, item_offset, item)
+    if checkpoint is None:
+        return None
+    if checkpoint.get("phase") != "finished":
+        checkpoint["phase"] = "finished"
+        checkpoint["finished_at"] = utc_now()
+        checkpoint["updated_at"] = utc_now()
+        write_json(path, checkpoint)
+    return checkpoint
+
+
+def save_chat_turn_actions(path: Path, item_offset: int, item: dict, executed: list[dict]) -> dict | None:
+    checkpoint = load_chat_turn_checkpoint(path, item_offset, item)
+    if checkpoint is None:
+        return None
+    checkpoint["actions_applied"] = True
+    checkpoint["executed_actions"] = json.loads(json.dumps(executed, ensure_ascii=False, default=str))
+    checkpoint["actions_applied_at"] = utc_now()
+    checkpoint["updated_at"] = utc_now()
+    write_json(path, checkpoint)
+    return checkpoint
+
+
+def complete_chat_turn(path: Path, offset_file: Path, item_offset: int, item: dict) -> None:
+    """Commit completion before advancing the cursor so either write can recover."""
+
+    finish_chat_turn(path, item_offset, item)
+    save_chat_offset(offset_file, item_offset)
+
+
+def _write_chat_offset(offset_file: Path, offset: int, *, monotonic: bool) -> None:
+    lock_path = offset_file.with_suffix(f"{offset_file.suffix}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        locking.acquire(lock_file.fileno())
+        try:
+            current = 0
+            if monotonic and offset_file.exists():
+                try:
+                    current = max(0, int(read_json(offset_file).get("offset") or 0))
+                except (OSError, TypeError, ValueError):
+                    current = 0
+            write_json(offset_file, {"offset": max(current, int(offset)), "updated_at": utc_now()})
+        finally:
+            locking.release(lock_file.fileno())
+
+
 def load_chat_offset(inbox: Path, offset_file: Path, from_start: bool) -> int:
     if from_start:
         return 0
     if offset_file.exists():
         try:
             offset = int(read_json(offset_file).get("offset") or 0)
-            if not inbox.exists() or offset <= inbox.stat().st_size:
+            inbox_size = inbox.stat().st_size if inbox.exists() else 0
+            if offset <= inbox_size:
                 return max(0, offset)
         except (OSError, TypeError, ValueError):
             pass
     _, offset = iter_jsonl_from(inbox, 0)
+    _write_chat_offset(offset_file, offset, monotonic=False)
     return offset
 
 
 def save_chat_offset(offset_file: Path, offset: int) -> None:
-    write_json(offset_file, {"offset": offset, "updated_at": utc_now()})
+    """Persist a monotonic consumer cursor without allowing stale workers to rewind it."""
+
+    _write_chat_offset(offset_file, offset, monotonic=True)
 
 
 def worker_backend_should_exit_after_turn(
@@ -78,9 +217,19 @@ def worker_backend_should_exit_after_turn(
 
 
 __all__ = [
+    "acquire_chat_consumer",
+    "chat_consumer_lock_path",
     "chat_offset_path",
+    "chat_turn_checkpoint_path",
+    "chat_turn_identity",
+    "complete_chat_turn",
+    "finish_chat_turn",
     "load_chat_offset",
+    "load_chat_turn_checkpoint",
+    "release_chat_consumer",
     "safe_target_name",
     "save_chat_offset",
+    "save_chat_turn_actions",
+    "save_chat_turn_result",
     "worker_backend_should_exit_after_turn",
 ]

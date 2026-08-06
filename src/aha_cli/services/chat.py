@@ -19,7 +19,20 @@ from aha_cli.services.backend_runtime import (
     start_backend,
     stop_task_backends,
 )
-from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset, worker_backend_should_exit_after_turn
+from aha_cli.services.chat_offsets import (
+    acquire_chat_consumer,
+    chat_offset_path,
+    chat_turn_checkpoint_path,
+    chat_turn_identity,
+    complete_chat_turn,
+    load_chat_offset,
+    load_chat_turn_checkpoint,
+    release_chat_consumer,
+    save_chat_offset,
+    save_chat_turn_actions,
+    save_chat_turn_result,
+    worker_backend_should_exit_after_turn,
+)
 from aha_cli.services.chat_prompt_context import (
     CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY,
     chat_prompt,
@@ -93,6 +106,17 @@ BLOCKED_REPLY_MARKERS = (
     "Permission denied",
     "Read-only file system",
 )
+
+
+def _chat_turn_reply_delivered(root: Path, run_id: str, task_id: str | None, reply_target: str, identity: str) -> bool:
+    path = (
+        run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl"
+        if task_id
+        else inbox_path(root, run_id, reply_target)
+    )
+    messages, _ = iter_jsonl_from(path, 0)
+    return any(item.get("source_turn_identity") == identity for item in messages)
+
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 RUNTIME_CONTEXT_COMPACT_SIGNATURE_KEY = "runtime_context_compact_signature"
@@ -740,6 +764,16 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     events_file = event_path(root, run_id)
     worker_task_id = str(getattr(args, "task_id", "") or "") or None
     offset_file = chat_offset_path(run, args.target, worker_task_id)
+    consumer_handle = acquire_chat_consumer(run, args.target, worker_task_id)
+    if consumer_handle is None:
+        append_event(
+            root,
+            run_id,
+            "chat_consumer_rejected",
+            {"target": args.target, "task_id": worker_task_id, "pid": os.getpid(), "reason": "consumer_lock_held"},
+        )
+        mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
+        return 0
     offset = load_chat_offset(inbox, offset_file, args.from_start)
     last_coordination_check = 0.0
     task_label = f" task={worker_task_id}" if worker_task_id else ""
@@ -833,6 +867,26 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         },
                     )
                     continue
+                turn_checkpoint_file = chat_turn_checkpoint_path(run, args.target, item_task_id)
+                turn_identity = chat_turn_identity(item_offset, item)
+                turn_checkpoint = load_chat_turn_checkpoint(turn_checkpoint_file, item_offset, item)
+                if turn_checkpoint and turn_checkpoint.get("phase") == "finished":
+                    save_chat_offset(offset_file, item_offset)
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_turn_replay_skipped",
+                        {
+                            "source": source_name,
+                            "target": args.target,
+                            "task_id": item_task_id,
+                            "item_offset": item_offset,
+                            "turn_identity": turn_identity,
+                            "reason": "finished_checkpoint",
+                        },
+                    )
+                    continue
+                recovered_turn_result = bool(turn_checkpoint and turn_checkpoint.get("phase") == "executed")
                 session = ensure_session(
                     root,
                     run_id,
@@ -905,6 +959,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         "requested_model": requested_model,
                         "resolved_model": resolved_model,
                         "proxy_enabled": bool((agent or {}).get("proxy_enabled")),
+                        "item_offset": item_offset,
+                        "turn_identity": turn_identity,
                     },
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task, plan, cfg)
@@ -922,6 +978,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     prompt_metrics["prompt_ref"] = save_prompt_artifact(root, run_id, item_task_id, args.target, prompt)
                 except OSError as exc:
                     prompt_metrics["prompt_ref_error"] = str(exc)
+                prompt_metrics["item_offset"] = item_offset
+                prompt_metrics["turn_identity"] = turn_identity
                 prompt_event = append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
                 record_context_pack_from_prompt_metrics(
                     root,
@@ -935,6 +993,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 )
                 gate_model_family = model_family_for_guidance(backend_name, requested_model, resolved_model)
                 git_before = _git_workspace_snapshot(workspace) if gate_model_family else None
+                if recovered_turn_result and isinstance((turn_checkpoint or {}).get("git_before"), dict):
+                    git_before = dict((turn_checkpoint or {}).get("git_before") or {}) or git_before
                 progress_heartbeat = (
                     AgentProgressHeartbeat(
                         root,
@@ -949,7 +1009,23 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 )
                 try:
                     runner_session = session
-                    if backend_name == "claude":
+                    if recovered_turn_result:
+                        exit_code = int((turn_checkpoint or {}).get("exit_code") or 0)
+                        reply = str((turn_checkpoint or {}).get("reply") or "")
+                        returned_session = session
+                        append_event(
+                            root,
+                            run_id,
+                            "agent_turn_result_recovered",
+                            {
+                                "source": source_name,
+                                "target": args.target,
+                                "task_id": item_task_id,
+                                "item_offset": item_offset,
+                                "turn_identity": turn_identity,
+                            },
+                        )
+                    elif backend_name == "claude":
                         effective_proxy_env, observe_runtime = prepare_observe_claude_runtime(
                             root,
                             config=cfg,
@@ -1088,6 +1164,17 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     traceback.print_exc()
                     exit_code = 1
                     reply = f"{backend_name.title()} backend crashed while handling agent turn: {type(exc).__name__}: {exc}"
+                if not recovered_turn_result:
+                    turn_checkpoint = save_chat_turn_result(
+                        turn_checkpoint_file,
+                        item_offset,
+                        item,
+                        exit_code=exit_code,
+                        reply=reply,
+                        prompt_metrics=prompt_metrics,
+                        prompt_event=prompt_event,
+                        git_before=git_before,
+                    )
                 if session:
                     if exit_code == 0:
                         _apply_context_fingerprint_updates(session, prompt_metrics)
@@ -1127,12 +1214,11 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         )
                     append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                     print(f"{args.sender} -> aha: MEMO report {'generated' if exit_code == 0 and reply.strip() else 'failed'}", flush=True)
+                    complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                     if worker_task_id:
-                        save_chat_offset(offset_file, item_offset)
                         mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                         return exit_code
                     if args.once:
-                        save_chat_offset(offset_file, item_offset)
                         return exit_code
                     continue
                 if exit_code == 0 and reply.strip():
@@ -1156,6 +1242,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         )
                         append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                         print(f"AHA requested {args.target} retry: invalid action schema ({schema_error})", flush=True)
+                        complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                         if worker_task_id:
                             finish_retry_turn(
                                 root,
@@ -1172,7 +1259,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             )
                             return exit_code
                         if args.once:
-                            save_chat_offset(offset_file, item_offset)
                             return exit_code
                         continue
                     git_after = _git_workspace_snapshot(workspace) if gate_model_family else None
@@ -1216,9 +1302,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             )
                         append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                         print(f"AHA blocked {args.target} normal completion: commit message policy violation", flush=True)
+                        complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                         if worker_task_id:
                             if commit_policy_retry_active:
-                                save_chat_offset(offset_file, item_offset)
                                 mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                             else:
                                 finish_retry_turn(
@@ -1236,7 +1322,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 )
                             return exit_code
                         if args.once:
-                            save_chat_offset(offset_file, item_offset)
                             return exit_code
                         continue
                     task_update_retry_active = item.get("coordination") == "task_update_required_retry"
@@ -1273,9 +1358,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             )
                         append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                         print(f"AHA blocked {args.target} normal completion: {reason}", flush=True)
+                        complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                         if worker_task_id:
                             if task_update_retry_active:
-                                save_chat_offset(offset_file, item_offset)
                                 mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                             else:
                                 finish_retry_turn(
@@ -1293,7 +1378,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 )
                             return exit_code
                         if args.once:
-                            save_chat_offset(offset_file, item_offset)
                             return exit_code
                         continue
                 if item_task_id and is_task_supervision_host_agent(task, agent_id):
@@ -1338,24 +1422,33 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         )
                     append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                     print(f"{args.sender} supervision decision: {action_response_text(reply)}", flush=True)
+                    complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                     if worker_task_id:
-                        save_chat_offset(offset_file, item_offset)
                         mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                         return exit_code
                     if args.once:
-                        save_chat_offset(offset_file, item_offset)
                         return exit_code
                     continue
                 supervision_routed_to_main = False
                 supervision_waiting_for_host = False
                 if exit_code == 0 and reply.strip():
-                    executed = execute_actions(
-                        root,
-                        run_id,
-                        item_task_id,
-                        reply,
-                        service_action_depth=int(item.get("service_action_depth") or 0),
-                    )
+                    if recovered_turn_result and (turn_checkpoint or {}).get("actions_applied"):
+                        cached_actions = (turn_checkpoint or {}).get("executed_actions")
+                        executed = list(cached_actions) if isinstance(cached_actions, list) else []
+                    else:
+                        executed = execute_actions(
+                            root,
+                            run_id,
+                            item_task_id,
+                            reply,
+                            service_action_depth=int(item.get("service_action_depth") or 0),
+                        )
+                        turn_checkpoint = save_chat_turn_actions(
+                            turn_checkpoint_file,
+                            item_offset,
+                            item,
+                            executed,
+                        ) or turn_checkpoint
                     if is_kb_command or is_nav_command:
                         display_source, sidecar_candidates, sidecar_error = split_knowledge_sidecar(reply)
                         if sidecar_error:
@@ -1395,7 +1488,13 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         "",
                     )
                     display_reply = "" if service_continuation else (action_user_response or action_response_text(display_source))
-                    if display_reply:
+                    if display_reply and not _chat_turn_reply_delivered(
+                        root,
+                        run_id,
+                        item_task_id,
+                        reply_target,
+                        turn_identity,
+                    ):
                         append_message(
                             root,
                             run_id,
@@ -1413,6 +1512,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             feishu_mention_open_id=str(item.get("feishu_mention_open_id") or "") or None,
                             feishu_channel=str(item.get("feishu_channel") or "") or None,
                             feishu_chat_type=str(item.get("feishu_chat_type") or "") or None,
+                            source_turn_identity=turn_identity,
                         )
                     delegating_actions = [action for action in executed if action.get("type") in {"route_to_agent", "spawn_sub"}]
                     main_followup_after_delegation = bool(
@@ -1652,12 +1752,11 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
                 if item_task_id and backend_name in {"codex", "claude"}:
                     auto_compact_agent_context_after_turn(root, run_id, item_task_id, agent_id)
+                complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                 if exit_after_message and worker_task_id:
-                    save_chat_offset(offset_file, item_offset)
                     mark_backend_stopped(root, run_id, args.target, task_id=worker_task_id, pid=os.getpid())
                     return exit_code
                 if args.once:
-                    save_chat_offset(offset_file, item_offset)
                     return exit_code
             if message_records:
                 offset = next_offset
@@ -1671,4 +1770,5 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     except KeyboardInterrupt:
         return 130
     finally:
+        release_chat_consumer(consumer_handle)
         _flush_channel_notifications(root, run_id)

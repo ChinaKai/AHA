@@ -146,6 +146,109 @@ class ChatPromptTests(unittest.TestCase):
                 self.assertTrue(scoped_offset.exists())
                 self.assertFalse(chat_offset_path(run_dir(root, run_id), "main", "task-002").exists())
 
+    def test_chat_turn_reuses_agent_result_after_crash_before_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover agent result", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+                append_message(root, run_id, "main", "new request", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "recovered reply", None)) as run_agent,
+                    mock.patch(
+                        "aha_cli.services.chat.execute_actions",
+                        side_effect=[RuntimeError("crash before reply"), []],
+                    ),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "crash before reply"):
+                        self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(run_agent.call_count, 1)
+        self.assertEqual([item["message"] for item in browser_messages], ["recovered reply"])
+        self.assertTrue(browser_messages[0].get("source_turn_identity"))
+
+    def test_chat_turn_dedupes_reply_after_crash_before_cursor_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Deduplicate recovered reply", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+                append_message(root, run_id, "main", "single delivery", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "one reply", None)) as run_agent,
+                    mock.patch("aha_cli.services.chat.execute_actions", return_value=[]) as execute_actions,
+                    mock.patch(
+                        "aha_cli.services.chat.distill_context_evidence_after_turn",
+                        side_effect=[RuntimeError("crash after reply"), None],
+                    ),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "crash after reply"):
+                        self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                stored_offset = read_json(offset_file)["offset"]
+                inbox_size = inbox.stat().st_size
+
+        self.assertEqual(code, 0)
+        self.assertEqual(run_agent.call_count, 1)
+        self.assertEqual(execute_actions.call_count, 1)
+        self.assertEqual([item["message"] for item in browser_messages], ["one reply"])
+        self.assertEqual(stored_offset, inbox_size)
+
+    def test_chat_turn_preserves_queue_order_across_second_message_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Ordered recovery", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+                append_message(root, run_id, "main", "first request", sender="browser", task_id="task-001", role="main")
+                append_message(root, run_id, "main", "second request", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch(
+                        "aha_cli.services.chat.run_codex_exec",
+                        side_effect=[(0, "first reply", None), (0, "second reply", None)],
+                    ) as run_agent,
+                    mock.patch(
+                        "aha_cli.services.chat.distill_context_evidence_after_turn",
+                        side_effect=[None, RuntimeError("second turn crash"), None],
+                    ),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "second turn crash"):
+                        self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                stored_offset = read_json(offset_file)["offset"]
+                inbox_size = inbox.stat().st_size
+
+        self.assertEqual(code, 0)
+        self.assertEqual(run_agent.call_count, 2)
+        self.assertEqual([item["message"] for item in browser_messages], ["first reply", "second reply"])
+        self.assertEqual(stored_offset, inbox_size)
+
     def test_task_scoped_codex_chat_flushes_notifications_before_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

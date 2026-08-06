@@ -221,6 +221,7 @@ def append_message(
     feishu_attachments: object | None = None,
     image: object | None = None,
     images: object | None = None,
+    source_turn_identity: str | None = None,
 ) -> dict:
     payload = {
         "ts": utc_now(),
@@ -295,6 +296,8 @@ def append_message(
         payload["image"] = image
     if images:
         payload["images"] = images
+    if source_turn_identity:
+        payload["source_turn_identity"] = str(source_turn_identity)
     append_jsonl(inbox_path(root, run_id, target), payload)
     if task_id:
         append_jsonl(run_dir(root, run_id) / "tasks" / task_id / "messages.jsonl", payload)

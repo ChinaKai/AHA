@@ -8,10 +8,16 @@ from unittest import mock
 
 from aha_cli.cli import main
 from aha_cli.services.chat_offsets import (
+    acquire_chat_consumer,
     chat_offset_path,
+    chat_turn_checkpoint_path,
+    finish_chat_turn,
     load_chat_offset,
+    load_chat_turn_checkpoint,
+    release_chat_consumer,
     safe_target_name,
     save_chat_offset,
+    save_chat_turn_result,
     worker_backend_should_exit_after_turn,
 )
 from aha_cli.store.filesystem import append_jsonl, read_json, set_task_status
@@ -58,6 +64,48 @@ class ChatOffsetTests(unittest.TestCase):
 
         self.assertEqual(payload["offset"], 42)
         self.assertIn("updated_at", payload)
+
+    def test_save_chat_offset_never_moves_backwards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            offset_file = Path(tmp) / "runtime" / "offset.json"
+
+            save_chat_offset(offset_file, 120)
+            save_chat_offset(offset_file, 40)
+
+            payload = read_json(offset_file)
+
+        self.assertEqual(payload["offset"], 120)
+
+    def test_chat_consumer_lock_rejects_a_second_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            first = acquire_chat_consumer(run, "main", "task-001")
+            try:
+                second = acquire_chat_consumer(run, "main", "task-001")
+                self.assertIsNotNone(first)
+                self.assertIsNone(second)
+            finally:
+                release_chat_consumer(first)
+
+            replacement = acquire_chat_consumer(run, "main", "task-001")
+            try:
+                self.assertIsNotNone(replacement)
+            finally:
+                release_chat_consumer(replacement)
+
+    def test_chat_turn_checkpoint_survives_until_finished(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = chat_turn_checkpoint_path(Path(tmp), "main", "task-001")
+            item = {"sender": "browser", "message": "fix sequencing", "task_id": "task-001"}
+
+            save_chat_turn_result(path, 88, item, exit_code=0, reply="done")
+            executed = load_chat_turn_checkpoint(path, 88, item)
+            finish_chat_turn(path, 88, item)
+            finished = load_chat_turn_checkpoint(path, 88, item)
+
+        self.assertEqual(executed["phase"], "executed")
+        self.assertEqual(executed["reply"], "done")
+        self.assertEqual(finished["phase"], "finished")
 
     def test_worker_backend_exit_waits_for_pending_work(self) -> None:
         root = Path("/tmp/root")

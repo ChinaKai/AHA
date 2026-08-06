@@ -79,9 +79,14 @@ Session metadata is durable. Backend process state is runtime-only:
 runs/<run-id>/runtime/backend-<task-id>-<agent-id>.json
 runs/<run-id>/runtime/backend-<task-id>-<agent-id>.lock
 runs/<run-id>/runtime/chat-offset-<task-id>-<agent-id>.json
+runs/<run-id>/runtime/chat-offset-<task-id>-<agent-id>.json.lock
+runs/<run-id>/runtime/chat-consumer-<task-id>-<agent-id>.lock
+runs/<run-id>/runtime/chat-turn-<task-id>-<agent-id>.json
 ```
 
 Runtime files contain child process pid, command, sandbox, approval, log path, and managed status. They are excluded from run exports because they are tied to one machine and one process tree.
+
+Chat workers use a task/agent consumer lock so only one process can consume that inbox scope. The cursor is monotonic. After a backend returns, the latest turn result is checkpointed before reply/action finalization; if the worker stops during finalization, its replacement reuses the checkpoint instead of sending the same user message to the backend again. Completed visible replies carry a turn identity for recovery-time deduplication.
 
 ## Managed Backend Launch
 

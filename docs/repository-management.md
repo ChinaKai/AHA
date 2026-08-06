@@ -55,8 +55,8 @@ Rules for store edits:
   session reset, handoff summaries, and explicit backend restart after startup
   setting changes.
 - `services/chat.py` owns backend chat turns and finalization handling.
-- `services/chat_offsets.py` owns chat inbox offset path/load/save helpers and
-  task-scoped worker exit checks.
+- `services/chat_offsets.py` owns chat inbox cursor persistence, single-consumer
+  locks, turn-result recovery checkpoints, and task-scoped worker exit checks.
 - `services/chat_prompt_context.py` owns chat prompt assembly, prompt status
   snapshots, event context filtering, and prompt metrics.
 - `services/chat_supervision.py` owns assisted supervision host prompts,
