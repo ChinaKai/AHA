@@ -179,7 +179,14 @@ def _send_owner_handoff_card(
         return {"ok": False, "sent": False, "error": str(exc)[:500]}
 
 
-def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, action: dict) -> dict:
+def prepare_feishu_group_handoff_action(
+    root: Path,
+    run_id: str,
+    task: dict,
+    action: dict,
+    *,
+    origin_message: dict | None = None,
+) -> dict:
     if not is_feishu_group_task(task):
         return {
             "type": FEISHU_GROUP_HANDOFF_ACTION,
@@ -187,7 +194,13 @@ def prepare_feishu_group_handoff_action(root: Path, run_id: str, task: dict, act
             "user_response": "当前 Task 不是飞书群聊数字人，不能执行数字人转管家操作。",
         }
     task_id = str(task.get("id") or "")
-    origin = _latest_group_request(root, run_id, task_id)
+    candidate = dict(origin_message or {})
+    origin = (
+        candidate
+        if str(candidate.get("task_id") or "") == task_id
+        and str(candidate.get("feishu_channel") or "") == "group_digital_human"
+        else _latest_group_request(root, run_id, task_id)
+    )
     if not origin:
         return {
             "type": FEISHU_GROUP_HANDOFF_ACTION,

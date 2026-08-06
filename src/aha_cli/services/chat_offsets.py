@@ -75,8 +75,53 @@ def load_chat_turn_checkpoint(path: Path, item_offset: int, item: dict) -> dict 
         return None
     if checkpoint.get("identity") != chat_turn_identity(item_offset, item):
         return None
-    if checkpoint.get("phase") not in {"executed", "finished"}:
+    if checkpoint.get("phase") not in {"prepared", "executed", "finished"}:
         return None
+    return checkpoint
+
+
+def load_prepared_chat_turn(path: Path, source_offset: int) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        checkpoint = read_json(path)
+    except (OSError, ValueError):
+        return None
+    item = checkpoint.get("item") if isinstance(checkpoint.get("item"), dict) else None
+    try:
+        prepared_source_offset = int(checkpoint.get("source_offset"))
+    except (TypeError, ValueError):
+        return None
+    if item is None or prepared_source_offset != max(0, int(source_offset)):
+        return None
+    try:
+        item_offset = max(0, int(checkpoint.get("item_offset") or 0))
+    except (TypeError, ValueError):
+        return None
+    if checkpoint.get("phase") not in {"prepared", "executed", "finished"}:
+        return None
+    if checkpoint.get("identity") != chat_turn_identity(item_offset, item):
+        return None
+    return checkpoint
+
+
+def save_chat_turn_preparation(
+    path: Path,
+    source_offset: int,
+    item_offset: int,
+    item: dict,
+) -> dict:
+    checkpoint = {
+        "version": 1,
+        "identity": chat_turn_identity(item_offset, item),
+        "source_offset": max(0, int(source_offset)),
+        "item_offset": max(0, int(item_offset)),
+        "item": json.loads(json.dumps(item, ensure_ascii=False, default=str)),
+        "phase": "prepared",
+        "prepared_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    write_json(path, checkpoint)
     return checkpoint
 
 
@@ -91,8 +136,21 @@ def save_chat_turn_result(
     prompt_event: dict | None = None,
     git_before: dict | None = None,
 ) -> dict:
+    prepared: dict = {}
+    if path.exists():
+        try:
+            candidate = read_json(path)
+        except (OSError, ValueError):
+            candidate = {}
+        if candidate.get("identity") == chat_turn_identity(item_offset, item):
+            prepared = {
+                key: candidate[key]
+                for key in ("source_offset", "item")
+                if key in candidate
+            }
     checkpoint = {
         "version": 1,
+        **prepared,
         "identity": chat_turn_identity(item_offset, item),
         "item_offset": max(0, int(item_offset)),
         "phase": "executed",
@@ -225,11 +283,13 @@ __all__ = [
     "complete_chat_turn",
     "finish_chat_turn",
     "load_chat_offset",
+    "load_prepared_chat_turn",
     "load_chat_turn_checkpoint",
     "release_chat_consumer",
     "safe_target_name",
     "save_chat_offset",
     "save_chat_turn_actions",
+    "save_chat_turn_preparation",
     "save_chat_turn_result",
     "worker_backend_should_exit_after_turn",
 ]

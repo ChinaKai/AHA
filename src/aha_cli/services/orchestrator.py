@@ -698,6 +698,7 @@ def execute_actions(
     text: str,
     *,
     service_action_depth: int = 0,
+    origin_message: dict | None = None,
 ) -> list[dict]:
     if not task_id:
         return []
@@ -795,7 +796,13 @@ def execute_actions(
             executed.append(result)
             continue
         if action_type == FEISHU_GROUP_HANDOFF_ACTION:
-            result = prepare_feishu_group_handoff_action(root, run_id, task, action)
+            result = prepare_feishu_group_handoff_action(
+                root,
+                run_id,
+                task,
+                action,
+                origin_message=origin_message,
+            )
             result["task_id"] = task_id
             append_event(
                 root,

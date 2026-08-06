@@ -249,6 +249,123 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual([item["message"] for item in browser_messages], ["first reply", "second reply"])
         self.assertEqual(stored_offset, inbox_size)
 
+    def test_feishu_group_backlog_merges_into_one_turn_and_replies_to_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Merge group backlog", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+                for index, text in enumerate(("first", "second", "third"), start=1):
+                    append_message(
+                        root,
+                        run_id,
+                        "main",
+                        f"wrapped {text}",
+                        sender="feishu",
+                        task_id="task-001",
+                        role="main",
+                        reply_target="feishu",
+                        feishu_chat_id="oc-group",
+                        feishu_reply_to=f"om-{index}",
+                        feishu_mention_open_id="ou-user",
+                        feishu_channel="group_digital_human",
+                        feishu_chat_type="group",
+                        feishu_message_id=f"om-{index}",
+                        feishu_session_key="tenant:feishu-group-user:ou-user",
+                        feishu_original_text=text,
+                    )
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "merged reply", None)) as run_agent:
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+                feishu_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "feishu"), 0)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(run_agent.call_count, 1)
+        prompt = run_agent.call_args.args[0]
+        self.assertIn("忙碌期间合并", prompt)
+        self.assertLess(prompt.index("first"), prompt.index("third"))
+        self.assertEqual(feishu_messages[-1]["message"], "merged reply")
+        self.assertEqual(feishu_messages[-1]["feishu_reply_to"], "om-3")
+        merged_events = [item for item in events if item.get("type") == "feishu_group_messages_coalesced"]
+        self.assertEqual(merged_events[-1]["data"]["merged_count"], 3)
+
+    def test_feishu_group_prepared_merge_does_not_absorb_new_message_after_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover group merge", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+
+                def append_group(text: str, index: int) -> None:
+                    append_message(
+                        root,
+                        run_id,
+                        "main",
+                        f"wrapped {text}",
+                        sender="feishu",
+                        task_id="task-001",
+                        role="main",
+                        reply_target="feishu",
+                        feishu_chat_id="oc-group",
+                        feishu_reply_to=f"om-{index}",
+                        feishu_mention_open_id="ou-user",
+                        feishu_channel="group_digital_human",
+                        feishu_chat_type="group",
+                        feishu_message_id=f"om-{index}",
+                        feishu_session_key="tenant:feishu-group-user:ou-user",
+                        feishu_original_text=text,
+                    )
+
+                for index, text in enumerate(("first", "second", "third"), start=1):
+                    append_group(text, index)
+
+                def crash_after_preparation(*_args: object, **_kwargs: object):
+                    append_group("fourth", 4)
+                    raise RuntimeError("crash after merge preparation")
+
+                with mock.patch("aha_cli.services.chat.chat_prompt_with_metrics", side_effect=crash_after_preparation):
+                    with self.assertRaisesRegex(RuntimeError, "crash after merge preparation"):
+                        self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+                from aha_cli.services import chat as chat_service
+
+                real_prompt_builder = chat_service.chat_prompt_with_metrics
+                consumed_items: list[dict] = []
+
+                def capture_item(*args: object, **kwargs: object):
+                    consumed_items.append(dict(args[3]))
+                    return real_prompt_builder(*args, **kwargs)
+
+                with (
+                    mock.patch("aha_cli.services.chat.chat_prompt_with_metrics", side_effect=capture_item),
+                    mock.patch(
+                        "aha_cli.services.chat.run_codex_exec",
+                        side_effect=[(0, "merged reply", None), (0, "fourth reply", None)],
+                    ) as run_agent,
+                ):
+                    first_code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+                    second_code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+        self.assertEqual(first_code, 0)
+        self.assertEqual(second_code, 0)
+        self.assertEqual(run_agent.call_count, 2)
+        self.assertEqual(consumed_items[0]["feishu_merged_count"], 3)
+        self.assertIn("third", consumed_items[0]["feishu_original_text"])
+        self.assertNotIn("fourth", consumed_items[0]["feishu_original_text"])
+        self.assertEqual(consumed_items[1]["feishu_original_text"], "fourth")
+
     def test_task_scoped_codex_chat_flushes_notifications_before_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

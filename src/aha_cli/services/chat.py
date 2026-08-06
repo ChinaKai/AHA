@@ -26,13 +26,16 @@ from aha_cli.services.chat_offsets import (
     chat_turn_identity,
     complete_chat_turn,
     load_chat_offset,
+    load_prepared_chat_turn,
     load_chat_turn_checkpoint,
     release_chat_consumer,
     save_chat_offset,
     save_chat_turn_actions,
+    save_chat_turn_preparation,
     save_chat_turn_result,
     worker_backend_should_exit_after_turn,
 )
+from aha_cli.services.chat_coalescing import next_task_message_batch
 from aha_cli.services.chat_prompt_context import (
     CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY,
     chat_prompt,
@@ -785,6 +788,43 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 monitor_task_coordination(root, run_id)
                 last_coordination_check = time.monotonic()
             message_records, next_offset = iter_jsonl_records_from(inbox, offset)
+            if worker_task_id:
+                turn_checkpoint_file = chat_turn_checkpoint_path(run, args.target, worker_task_id)
+                prepared_turn = load_prepared_chat_turn(turn_checkpoint_file, offset)
+                if prepared_turn is not None:
+                    prepared_item = dict(prepared_turn["item"])
+                    prepared_offset = int(prepared_turn["item_offset"])
+                    message_records = [(prepared_item, prepared_offset)]
+                    next_offset = prepared_offset
+                else:
+                    batch = next_task_message_batch(message_records, worker_task_id)
+                    if batch is not None:
+                        batch_item, batch_offset, batch_stats = batch
+                        message_records = [(batch_item, batch_offset)]
+                        next_offset = batch_offset
+                        if int(batch_stats.get("merged_count") or 0) > 1:
+                            save_chat_turn_preparation(
+                                turn_checkpoint_file,
+                                offset,
+                                batch_offset,
+                                batch_item,
+                            )
+                            append_event(
+                                root,
+                                run_id,
+                                "feishu_group_messages_coalesced",
+                                {
+                                    "target": args.target,
+                                    "task_id": worker_task_id,
+                                    "merged_count": int(batch_stats.get("merged_count") or 0),
+                                    "omitted_count": int(batch_stats.get("omitted_count") or 0),
+                                    "latest_truncated": bool(batch_stats.get("latest_truncated")),
+                                    "first_ts": str(batch_stats.get("first_ts") or ""),
+                                    "last_ts": str(batch_stats.get("last_ts") or ""),
+                                    "item_offset": batch_offset,
+                                    "turn_identity": chat_turn_identity(batch_offset, batch_item),
+                                },
+                            )
             for item, item_offset in message_records:
                 exit_after_message = False
                 item_task_id = str(item.get("task_id", "") or "") or None
@@ -961,6 +1001,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         "proxy_enabled": bool((agent or {}).get("proxy_enabled")),
                         "item_offset": item_offset,
                         "turn_identity": turn_identity,
+                        "merged_message_count": int(item.get("feishu_merged_count") or 1),
                     },
                 )
                 proxy_env = proxy_env_for_agent(agent or {}, task, plan, cfg)
@@ -980,6 +1021,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     prompt_metrics["prompt_ref_error"] = str(exc)
                 prompt_metrics["item_offset"] = item_offset
                 prompt_metrics["turn_identity"] = turn_identity
+                if item.get("feishu_merged_count"):
+                    prompt_metrics["merged_message_count"] = int(item.get("feishu_merged_count") or 1)
+                    prompt_metrics["merged_omitted_count"] = int(item.get("feishu_merged_omitted_count") or 0)
                 prompt_event = append_event(root, run_id, "agent_prompt_metrics", {"source": source_name, **prompt_metrics})
                 record_context_pack_from_prompt_metrics(
                     root,
@@ -1442,6 +1486,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             item_task_id,
                             reply,
                             service_action_depth=int(item.get("service_action_depth") or 0),
+                            origin_message=item,
                         )
                         turn_checkpoint = save_chat_turn_actions(
                             turn_checkpoint_file,

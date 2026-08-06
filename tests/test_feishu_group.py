@@ -241,7 +241,7 @@ class FeishuGroupTests(unittest.TestCase):
             run_id = ensure_feishu_group_run(root, {"backend": "stub"})
             session_key = "tenant-1:feishu-group-user:ou_requester"
             task = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
-            append_message(
+            origin = append_message(
                 root,
                 run_id,
                 "main",
@@ -258,6 +258,24 @@ class FeishuGroupTests(unittest.TestCase):
                 feishu_message_id="om_group",
                 feishu_session_key=session_key,
                 feishu_original_text="请帮我提交代码",
+            )
+            append_message(
+                root,
+                run_id,
+                "main",
+                "飞书群聊 @ 数字人请求\n\n当前 @ 消息：\n这是稍后到达的消息",
+                sender="feishu",
+                task_id=task["id"],
+                role="main",
+                feishu_channel="group_digital_human",
+                feishu_chat_id="oc_group",
+                feishu_reply_to="om_group_later",
+                feishu_mention_open_id="ou_requester",
+                feishu_tenant_key="tenant-1",
+                feishu_chat_type="group",
+                feishu_message_id="om_group_later",
+                feishu_session_key=session_key,
+                feishu_original_text="这是稍后到达的消息",
             )
             reply = json.dumps(
                 {
@@ -276,7 +294,7 @@ class FeishuGroupTests(unittest.TestCase):
                 ensure_ascii=False,
             )
 
-            executed = execute_actions(root, run_id, task["id"], reply)
+            executed = execute_actions(root, run_id, task["id"], reply, origin_message=origin)
             handoffs = json.loads(feishu_group_handoffs_path(root).read_text(encoding="utf-8"))["handoffs"]
             subscriptions = load_subscription_state(root)["subscriptions"]
 

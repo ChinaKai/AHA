@@ -13,10 +13,12 @@ from aha_cli.services.chat_offsets import (
     chat_turn_checkpoint_path,
     finish_chat_turn,
     load_chat_offset,
+    load_prepared_chat_turn,
     load_chat_turn_checkpoint,
     release_chat_consumer,
     safe_target_name,
     save_chat_offset,
+    save_chat_turn_preparation,
     save_chat_turn_result,
     worker_backend_should_exit_after_turn,
 )
@@ -106,6 +108,27 @@ class ChatOffsetTests(unittest.TestCase):
         self.assertEqual(executed["phase"], "executed")
         self.assertEqual(executed["reply"], "done")
         self.assertEqual(finished["phase"], "finished")
+
+    def test_prepared_chat_turn_preserves_merged_item_through_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = chat_turn_checkpoint_path(Path(tmp), "main", "task-001")
+            item = {
+                "sender": "feishu",
+                "message": "merged request",
+                "task_id": "task-001",
+                "feishu_merged_count": 3,
+            }
+
+            save_chat_turn_preparation(path, 0, 240, item)
+            prepared = load_prepared_chat_turn(path, 0)
+            save_chat_turn_result(path, 240, item, exit_code=0, reply="done")
+            executed = load_prepared_chat_turn(path, 0)
+
+        self.assertEqual(prepared["phase"], "prepared")
+        self.assertEqual(prepared["item"], item)
+        self.assertEqual(executed["phase"], "executed")
+        self.assertEqual(executed["source_offset"], 0)
+        self.assertEqual(executed["item"], item)
 
     def test_worker_backend_exit_waits_for_pending_work(self) -> None:
         root = Path("/tmp/root")
