@@ -19,6 +19,7 @@ from aha_cli.services.proxy import (
     apply_proxy_environment,
     backend_proxy_config,
     core_proxy_config,
+    default_backend_proxy_status,
     proxy_configured,
 )
 from aha_cli.services.token_usage import daily_token_usage_cached, start_daily_token_usage_refresh, stop_daily_token_usage_refresh
@@ -267,16 +268,9 @@ def _web_upgrade_check_command() -> list[str]:
 
 def _web_upgrade_proxy_status(root: Path) -> dict[str, bool]:
     try:
-        config = load_config(root)
-        proxy = core_proxy_config(config)
-        default_backend_proxy = backend_proxy_config(config, config.get("backend"))
+        return default_backend_proxy_status(load_config(root))
     except Exception:  # noqa: BLE001 - upgrade remains available when optional proxy config cannot be loaded.
         return {"proxy_configured": False, "proxy_enabled": False}
-    configured = proxy_configured(proxy)
-    return {
-        "proxy_configured": configured,
-        "proxy_enabled": bool(default_backend_proxy.get("enabled") and configured),
-    }
 
 
 def _web_upgrade_env(root: Path, proxy_enabled: bool | None = None) -> dict[str, str]:

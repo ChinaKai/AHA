@@ -6,6 +6,7 @@ from aha_cli.backends.registry import agent_backends
 from aha_cli.domain.workflow_templates import workflow_template_metadata
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.browser_runtime import list_named_browser_profiles
+from aha_cli.services.proxy import default_backend_proxy_status
 from aha_cli.services.task_skills import discover_task_skill_options
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import (
@@ -169,10 +170,13 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
     cfg = load_config(root)
     runs = public_run_summaries(root)
     selected_run_id = default_api_run_id(root, default_run_id, runs)
+    upgrade = web_upgrade_status()
+    if upgrade.get("action") == "upgrade":
+        upgrade = {**upgrade, **default_backend_proxy_status(cfg)}
     return {
         "aha_home": str(root),
         "aha_version": aha_version(root),
-        "web_upgrade": web_upgrade_status(),
+        "web_upgrade": upgrade,
         "initialized": config_path(root).exists(),
         "config": cfg,
         "config_backend_options": ["codex", "claude"],

@@ -86,7 +86,13 @@ function webUpgradeAvailable() {
 }
 
 function webUpgradeCapability() {
-  return bootstrapData?.web_upgrade || statusData?.web_upgrade || null;
+  const bootstrapCapability = bootstrapData?.web_upgrade;
+  const statusCapability = statusData?.web_upgrade;
+  if (!bootstrapCapability && !statusCapability) return null;
+  return {
+    ...(bootstrapCapability || {}),
+    ...(statusCapability || {})
+  };
 }
 
 function webUpgradeAction() {

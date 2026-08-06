@@ -407,7 +407,9 @@ clicks `Check version` to call `GET /api/web/upgrade/status`. Its per-upgrade
 `Use proxy` switch applies the shared Core proxy to both that version check
 and the confirmed install; turning it off strips inherited proxy environment
 variables for those subprocesses. Its initial state follows the default backend's
-proxy switch. A check-only
+proxy switch; `/api/bootstrap.web_upgrade` includes the local
+`proxy_configured` and `proxy_enabled` capability fields required to render
+that switch before any remote check. A check-only
 `aha service upgrade-user` subprocess downloads and validates the configured
 release without replacing the installed file, then reports the current and
 latest versions plus the runtime platform. Version ordering compares release

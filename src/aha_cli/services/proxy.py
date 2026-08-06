@@ -129,6 +129,17 @@ def backend_has_proxy_config(config: dict | None, backend: object = None, fallba
     return proxy_configured(backend_proxy_config(config, backend, fallback_run, fallback_task))
 
 
+def default_backend_proxy_status(config: dict | None) -> dict[str, bool]:
+    config = config or {}
+    shared_proxy = core_proxy_config(config)
+    configured = proxy_configured(shared_proxy)
+    selected_proxy = backend_proxy_config(config, config.get("backend"))
+    return {
+        "proxy_configured": configured,
+        "proxy_enabled": bool(selected_proxy.get("enabled") and configured),
+    }
+
+
 def agent_proxy_enabled(agent: dict, task: dict) -> bool:
     return bool(agent.get("proxy_enabled"))
 

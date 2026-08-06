@@ -113,6 +113,34 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(body["web_upgrade"]["action"], "publish")
         self.assertEqual(body["web_upgrade"]["mode"], "source")
 
+    def test_api_bootstrap_includes_upgrade_proxy_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "codex",
+                        "proxy": {
+                            "http_proxy": "http://shared.proxy:7890",
+                            "https_proxy": "http://shared.proxy:7890",
+                        },
+                        "codex": {"proxy": {"enabled": True}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "aha_cli.web.run_api.web_upgrade_status",
+                return_value={"available": True, "action": "upgrade", "mode": "current-onebin"},
+            ):
+                response = asyncio.run(fetch_ui_response(root, "", "/api/bootstrap"))
+            body = json_response_body(response)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertTrue(body["web_upgrade"]["proxy_configured"])
+        self.assertTrue(body["web_upgrade"]["proxy_enabled"])
+
     def test_api_bootstrap_includes_discovered_skill_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
