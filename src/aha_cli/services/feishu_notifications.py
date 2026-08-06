@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 import threading
 
@@ -51,6 +52,7 @@ TASK_CHAT_CONTROL_EXIT_CHOICE_ID = "exit"
 TASK_CHAT_CONTROL_STATUSES = {"awaiting_user", "completed", "failed", "blocked"}
 TASK_CHAT_MIRROR_LIMIT = 64
 TASK_CHAT_MIRROR_EVENT_WINDOW = 256
+TASK_CHAT_MIRROR_TURN_TTL_SECONDS = 120
 
 _state_lock = threading.RLock()
 
@@ -481,13 +483,24 @@ def _task_chat_mirror_source(event: dict) -> tuple[str, str] | None:
     return (agent, text) if text and not is_aha_action_envelope_text(text) else None
 
 
-def _task_chat_mirror_candidate(event: dict) -> tuple[str, str] | None:
+def _task_chat_mirror_candidate(event: dict) -> tuple[str, str, str] | None:
     if str(event.get("type") or "") != "message":
         return None
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     sender, _target = _message_route(data)
     text = _message_text(data)
-    return (sender, text) if sender and text else None
+    turn_identity = str(data.get("source_turn_identity") or "").strip()
+    return (sender, text, turn_identity) if sender and text else None
+
+
+def _task_chat_mirror_recorded_at(item: dict) -> float | None:
+    value = str(item.get("recorded_at") or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _remember_task_chat_mirror(subscription: dict, event: dict) -> None:
@@ -513,14 +526,19 @@ def _consume_task_chat_mirror(subscription: dict, event: dict) -> bool:
     pending = subscription.get("task_chat_pending_mirrors")
     if candidate is None or not isinstance(pending, list):
         return False
-    sender, text = candidate
+    sender, text, turn_identity = candidate
     current_event_id = _event_id_number(event)
+    current_time = datetime.fromisoformat(utc_now().replace("Z", "+00:00")).timestamp()
     mirrors = [item for item in pending if isinstance(item, dict)]
     match_index: int | None = None
     kept: list[dict] = []
     for item in mirrors:
         source_event_id = item.get("event_id") if isinstance(item.get("event_id"), int) else None
-        if (
+        recorded_at = _task_chat_mirror_recorded_at(item)
+        if turn_identity:
+            if recorded_at is None or current_time - recorded_at > TASK_CHAT_MIRROR_TURN_TTL_SECONDS:
+                continue
+        elif (
             current_event_id is not None
             and source_event_id is not None
             and current_event_id - source_event_id > TASK_CHAT_MIRROR_EVENT_WINDOW

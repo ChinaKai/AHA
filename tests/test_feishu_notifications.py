@@ -447,9 +447,15 @@ class FeishuNotificationTests(unittest.TestCase):
                 root,
                 run_id,
                 {
-                    "event_id": 61,
+                    "event_id": 1061,
                     "type": "message",
-                    "data": {"task_id": "task-001", "sender": "main", "target": "browser", "message": "final reply"},
+                    "data": {
+                        "task_id": "task-001",
+                        "sender": "main",
+                        "target": "browser",
+                        "message": "final reply",
+                        "source_turn_identity": "42:final-reply",
+                    },
                 },
             )
             action_envelope = notify_event(
@@ -481,6 +487,33 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertEqual(action_envelope["reason"], "ignored_event")
         self.assertEqual(private_sub_update["reason"], "ignored_event")
         send.assert_called_once_with(root, "oc-user", "final reply", card=None)
+
+    def test_task_chat_turn_mirror_does_not_match_expired_update(self) -> None:
+        subscription = {
+            "task_chat_pending_mirrors": [
+                {
+                    "agent": "main",
+                    "text": "same reply",
+                    "event_id": 60,
+                    "recorded_at": "2026-08-06T00:00:00+00:00",
+                }
+            ]
+        }
+        event = {
+            "event_id": 1061,
+            "type": "message",
+            "data": {
+                "sender": "main",
+                "message": "same reply",
+                "source_turn_identity": "43:same-reply",
+            },
+        }
+
+        with mock.patch("aha_cli.services.feishu_notifications.utc_now", return_value="2026-08-06T00:03:00+00:00"):
+            matched = feishu_notifications._consume_task_chat_mirror(subscription, event)
+
+        self.assertFalse(matched)
+        self.assertEqual(subscription["task_chat_pending_mirrors"], [])
 
     def test_task_chat_control_card_is_invalidated_by_running_and_recreated_afterwards(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
