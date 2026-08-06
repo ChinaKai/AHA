@@ -24,6 +24,7 @@ from aha_cli.services.chat_offsets import (
     chat_offset_path,
     chat_turn_checkpoint_path,
     chat_turn_identity,
+    chat_turn_result_recoverable,
     complete_chat_turn,
     load_chat_offset,
     load_prepared_chat_turn,
@@ -926,7 +927,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         },
                     )
                     continue
-                recovered_turn_result = bool(turn_checkpoint and turn_checkpoint.get("phase") == "executed")
                 session = ensure_session(
                     root,
                     run_id,
@@ -962,6 +962,26 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 claude_config = claude_config_for_model(claude_cfg, model) if backend_name == "claude" else None
                 command_model = claude_cli_model(model, claude_cfg) if backend_name == "claude" else codex_cli_model(codex_config, model) if backend_name == "codex" else model
                 resolved_model = claude_resolved_model(claude_config, model) if backend_name == "claude" else codex_resolved_model(codex_config, model) if backend_name == "codex" else resolve_model(backend_name, command_model)
+                checkpoint_model = configured_model or requested_model or model
+                recovered_turn_result = chat_turn_result_recoverable(turn_checkpoint, backend_name, checkpoint_model)
+                if turn_checkpoint and turn_checkpoint.get("phase") == "executed" and not recovered_turn_result:
+                    append_event(
+                        root,
+                        run_id,
+                        "agent_turn_result_recovery_skipped",
+                        {
+                            "source": source_name,
+                            "target": args.target,
+                            "task_id": item_task_id,
+                            "item_offset": item_offset,
+                            "turn_identity": turn_identity,
+                            "checkpoint_backend": turn_checkpoint.get("backend"),
+                            "checkpoint_model": turn_checkpoint.get("model"),
+                            "backend": backend_name,
+                            "model": checkpoint_model,
+                            "reason": "execution_config_changed",
+                        },
+                    )
                 session["requested_model"] = requested_model
                 session["resolved_model"] = resolved_model
                 session["model"] = resolved_model or command_model or model
@@ -1218,6 +1238,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         prompt_metrics=prompt_metrics,
                         prompt_event=prompt_event,
                         git_before=git_before,
+                        backend=backend_name,
+                        model=checkpoint_model,
                     )
                 if session:
                     if exit_code == 0:

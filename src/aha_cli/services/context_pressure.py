@@ -50,6 +50,7 @@ def context_window_for_model(
     runtime_context_window: int | None = None,
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
+    prefer_runtime_context_window: bool = False,
 ) -> tuple[int | None, str]:
     normalized_backend = str(backend or "").removesuffix("-chat").strip().lower()
     normalized_model = str(model or "").strip()
@@ -59,6 +60,10 @@ def context_window_for_model(
         normalized_model = "default"
     if not normalized_model:
         return None, "unknown"
+
+    from_runtime = _positive_int(runtime_context_window)
+    if prefer_runtime_context_window and from_runtime:
+        return from_runtime, "runtime"
 
     env = os.environ if environ is None else environ
     key = _env_key(normalized_backend, normalized_model)
@@ -70,16 +75,12 @@ def context_window_for_model(
     if from_config:
         return from_config, "config"
 
-    from_runtime = _positive_int(runtime_context_window)
     if from_runtime:
         return from_runtime, "runtime"
 
     from_table = DEFAULT_CONTEXT_WINDOWS.get((normalized_backend, normalized_model))
     if from_table:
         return from_table, "table"
-    from_default_table = DEFAULT_CONTEXT_WINDOWS.get((normalized_backend, "default"))
-    if from_default_table:
-        return from_default_table, "table:default"
     return None, "unknown"
 
 
@@ -92,6 +93,7 @@ def context_pressure(
     runtime_token_usage: Mapping[str, object] | None = None,
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
+    prefer_runtime_context_window: bool = False,
 ) -> dict:
     normalized_backend = str(backend or "").removesuffix("-chat").strip().lower() or None
     metrics = prompt_metrics or {}
@@ -117,6 +119,7 @@ def context_pressure(
         runtime_context_window=runtime_context_window,
         cfg=cfg,
         environ=environ,
+        prefer_runtime_context_window=prefer_runtime_context_window,
     )
     runtime_effective_input_tokens = runtime_input_tokens
     if normalized_backend == "claude" and runtime_input_tokens is not None:

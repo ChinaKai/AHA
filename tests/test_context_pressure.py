@@ -93,6 +93,22 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["prompt_estimate_percent"], 50.0)
         self.assertTrue(pressure["pressure_is_estimate"])
 
+    def test_runtime_context_window_can_be_authoritative(self) -> None:
+        pressure = context_pressure(
+            "claude-chat",
+            "gateway-model",
+            {"total": {"tokens": 500}},
+            runtime_context_window=300000,
+            runtime_token_usage={"input_tokens": 150000},
+            cfg={"context_windows": {"claude": {"gateway-model": 1000}}},
+            environ={"AHA_CONTEXT_WINDOW_CLAUDE_GATEWAY_MODEL": "2000"},
+            prefer_runtime_context_window=True,
+        )
+
+        self.assertEqual(pressure["context_window"], 300000)
+        self.assertEqual(pressure["context_window_source"], "runtime")
+        self.assertEqual(pressure["percent"], 50.0)
+
     def test_prompt_chars_without_tokens_keeps_pressure_unknown(self) -> None:
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"chars": 120000, "bytes": 130000}})
 
@@ -141,6 +157,12 @@ class ContextPressureTests(unittest.TestCase):
 
         self.assertEqual(window, 1_000_000)
         self.assertEqual(source, "table")
+
+    def test_claude_unknown_model_does_not_inherit_default_window(self) -> None:
+        window, source = context_window_for_model("claude", "gateway-model-without-limit", environ={})
+
+        self.assertIsNone(window)
+        self.assertEqual(source, "unknown")
 
     def test_unknown_context_window_keeps_pressure_unknown(self) -> None:
         pressure = context_pressure("unknown", None, {"total": {"tokens": 10}})

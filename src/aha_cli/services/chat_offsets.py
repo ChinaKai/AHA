@@ -80,6 +80,22 @@ def load_chat_turn_checkpoint(path: Path, item_offset: int, item: dict) -> dict 
     return checkpoint
 
 
+def chat_turn_result_recoverable(checkpoint: dict | None, backend: str, model: str | None = None) -> bool:
+    if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "executed":
+        return False
+    expected_backend = str(backend or "").removesuffix("-chat").strip().lower()
+    checkpoint_backend = str(checkpoint.get("backend") or "").removesuffix("-chat").strip().lower()
+    if not checkpoint_backend:
+        prompt_event = checkpoint.get("prompt_event") if isinstance(checkpoint.get("prompt_event"), dict) else {}
+        prompt_data = prompt_event.get("data") if isinstance(prompt_event.get("data"), dict) else {}
+        checkpoint_backend = str(prompt_data.get("source") or "").removesuffix("-chat").strip().lower()
+    if checkpoint_backend and checkpoint_backend != expected_backend:
+        return False
+    expected_model = str(model or "").strip()
+    checkpoint_model = str(checkpoint.get("model") or "").strip()
+    return not checkpoint_model or not expected_model or checkpoint_model == expected_model
+
+
 def load_prepared_chat_turn(path: Path, source_offset: int) -> dict | None:
     if not path.exists():
         return None
@@ -135,6 +151,8 @@ def save_chat_turn_result(
     prompt_metrics: dict | None = None,
     prompt_event: dict | None = None,
     git_before: dict | None = None,
+    backend: str | None = None,
+    model: str | None = None,
 ) -> dict:
     prepared: dict = {}
     if path.exists():
@@ -159,6 +177,8 @@ def save_chat_turn_result(
         "prompt_metrics": dict(prompt_metrics or {}),
         "prompt_event": dict(prompt_event or {}),
         "git_before": dict(git_before or {}),
+        **({"backend": str(backend).removesuffix("-chat")} if backend else {}),
+        **({"model": str(model)} if model else {}),
         "executed_at": utc_now(),
         "updated_at": utc_now(),
     }
@@ -280,6 +300,7 @@ __all__ = [
     "chat_offset_path",
     "chat_turn_checkpoint_path",
     "chat_turn_identity",
+    "chat_turn_result_recoverable",
     "complete_chat_turn",
     "finish_chat_turn",
     "load_chat_offset",

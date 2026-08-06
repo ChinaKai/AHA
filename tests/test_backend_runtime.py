@@ -569,14 +569,46 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["status"], "running")
         self.assertEqual(status["pid"], 4242)
 
-    def test_backend_status_reports_claude_context_pressure_from_latest_usage(self) -> None:
+    def test_backend_status_reports_claude_context_pressure_from_latest_unique_response(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
                 self.run_cli("init", "--portable", "--backend", "codex")
+                cfg_path = root / ".aha" / "config.json"
+                cfg = read_json(cfg_path)
+                cfg["claude"] = {
+                    "model": "env:test-gateway",
+                    "env": [
+                        {
+                            "name": "test-gateway",
+                            "ANTHROPIC_MODEL": "gateway-model",
+                            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "300000",
+                        }
+                    ],
+                }
+                cfg["context_windows"] = {"claude": {"gateway-model": 123456}}
+                write_json(cfg_path, cfg)
                 code, plan_output = self.run_cli("plan", "Claude context pressure", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                transcript = root / "claude-session.jsonl"
+                response_usage = {
+                    "input_tokens": 1000,
+                    "cache_read_input_tokens": 2000,
+                    "cache_creation_input_tokens": 3000,
+                    "output_tokens": 400,
+                }
+                rows = [
+                    {"type": "assistant", "message": {"id": "response-1", "model": "gateway-model", "usage": {"input_tokens": 10}}},
+                    {"type": "assistant", "message": {"id": "response-2", "model": "gateway-model", "usage": response_usage}},
+                    {"type": "assistant", "message": {"id": "response-2", "model": "gateway-model", "usage": response_usage}},
+                    {
+                        "type": "assistant",
+                        "is_api_error_message": True,
+                        "message": {"id": "synthetic-error", "model": "<synthetic>", "usage": {}},
+                    },
+                ]
+                transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
                 class FakeProcess:
                     pid = 4242
@@ -584,8 +616,25 @@ class BackendRuntimeTests(unittest.TestCase):
                 with (
                     mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
                     mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+                    mock.patch("aha_cli.services.backend_runtime._claude_session_jsonl_path", return_value=transcript),
                 ):
-                    start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001")
+                    start_backend(
+                        root / ".aha",
+                        run_id,
+                        "main",
+                        backend="claude",
+                        model="env:test-gateway",
+                        task_id="task-001",
+                    )
+                    write_json(
+                        session_path(root / ".aha", run_id, "task-001", "main"),
+                        {
+                            "backend_session_id": "claude-session",
+                            "backend": "claude",
+                            "requested_model": "env:test-gateway",
+                            "model": "gateway-model",
+                        },
+                    )
                     append_event(
                         root / ".aha",
                         run_id,
@@ -594,10 +643,8 @@ class BackendRuntimeTests(unittest.TestCase):
                             "task_id": "task-001",
                             "target": "main",
                             "usage": {
-                                "input_tokens": 1000,
-                                "cache_read_input_tokens": 2000,
-                                "cache_creation_input_tokens": 3000,
-                                "output_tokens": 400,
+                                "input_tokens": 999_000,
+                                "cache_read_input_tokens": 999_000,
                             },
                         },
                     )
@@ -618,12 +665,14 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["backend"], "claude-chat")
         self.assertEqual(status["runtime_context_usage"]["input_tokens"], 1000)
         self.assertEqual(status["runtime_context_usage"]["cache_read_input_tokens"], 2000)
+        self.assertEqual(status["latest_usage"]["input_tokens"], 999_000)
         self.assertEqual(status["context_pressure"]["backend"], "claude")
-        self.assertEqual(status["context_pressure"]["context_window"], 200_000)
+        self.assertEqual(status["context_pressure"]["context_window"], 300_000)
+        self.assertEqual(status["context_pressure"]["context_window_source"], "runtime")
         self.assertEqual(status["context_pressure"]["input_tokens"], 6000)
         self.assertEqual(status["context_pressure"]["runtime_effective_input_tokens"], 6000)
         self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.effective_input_tokens")
-        self.assertEqual(status["context_pressure"]["percent"], 3.0)
+        self.assertEqual(status["context_pressure"]["percent"], 2.0)
 
     def test_backend_status_scans_event_log_once_for_activity_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,7 +11,13 @@ import sys
 import time
 import zipfile
 
-from aha_cli.backends.claude import apply_claude_environment, claude_cli_model, claude_config_for_model, claude_resolved_model
+from aha_cli.backends.claude import (
+    apply_claude_environment,
+    claude_cli_model,
+    claude_config_env,
+    claude_config_for_model,
+    claude_resolved_model,
+)
 from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_model_selector, normalize_reasoning_effort, resolve_model
 from aha_cli.domain.models import utc_now
@@ -35,6 +41,7 @@ from aha_cli.store.filesystem import (
 
 BACKEND_ACTIVITY_SCAN_LIMIT = 5000
 CODEX_CONTEXT_WINDOW_SCAN_LIMIT = 1000
+CLAUDE_CONTEXT_WINDOW_SCAN_LIMIT = 5000
 CODEX_CONTEXT_DROP_MIN_PREVIOUS_PERCENT = 70.0
 CODEX_CONTEXT_DROP_MAX_CURRENT_PERCENT = 60.0
 CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT = 20.0
@@ -193,6 +200,39 @@ def _codex_session_jsonl_path(session_id: str) -> Path | None:
         return None
     candidates = list((Path.home() / ".codex" / "sessions").glob(f"**/*{safe_id}.jsonl"))
     return candidates[0] if candidates else None
+
+
+def _claude_session_jsonl_path(session_id: str) -> Path | None:
+    safe_id = str(session_id or "").strip()
+    if not safe_id:
+        return None
+    candidates = list((Path.home() / ".claude" / "projects").glob(f"*/*{safe_id}.jsonl"))
+    return candidates[0] if candidates else None
+
+
+def _claude_assistant_usage(record: dict) -> tuple[str, dict] | None:
+    if record.get("type") != "assistant" or record.get("is_api_error_message"):
+        return None
+    message = record.get("message") if isinstance(record.get("message"), dict) else {}
+    response_id = str(message.get("id") or "").strip()
+    usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+    if not response_id or str(message.get("model") or "").strip() == "<synthetic>":
+        return None
+    normalized = {
+        key: value
+        for key, value in {
+            "input_tokens": _positive_int(usage.get("input_tokens")),
+            "cache_read_input_tokens": _positive_int(usage.get("cache_read_input_tokens")),
+            "cache_creation_input_tokens": _positive_int(usage.get("cache_creation_input_tokens")),
+            "output_tokens": _positive_int(usage.get("output_tokens")),
+        }.items()
+        if value is not None
+    }
+    effective_input = sum(
+        int(normalized.get(key) or 0)
+        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    )
+    return (response_id, normalized) if effective_input > 0 else None
 
 
 def _codex_token_count_info(record: dict) -> dict:
@@ -364,6 +404,57 @@ def _codex_runtime_context(root: Path, run_id: str, target: str, task_id: str | 
     return {}
 
 
+def _claude_runtime_context(
+    root: Path,
+    run_id: str,
+    target: str,
+    task_id: str | None = None,
+    *,
+    state: dict | None = None,
+    cfg: dict | None = None,
+) -> dict:
+    session_file = session_path(root, run_id, task_id, target)
+    session: dict = {}
+    if session_file.exists():
+        try:
+            session = read_json(session_file)
+        except (OSError, ValueError):
+            session = {}
+
+    state = state if isinstance(state, dict) else {}
+    cfg = cfg if isinstance(cfg, dict) else load_config(root)
+    requested_model = state.get("requested_model")
+    if requested_model is None:
+        requested_model = session.get("requested_model") or session.get("model") or state.get("model")
+    claude_cfg = cfg.get("claude") if isinstance(cfg.get("claude"), dict) else {}
+    selected_config = claude_config_for_model(claude_cfg, requested_model)
+    selected_env = claude_config_env(selected_config)
+    context_window = _positive_int(selected_env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"))
+
+    path = _claude_session_jsonl_path(str(session.get("backend_session_id") or ""))
+    if not path:
+        return {"context_window": context_window, "last_token_usage": {}, "source": "runtime"}
+
+    scanned = 0
+    for _offset, record in iter_jsonl_reverse(path) or ():
+        scanned += 1
+        candidate = _claude_assistant_usage(record)
+        if candidate:
+            response_id, usage = candidate
+            # The transcript may repeat one response ID as its content streams.
+            # Reading in reverse and returning one snapshot prevents duplicates
+            # from being summed as though they were separate model requests.
+            return {
+                "context_window": context_window,
+                "last_token_usage": usage,
+                "response_id": response_id,
+                "source": "runtime",
+            }
+        if scanned >= CLAUDE_CONTEXT_WINDOW_SCAN_LIMIT:
+            break
+    return {"context_window": context_window, "last_token_usage": {}, "source": "runtime"}
+
+
 def _process_matches_task(parts: list[str], task_id: str | None) -> bool:
     if "--task-id" not in parts:
         return task_id is None
@@ -445,19 +536,23 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     resolved_model = state.get("resolved_model") or state.get("model")
     latest_usage = event_runtime["latest_usage"]
     latest_prompt_metrics = event_runtime["latest_prompt_metrics"]
-    runtime_context = (
-        _codex_runtime_context(root, run_id, target, task_id)
-        if str(backend_name).removesuffix("-chat") == "codex"
-        else {}
-    )
-    runtime_context_window = (
-        _positive_int(runtime_context.get("context_window"))
-        or _positive_int(latest_usage.get("context_window"))
-        or _positive_int(latest_usage.get("model_context_window"))
-    )
-    runtime_context_usage = runtime_context.get("last_token_usage") if isinstance(runtime_context.get("last_token_usage"), dict) else {}
+    cfg = load_config(root)
     normalized_backend_name = str(backend_name).removesuffix("-chat")
-    pressure_runtime_usage = runtime_context_usage or (latest_usage if normalized_backend_name == "claude" else {})
+    if normalized_backend_name == "codex":
+        runtime_context = _codex_runtime_context(root, run_id, target, task_id)
+    elif normalized_backend_name == "claude":
+        runtime_context = _claude_runtime_context(root, run_id, target, task_id, state=state, cfg=cfg)
+    else:
+        runtime_context = {}
+    runtime_context_window = _positive_int(runtime_context.get("context_window"))
+    if normalized_backend_name != "claude":
+        runtime_context_window = (
+            runtime_context_window
+            or _positive_int(latest_usage.get("context_window"))
+            or _positive_int(latest_usage.get("model_context_window"))
+        )
+    runtime_context_usage = runtime_context.get("last_token_usage") if isinstance(runtime_context.get("last_token_usage"), dict) else {}
+    pressure_runtime_usage = runtime_context_usage
     return {
         "target": target,
         "task_id": task_id,
@@ -484,7 +579,8 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
             latest_prompt_metrics,
             runtime_context_window=runtime_context_window,
             runtime_token_usage=pressure_runtime_usage,
-            cfg=load_config(root),
+            cfg=cfg,
+            prefer_runtime_context_window=normalized_backend_name == "claude" and runtime_context_window is not None,
         ),
         **activity,
     }

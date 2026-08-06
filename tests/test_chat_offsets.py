@@ -11,6 +11,7 @@ from aha_cli.services.chat_offsets import (
     acquire_chat_consumer,
     chat_offset_path,
     chat_turn_checkpoint_path,
+    chat_turn_result_recoverable,
     finish_chat_turn,
     load_chat_offset,
     load_prepared_chat_turn,
@@ -108,6 +109,33 @@ class ChatOffsetTests(unittest.TestCase):
         self.assertEqual(executed["phase"], "executed")
         self.assertEqual(executed["reply"], "done")
         self.assertEqual(finished["phase"], "finished")
+
+    def test_chat_turn_result_is_not_recovered_after_backend_or_model_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = chat_turn_checkpoint_path(Path(tmp), "main", "task-001")
+            item = {"sender": "browser", "message": "continue", "task_id": "task-001"}
+
+            save_chat_turn_result(
+                path,
+                88,
+                item,
+                exit_code=1,
+                reply="old failure",
+                backend="claude",
+                model="env:gateway-a",
+            )
+            checkpoint = load_chat_turn_checkpoint(path, 88, item)
+
+        self.assertTrue(chat_turn_result_recoverable(checkpoint, "claude", "env:gateway-a"))
+        self.assertFalse(chat_turn_result_recoverable(checkpoint, "codex", "gpt-5.6-sol"))
+        self.assertFalse(chat_turn_result_recoverable(checkpoint, "claude", "env:gateway-b"))
+
+        legacy_checkpoint = dict(checkpoint or {})
+        legacy_checkpoint.pop("backend", None)
+        legacy_checkpoint.pop("model", None)
+        legacy_checkpoint["prompt_event"] = {"data": {"source": "claude-chat"}}
+        self.assertTrue(chat_turn_result_recoverable(legacy_checkpoint, "claude"))
+        self.assertFalse(chat_turn_result_recoverable(legacy_checkpoint, "codex"))
 
     def test_prepared_chat_turn_preserves_merged_item_through_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
