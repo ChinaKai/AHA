@@ -1731,6 +1731,69 @@ class ChatPromptTests(unittest.TestCase):
         self.assertNotIn("Re-audit the root cause", codex_prompt)
         self.assertNotIn("model_guidance", codex_metrics["components"])
 
+    def test_claude_public_update_protocol_is_delivered_once_per_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "claude")
+                code, plan_output = self.run_cli("plan", "Claude public updates", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "legacy-claude-session"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                item = {
+                    "sender": "browser",
+                    "message": "work in stages",
+                    "task_id": "task-001",
+                    "role": "main",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                    "plain_sticky": True,
+                }
+
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "", backend="claude")
+                self.assertIn("Claude public update protocol:", prompt)
+                self.assertIn("ordinary assistant `text` block", prompt)
+                self.assertIn("claude_public_updates", metrics["context_fingerprint_updates"])
+                self.assertIn("claude_public_update_context", metrics["components"])
+                command_prompt, command_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {**item, "message": "status", "command_namespace": "agent", "original_command": "/agent status"},
+                    "",
+                    backend="claude",
+                )
+                self.assertIn("Claude public update protocol:", command_prompt)
+                self.assertIn("claude_public_update_context", command_metrics["components"])
+
+                session = read_json(session_file)
+                session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                next_prompt, next_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {**item, "message": "continue"},
+                    "",
+                    backend="claude",
+                )
+                codex_prompt, codex_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {**item, "message": "codex continue"},
+                    "",
+                    backend="codex",
+                )
+
+        self.assertEqual(next_prompt, "continue")
+        self.assertEqual(next_metrics["prompt_mode"], "sticky_delta")
+        self.assertNotIn("claude_public_update_context", next_metrics["components"])
+        self.assertEqual(codex_prompt, "codex continue")
+        self.assertNotIn("claude_public_updates", codex_metrics.get("context_fingerprint_updates", {}))
+
     def test_minimax_sticky_delta_passes_plain_user_message_like_other_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1741,7 +1804,22 @@ class ChatPromptTests(unittest.TestCase):
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
+                _, initial_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "initial request",
+                        "task_id": "task-001",
+                        "role": "main",
+                        "ts": "2026-01-01T00:00:00+00:00",
+                    },
+                    "",
+                    backend="claude",
+                )
                 session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = initial_metrics["context_fingerprint_updates"]
                 session_file.write_text(json.dumps(session), encoding="utf-8")
 
                 prompt, metrics = chat_prompt_with_metrics(

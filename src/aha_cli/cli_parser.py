@@ -373,7 +373,10 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     send_p.add_argument("run_id")
     send_p.add_argument("target")
     send_p.add_argument("message", nargs="+")
-    send_p.add_argument("--sender", default="main")
+    send_p.add_argument("--sender")
+    send_scope = send_p.add_mutually_exclusive_group()
+    send_scope.add_argument("--task-id", help="Bind the message to a task (defaults to AHA_TASK_ID in managed backends)")
+    send_scope.add_argument("--run-level", action="store_true", help="Send a run-level message even when AHA_TASK_ID is set")
     send_p.set_defaults(func=handlers["send"])
 
     hardware_io_p = sub.add_parser("hardware-io", help="Append a task hardware I/O timeline entry")

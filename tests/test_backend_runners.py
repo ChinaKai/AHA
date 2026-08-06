@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import textwrap
+import threading
 import unittest
 from unittest import mock
 
@@ -701,6 +702,162 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(output_text, reply)
         self.assertEqual(rows[-1]["type"], "agent_error")
         self.assertEqual(rows[-1]["data"]["reason"], "backend_start_failed")
+
+    def test_codex_exec_finishes_after_native_completion_when_stdout_stays_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+            events = Path(tmp) / "events.jsonl"
+            completion = json.dumps({"type": "turn.completed", "usage": {"output_tokens": 1}}) + "\n"
+
+            class BlockingStdout:
+                def __init__(self) -> None:
+                    self.sent = False
+                    self.release = threading.Event()
+
+                def __iter__(self) -> "BlockingStdout":
+                    return self
+
+                def __next__(self) -> str:
+                    if not self.sent:
+                        self.sent = True
+                        return completion
+                    self.release.wait(5)
+                    raise StopIteration
+
+            class FakeProcess:
+                pid = 1234
+
+                def __init__(self) -> None:
+                    self.stdin = io.StringIO()
+                    self.stdout = BlockingStdout()
+
+                def poll(self) -> int:
+                    return 0
+
+                def terminate(self) -> None:
+                    raise AssertionError("an exited backend parent must not terminate its detached child")
+
+            process = FakeProcess()
+
+            with mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=process):
+                code, reply, _ = run_codex_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="codex-chat",
+                    target="main",
+                    completion_grace_seconds=0.01,
+                )
+            process.stdout.release.set()
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        self.assertEqual([row["type"] for row in rows], ["agent_usage", "backend_completion_grace_exceeded"])
+        self.assertEqual(rows[-1]["data"]["backend"], "codex")
+        self.assertEqual(rows[-1]["data"]["process_exit_code"], 0)
+
+    def test_claude_exec_finishes_after_native_completion_when_stdout_stays_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            events = Path(tmp) / "events.jsonl"
+            completion = json.dumps({"type": "result", "result": "done", "usage": {"output_tokens": 1}}) + "\n"
+
+            class BlockingStdout:
+                def __init__(self) -> None:
+                    self.sent = False
+                    self.release = threading.Event()
+
+                def __iter__(self) -> "BlockingStdout":
+                    return self
+
+                def __next__(self) -> str:
+                    if not self.sent:
+                        self.sent = True
+                        return completion
+                    self.release.wait(5)
+                    raise StopIteration
+
+            class FakeProcess:
+                pid = 5678
+
+                def __init__(self) -> None:
+                    self.stdin = io.StringIO()
+                    self.stdout = BlockingStdout()
+
+            process = FakeProcess()
+
+            def terminate(_process) -> int:
+                process.stdout.release.set()
+                return 137
+
+            with (
+                mock.patch("aha_cli.backends.claude.subprocess.Popen", return_value=process),
+                mock.patch("aha_cli.backends.process_stream._finish_completed_backend_process", side_effect=terminate) as cleanup,
+            ):
+                code, reply, _ = run_claude_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="claude-chat",
+                    target="main",
+                    completion_grace_seconds=0.01,
+                )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        cleanup.assert_called_once_with(process)
+        self.assertEqual([row["type"] for row in rows], ["agent_usage", "backend_completion_grace_exceeded"])
+        self.assertEqual(rows[-1]["data"]["backend"], "claude")
+        self.assertEqual(rows[-1]["data"]["process_exit_code"], 137)
+
+    def test_backend_completion_with_normal_eof_does_not_force_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("done", encoding="utf-8")
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO(json.dumps({"type": "turn.completed", "usage": {}}) + "\n")
+
+                def wait(self) -> int:
+                    return 0
+
+            with (
+                mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()),
+                mock.patch("aha_cli.backends.process_stream._finish_completed_backend_process") as cleanup,
+            ):
+                code, reply, _ = run_codex_exec("hello", cwd=Path(tmp), output_file=output)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "done")
+        cleanup.assert_not_called()
+
+    def test_backend_without_completion_preserves_nonzero_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            output.write_text("backend failed", encoding="utf-8")
+
+            class FakeProcess:
+                stdin = io.StringIO()
+                stdout = io.StringIO(json.dumps({"type": "error", "message": "failed"}) + "\n")
+
+                def wait(self) -> int:
+                    return 9
+
+            with mock.patch("aha_cli.backends.codex.subprocess.Popen", return_value=FakeProcess()):
+                code, reply, _ = run_codex_exec("hello", cwd=Path(tmp), output_file=output)
+
+        self.assertEqual(code, 9)
+        self.assertEqual(reply, "backend failed")
 
     def test_claude_permission_mode_maps_sandbox(self) -> None:
         self.assertEqual(claude_permission_mode("research", "read-only"), "plan")

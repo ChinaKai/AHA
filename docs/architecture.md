@@ -172,6 +172,24 @@ In a one-bin zipapp it launches the current one-bin artifact instead, so a packa
 
 Codex and Claude use the same AHA task/session model. Their Model selectors can point at an official model or at a custom env group. Env-group selections are stored as `env:<group-name>`. Codex env groups target OpenAI-compatible Responses providers: AHA passes the selected group's `OPENAI_MODEL` to Codex, adds a temporary Codex `model_provider` override for `OPENAI_BASE_URL`, and uses `CODEX_WIRE_API=responses` plus `CODEX_ENV_KEY` for provider-specific authentication. Chat Completions-only endpoints are not supported by current Codex CLI provider config. Claude env groups inject `ANTHROPIC_*` / `CLAUDE_*` values and launch Claude without a CLI `--model` argument, so `ANTHROPIC_MODEL` is the effective model. Secrets must not be written to task journals, exported documentation, or user-visible logs.
 
+Claude's streamed `assistant.text` blocks are public task-scoped Agent updates;
+`thinking` stays private and `tool_use/tool_result` remain command activity.
+The prompt context asks Claude to emit concise text blocks between work stages,
+and a managed backend's `aha send` fallback inherits `AHA_TASK_ID` and
+`AHA_AGENT_ID` so explicitly emitted messages cannot silently fall out of the
+Task filter.
+
+Both backend runners treat Codex `turn.completed` and Claude `result` as trusted
+native turn boundaries. After that boundary, stdout receives a short grace
+period to close. If an agent-started long-running descendant inherited the
+backend pipe and prevents EOF, AHA records `backend_completion_grace_exceeded`
+and completes the logical turn instead of leaving the Task permanently
+`running`. AHA stops only a still-running backend parent; it does not tree-kill
+an already detached server. No timeout applies before the native completion
+event, so active commands and model work retain their existing lifecycle.
+Persistent servers, watchers, tunnels, and monitors should still be owned by an
+AHA runtime or an external service host rather than by an individual agent turn.
+
 Changing a task `main`, `sub-*`, or assisted-supervision `host` backend or model is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend/model, appends a handoff message for the new backend, and restarts the new backend when the old one was active. The supervision policy stores the host's selected `host_model`, so a Codex/Claude host does not have to inherit the task-main model. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
 
 ## Distribution And Portability

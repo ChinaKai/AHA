@@ -951,6 +951,49 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn("Observe agents", watch_output)
                 self.assertIn("message main -> task-001: hello agent", watch_output)
 
+    def test_send_inherits_managed_backend_task_scope_and_sender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            aha_root = workspace / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("init", "--portable")
+                code, plan_output = self.run_cli("plan", "Scoped backend send", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                backend_env = {"AHA_TASK_ID": "task-001", "AHA_AGENT_ID": "main"}
+                with mock.patch.dict(os.environ, backend_env, clear=False):
+                    code, output = self.run_cli(
+                        "send",
+                        run_id,
+                        "browser",
+                        "first update",
+                        allow_aha_keys=set(backend_env),
+                    )
+                    self.assertEqual(code, 0)
+                    payload = json.loads(output)
+                    self.assertEqual(payload["task_id"], "task-001")
+                    self.assertEqual(payload["sender"], "main")
+
+                    code, output = self.run_cli(
+                        "send",
+                        run_id,
+                        "browser",
+                        "global notice",
+                        "--run-level",
+                        allow_aha_keys=set(backend_env),
+                    )
+                    self.assertEqual(code, 0)
+                    self.assertNotIn("task_id", json.loads(output))
+
+                messages = [
+                    row
+                    for row in iter_jsonl_from(event_path(aha_root, run_id), 0)[0]
+                    if row.get("type") == "message" and row.get("data", {}).get("message") == "first update"
+                ]
+                self.assertEqual(len(messages), 1)
+                self.assertEqual(messages[0]["data"]["task_id"], "task-001")
+
     def test_hardware_io_command_records_timeline_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -16,6 +16,7 @@ from aha_cli.backends.codex import (
     tail_text,
 )
 from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort
+from aha_cli.backends.process_stream import BACKEND_COMPLETION_GRACE_SECONDS, consume_process_output
 from aha_cli.platform import hidden_subprocess_kwargs, spawn_command
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
@@ -330,6 +331,14 @@ def handle_claude_event(
     return result
 
 
+def _claude_raw_type(line: str) -> str | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return str(event.get("type")) if isinstance(event, dict) and event.get("type") else None
+
+
 def run_claude_exec(
     prompt: str,
     *,
@@ -350,6 +359,7 @@ def run_claude_exec(
     reasoning_effort: str | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
     start_new_session: bool = False,
+    completion_grace_seconds: float = BACKEND_COMPLETION_GRACE_SECONDS,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     session_id = session.get("backend_session_id") if session else None
@@ -425,7 +435,8 @@ def run_claude_exec(
 
     assistant_texts: list[str] = []
     result_text = ""
-    for raw_line in process.stdout:
+    def handle_line(raw_line: str) -> None:
+        nonlocal result_text
         print(raw_line, end="", flush=True)
         parsed = handle_claude_event(
             raw_line.strip(),
@@ -442,10 +453,32 @@ def run_claude_exec(
         assistant_texts.extend(parsed.get("assistant_texts", []))
         if parsed.get("result_text"):
             result_text = str(parsed["result_text"])
-    exit_code = process.wait()
+
+    stream_result = consume_process_output(
+        process,
+        handle_line=handle_line,
+        is_completion_line=lambda line: _claude_raw_type(line) == "result",
+        completion_grace_seconds=completion_grace_seconds,
+    )
+    if stream_result.completion_grace_exceeded:
+        append_event_to_file(
+            events_file,
+            run_id,
+            "backend_completion_grace_exceeded",
+            {
+                "source": source,
+                "task_id": task_id,
+                "target": target,
+                "backend": "claude",
+                "pid": getattr(process, "pid", None),
+                "grace_seconds": completion_grace_seconds,
+                "process_exit_code": stream_result.process_exit_code,
+                "reason": "native_completion_without_stdout_eof",
+            },
+        )
     final_text = result_text or "\n".join(text for text in assistant_texts if text).strip()
     output_file.write_text(final_text, encoding="utf-8")
-    return exit_code, final_text, session
+    return stream_result.exit_code, final_text, session
 
 
 def build_claude_exec_command(

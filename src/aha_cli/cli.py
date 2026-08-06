@@ -1036,7 +1036,13 @@ def cmd_send(args: argparse.Namespace) -> int:
     message = " ".join(args.message).strip()
     if not message:
         raise SystemExit("Message cannot be empty")
-    payload = append_message(root, run_id, args.target, message, sender=args.sender)
+    task_id = None
+    if not args.run_level:
+        task_id = str(args.task_id or "").strip() or os.environ.get("AHA_TASK_ID", "").strip() or None
+    sender = str(args.sender or "").strip() or os.environ.get("AHA_AGENT_ID", "").strip() or "main"
+    if task_id:
+        task_snapshot(root, run_id, task_id)
+    payload = append_message(root, run_id, args.target, message, sender=sender, task_id=task_id)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 

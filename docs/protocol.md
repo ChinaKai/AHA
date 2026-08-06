@@ -62,8 +62,17 @@ backend_started
 backend_session_reset
 backend_start_failed
 backend_stopped
+backend_completion_grace_exceeded
 run_imported
 ```
+
+`backend_completion_grace_exceeded` means the backend emitted its trusted
+native completion record (`turn.completed` for Codex or `result` for Claude),
+but stdout did not reach EOF during the completion grace period. Its data
+includes `backend`, `pid`, `grace_seconds`, `process_exit_code`, and the reason
+`native_completion_without_stdout_eof`. The logical turn remains successful;
+the event is a diagnostic for an inherited long-running child or pipe handle.
+Before a native completion record, AHA does not apply this timeout.
 
 ## Web Upgrade
 
@@ -114,6 +123,18 @@ Task-scoped messages are also mirrored to:
 ```text
 .aha/runs/<run-id>/tasks/<task-id>/messages.jsonl
 ```
+
+`aha send <run-id> <target> <message>` remains Run-scoped for ordinary shell
+use. When it runs inside a managed backend, it inherits `AHA_TASK_ID` and
+`AHA_AGENT_ID`, so an agent's explicit public message stays attached to the
+current Task. Use `--task-id <task-id>` to bind explicitly or `--run-level` to
+override the inherited Task scope.
+
+Claude public progress uses ordinary streamed `assistant.text` blocks. AHA
+maps every block to a task-scoped `agent_message`; Claude `thinking` remains
+private and tool calls remain command events. AHA injects this protocol once
+per Claude backend session, including existing sticky sessions after an
+upgrade, and records delivery through the session context fingerprints.
 
 Special fields used by AHA control flows:
 

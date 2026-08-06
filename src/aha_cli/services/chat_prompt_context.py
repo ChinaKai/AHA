@@ -70,6 +70,7 @@ PROMPT_CONVERSATION_SCAN_LIMIT = 200
 PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT = 700
 PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT = 240
 PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
+CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY = "claude_public_updates"
 COMMIT_POLICY_INTENT_TERMS = (
     "commit",
     "git commit",
@@ -613,7 +614,20 @@ def _context_pack_payload_for_prompt(root: Path, run_id: str, task: dict | None,
     return context_pack_payload_for_turn(root, run_id, task, item.get("message"))
 
 
-def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, include_attachment_output: bool = True) -> dict[str, str]:
+def _claude_public_update_context(backend: str | None) -> str:
+    if str(backend or "").strip().lower() != "claude":
+        return ""
+    return render_prompt_template("backend_claude_public_updates.md").rstrip()
+
+
+def _prompt_context_fingerprints(
+    root: Path,
+    run_id: str,
+    task: dict | None,
+    *,
+    backend: str | None = None,
+    include_attachment_output: bool = True,
+) -> dict[str, str]:
     if not task:
         return {}
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
@@ -629,6 +643,9 @@ def _prompt_context_fingerprints(root: Path, run_id: str, task: dict | None, *, 
     }
     if include_attachment_output:
         fingerprints["attachment_output_guidance"] = _context_fingerprint(_attachment_output_guidance_for_prompt(root, run_id))
+    claude_public_updates = _claude_public_update_context(backend)
+    if claude_public_updates:
+        fingerprints[CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY] = _context_fingerprint(claude_public_updates)
     return fingerprints
 
 
@@ -687,6 +704,11 @@ def _sticky_context_delta_for_prompt(
         and delivered.get("attachment_output_guidance") != current_fingerprints.get("attachment_output_guidance")
     ):
         sections.append(_attachment_output_guidance_for_prompt(root, run_id))
+    if (
+        current_fingerprints.get(CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY)
+        and delivered.get(CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY) != current_fingerprints.get(CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY)
+    ):
+        sections.append(_claude_public_update_context("claude"))
     if not sections:
         return ""
     return render_prompt_template(
@@ -1159,6 +1181,7 @@ def chat_prompt(
     resolved_model: str | None = None,
 ) -> str:
     plan = require_plan(root, run_id)
+    claude_public_update_context = _claude_public_update_context(backend)
     task_id = item.get("task_id")
     result_policy = item.get("result_policy")
     is_finalization = result_policy == "finalize"
@@ -1213,6 +1236,7 @@ def chat_prompt(
                     root,
                     run_id,
                     detail["task"],
+                    backend=backend,
                     include_attachment_output=_prompt_needs_attachment_output_guidance(item, sticky_delta=sticky_delta),
                 )
                 if not is_agent_command:
@@ -1228,6 +1252,14 @@ def chat_prompt(
                         else:
                             context_pack_evidence = {key: value for key, value in context_pack_payload.items() if key != "text"}
                             components["context_pack"] = context_pack
+            delivered_fingerprints = _delivered_context_fingerprints(session)
+            claude_public_update_pending = bool(
+                context_fingerprint_updates.get(CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY)
+                and delivered_fingerprints.get(CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY)
+                != context_fingerprint_updates.get(CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY)
+            )
+            if claude_public_update_pending:
+                components["claude_public_update_context"] = claude_public_update_context
             if (
                 sticky_delta
                 and item.get("plain_sticky")
@@ -1235,6 +1267,7 @@ def chat_prompt(
                 and not input_image_guidance
                 and not context_pack
                 and not components["request_policy"]
+                and not claude_public_update_pending
             ):
                 prompt = str(item.get("message") or "")
                 _fill_prompt_metrics(
@@ -1272,9 +1305,12 @@ def chat_prompt(
                         "agent_metadata": agent_metadata,
                     }
                 )
+                command_prefix = prefix
+                if claude_public_update_pending:
+                    command_prefix = f"{prefix.rstrip()}\n\n{claude_public_update_context}".strip()
                 prompt = render_prompt_template(
                     "backend_agent_command.md",
-                    prefix=prefix,
+                    prefix=command_prefix,
                     target=target,
                     original_command=original_command or command,
                     command=command,
@@ -1425,6 +1461,8 @@ def chat_prompt(
                     coordination_policy=coordination_policy,
                     commit_policy=commit_policy,
                 )
+            if claude_public_update_context and not sticky_delta and not is_result_request:
+                task_context = f"{task_context.rstrip()}\n\n{claude_public_update_context}\n"
             if context_pack and not sticky_delta and not is_result_request:
                 task_context = f"{task_context.rstrip()}\n\n{context_pack}\n"
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):

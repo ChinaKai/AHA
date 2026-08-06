@@ -12,6 +12,7 @@ import sys
 
 from aha_cli.backends.registry import normalize_model_selector, normalize_reasoning_effort, resolve_model
 from aha_cli.backends.codex_litellm_bridge import start_litellm_responses_bridge
+from aha_cli.backends.process_stream import BACKEND_COMPLETION_GRACE_SECONDS, consume_process_output
 from aha_cli.domain.models import utc_now
 from aha_cli.platform import hidden_subprocess_kwargs, spawn_command
 from aha_cli.services.backend_paths import add_user_backend_paths
@@ -606,6 +607,14 @@ def codex_callback_events(line: str) -> list[tuple[str, dict]]:
     return events
 
 
+def _codex_raw_type(line: str) -> str | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return str(event.get("type")) if isinstance(event, dict) and event.get("type") else None
+
+
 def run_codex_exec(
     prompt: str,
     *,
@@ -628,6 +637,7 @@ def run_codex_exec(
     reasoning_effort: str | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
     start_new_session: bool = False,
+    completion_grace_seconds: float = BACKEND_COMPLETION_GRACE_SECONDS,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     requested_model = session.get("requested_model") if session is not None and "requested_model" in session else model
@@ -700,7 +710,7 @@ def run_codex_exec(
             process.stdin.close()
         except BrokenPipeError:
             pass
-        for raw_line in process.stdout:
+        def handle_line(raw_line: str) -> None:
             print(raw_line, end="", flush=True)
             line = raw_line.strip()
             handle_codex_event(
@@ -715,9 +725,31 @@ def run_codex_exec(
             if event_callback:
                 for event_type, event_data in codex_callback_events(line):
                     event_callback(event_type, event_data)
-        exit_code = process.wait()
+
+        stream_result = consume_process_output(
+            process,
+            handle_line=handle_line,
+            is_completion_line=lambda line: _codex_raw_type(line) == "turn.completed",
+            completion_grace_seconds=completion_grace_seconds,
+        )
+        if stream_result.completion_grace_exceeded:
+            append_event_to_file(
+                events_file,
+                run_id,
+                "backend_completion_grace_exceeded",
+                {
+                    "source": source,
+                    "task_id": task_id,
+                    "target": target,
+                    "backend": "codex",
+                    "pid": getattr(process, "pid", None),
+                    "grace_seconds": completion_grace_seconds,
+                    "process_exit_code": stream_result.process_exit_code,
+                    "reason": "native_completion_without_stdout_eof",
+                },
+            )
         final_text = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
-        return exit_code, final_text, session
+        return stream_result.exit_code, final_text, session
     except OSError as exc:
         exit_code = 127 if isinstance(exc, FileNotFoundError) else 1
         binary = exc.filename or codex_bin
