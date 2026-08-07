@@ -375,6 +375,110 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_claude_gateway_groups_render_simple_fields_and_derive_runtime_policy(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+const html = config.bootstrapConfigFormHtml({
+  mode: "settings",
+  config: {
+    backend: "claude",
+    claude: {
+      model: "env:gateway",
+      env_active: "gateway",
+      env: [{
+        name: "gateway",
+        ANTHROPIC_MODEL: "claude-gpt-5.6-terra",
+        ANTHROPIC_AUTH_TOKEN: "hidden-auth-token",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-gpt-5.6-sol",
+        ANTHROPIC_SMALL_FAST_MODEL: "claude-gpt-5.6-luna",
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: "256000",
+        API_TIMEOUT_MS: "900000"
+      }]
+    }
+  }
+});
+for (const field of [
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+]) {
+  if (!html.includes(`data-bootstrap-env-field="${field}"`)) process.exit(1);
+}
+for (const internalField of [
+  "ANTHROPIC_SMALL_FAST_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "DISABLE_COMPACT",
+  "API_TIMEOUT_MS",
+  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+  "AHA_CLAUDE_CLEAN_PROVIDER_ENV"
+]) {
+  if (html.includes(`data-bootstrap-env-field="${internalField}"`)) process.exit(1);
+}
+if (html.includes("hidden-auth-token")) process.exit(1);
+if (!html.includes("data-bootstrap-claude-credential")) process.exit(1);
+if (!html.includes("Role model routing (optional)")) process.exit(1);
+if (!html.includes('option value="256000" selected>256K</option>')) process.exit(1);
+
+const values = { ANTHROPIC_MODEL: "claude-custom", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "256000" };
+let authMode = "auth_token";
+let credential = "replacement-token";
+const row = {
+  querySelector(selector) {
+    if (selector === "[data-bootstrap-env-name]") return { value: "gateway" };
+    if (selector === "[data-bootstrap-claude-auth-mode]") return { value: authMode };
+    if (selector === "[data-bootstrap-claude-credential]") return { value: credential };
+    const match = selector.match(/data-bootstrap-env-field="([^"]+)"/);
+    return { value: match ? (values[match[1]] || "") : "" };
+  }
+};
+const form = {
+  dataset: { bootstrapConfigMode: "settings" },
+  querySelector(selector) {
+    const match = selector.match(/data-bootstrap-config-field="([^"]+)"/);
+    const value = match && match[1] === "claude.model" ? "env:gateway" : "";
+    return { value, checked: false };
+  },
+  querySelectorAll(selector) {
+    if (selector === "[data-bootstrap-row='claude.env']") return [row];
+    return [];
+  }
+};
+const saved = config.bootstrapConfigPayload(form, { config: { claude: { env: [] } } }).claude.env[0];
+if (saved.ANTHROPIC_AUTH_TOKEN !== "replacement-token" || saved.ANTHROPIC_API_KEY) process.exit(1);
+if (saved.CLAUDE_CODE_MAX_CONTEXT_TOKENS !== "256000") process.exit(1);
+credential = "";
+const preserved = config.bootstrapConfigPayload(form, {
+  config: { claude: { env: [{ name: "gateway", ANTHROPIC_AUTH_TOKEN: "stored-token" }] } }
+}).claude.env[0];
+if (preserved.ANTHROPIC_AUTH_TOKEN !== "stored-token") process.exit(1);
+authMode = "none";
+const cleared = config.bootstrapConfigPayload(form, {
+  config: { claude: { env: [{ name: "gateway", ANTHROPIC_AUTH_TOKEN: "stored-token" }] } }
+}).claude.env[0];
+if (cleared.ANTHROPIC_API_KEY || cleared.ANTHROPIC_AUTH_TOKEN) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_global_settings_omit_feishu_and_preserve_existing_integration(self) -> None:
         node = shutil.which("node")
         if not node:
@@ -951,7 +1055,7 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=web-upgrade-proxy-v1">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=claude-gateway-v3">', html)
         self.assertIn('<script src="/static/i18n.js?v=knowledge-proxy-v3"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
@@ -4606,7 +4710,7 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn('data-bootstrap-config-field="claude.model"', script)
         self.assertIn('data-bootstrap-config-field="claude.reasoning_effort"', script)
         self.assertIn('bootstrapConfigText(form, "claude.reasoning_effort")', script)
-        self.assertIn("Official Claude model or custom env group model.", script)
+        self.assertIn("Official Claude model or custom gateway group.", script)
         self.assertIn("data-bootstrap-env-name", script)
         self.assertIn("data-bootstrap-env-field", script)
         self.assertIn('data-bootstrap-config-list="codex.env"', script)
@@ -4620,9 +4724,10 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn("ANTHROPIC_BASE_URL", script)
         self.assertIn("ANTHROPIC_MODEL", script)
         self.assertIn("ANTHROPIC_API_KEY", script)
-        self.assertIn("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", script)
+        self.assertIn("ANTHROPIC_AUTH_TOKEN", script)
+        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL", script)
         self.assertIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", script)
-        self.assertIn("CLAUDE_CODE_MAX_OUTPUT_TOKENS", script)
+        self.assertIn("Gateway groups", script)
         self.assertNotIn("data-bootstrap-env-key", script)
         self.assertNotIn("data-bootstrap-env-active", script)
         self.assertNotIn("data-bootstrap-context-tokens", script)
@@ -5325,7 +5430,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=knowledge-proxy-v3"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=shared-proxy-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=claude-gateway-v3"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)

@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 from urllib.parse import unquote
 
+from aha_cli.backends.claude import CLAUDE_ENV_GROUP_FIELDS
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, normalize_reasoning_effort
 from aha_cli.domain.models import default_config, normalize_integrations_config
 from aha_cli.services.observe_proxy import observe_proxy_status, observe_proxy_usage_summary
@@ -70,21 +71,24 @@ CODEX_ENV_GROUP_ALIASES = {
     "CODEX_WIRE_API": ("CODEX_WIRE_API", "wire_api"),
     "CODEX_ENV_KEY": ("CODEX_ENV_KEY", "env_key"),
 }
-CLAUDE_ENV_GROUP_FIELDS = (
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_API_KEY",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-)
 CLAUDE_ENV_GROUP_ALIASES = {
     "ANTHROPIC_BASE_URL": ("ANTHROPIC_BASE_URL", "base_url"),
     "ANTHROPIC_MODEL": ("ANTHROPIC_MODEL", "model"),
     "ANTHROPIC_API_KEY": ("ANTHROPIC_API_KEY", "api_key"),
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": ("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",),
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": ("CLAUDE_CODE_MAX_CONTEXT_TOKENS",),
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": ("CLAUDE_CODE_MAX_OUTPUT_TOKENS",),
+    "ANTHROPIC_AUTH_TOKEN": ("ANTHROPIC_AUTH_TOKEN", "auth_token"),
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": ("ANTHROPIC_DEFAULT_FABLE_MODEL", "fable_model"),
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus_model"),
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet_model"),
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": (
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "haiku_model",
+    ),
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": (
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "context_window",
+    ),
 }
 
 
@@ -478,15 +482,26 @@ def _object_value(value: object, field_name: str) -> dict:
     return value
 
 
+def _validate_claude_env_group(group: dict) -> None:
+    if group.get("ANTHROPIC_API_KEY") and group.get("ANTHROPIC_AUTH_TOKEN"):
+        raise ValueError("claude.env group cannot set both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN")
+    context = str(group.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS") or "").strip()
+    if context and (not context.isdigit() or int(context) <= 0):
+        raise ValueError("claude.env context window must be a positive integer")
+
+
 def _claude_env_groups(value: object) -> list[dict]:
     if value is None:
         return []
     if isinstance(value, dict):
         legacy = {"name": "default"}
         for key in CLAUDE_ENV_GROUP_FIELDS:
-            legacy[key] = next((str(value.get(alias) or "").strip() for alias in CLAUDE_ENV_GROUP_ALIASES[key] if value.get(alias)), "")
-        if not any(legacy.get(key) for key in CLAUDE_ENV_GROUP_FIELDS):
+            field_value = next((str(value.get(alias) or "").strip() for alias in CLAUDE_ENV_GROUP_ALIASES[key] if value.get(alias)), "")
+            if field_value:
+                legacy[key] = field_value
+        if len(legacy) == 1:
             return []
+        _validate_claude_env_group(legacy)
         return [legacy]
     if not isinstance(value, list):
         raise ValueError("claude.env must be a list")
@@ -497,8 +512,14 @@ def _claude_env_groups(value: object) -> list[dict]:
         raw_name = str(item.get("name") or "").strip()
         group = {"name": raw_name or f"env-{index}"}
         for key in CLAUDE_ENV_GROUP_FIELDS:
-            group[key] = str(item.get(key) or "").strip()
-        if raw_name or any(group.get(key) for key in CLAUDE_ENV_GROUP_FIELDS):
+            field_value = next(
+                (str(item.get(alias) or "").strip() for alias in CLAUDE_ENV_GROUP_ALIASES[key] if item.get(alias)),
+                "",
+            )
+            if field_value:
+                group[key] = field_value
+        _validate_claude_env_group(group)
+        if raw_name or len(group) > 1:
             groups.append(group)
     return groups
 

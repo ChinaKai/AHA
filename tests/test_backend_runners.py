@@ -12,9 +12,11 @@ import unittest
 from unittest import mock
 
 from aha_cli.backends.claude import (
+    apply_claude_environment,
     build_claude_exec_command,
     claude_cli_model,
     claude_config_env,
+    claude_context_window,
     claude_config_for_model,
     claude_permission_mode,
     handle_claude_event,
@@ -62,9 +64,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                         "ANTHROPIC_API_KEY": "prod-key",
                         "ANTHROPIC_BASE_URL": "https://prod.example",
                         "ANTHROPIC_MODEL": "claude-prod",
-                        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
                         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
-                        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
                     },
                 ],
             }
@@ -73,9 +73,70 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(env["ANTHROPIC_API_KEY"], "prod-key")
         self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://prod.example")
         self.assertEqual(env["ANTHROPIC_MODEL"], "claude-prod")
+        self.assertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "claude-prod")
+        self.assertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "claude-prod")
+        self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "claude-prod")
+        self.assertEqual(env["CLAUDE_CODE_SUBAGENT_MODEL"], "claude-prod")
         self.assertEqual(env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"], "1")
-        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "200000")
-        self.assertEqual(env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "64000")
+        self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "200000")
+        self.assertEqual(env["API_TIMEOUT_MS"], "600000")
+        self.assertEqual(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1")
+        self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", env)
+
+    def test_claude_environment_supports_role_models_auth_token_and_runtime_policy(self) -> None:
+        env = {
+            "ANTHROPIC_API_KEY": "inherited-key",
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "ANTHROPIC_CUSTOM_HEADERS": "x-test: inherited",
+        }
+        apply_claude_environment(
+            env,
+            {
+                "env_active": "gateway",
+                "env": [
+                    {
+                        "name": "gateway",
+                        "ANTHROPIC_AUTH_TOKEN": "gateway-token",
+                        "ANTHROPIC_MODEL": "claude-sonnet-custom",
+                        "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-custom",
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-custom",
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-custom",
+                        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "256000",
+                    }
+                ],
+            },
+        )
+
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "gateway-token")
+        self.assertEqual(env["ANTHROPIC_DEFAULT_FABLE_MODEL"], "claude-sonnet-custom")
+        self.assertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "claude-opus-custom")
+        self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "claude-haiku-custom")
+        self.assertNotIn("CLAUDE_CODE_SUBAGENT_MODEL", env)
+        self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "256000")
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "256000")
+        self.assertEqual(env["DISABLE_COMPACT"], "1")
+        self.assertEqual(env["API_TIMEOUT_MS"], "600000")
+        self.assertNotIn("CLAUDE_CODE_USE_VERTEX", env)
+        self.assertNotIn("ANTHROPIC_CUSTOM_HEADERS", env)
+
+    def test_claude_gateway_infers_one_million_context_without_forcing_manual_compaction(self) -> None:
+        config = {
+            "env": [
+                {
+                    "name": "deepseek",
+                    "ANTHROPIC_MODEL": "claude-deepseek-v4-flash[1m]",
+                    "ANTHROPIC_AUTH_TOKEN": "gateway-token",
+                }
+            ]
+        }
+
+        env = claude_config_env(config)
+
+        self.assertEqual(claude_context_window(config), 1_000_000)
+        self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "1000000")
+        self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", env)
+        self.assertNotIn("DISABLE_COMPACT", env)
 
     def test_claude_config_env_can_disable_env_groups_for_official_claude(self) -> None:
         env = claude_config_env(
@@ -96,10 +157,22 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(env["ANTHROPIC_MODEL"], "claude-prod")
 
     def test_claude_config_env_keeps_legacy_dict_shape(self) -> None:
-        env = claude_config_env({"env": {"api_key": "test-key", "base_url": "https://claude.test"}})
+        env = claude_config_env(
+            {
+                "env": {
+                    "api_key": "test-key",
+                    "base_url": "https://claude.test",
+                    "model": "claude-custom",
+                    "small_fast_model": "claude-fast",
+                    "context_window": "200000",
+                }
+            }
+        )
 
         self.assertEqual(env["ANTHROPIC_API_KEY"], "test-key")
         self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://claude.test")
+        self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "claude-fast")
+        self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "200000")
 
     def test_claude_official_model_disables_env_group_injection(self) -> None:
         base_config = {

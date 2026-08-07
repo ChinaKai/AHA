@@ -6,9 +6,12 @@
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_API_KEY",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
   ];
   const defaultBootstrapHttpProxy = "http://127.0.0.1:7890";
   const defaultBootstrapHttpsProxy = defaultBootstrapHttpProxy;
@@ -57,13 +60,29 @@
     return backend === "codex" ? "OPENAI_MODEL" : "ANTHROPIC_MODEL";
   }
 
-  function envGroupSecretKey(backend) {
-    return backend === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  function envGroupSecretKeys(backend) {
+    return backend === "codex" ? ["OPENAI_API_KEY"] : ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+  }
+
+  function normalizeClaudeEnvGroup(value = {}, fallbackName = "") {
+    return {
+      name: value.name || fallbackName,
+      ANTHROPIC_BASE_URL: value.ANTHROPIC_BASE_URL || value.base_url || "",
+      ANTHROPIC_MODEL: value.ANTHROPIC_MODEL || value.model || "",
+      ANTHROPIC_API_KEY: value.ANTHROPIC_API_KEY || value.api_key || "",
+      ANTHROPIC_AUTH_TOKEN: value.ANTHROPIC_AUTH_TOKEN || value.auth_token || "",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: value.ANTHROPIC_DEFAULT_FABLE_MODEL || value.fable_model || "",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: value.ANTHROPIC_DEFAULT_OPUS_MODEL || value.opus_model || "",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: value.ANTHROPIC_DEFAULT_SONNET_MODEL || value.sonnet_model || "",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: value.ANTHROPIC_DEFAULT_HAIKU_MODEL || value.ANTHROPIC_SMALL_FAST_MODEL || value.haiku_model || "",
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: value.CLAUDE_CODE_MAX_CONTEXT_TOKENS || value.CLAUDE_CODE_AUTO_COMPACT_WINDOW || value.context_window || ""
+    };
   }
 
   function bootstrapEnvGroups(value, backend = "claude") {
     if (Array.isArray(value)) {
-      return value.filter(item => item && typeof item === "object" && !Array.isArray(item));
+      const groups = value.filter(item => item && typeof item === "object" && !Array.isArray(item));
+      return backend === "claude" ? groups.map(item => normalizeClaudeEnvGroup(item)) : groups;
     }
     if (value && typeof value === "object") {
       if (backend === "codex") {
@@ -76,12 +95,7 @@
           CODEX_ENV_KEY: value.CODEX_ENV_KEY || value.env_key || "OPENAI_API_KEY"
         }];
       }
-      return [{
-        name: "default",
-        ANTHROPIC_BASE_URL: value.ANTHROPIC_BASE_URL || value.base_url || "",
-        ANTHROPIC_MODEL: value.ANTHROPIC_MODEL || value.model || "",
-        ANTHROPIC_API_KEY: value.ANTHROPIC_API_KEY || value.api_key || ""
-      }];
+      return [normalizeClaudeEnvGroup(value, "default")];
     }
     return [];
   }
@@ -271,13 +285,38 @@
       const fields = envGroupFieldsForBackend(backend);
       const baseUrlKey = fields[0];
       const modelKey = envGroupModelKey(backend);
-      const secretKey = envGroupSecretKey(backend);
+      const secretKeys = envGroupSecretKeys(backend);
       const name = configString(data.name);
       const namePlaceholder = index === 0 ? "default" : `env-${index + 1}`;
-      const apiKeyValue = options.maskSecrets ? "" : configString(data[secretKey]);
-      const apiKeyPlaceholder = options.maskSecrets && configString(data[secretKey])
-        ? "Configured; leave blank to keep"
-        : "";
+      const secretInput = (key, label) => {
+        const value = options.maskSecrets ? "" : configString(data[key]);
+        const placeholder = options.maskSecrets && configString(data[key]) ? "Configured; leave blank to keep" : "";
+        return `
+            <label class="field-label">
+              <span>${escapeHtml(label)}</span>
+              <input data-bootstrap-env-field="${escapeHtml(key)}" type="password" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}">
+            </label>`;
+      };
+      const claudeAuthMode = configString(data.ANTHROPIC_AUTH_TOKEN)
+        ? "auth_token"
+        : (configString(data.ANTHROPIC_API_KEY) ? "api_key" : "none");
+      const claudeCredential = configString(data[claudeAuthMode === "auth_token" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"]);
+      const credentialModeField = backend === "claude" ? `
+            <label class="field-label">
+              <span>Credential type</span>
+              <select data-bootstrap-claude-auth-mode>
+                <option value="none" ${claudeAuthMode === "none" ? "selected" : ""}>Inherited / none</option>
+                <option value="api_key" ${claudeAuthMode === "api_key" ? "selected" : ""}>API key</option>
+                <option value="auth_token" ${claudeAuthMode === "auth_token" ? "selected" : ""}>Auth token</option>
+              </select>
+            </label>` : "";
+      const credentialFields = backend === "codex" ? secretInput(secretKeys[0], "API key") : `
+            <label class="field-label">
+              <span>Credential</span>
+              <input data-bootstrap-claude-credential type="password"
+                placeholder="${escapeHtml(options.maskSecrets && claudeCredential ? "Configured; leave blank to keep" : "")}"
+                value="${escapeHtml(options.maskSecrets ? "" : claudeCredential)}">
+            </label>`;
       const codexExtraFields = backend === "codex" ? `
             <label class="field-label">
               <span>Wire API</span>
@@ -288,24 +327,49 @@
               <input data-bootstrap-env-field="CODEX_ENV_KEY" placeholder="OPENAI_API_KEY" value="${escapeHtml(configString(data.CODEX_ENV_KEY, "OPENAI_API_KEY"))}">
             </label>
       ` : "";
+      const contextWindow = configString(data.CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+      const knownContextWindows = ["", "200000", "256000", "1000000"];
+      const customContextOption = backend === "claude" && contextWindow && !knownContextWindows.includes(contextWindow)
+        ? `<option value="${escapeHtml(contextWindow)}" selected>Custom (${escapeHtml(contextWindow)})</option>`
+        : "";
       const claudeExtraFields = backend === "claude" ? `
             <label class="field-label">
-              <span>Gateway model discovery</span>
-              <input data-bootstrap-env-field="CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" placeholder="1" value="${escapeHtml(configString(data.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY))}">
+              <span>Context window</span>
+              <select data-bootstrap-env-field="CLAUDE_CODE_MAX_CONTEXT_TOKENS">
+                <option value="" ${contextWindow ? "" : "selected"}>Auto-detect</option>
+                <option value="200000" ${contextWindow === "200000" ? "selected" : ""}>200K</option>
+                <option value="256000" ${contextWindow === "256000" ? "selected" : ""}>256K</option>
+                <option value="1000000" ${contextWindow === "1000000" ? "selected" : ""}>1M</option>
+                ${customContextOption}
+              </select>
             </label>
-            <label class="field-label">
-              <span>Max context tokens</span>
-              <input data-bootstrap-env-field="CLAUDE_CODE_MAX_CONTEXT_TOKENS" inputmode="numeric" placeholder="200000" value="${escapeHtml(configString(data.CLAUDE_CODE_MAX_CONTEXT_TOKENS))}">
-            </label>
-            <label class="field-label">
-              <span>Max output tokens</span>
-              <input data-bootstrap-env-field="CLAUDE_CODE_MAX_OUTPUT_TOKENS" inputmode="numeric" placeholder="64000" value="${escapeHtml(configString(data.CLAUDE_CODE_MAX_OUTPUT_TOKENS))}">
-            </label>
+            <details class="bootstrap-env-advanced">
+              <summary>Role model routing (optional)</summary>
+              <div class="bootstrap-env-fields">
+                <label class="field-label">
+                  <span>Fable</span>
+                  <input data-bootstrap-env-field="ANTHROPIC_DEFAULT_FABLE_MODEL" placeholder="use primary model" value="${escapeHtml(configString(data.ANTHROPIC_DEFAULT_FABLE_MODEL))}">
+                </label>
+                <label class="field-label">
+                  <span>Opus</span>
+                  <input data-bootstrap-env-field="ANTHROPIC_DEFAULT_OPUS_MODEL" placeholder="use primary model" value="${escapeHtml(configString(data.ANTHROPIC_DEFAULT_OPUS_MODEL))}">
+                </label>
+                <label class="field-label">
+                  <span>Sonnet</span>
+                  <input data-bootstrap-env-field="ANTHROPIC_DEFAULT_SONNET_MODEL" placeholder="use primary model" value="${escapeHtml(configString(data.ANTHROPIC_DEFAULT_SONNET_MODEL))}">
+                </label>
+                <label class="field-label">
+                  <span>Haiku / fast</span>
+                  <input data-bootstrap-env-field="ANTHROPIC_DEFAULT_HAIKU_MODEL" placeholder="use primary model" value="${escapeHtml(configString(data.ANTHROPIC_DEFAULT_HAIKU_MODEL))}">
+                </label>
+              </div>
+              <div class="field-help">Leave all blank to use the primary model for every Claude Code role.</div>
+            </details>
       ` : "";
       return `
         <div class="bootstrap-env-group" data-bootstrap-row="${escapeHtml(kind)}">
           <div class="bootstrap-env-group-head">
-            <strong>${backend === "codex" ? "Provider group" : "Env group"}</strong>
+            <strong>${backend === "codex" ? "Provider group" : "Gateway group"}</strong>
             <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-row title="Remove">x</button>
           </div>
           <div class="bootstrap-env-fields">
@@ -321,10 +385,8 @@
               <span>Model</span>
               <input data-bootstrap-env-field="${escapeHtml(modelKey)}" placeholder="${backend === "codex" ? "model-name" : "claude-sonnet-4-5"}" value="${escapeHtml(configString(data[modelKey]))}">
             </label>
-            <label class="field-label">
-              <span>API key</span>
-              <input data-bootstrap-env-field="${escapeHtml(secretKey)}" type="password" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(apiKeyValue)}">
-            </label>
+            ${credentialModeField}
+            ${credentialFields}
             ${codexExtraFields}
             ${claudeExtraFields}
           </div>
@@ -430,7 +492,7 @@
             <label class="field-label">
               <span>Model</span>
               <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claudeModel, options)}</select>
-              <div class="field-help">Official Claude model or custom env group model.</div>
+              <div class="field-help">Official Claude model or custom gateway group.</div>
             </label>
             <label class="field-label">
               <span>Reasoning effort</span>
@@ -442,12 +504,12 @@
             ${bootstrapBackendProxySwitchHtml("claude", claudeProxy)}
           </div>
           <label class="field-label">
-            <span>Env groups</span>
+            <span>Gateway groups</span>
             <div class="bootstrap-config-list" data-bootstrap-config-list="claude.env">
               ${bootstrapEnvRows(claude.env, claude.env_active, { maskSecrets })}
-              <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="claude.env">Add env group</button>
+              <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="claude.env">Add gateway group</button>
             </div>
-            <div class="field-help">Each group becomes a custom Claude model option.</div>
+            <div class="field-help">Each group defines one gateway connection. AHA derives Claude Code role, timeout, discovery, traffic and compaction variables at launch.</div>
           </label>
         </details>
         <div class="bootstrap-form-actions">
@@ -486,8 +548,7 @@
   function bootstrapConfigEnvGroups(form, backend = "claude", context = {}) {
     const preserveSecrets = bootstrapConfigMode(form) === "settings";
     const fields = envGroupFieldsForBackend(backend);
-    const secretKey = envGroupSecretKey(backend);
-    const modelKey = envGroupModelKey(backend);
+    const secretKeys = envGroupSecretKeys(backend);
     const config = context.config || {};
     return [...form.querySelectorAll(`[data-bootstrap-row='${backend}.env']`)]
       .map((row, index) => {
@@ -498,13 +559,25 @@
         for (const key of fields) {
           group[key] = String(row.querySelector(`[data-bootstrap-env-field="${key}"]`)?.value || "").trim();
         }
-        const hasNonSecretValue = Boolean(rawName || group[fields[0]] || group[modelKey]);
-        if (preserveSecrets && !group[secretKey] && hasNonSecretValue) {
-          group[secretKey] = configString(previousBootstrapEnvGroup(index, group.name, backend, config)[secretKey]);
+        let selectedSecretKeys = secretKeys;
+        if (backend === "claude") {
+          const authMode = String(row.querySelector("[data-bootstrap-claude-auth-mode]")?.value || "none");
+          const credential = String(row.querySelector("[data-bootstrap-claude-credential]")?.value || "").trim();
+          group.ANTHROPIC_API_KEY = authMode === "api_key" ? credential : "";
+          group.ANTHROPIC_AUTH_TOKEN = authMode === "auth_token" ? credential : "";
+          selectedSecretKeys = authMode === "api_key"
+            ? ["ANTHROPIC_API_KEY"]
+            : (authMode === "auth_token" ? ["ANTHROPIC_AUTH_TOKEN"] : []);
+        }
+        const hasNonSecretValue = Boolean(rawName || fields.some(key => !secretKeys.includes(key) && group[key]));
+        const previous = previousBootstrapEnvGroup(index, group.name, backend, config);
+        const enteredSecret = selectedSecretKeys.some(key => group[key]);
+        if (preserveSecrets && hasNonSecretValue && !enteredSecret) {
+          for (const secretKey of selectedSecretKeys) group[secretKey] = configString(previous[secretKey]);
         }
         return {
           group,
-          hasValue: Boolean(hasNonSecretValue || group[secretKey])
+          hasValue: Boolean(hasNonSecretValue || secretKeys.some(key => group[key]))
         };
       })
       .filter(item => item.hasValue)
@@ -565,7 +638,9 @@
     if (!row || !list) return;
     const rows = [...list.querySelectorAll("[data-bootstrap-row]")];
     if (rows.length <= 1) {
-      row.querySelectorAll("input").forEach(input => { input.value = ""; });
+      row.querySelectorAll("input, select").forEach(input => {
+        input.value = input.matches?.("[data-bootstrap-claude-auth-mode]") ? "none" : "";
+      });
       syncBootstrapModelOptions(list.closest("[data-bootstrap-config-form]"), context);
       return;
     }

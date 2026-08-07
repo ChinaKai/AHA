@@ -36,16 +36,44 @@ CLAUDE_CONFIG_ENV_ALIASES = {
     "auth_token": "ANTHROPIC_AUTH_TOKEN",
     "base_url": "ANTHROPIC_BASE_URL",
     "model": "ANTHROPIC_MODEL",
-    "small_fast_model": "ANTHROPIC_SMALL_FAST_MODEL",
+    "fable_model": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "opus_model": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "sonnet_model": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "haiku_model": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "small_fast_model": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "context_window": "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
 }
+CLAUDE_CONFLICTING_PROVIDER_ENV_KEYS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "ANTHROPIC_BEDROCK_BASE_URL",
+    "ANTHROPIC_VERTEX_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+)
 CLAUDE_ENV_GROUP_FIELDS = (
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_API_KEY",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
 )
+CLAUDE_LEGACY_RUNTIME_ENV_FIELDS = (
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    "DISABLE_COMPACT",
+    "API_TIMEOUT_MS",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "AHA_CLAUDE_CLEAN_PROVIDER_ENV",
+)
+CLAUDE_GATEWAY_DEFAULT_TIMEOUT_MS = "600000"
 CLAUDE_ENV_MODEL_PREFIX = "env:"
 CLAUDE_DISABLE_ENV_KEY = "_aha_disable_env"
 
@@ -101,40 +129,112 @@ def _normalize_claude_env_key(key: str) -> str | None:
     if alias:
         return alias
     upper = cleaned.upper()
+    if upper in (*CLAUDE_ENV_GROUP_FIELDS, *CLAUDE_LEGACY_RUNTIME_ENV_FIELDS):
+        return upper
     if upper.startswith(("ANTHROPIC_", "CLAUDE_")):
         return upper
     return None
 
 
-def claude_config_env(claude_config: dict | None) -> dict[str, str]:
-    if not isinstance(claude_config, dict):
-        return {}
-    if claude_config.get(CLAUDE_DISABLE_ENV_KEY):
+def _claude_active_env_group(claude_config: dict | None) -> dict:
+    if not isinstance(claude_config, dict) or claude_config.get(CLAUDE_DISABLE_ENV_KEY):
         return {}
     configured = claude_config.get("env")
     if isinstance(configured, list):
         active_configured = "env_active" in claude_config
         active = str(claude_config.get("env_active") or "").strip()
         if active_configured and not active:
-            configured = {}
-        else:
-            groups = [item for item in configured if isinstance(item, dict)]
-            selected = next((item for item in groups if active and str(item.get("name") or "").strip() == active), None)
-            configured = selected or (groups[0] if groups else {})
-            configured = {key: configured.get(key) for key in CLAUDE_ENV_GROUP_FIELDS}
-    elif not isinstance(configured, dict):
-        configured = {}
+            return {}
+        groups = [item for item in configured if isinstance(item, dict)]
+        selected = next((item for item in groups if active and str(item.get("name") or "").strip() == active), None)
+        return dict(selected or (groups[0] if groups else {}))
+    return dict(configured) if isinstance(configured, dict) else {}
+
+
+def _truthy_env_value(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _claude_group_context_window(group: dict) -> int | None:
+    raw = group.get(
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+        group.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", group.get("context_window")),
+    )
+    try:
+        value = int(str(raw or "").strip())
+    except ValueError:
+        value = 0
+    if value > 0:
+        return value
+    model = str(group.get("ANTHROPIC_MODEL") or group.get("model") or "").strip().lower()
+    return 1_000_000 if model.endswith("[1m]") else None
+
+
+def claude_context_window(claude_config: dict | None) -> int | None:
+    return _claude_group_context_window(_claude_active_env_group(claude_config))
+
+
+def claude_config_env(claude_config: dict | None) -> dict[str, str]:
+    group = _claude_active_env_group(claude_config)
+    if not group:
+        return {}
+
     env: dict[str, str] = {}
-    for raw_key, raw_value in configured.items():
+    for raw_key, raw_value in group.items():
         key = _normalize_claude_env_key(str(raw_key))
         value = str(raw_value or "").strip()
-        if key and value:
+        if key and key != "AHA_CLAUDE_CLEAN_PROVIDER_ENV" and value:
             env[key] = value
+
+    if env.get("ANTHROPIC_AUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+    elif env.get("ANTHROPIC_API_KEY"):
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+    primary_model = env.get("ANTHROPIC_MODEL", "")
+    if primary_model:
+        role_keys = (
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        )
+        has_role_overrides = any(env.get(key) for key in role_keys)
+        for key in role_keys:
+            env.setdefault(key, primary_model)
+        if not has_role_overrides:
+            env.setdefault("CLAUDE_CODE_SUBAGENT_MODEL", primary_model)
+    if env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL"):
+        env.setdefault("ANTHROPIC_SMALL_FAST_MODEL", env["ANTHROPIC_DEFAULT_HAIKU_MODEL"])
+
+    env.setdefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1")
+    env.setdefault("API_TIMEOUT_MS", CLAUDE_GATEWAY_DEFAULT_TIMEOUT_MS)
+    env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+
+    context_window = _claude_group_context_window(group)
+    env.pop("CLAUDE_CODE_MAX_CONTEXT_TOKENS", None)
+    if context_window:
+        env.setdefault("CLAUDE_CODE_AUTO_COMPACT_WINDOW", str(context_window))
+        if context_window == 256_000 or _truthy_env_value(group.get("DISABLE_COMPACT")):
+            env["DISABLE_COMPACT"] = "1"
+            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(context_window)
+        else:
+            env.pop("DISABLE_COMPACT", None)
+
     return env
 
 
 def apply_claude_environment(env: dict[str, str], claude_config: dict | None = None) -> dict[str, str]:
-    env.update(claude_config_env(claude_config))
+    configured = claude_config_env(claude_config)
+    if not configured:
+        return env
+    if configured.get("ANTHROPIC_AUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+    elif configured.get("ANTHROPIC_API_KEY"):
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    for key in CLAUDE_CONFLICTING_PROVIDER_ENV_KEYS:
+        env.pop(key, None)
+    env.update(configured)
     return env
 
 
@@ -385,7 +485,7 @@ def run_claude_exec(
     config_env = claude_config_env(claude_config)
     env = os.environ.copy()
     add_user_backend_paths(env)
-    env.update(config_env)
+    apply_claude_environment(env, claude_config)
     apply_proxy_environment(env, proxy_env)
     if config_env and not claude_auth_configured(env):
         message = claude_missing_auth_message()

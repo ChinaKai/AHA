@@ -26,7 +26,7 @@ from aha_cli.store.filesystem import (
 )
 from aha_cli.store.task_memos import create_task_memo
 from aha_cli.store.ui_state import update_ui_state
-from aha_cli.web.run_routes import handle_run_workspace_route
+from aha_cli.web.run_routes import _claude_env_groups, handle_run_workspace_route
 from tests.helpers import (
     AHA_RUNTIME_ENV_KEYS,
     fetch_ui_response,
@@ -323,12 +323,76 @@ class WebRunApiTests(unittest.TestCase):
                     "ANTHROPIC_BASE_URL": "https://claude.test",
                     "ANTHROPIC_MODEL": "claude-sonnet",
                     "ANTHROPIC_API_KEY": "test-key",
-                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
                     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
-                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
                 }
             ],
         )
+
+    def test_claude_env_groups_migrate_legacy_runtime_fields_to_simple_shape(self) -> None:
+        groups = _claude_env_groups(
+            [
+                {
+                    "name": "gateway",
+                    "ANTHROPIC_MODEL": "claude-gpt-5.6-terra",
+                    "ANTHROPIC_AUTH_TOKEN": "test-token",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-gpt-5.6-sol",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-gpt-5.6-terra",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-gpt-5.6-luna",
+                    "ANTHROPIC_SMALL_FAST_MODEL": "claude-gpt-5.6-luna",
+                    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-gpt-5.6-terra",
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "256000",
+                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "256000",
+                    "DISABLE_COMPACT": "1",
+                    "API_TIMEOUT_MS": "600000",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                    "AHA_CLAUDE_CLEAN_PROVIDER_ENV": "1",
+                }
+            ]
+        )
+
+        self.assertEqual(groups[0]["ANTHROPIC_AUTH_TOKEN"], "test-token")
+        self.assertEqual(groups[0]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "claude-gpt-5.6-sol")
+        self.assertEqual(groups[0]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "claude-gpt-5.6-luna")
+        self.assertEqual(groups[0]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "256000")
+        self.assertNotIn("CLAUDE_CODE_SUBAGENT_MODEL", groups[0])
+        self.assertNotIn("CLAUDE_CODE_MAX_OUTPUT_TOKENS", groups[0])
+        self.assertNotIn("API_TIMEOUT_MS", groups[0])
+        self.assertNotIn("AHA_CLAUDE_CLEAN_PROVIDER_ENV", groups[0])
+
+    def test_claude_env_groups_reject_invalid_context_window(self) -> None:
+        with self.assertRaisesRegex(ValueError, "context window must be a positive integer"):
+            _claude_env_groups([{"name": "gateway", "ANTHROPIC_MODEL": "claude-custom", "context_window": "many"}])
+
+    def test_api_bootstrap_rejects_claude_group_with_two_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "claude",
+                        "claude": {
+                            "model": "env:work",
+                            "env_active": "work",
+                            "env": [
+                                {
+                                    "name": "work",
+                                    "ANTHROPIC_MODEL": "claude-custom",
+                                    "ANTHROPIC_API_KEY": "api-key",
+                                    "ANTHROPIC_AUTH_TOKEN": "auth-token",
+                                }
+                            ],
+                        },
+                    },
+                )
+            )
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("cannot set both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN", response.decode("utf-8"))
 
     def test_api_bootstrap_migrates_backend_proxy_addresses_to_shared_proxy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

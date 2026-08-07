@@ -16,6 +16,7 @@ from aha_cli.backends.claude import (
     claude_cli_model,
     claude_config_env,
     claude_config_for_model,
+    claude_context_window,
     claude_resolved_model,
 )
 from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
@@ -428,8 +429,7 @@ def _claude_runtime_context(
         requested_model = session.get("requested_model") or session.get("model") or state.get("model")
     claude_cfg = cfg.get("claude") if isinstance(cfg.get("claude"), dict) else {}
     selected_config = claude_config_for_model(claude_cfg, requested_model)
-    selected_env = claude_config_env(selected_config)
-    context_window = _positive_int(selected_env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"))
+    context_window = claude_context_window(selected_config)
 
     path = _claude_session_jsonl_path(str(session.get("backend_session_id") or ""))
     if not path:
