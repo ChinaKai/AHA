@@ -5,9 +5,33 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 import uuid
 
 from aha_cli.domain.models import utc_now
+
+
+_WINDOWS = os.name == "nt"
+_WRITE_LOCKS_GUARD = threading.Lock()
+_WRITE_LOCKS: dict[str, threading.RLock] = {}
+_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16)
+
+
+def _write_lock(path: Path) -> threading.RLock:
+    key = os.path.normcase(str(path.resolve()))
+    with _WRITE_LOCKS_GUARD:
+        return _WRITE_LOCKS.setdefault(key, threading.RLock())
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if not _WINDOWS or attempt >= len(_REPLACE_RETRY_DELAYS):
+                raise
+            time.sleep(_REPLACE_RETRY_DELAYS[attempt])
 
 
 def read_json(path: Path) -> dict:
@@ -16,16 +40,21 @@ def read_json(path: Path) -> dict:
 
 
 def write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
-    try:
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    with _write_lock(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            _replace_with_retry(tmp, path)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def append_jsonl(path: Path, data: dict) -> int:

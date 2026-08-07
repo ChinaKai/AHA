@@ -25,6 +25,7 @@ BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
 TASK_OUTCOME_SCAN_LIMIT = 10000
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 STALE_RECOVERABLE_TASK_STATUSES = {"running", "awaiting_user"}
+ACTIVE_AGENT_STATUSES = {"pending", "running", "waiting"}
 _BACKEND_STATUS_CACHE: dict[tuple[str, str, str, str], tuple[float, dict]] = {}
 
 
@@ -334,6 +335,53 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
     return True
 
 
+def recover_inconsistent_task_status(root: Path, run_id: str, task: dict) -> bool:
+    task_id = str(task.get("id") or "")
+    if not task_id or str(task.get("status") or "") != "running":
+        return False
+    try:
+        persisted_task = task_snapshot(root, run_id, task_id)["task"]
+    except KeyError:
+        return False
+    if str(persisted_task.get("status") or "") != "running":
+        return False
+    agents = persisted_task.get("agents", [])
+    if any(str(agent.get("status") or "") in ACTIVE_AGENT_STATUSES for agent in agents):
+        return False
+    main_agent = next((agent for agent in agents if str(agent.get("id") or "") == "main"), None)
+    main_status = str((main_agent or {}).get("status") or "")
+    if main_status in {"failed", "blocked"}:
+        next_status = main_status
+    elif main_status in {"completed", "interrupted", "stopped"}:
+        finalized = bool(
+            persisted_task.get("current_round_id")
+            and persisted_task.get("last_final_round_id") == persisted_task.get("current_round_id")
+        )
+        next_status = "completed" if finalized else "awaiting_user"
+    else:
+        return False
+    updated_task = set_task_status(
+        root,
+        run_id,
+        task_id,
+        next_status,
+        (main_agent or {}).get("exit_code"),
+    )
+    task.update(updated_task)
+    append_event(
+        root,
+        run_id,
+        "task_status_recovered",
+        {
+            "task_id": task_id,
+            "from_status": "running",
+            "status": next_status,
+            "reason": "terminal_agents_with_running_task",
+        },
+    )
+    return True
+
+
 def decorate_task_status(task: dict, outcomes: dict[str, dict] | None = None) -> None:
     raw_task_id = str(task.get("id") or "")
     agents = task.get("agents", [])
@@ -504,15 +552,20 @@ def attach_backend_runtime(
         raw_task_id = str(task.get("id") or "")
         task_id = raw_task_id or None
         agents = task.get("agents", [])
+        task_recovered = False
         for agent in agents:
             target = str(agent.get("id") or "main")
             key = (task_id, target)
             if key not in backend_cache:
                 backend_cache[key] = cached_backend_status(root, run_id, target, task_id=task_id)
             state = backend_cache[key]
-            if recover_stale:
-                recover_stale_running_agent(root, run_id, task, agent, state)
+            if recover_stale and recover_stale_running_agent(root, run_id, task, agent, state):
+                task_recovered = True
             apply_backend_runtime(agent, state)
+        if recover_stale and recover_inconsistent_task_status(root, run_id, task):
+            task_recovered = True
+        if task_recovered:
+            decorate_task_status(task)
         task["activity_status"] = task_activity_status(task)
     return snapshot
 
@@ -604,7 +657,7 @@ def web_status_snapshot(
         task_filter=task_filter,
     )
     if not lite:
-        snapshot = attach_backend_runtime(root, run_id, snapshot, recover_stale=False)
+        snapshot = attach_backend_runtime(root, run_id, snapshot, recover_stale=True)
     return redact_hardware_credentials(snapshot)
 
 __all__ = [
@@ -621,6 +674,7 @@ __all__ = [
     "merge_recovery_context_message",
     "recover_stale_running_agent",
     "recover_stale_running_agents",
+    "recover_inconsistent_task_status",
     "decorate_task_status",
     "backend_runtime_payload",
     "apply_backend_runtime",

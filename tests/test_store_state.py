@@ -17,6 +17,7 @@ from aha_cli.store.filesystem import (
     set_task_status,
     status_snapshot,
 )
+from aha_cli.store.io import read_json, write_json
 from aha_cli.store.sessions import backend_session_usage_archive_fields, usage_token_summary
 from aha_cli.store.paths import event_path
 from tests.helpers import append_jsonl_records, write_plan_statuses
@@ -249,6 +250,30 @@ class StoreStateTests(unittest.TestCase):
         self.assertEqual(agent["status_started_at"], "2026-05-15T00:01:00+00:00")
         self.assertEqual(agent["last_active_at"], "2026-05-15T00:01:00+00:00")
         self.assertEqual(agent["started_at"], "2026-05-15T00:00:10+00:00")
+
+    def test_write_json_retries_transient_windows_replace_denial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            original_replace = Path.replace
+            attempts = 0
+
+            def flaky_replace(source: Path, target: Path) -> Path:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError(5, "access denied")
+                return original_replace(source, target)
+
+            with (
+                mock.patch("aha_cli.store.io._WINDOWS", True),
+                mock.patch.object(Path, "replace", new=flaky_replace),
+                mock.patch("aha_cli.store.io.time.sleep") as sleep,
+            ):
+                write_json(path, {"status": "ok"})
+
+            self.assertEqual(read_json(path), {"status": "ok"})
+            self.assertEqual(attempts, 3)
+            self.assertEqual(sleep.call_count, 2)
 
     def test_parallel_plan_writers_do_not_collide_on_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
