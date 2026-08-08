@@ -965,6 +965,12 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 checkpoint_model = configured_model or requested_model or model
                 recovered_turn_result = chat_turn_result_recoverable(turn_checkpoint, backend_name, checkpoint_model)
                 if turn_checkpoint and turn_checkpoint.get("phase") == "executed" and not recovered_turn_result:
+                    recovery_skip_reason = "failed_turn"
+                    try:
+                        if int(turn_checkpoint.get("exit_code") or 0) == 0:
+                            recovery_skip_reason = "execution_config_changed"
+                    except (TypeError, ValueError):
+                        recovery_skip_reason = "execution_config_changed"
                     append_event(
                         root,
                         run_id,
@@ -977,9 +983,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             "turn_identity": turn_identity,
                             "checkpoint_backend": turn_checkpoint.get("backend"),
                             "checkpoint_model": turn_checkpoint.get("model"),
+                            "checkpoint_exit_code": turn_checkpoint.get("exit_code"),
                             "backend": backend_name,
                             "model": checkpoint_model,
-                            "reason": "execution_config_changed",
+                            "reason": recovery_skip_reason,
                         },
                     )
                 session["requested_model"] = requested_model

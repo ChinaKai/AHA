@@ -83,6 +83,15 @@ def load_chat_turn_checkpoint(path: Path, item_offset: int, item: dict) -> dict 
 def chat_turn_result_recoverable(checkpoint: dict | None, backend: str, model: str | None = None) -> bool:
     if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "executed":
         return False
+    try:
+        exit_code = int(checkpoint.get("exit_code"))
+    except (TypeError, ValueError):
+        exit_code = None
+    if exit_code != 0:
+        # Only successful executed turns carry recoverable side effects. A failed
+        # turn (e.g. backend refused an over-long prompt) has nothing to preserve,
+        # and recovering it would make a reopen hit the old failure immediately.
+        return False
     expected_backend = str(backend or "").removesuffix("-chat").strip().lower()
     checkpoint_backend = str(checkpoint.get("backend") or "").removesuffix("-chat").strip().lower()
     if not checkpoint_backend:

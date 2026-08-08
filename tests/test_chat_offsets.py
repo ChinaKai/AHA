@@ -119,8 +119,8 @@ class ChatOffsetTests(unittest.TestCase):
                 path,
                 88,
                 item,
-                exit_code=1,
-                reply="old failure",
+                exit_code=0,
+                reply="old success",
                 backend="claude",
                 model="env:gateway-a",
             )
@@ -136,6 +136,37 @@ class ChatOffsetTests(unittest.TestCase):
         legacy_checkpoint["prompt_event"] = {"data": {"source": "claude-chat"}}
         self.assertTrue(chat_turn_result_recoverable(legacy_checkpoint, "claude"))
         self.assertFalse(chat_turn_result_recoverable(legacy_checkpoint, "codex"))
+
+    def test_failed_chat_turn_result_is_never_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = chat_turn_checkpoint_path(Path(tmp), "main", "task-001")
+            item = {"sender": "browser", "message": "fix", "task_id": "task-001"}
+
+            save_chat_turn_result(
+                path,
+                88,
+                item,
+                exit_code=1,
+                reply="Prompt is too long",
+                backend="claude",
+                model="env:gateway-a",
+            )
+            checkpoint = load_chat_turn_checkpoint(path, 88, item)
+
+        # A failed turn has no successful side effects to preserve; recovering it
+        # would make a reopen hit the old failure instead of retrying the message.
+        self.assertFalse(chat_turn_result_recoverable(checkpoint, "claude", "env:gateway-a"))
+        self.assertFalse(chat_turn_result_recoverable(checkpoint, "claude", "env:gateway-b"))
+
+        legacy_checkpoint = dict(checkpoint or {})
+        legacy_checkpoint.pop("backend", None)
+        legacy_checkpoint.pop("model", None)
+        legacy_checkpoint["prompt_event"] = {"data": {"source": "claude-chat"}}
+        self.assertFalse(chat_turn_result_recoverable(legacy_checkpoint, "claude"))
+
+        missing_exit_code = dict(checkpoint or {})
+        missing_exit_code.pop("exit_code", None)
+        self.assertFalse(chat_turn_result_recoverable(missing_exit_code, "claude", "env:gateway-a"))
 
     def test_prepared_chat_turn_preserves_merged_item_through_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
