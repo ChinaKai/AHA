@@ -806,6 +806,68 @@ def _mention_text(text: str, open_id: str) -> str:
     return f'<at user_id="{identity}"></at> {message}'.strip()
 
 
+def _last_group_feishu_chat(root: Path, run_id: str, task_id: str) -> str:
+    """Find the newest group-digital-human chat_id for a task from its event stream."""
+    if not task_id:
+        return ""
+    for _offset, candidate in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        candidate_data = candidate.get("data") if isinstance(candidate.get("data"), dict) else {}
+        if str(candidate_data.get("task_id") or "") != task_id:
+            continue
+        if str(candidate.get("type") or "") != "message":
+            continue
+        if str(candidate_data.get("feishu_channel") or "") != "group_digital_human":
+            continue
+        chat_id = str(candidate_data.get("feishu_chat_id") or "").strip()
+        if chat_id:
+            return chat_id
+    return ""
+
+
+def _group_agent_error_delivery(root: Path, run_id: str, event: dict) -> dict | None:
+    if str(event.get("type") or "") != "agent_error":
+        return None
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    task_id = str(data.get("task_id") or "")
+    raw_error = str(data.get("message") or data.get("error") or data.get("text") or "").strip()
+    if not task_id or not raw_error:
+        return None
+    chat_id = _last_group_feishu_chat(root, run_id, task_id)
+    if not chat_id:
+        return None
+    message = sanitize_agent_error_message(raw_error, group=True)
+    event_key = _event_key(run_id, event)
+    sent_key = f"group-error:{_status_recipient_key(chat_id)}:{event_key}"
+    with _locked_subscription_state(root):
+        state = _load_subscription_state_unlocked(root)
+        if sent_key in state["sent"]:
+            return {"ok": True, "sent": False, "reason": "duplicate_event"}
+        result = _send(root, chat_id, message)
+        state["sent"][sent_key] = {"sent_at": utc_now(), "message_id": result.get("message_id")}
+        state["updated_at"] = utc_now()
+        _write_subscription_state_unlocked(root, state)
+    audit_feishu_channel(
+        root,
+        direction="outbound",
+        kind="group_error_notice",
+        status="delivered",
+        transport=str(result.get("transport") or "unknown"),
+        message_id=str(result.get("message_id") or ""),
+        chat_id=chat_id,
+        run_id=run_id,
+        task_id=task_id,
+        content=message,
+        reason=str(event.get("type") or ""),
+    )
+    return {
+        "ok": True,
+        "sent": True,
+        "sent_count": 1,
+        "message_id": result.get("message_id"),
+        "reason": "group_agent_error",
+    }
+
+
 def _direct_feishu_delivery(root: Path, run_id: str, event: dict) -> dict | None:
     if str(event.get("type") or "") != "message":
         return None
@@ -894,6 +956,9 @@ def _handoff_closure(root: Path, run_id: str, event: dict) -> tuple[dict, str] |
 
 
 def notify_event(root: Path, run_id: str, event: dict) -> dict:
+    group_error = _group_agent_error_delivery(root, run_id, event)
+    if group_error is not None:
+        return group_error
     direct = _direct_feishu_delivery(root, run_id, event)
     if direct is not None:
         return direct

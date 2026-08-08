@@ -425,6 +425,70 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertIn("access token could not be refreshed", sent_text)
         self.assertNotIn("Bearer sk-secret", sent_text)
 
+    def test_group_agent_error_sends_redacted_notice_to_originating_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-group-error-notice"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            # The group digital-human turn carried feishu_chat_id in the event stream.
+            append_jsonl(
+                event_path(root, run_id),
+                {
+                    "event_id": 80,
+                    "type": "message",
+                    "data": {
+                        "task_id": "task-001",
+                        "sender": "feishu",
+                        "target": "main",
+                        "feishu_channel": "group_digital_human",
+                        "feishu_chat_id": "oc-group-chat",
+                        "message": "飞书群聊 @ 数字人请求",
+                    },
+                },
+            )
+            result = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 81,
+                    "type": "agent_error",
+                    "data": {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "message": "Reconnecting... 401 Unauthorized: Missing bearer, url: https://internal.gateway/v1",
+                    },
+                },
+            )
+
+        self.assertEqual(result["reason"], "group_agent_error")
+        self.assertEqual(send.call_args.args[1], "oc-group-chat")
+        sent_text = send.call_args.args[2]
+        self.assertNotIn("https://internal.gateway", sent_text)
+        self.assertNotIn("Bearer", sent_text)
+        self.assertIn("执行失败", sent_text)
+
+    def test_group_agent_error_without_prior_group_chat_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-noop"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            result = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 82,
+                    "type": "agent_error",
+                    "data": {"task_id": "task-001", "target": "main", "message": "some error"},
+                },
+            )
+
+        self.assertFalse(result["sent"])
+        send.assert_not_called()
+
     def test_group_subscription_receives_generic_agent_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",
