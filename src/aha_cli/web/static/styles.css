@@ -5254,7 +5254,8 @@ body.auth-required.knowledge-home .knowledge-home-page {
   max-width: 100%;
   overflow: auto;
   padding: 10px;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .message-markdown pre code {
   background: transparent;
