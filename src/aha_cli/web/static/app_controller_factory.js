@@ -393,6 +393,7 @@
     const {
       agentRuntimeConfirmDialogEl, agentRuntimeConfirmMessageEl, agentTargetEl, agentsEl,
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
+      ahaPromptsEl, closePromptsEl, promptsContentEl, promptsDialogEl,
       messageImageFileEl, messageImageUploadEl,
       observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
       feishuConsoleEl, feishuConsolePopoverEl,
@@ -480,6 +481,16 @@
       setSessionMenu: deps.setSessionMenu,
       syncBootstrapProxyDefaultsForInput: deps.syncBootstrapProxyDefaultsForInput,
       syncBootstrapModelOptions: deps.syncBootstrapModelOptions
+    });
+
+    const promptsController = window.AHAPromptsController.createPromptsController({
+      ahaPromptsEl,
+      closePromptsEl,
+      promptsContentEl,
+      promptsDialogEl
+    }, {
+      apiUrl: deps.apiUrl,
+      fetchWithTimeout: deps.fetchWithTimeout
     });
 
     const playConsoleController = window.AHAPlayConsole.createPlayConsoleController({
@@ -839,6 +850,7 @@
       observeProxyController,
       messageComposer,
       playConsoleController,
+      promptsController,
       settingsController,
       skillsConsoleController,
       taskCreateController,

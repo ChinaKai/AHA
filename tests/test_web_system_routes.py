@@ -30,6 +30,33 @@ class WebSystemRoutesTests(unittest.TestCase):
             code = main(list(args))
         return code, out.getvalue()
 
+    def test_prompts_api_lists_and_loads_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            listing = json_response_body(system_route_response(root, "", "GET", "/api/prompts", {}))
+            self.assertTrue(listing["ok"])
+            self.assertGreater(listing["count"], 0)
+            self.assertIn("backend", listing["templates"])
+            names = [item["name"] for item in listing["templates"]["backend"]]
+            self.assertIn("backend_chat_full", names)
+
+            single = json_response_body(
+                system_route_response(root, "", "GET", "/api/prompts", {"name": ["backend_chat_full"]})
+            )
+            self.assertTrue(single["ok"])
+            self.assertEqual(single["name"], "backend_chat_full")
+            self.assertIn("You are the AHA backend agent", single["text"])
+
+            missing = json_response_body(
+                system_route_response(root, "", "GET", "/api/prompts", {"name": ["does_not_exist"]})
+            )
+            self.assertFalse(missing["ok"])
+
+            traversal = json_response_body(
+                system_route_response(root, "", "GET", "/api/prompts", {"name": ["../config.json"]})
+            )
+            self.assertFalse(traversal["ok"])
+
     def run_git(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         if not shutil.which("git"):
             self.skipTest("git is not available")

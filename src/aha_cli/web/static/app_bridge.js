@@ -240,6 +240,7 @@
       controllers.observeProxyController?.()?.bind();
       controllers.skillsConsoleController?.()?.bind();
       controllers.tokenUsageController?.()?.bind();
+      controllers.promptsController?.()?.bind();
     }
 
     function selectedTask() {

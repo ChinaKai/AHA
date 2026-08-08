@@ -1602,6 +1602,115 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
 .settings-popover-close {
   flex: 0 0 auto;
 }
+.prompts-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(calc(var(--app-viewport-height) - 96px), 640px);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px;
+}
+.prompts-popover-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.prompts-popover-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.prompts-popover-head p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+.prompts-popover-close {
+  flex: 0 0 auto;
+}
+.prompts-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 12px;
+  flex: 1;
+}
+.prompts-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) 1fr;
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1;
+}
+.prompts-nav {
+  overflow-y: auto;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
+  padding: 8px;
+}
+.prompts-group + .prompts-group {
+  margin-top: 10px;
+}
+.prompts-group-title {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #667085;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.prompts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.prompts-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary, #1d2939);
+  font-size: 12px;
+  cursor: pointer;
+}
+.prompts-item:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+}
+.prompts-item.active {
+  background: var(--accent, #1f5eff);
+  color: #ffffff;
+}
+.prompts-preview {
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
+  background: var(--surface-bg-subtle, #f8fafc);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary, #1d2939);
+}
+.prompts-preview.loaded {
+  background: var(--surface-bg, #ffffff);
+}
+.prompts-empty {
+  padding: 16px;
+  color: #667085;
+  font-size: 13px;
+  text-align: center;
+}
 .web-publish-console {
   display: grid;
   gap: 10px;
@@ -1747,6 +1856,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
 }
 .session-menu,
 .settings-popover,
+.prompts-popover,
 .feishu-console-popover,
 .weixin-console-popover,
 .play-console-popover,
@@ -1816,6 +1926,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
 .skills-console-popover[hidden],
 .token-usage-popover[hidden],
 .settings-popover[hidden],
+.prompts-popover[hidden],
 .run-maintenance-popover[hidden] {
   display: none;
 }

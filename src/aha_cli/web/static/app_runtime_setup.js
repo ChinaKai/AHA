@@ -488,6 +488,7 @@ appBridge = window.AHAAppBridge.createAppBridge({
   optimisticEvents: () => optimisticEvents,
   panelController: () => panelController,
   playConsoleController: () => playConsoleController,
+  promptsController: () => promptsController,
   realtimeClient: () => realtimeClient,
   renderOrchestrator: () => renderOrchestrator,
   runController: () => runController,

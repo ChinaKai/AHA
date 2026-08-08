@@ -3,12 +3,14 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
-import subprocess
+from importlib import resources
 from pathlib import Path
+import subprocess
 
 from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.app_version import aha_version
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.feishu_runtime import (
     cleanup_feishu_old_app_state,
     feishu_status,
@@ -574,6 +576,66 @@ def token_usage_daily_stop_response(
     return json_response({"ok": True, **payload})
 
 
+def _prompt_group(name: str) -> str:
+    prefixes = (
+        ("workflow_guidance_", "workflow"),
+        ("service_assistant_", "service_assistant"),
+        ("feishu_group_", "feishu_group"),
+        ("mode_instruction_", "mode_instruction"),
+        ("hardware_debug_", "hardware"),
+        ("browser_control_", "browser"),
+        ("knowledge_", "knowledge"),
+        ("navigation_", "navigation"),
+        ("supervision_", "supervision"),
+        ("finalization", "finalization"),
+        ("subtask", "subtask"),
+        ("runner_", "runner"),
+        ("task_", "task"),
+        ("chat_", "chat"),
+        ("backend_", "backend"),
+        ("commit_policy", "policy"),
+        ("compact_summary", "policy"),
+        ("action_", "action"),
+        ("memo_", "memo"),
+    )
+    for prefix, group in prefixes:
+        if name.startswith(prefix):
+            return group
+    return "other"
+
+
+def prompts_payload(name: str = "") -> dict:
+    """List bundled prompt templates grouped by domain, or return one template's text."""
+    prompts = resources.files("aha_cli.prompts")
+    templates: dict[str, list[dict]] = {}
+    for item in sorted(prompts.iterdir(), key=lambda i: i.name):
+        if not item.name.endswith(".md") or item.name == "README.md":
+            continue
+        base = item.name[: -len(".md")]
+        group = _prompt_group(base)
+        templates.setdefault(group, []).append(
+            {
+                "name": base,
+                "group": group,
+            }
+        )
+    if name:
+        safe_name = str(name).strip()
+        if not safe_name or "/" in safe_name or "\\" in safe_name or not safe_name.endswith(".md"):
+            safe_name = f"{safe_name}.md"
+        try:
+            text = prompts.joinpath(safe_name).read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            return {"ok": False, "error": f"prompt template not found: {name}"}
+        return {
+            "ok": True,
+            "name": safe_name[: -len(".md")],
+            "text": text,
+            "group": _prompt_group(safe_name[: -len(".md")]),
+        }
+    return {"ok": True, "templates": templates, "count": sum(len(items) for items in templates.values())}
+
+
 def system_route_response(
     root: Path,
     default_run_id: str,
@@ -587,6 +649,9 @@ def system_route_response(
     bind_host: str | None = None,
     bind_port: int | str | None = None,
 ) -> bytes | None:
+    if method in {"GET", "HEAD"} and path == "/api/prompts":
+        prompt_name = str(query.get("name", [""])[0] or "").strip()
+        return json_response(prompts_payload(prompt_name))
     if method in {"GET", "HEAD"} and path == "/api/global-search":
         try:
             limit = max(1, min(query_int(query, "limit", 50), 100))

@@ -110,6 +110,7 @@
                 </section>
                 <div class="run-admin-actions">
                   <button id="aha-settings" type="button" aria-controls="settings-dialog" aria-expanded="false" data-i18n="common.settings">Settings</button>
+                  <button id="aha-prompts" type="button" aria-controls="prompts-dialog" aria-expanded="false" data-i18n="run.prompts">Prompts</button>
                   <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
                   <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
                   <button id="web-upgrade" class="button-ghost" type="button" hidden aria-controls="web-publish-console" aria-expanded="false" data-i18n="run.upgrade_web">Upgrade</button>
@@ -126,6 +127,16 @@
                   <button id="close-settings" class="settings-popover-close" type="button" data-i18n="common.close">Close</button>
                 </div>
                 <div id="settings-content"></div>
+              </div>
+              <div id="prompts-dialog" class="prompts-popover" aria-labelledby="prompts-title" hidden>
+                <div class="prompts-popover-head">
+                  <div>
+                    <h2 id="prompts-title" data-i18n="prompts.title">AHA Prompt Templates</h2>
+                    <p data-i18n="prompts.description">Browse bundled prompt templates grouped by domain.</p>
+                  </div>
+                  <button id="close-prompts" class="prompts-popover-close" type="button" data-i18n="common.close">Close</button>
+                </div>
+                <div id="prompts-content" class="prompts-body"></div>
               </div>
               <div class="run-actions-section run-actions-section-secondary run-integrations-section">
                 <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
@@ -1080,6 +1091,7 @@
   <script src="/static/task_memo_controller.js?v=memo-weekdays-v1"></script>
   <script src="/static/global_search_controller.js?v=global-search-v6"></script>
   <script src="/static/settings_controller.js?v=token-saving-v8"></script>
+  <script src="/static/prompts_controller.js?v=prompts-v1"></script>
   <script src="/static/run_controller.js?v=manual-upgrade-check-v15"></script>
   <script src="/static/message_flow.js?v=hardware-terminal-v1"></script>
   <script src="/static/render_scheduler.js"></script>
