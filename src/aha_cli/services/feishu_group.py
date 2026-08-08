@@ -14,7 +14,7 @@ from aha_cli.domain.models import (
     utc_now,
 )
 from aha_cli.store.config import load_config
-from aha_cli.store.filesystem import create_plan
+from aha_cli.store.filesystem import create_plan, reopen_task, task_snapshot
 from aha_cli.store.io import write_json
 from aha_cli.store.paths import aha_home_path, run_dir
 from aha_cli.store.runs import list_run_summaries, locked_plan, require_plan, save_plan
@@ -280,13 +280,21 @@ def ensure_feishu_group_task(
         and str(task.get("session_key_hash") or "") == session_hash
         and not task.get("deleted_at")
         and not task.get("feishu_group_archived_at")
-        and str(task.get("status") or "") not in {"completed", "failed", "blocked"}
+        and str(task.get("status") or "") not in {"completed"}
     ]
     if existing:
+        candidate = existing[-1]
+        candidate_id = str(candidate.get("id") or "")
+        if str(candidate.get("status") or "") in {"failed", "blocked"}:
+            reopen_task(root, run_id, candidate_id)
+            try:
+                candidate = task_snapshot(root, run_id, candidate_id)["task"]
+            except KeyError:
+                candidate = candidate
         return _sync_task_display_title(
             root,
             run_id,
-            existing[-1],
+            candidate,
             session_key=session_key,
             display_name=clean_name,
         )

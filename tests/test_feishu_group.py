@@ -37,6 +37,26 @@ from aha_cli.store.task_memos import create_task_memo
 
 
 class FeishuGroupTests(unittest.TestCase):
+    def test_failed_group_task_is_reopened_and_reused_not_recreated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_key = "tenant:feishu-group-user:ou_user"
+            run_id = ensure_feishu_group_run(root, {"backend": "stub"})
+            first = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
+            first_id = str(first.get("id") or "")
+
+            from aha_cli.store.filesystem import set_task_status
+
+            set_task_status(root, run_id, first_id, "failed", 1)
+
+            reopened = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
+            plan = require_plan(root, run_id)
+            group_tasks = [t for t in plan.get("tasks", []) if is_feishu_group_task(t)]
+
+        self.assertEqual(str(reopened.get("id") or ""), first_id)
+        self.assertEqual(reopened.get("status"), "awaiting_user")
+        self.assertEqual(len(group_tasks), 1)
+
     def test_group_run_and_user_task_use_dedicated_service_state_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
