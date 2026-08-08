@@ -390,6 +390,117 @@ class FeishuNotificationTests(unittest.TestCase):
             ["first update", "second update", "Agent error (sub-001)\nworker failed"],
         )
 
+    def test_private_subscription_receives_hard_redacted_agent_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-private-error"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-chat",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                chat_type="p2p",
+            )
+            result = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 60,
+                    "type": "agent_error",
+                    "data": {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "message": "Your access token could not be refreshed because Authorization: Bearer sk-secret was revoked",
+                    },
+                },
+            )
+
+        self.assertEqual(result["reason"], "sent")
+        sent_text = send.call_args.args[2]
+        self.assertIn("access token could not be refreshed", sent_text)
+        self.assertNotIn("Bearer sk-secret", sent_text)
+
+    def test_group_subscription_receives_generic_agent_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-group-error"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            set_subscription(
+                root,
+                "tenant:group:chat",
+                chat_id="oc-group",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                chat_type="group",
+            )
+            result = notify_event(
+                root,
+                run_id,
+                {
+                    "event_id": 61,
+                    "type": "agent_error",
+                    "data": {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "message": "POST https://internal.gateway/v1 failed with Authorization: Bearer sk-secret (status 500)",
+                    },
+                },
+            )
+
+        self.assertEqual(result["reason"], "sent")
+        sent_text = send.call_args.args[2]
+        self.assertNotIn("https://internal.gateway", sent_text)
+        self.assertNotIn("sk-secret", sent_text)
+        self.assertIn("执行失败", sent_text)
+
+    def test_failed_status_card_includes_recent_agent_error_in_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_notifications._send",
+            return_value={"message_id": "om-failed-card"},
+        ) as send:
+            root = Path(tmp)
+            run_id = _setup(root)
+            set_subscription(
+                root,
+                "tenant:p2p:user",
+                chat_id="oc-chat",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            append_jsonl(
+                event_path(root, run_id),
+                {
+                    "event_id": 70,
+                    "type": "agent_error",
+                    "data": {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "message": "Your refresh token was revoked; Authorization: Bearer sk-secret is stale",
+                    },
+                },
+            )
+            event = {
+                "event_id": 71,
+                "type": "task_status_changed",
+                "data": {"task_id": "task-001", "previous_status": "running", "status": "failed", "exit_code": 1},
+            }
+            append_jsonl(event_path(root, run_id), event)
+            message = notification_message_for_event(root, run_id, event)
+            result = notify_event(root, run_id, event)
+
+        self.assertEqual(result["reason"], "sent")
+        self.assertIn("refresh token was revoked", message)
+        self.assertNotIn("Bearer sk-secret", message)
+
     def test_backend_event_file_agent_update_enters_task_chat_notification_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.services.feishu_notifications._send",

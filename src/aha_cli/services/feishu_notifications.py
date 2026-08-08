@@ -17,7 +17,7 @@ from aha_cli.services.feishu import (
     send_text_message,
     update_card_message,
 )
-from aha_cli.services.feishu_audit import audit_feishu_channel
+from aha_cli.services.feishu_audit import _AUTH_RE, _SECRET_RE, audit_feishu_channel
 from aha_cli.services.feishu_runtime import (
     feishu_config,
     feishu_credentials,
@@ -321,6 +321,58 @@ def _status_event_reason(data: dict) -> str:
     return ""
 
 
+def _hard_redact_error(text: str) -> str:
+    """Remove credential material regardless of audience. Otherwise keep detail."""
+    text = _AUTH_RE.sub("Authorization=[REDACTED]", text)
+    text = _SECRET_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    return text
+
+
+def sanitize_agent_error_message(message: object, *, group: bool = False) -> str:
+    """Build a user-visible agent_error text scoped to the receiving audience.
+
+    Private chats keep the underlying error detail (credential-level redaction
+    only). Group chats get a generic, actionable hint because the audience is
+    wider and must not see upstream hosts, paths, ids, tokens or stack traces.
+    """
+    text = " ".join(str(message or "").split())
+    if not text:
+        return ""
+    if group:
+        return "AHA Agent 执行失败，请稍后重试或联系管理员。"
+    return _trim_notification(_hard_redact_error(text))
+
+
+def _last_task_agent_error(root: Path, run_id: str, task_id: str, event: dict) -> str:
+    """Find the newest agent_error message for a task before the given event."""
+    current_event_id = event.get("event_id")
+    event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    found_current = False
+    for _offset, candidate in iter_jsonl_reverse(event_path(root, run_id)) or ():
+        if not found_current:
+            candidate_data = candidate.get("data") if isinstance(candidate.get("data"), dict) else {}
+            same_id = current_event_id not in {None, ""} and candidate.get("event_id") == current_event_id
+            same_payload = (
+                candidate.get("ts") == event.get("ts")
+                and candidate.get("type") == event.get("type")
+                and str(candidate_data.get("task_id") or "") == str(event_data.get("task_id") or "")
+            )
+            if same_id or same_payload:
+                found_current = True
+            continue
+        candidate_data = candidate.get("data") if isinstance(candidate.get("data"), dict) else {}
+        if str(candidate_data.get("task_id") or "") != task_id:
+            continue
+        if str(candidate.get("type") or "") != "agent_error":
+            continue
+        message = " ".join(
+            str(candidate_data.get("message") or candidate_data.get("error") or candidate_data.get("text") or "").split()
+        )
+        if message:
+            return message
+    return ""
+
+
 def _trim_notification(message: str) -> str:
     return message if len(message) <= MAX_NOTIFICATION_CHARS else message[: MAX_NOTIFICATION_CHARS - 1].rstrip() + "…"
 
@@ -380,7 +432,14 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     if not task_id:
         return ""
     reason = _status_event_reason(data)
-    if current == "busy":
+    if current == "failed":
+        agent_error = _last_task_agent_error(root, run_id, task_id, event)
+        source_message = (
+            reason
+            or (_hard_redact_error(agent_error) if agent_error else "")
+            or _last_task_message(root, run_id, task_id, event, USER_REPLY_ROUTES)
+        )
+    elif current == "busy":
         source_message = _last_task_message(root, run_id, task_id, event, USER_TRIGGER_ROUTES) or reason
     elif previous == "busy":
         source_message = _last_task_message(root, run_id, task_id, event, USER_REPLY_ROUTES) or reason
@@ -568,6 +627,20 @@ def _has_task_chat_subscription(root: Path, run_id: str, task_id: str) -> bool:
         if not isinstance(subscription, dict) or not subscription.get("enabled"):
             continue
         if str(subscription.get("mode") or "") != "task_chat":
+            continue
+        if str(subscription.get("run_id") or "") == run_id and str(subscription.get("task_id") or "") == task_id:
+            return True
+    return False
+
+
+def _has_plain_subscription(root: Path, run_id: str, task_id: str) -> bool:
+    if not run_id or not task_id:
+        return False
+    state = load_subscription_state(root)
+    for subscription in state.get("subscriptions", {}).values():
+        if not isinstance(subscription, dict) or not subscription.get("enabled"):
+            continue
+        if str(subscription.get("mode") or "") == "task_chat":
             continue
         if str(subscription.get("run_id") or "") == run_id and str(subscription.get("task_id") or "") == task_id:
             return True
@@ -873,6 +946,12 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
     has_task_chat = _has_task_chat_subscription(root, run_id, task_id)
     if task_chat_message and not has_task_chat:
         task_chat_message = ""
+    is_agent_error_event = not is_status_event and str(event.get("type") or "") == "agent_error"
+    raw_error_message = (
+        str(data.get("message") or data.get("error") or data.get("text") or "")
+        if is_agent_error_event
+        else ""
+    )
     task_chat_status = str(data.get("status") or "").strip().lower() if is_status_event and has_task_chat else ""
     if task_chat_status not in TASK_CHAT_CONTROL_STATUSES | {"running"}:
         task_chat_status = ""
@@ -882,7 +961,8 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
         if task_chat_status in TASK_CHAT_CONTROL_STATUSES
         else None
     )
-    if not message and not card and not task_chat_message and not task_chat_status:
+    has_non_task_chat_agent_error = bool(is_agent_error_event and raw_error_message and _has_plain_subscription(root, run_id, task_id))
+    if not message and not card and not task_chat_message and not task_chat_status and not has_non_task_chat_agent_error:
         return {"ok": True, "sent": False, "reason": "ignored_event"}
     event_key = _event_key(run_id, event)
     sent_count = 0
@@ -903,7 +983,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             if not _matches_current_tenant(session_key, current_tenant_key):
                 skipped_tenant_count += 1
                 continue
-            if _subscription_chat_type(session_key, subscription) == "group":
+            if _subscription_chat_type(session_key, subscription) == "group" and not is_agent_error_event:
                 skipped_group_count += 1
                 continue
             mode = str(subscription.get("mode") or "")
@@ -1020,6 +1100,11 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
             outbound_message = message
             if not is_status_event and str(subscription.get("mode") or "") == "task_chat":
                 outbound_message = task_chat_message
+            elif is_agent_error_event:
+                outbound_message = sanitize_agent_error_message(
+                    raw_error_message,
+                    group=_subscription_chat_type(session_key, subscription) == "group",
+                )
             if not outbound_message and not card:
                 continue
             recipient_key = _status_recipient_key(chat_id) if is_status_event else session_key
