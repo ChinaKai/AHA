@@ -35,6 +35,26 @@ from aha_cli.web.task_messaging import message_backend_autostart_config
 
 
 class ServiceAssistantTests(unittest.TestCase):
+    def test_failed_service_assistant_task_is_reopened_and_reused_not_recreated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_key = "tenant:p2p:ou_user"
+            run_id = ensure_service_assistant_run(root, {"backend": "stub"})
+            first = ensure_service_assistant_task(root, run_id, session_key, {"backend": "stub"})
+            first_id = str(first.get("id") or "")
+
+            from aha_cli.store.filesystem import set_task_status
+
+            set_task_status(root, run_id, first_id, "failed", 1)
+
+            reopened = ensure_service_assistant_task(root, run_id, session_key, {"backend": "stub"})
+            plan = require_plan(root, run_id)
+            assistant_tasks = [t for t in plan.get("tasks", []) if is_service_assistant_task(t)]
+
+        self.assertEqual(str(reopened.get("id") or ""), first_id)
+        self.assertEqual(reopened.get("status"), "awaiting_user")
+        self.assertEqual(len(assistant_tasks), 1)
+
     def test_system_run_and_session_task_use_aha_home_and_are_visible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1402,12 +1422,23 @@ class ServiceAssistantTests(unittest.TestCase):
                 set_run_lifecycle_status(root, run_id, "hidden")
             with self.assertRaises(RunRetentionError) as retention_error:
                 apply_run_retention(root, run_id, force=True)
-            with self.assertRaises(ValueError):
-                delete_task(root, run_id, task["id"])
 
             self.assertEqual(delete_error.exception.reason, "system_managed_run")
             self.assertEqual(lifecycle_error.exception.reason, "system_managed_run")
             self.assertEqual(retention_error.exception.reason, "system_managed_run")
+
+    def test_system_run_tasks_can_be_deleted_by_administrator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = ensure_service_assistant_run(root, {"backend": "stub"})
+            task = ensure_service_assistant_task(root, run_id, "tenant:p2p:ou_user", {"backend": "stub"})
+
+            deleted = delete_task(root, run_id, task["id"])
+            plan = require_plan(root, run_id)
+            stored = next(item for item in plan.get("tasks", []) if str(item.get("id") or "") == str(task["id"]))
+
+            self.assertIsNotNone(deleted.get("deleted_at"))
+            self.assertIsNotNone(stored.get("deleted_at"))
 
     def test_dedicated_prompt_explains_identity_runtime_home_and_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

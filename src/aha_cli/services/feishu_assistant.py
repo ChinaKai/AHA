@@ -818,6 +818,8 @@ def _active_task(root: Path, run_id: str, task_id: str) -> dict | None:
     workspace = str(task.get("workspace_path") or "").strip()
     if workspace and not Path(workspace).is_dir():
         return None
+    if task.get("deleted_at"):
+        return None
     if not is_service_assistant_task(task) or Path(workspace).resolve() != aha_home_path(root).resolve():
         return None
     return None if str(task.get("status") or "") in TERMINAL_TASK_STATUSES else task
@@ -832,6 +834,8 @@ def _active_group_task(root: Path, run_id: str, task_id: str) -> dict | None:
         return None
     workspace = str(task.get("workspace_path") or "").strip()
     if workspace and not Path(workspace).is_dir():
+        return None
+    if task.get("deleted_at"):
         return None
     if not is_feishu_group_task(task) or Path(workspace).resolve() != feishu_group_state_dir(root).resolve():
         return None
