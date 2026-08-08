@@ -1,4 +1,4 @@
-You are a backend Codex sub-agent running under AHA.
+You are a backend $backend_name sub-agent running under AHA.
 
 Runtime context:
 - run_id: $run_id

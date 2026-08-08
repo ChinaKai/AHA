@@ -12,13 +12,13 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 | `backend_` | 主 prompt 组装（full/delta 上下文、recovery、request policy） | `backend_chat_full.md` |
 | `chat_` | 回合交互与重试 | `chat_action_schema_retry.md` |
 | `knowledge_` | 知识库 capture/distill/nav | `knowledge_capture_prompt.md` |
-| `navigation_` | 项目导航 | `navigation_command.md` |
+| `navigation_` | 项目导航 | `knowledge_navigation_rule.md` |
 | `service_assistant_` | 飞书私聊管家 | `service_assistant_identity.md` |
 | `feishu_group_` | 飞书群聊数字人 | `feishu_group_digital_human_identity.md` |
 | `supervision_` | 监督 host | `supervision_host_contract.md` |
 | `finalization` | 任务收尾 | `finalization.md` |
 | `subtask` | 子代理任务 | `subtask.md` |
-| `runner_` | backend runner | `runner_claude.md` |
+| `runner` | backend runner（按 `$backend_name` 区分） | `runner.md` |
 | `workflow_guidance_` | 工作流模式 | `workflow_guidance_bugfix.md` |
 | `mode_instruction_` | 回合模式指令 | `mode_instruction_default.md` |
 | `task_` | 回合摘要、任务分配、skills 上下文 | `task_round_summary.md` |
@@ -27,7 +27,6 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 | `action_` | 动作 schema 校验 | `action_invalid_schema.md` |
 | `hardware_debug_` | 硬件调试 | `hardware_debug_context.md` |
 | `browser_control_` | 浏览器控制 | `browser_control_context.md` |
-| `memo_` | Memo 完成报告 | `memo_completion_report.md` |
 
 ## 占位符命名约定
 
@@ -55,7 +54,7 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 - backend_knowledge_enabled_empty, backend_prompt_prefix
 - backend_recent_conversation_chain, backend_recent_conversation_chains, backend_recent_conversation_empty, backend_recent_conversation_line, backend_recent_supervision_conversation
 - backend_recovery_agent_context, backend_recovery_context, backend_recovery_sub_agent_notice, backend_request_policy
-- backend_result_conversation_omitted, backend_sticky_context
+- backend_result_conversation_omitted, backend_sticky_context, backend_subagent_contract
 - backend_task_context, backend_task_context_minimal, backend_task_context_missing, backend_task_context_none, backend_truncated_budget_suffix, backend_truncated_message_suffix
 
 ### chat_（回合交互与重试）
@@ -66,7 +65,6 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 - knowledge_capture_image_manifest, knowledge_capture_prompt, knowledge_command
 - knowledge_distill_generate_rules, knowledge_distill_organize_rules
 - knowledge_navigation_bootstrap, knowledge_navigation_header, knowledge_navigation_rule
-- navigation_command
 
 ### service_assistant_ / feishu_group_（飞书管家与群聊数字人）
 - service_assistant_action_contract, service_assistant_identity, service_assistant_runtime
@@ -81,7 +79,7 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 - finalization_task_journal, finalization_task_journal_empty, finalization_task_journal_field, finalization_task_journal_item
 - task_assignment, task_round_summary, task_skills_context
 - subtask, subtask_mutability_implementation, subtask_mutability_research
-- runner_claude, runner_codex
+- runner
 
 ### workflow_guidance_（工作流模式）
 - workflow_guidance_auto, workflow_guidance_bugfix, workflow_guidance_embedded-driver
@@ -90,4 +88,4 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 
 ### 其他
 - mode_instruction_default, mode_instruction_final, mode_instruction_memo_report, commit_policy, compact_summary, action_invalid_schema
-- hardware_debug_context, browser_control_context, memo_completion_report
+- hardware_debug_context, browser_control_context

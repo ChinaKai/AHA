@@ -141,6 +141,7 @@ def task_has_active_followup(task: dict) -> bool:
 def task_assignment_prompt(task: dict, knowledge_context: str = "") -> str:
     return render_prompt_template(
         "task_assignment.md",
+        subagent_contract=render_prompt_template("backend_subagent_contract.md").rstrip("\n"),
         task_title=task.get("title", ""),
         task_description=task.get("description", ""),
         workspace_path=task.get("workspace_path") or "(not set)",

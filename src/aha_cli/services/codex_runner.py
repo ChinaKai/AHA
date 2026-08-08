@@ -50,7 +50,8 @@ def run_codex_task(args) -> int:
     if inbox_file.exists() and inbox_file.stat().st_size:
         inbox_preview = inbox_file.read_text(encoding="utf-8")[-8000:]
     prompt = render_prompt_template(
-        "runner_codex.md",
+        "runner.md",
+        backend_name="Codex",
         run_id=run_id,
         task_id=task_id,
         mode=mode,

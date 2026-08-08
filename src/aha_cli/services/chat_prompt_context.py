@@ -280,7 +280,10 @@ def _coordination_policy_for_prompt(needed: bool) -> str:
 def _action_contract_for_prompt(needed: bool) -> str:
     if not needed:
         return ""
-    return render_prompt_template("backend_action_contract.md").rstrip()
+    return render_prompt_template(
+        "backend_action_contract.md",
+        subagent_contract=render_prompt_template("backend_subagent_contract.md").rstrip("\n"),
+    ).rstrip()
 
 
 def _agent_context_for_prompt(current_agent: dict, visible_agents: list[dict], needed: bool) -> str:
