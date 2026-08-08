@@ -114,8 +114,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "claude-haiku-custom")
         self.assertNotIn("CLAUDE_CODE_SUBAGENT_MODEL", env)
         self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "256000")
-        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "256000")
-        self.assertEqual(env["DISABLE_COMPACT"], "1")
+        # 256K 窗口不再自动注入 DISABLE_COMPACT，让 Claude CLI 在接近窗口时自动压缩。
+        self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", env)
+        self.assertNotIn("DISABLE_COMPACT", env)
         self.assertEqual(env["API_TIMEOUT_MS"], "600000")
         self.assertNotIn("CLAUDE_CODE_USE_VERTEX", env)
         self.assertNotIn("ANTHROPIC_CUSTOM_HEADERS", env)
@@ -137,6 +138,26 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "1000000")
         self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", env)
         self.assertNotIn("DISABLE_COMPACT", env)
+
+    def test_claude_explicit_disable_compact_still_forces_manual_compaction(self) -> None:
+        config = {
+            "env": [
+                {
+                    "name": "manual-compact",
+                    "ANTHROPIC_MODEL": "claude-gpt-5.6-sol",
+                    "ANTHROPIC_AUTH_TOKEN": "gateway-token",
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "256000",
+                    "DISABLE_COMPACT": "1",
+                }
+            ]
+        }
+
+        env = claude_config_env(config)
+
+        # 用户显式配置 DISABLE_COMPACT 时仍生效，并回填窗口上限。
+        self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "256000")
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "256000")
+        self.assertEqual(env["DISABLE_COMPACT"], "1")
 
     def test_claude_config_env_can_disable_env_groups_for_official_claude(self) -> None:
         env = claude_config_env(

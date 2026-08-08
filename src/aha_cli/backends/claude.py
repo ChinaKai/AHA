@@ -215,7 +215,7 @@ def claude_config_env(claude_config: dict | None) -> dict[str, str]:
     env.pop("CLAUDE_CODE_MAX_CONTEXT_TOKENS", None)
     if context_window:
         env.setdefault("CLAUDE_CODE_AUTO_COMPACT_WINDOW", str(context_window))
-        if context_window == 256_000 or _truthy_env_value(group.get("DISABLE_COMPACT")):
+        if _truthy_env_value(group.get("DISABLE_COMPACT")):
             env["DISABLE_COMPACT"] = "1"
             env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(context_window)
         else:
