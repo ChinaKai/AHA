@@ -1735,6 +1735,52 @@ class CliCoreTests(unittest.TestCase):
                 self.assertIn('"agent_id": "main"', sessions)
                 self.assertIn('"agent_id": "sub-001"', sessions)
 
+    def test_web_restart_reaps_managed_children_before_execv(self) -> None:
+        from aha_cli import cli as cli_module
+        from aha_cli.web.server import WEB_RESTART_EXIT_CODE
+
+        args = mock.Mock()
+        args.home = None
+        args.run_id = ""
+        args.host = "127.0.0.1"
+        args.port = 8788
+        args.poll_interval = 1000
+        args.auth_token = None
+        args.auth_token_file = None
+        args.allow_unsafe_bind = True
+        args._aha_restart_argv = ["ui", "run-a"]
+
+        calls: list[str] = []
+
+        def fake_asyncio_run(coro):
+            raise SystemExit(WEB_RESTART_EXIT_CODE)
+
+        def fake_execv(command, argv):
+            calls.append("execv")
+            return None
+
+        def fake_terminate():
+            calls.append("terminate")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            cli_module, "command_aha_home", return_value=Path(tmp)
+        ), mock.patch.object(cli_module, "resolve_auth_token", return_value="tok"), mock.patch.object(
+            cli_module, "asyncio"
+        ) as asyncio_mock, mock.patch.object(cli_module, "aha_cli_invocation", return_value=["python", "aha"]), mock.patch.object(
+            cli_module.os, "execv", side_effect=fake_execv
+        ) as execv, mock.patch.object(
+            cli_module, "terminate_parent_death_children", side_effect=fake_terminate
+        ) as terminate:
+            asyncio_mock.run = fake_asyncio_run
+            result = cli_module.cmd_ui(args)
+
+        self.assertEqual(result, 1)
+        terminate.assert_called_once_with()
+        execv.assert_called_once()
+        # Managed children (backend workers, browser/hardware bridges) must be
+        # reaped before the process image is replaced.
+        self.assertEqual(calls, ["terminate", "execv"])
+
 
 if __name__ == "__main__":
     unittest.main()

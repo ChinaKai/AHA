@@ -80,6 +80,7 @@ from aha_cli.services.service_upgrade import (
     check_user_service_upgrade,
     upgrade_user_service,
 )
+from aha_cli.process_control import terminate_parent_death_children
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.services.windows_tray import (
     WindowsTrayError,
@@ -1707,6 +1708,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
     except SystemExit as exc:
         if exc.code != WEB_RESTART_EXIT_CODE:
             raise
+        # Reap managed children (backend workers, browser/hardware bridges)
+        # before replacing the process image. os.execv preserves the PID but
+        # resets the Windows kill-on-close Job Object handle, so the old job can
+        # no longer reap those children once the image is replaced; terminate the
+        # Job tree here so they do not leak as orphans holding stale sessions.
+        terminate_parent_death_children()
         # Replace the whole process image so updated source modules or a newly
         # installed onebin are loaded. os.execv preserves the PID and parent
         # relationship, while closing non-inheritable server sockets.
