@@ -151,6 +151,11 @@ def default_feishu_integration_config() -> dict:
         "group_mentions_only": True,
         "notifications_enabled": True,
         "security_mode": "audit",
+        "group_permissions": {
+            "default_scope": "public_knowledge",
+            "allowed_topics": [],
+            "handoff_always": [],
+        },
     }
 
 
@@ -369,6 +374,17 @@ def normalize_feishu_integration_config(value: object | None = None) -> dict:
     )
     security_mode = str(raw.get("security_mode") or config["security_mode"]).strip().lower()
     config["security_mode"] = security_mode if security_mode in {"compat", "audit", "strict"} else "audit"
+    raw_permissions = raw.get("group_permissions")
+    if isinstance(raw_permissions, dict):
+        default_permissions = config["group_permissions"]
+        default_scope = str(raw_permissions.get("default_scope") or default_permissions["default_scope"]).strip()
+        allowed_topics = _normalize_string_list(raw_permissions.get("allowed_topics"))
+        handoff_always = _normalize_string_list(raw_permissions.get("handoff_always"))
+        config["group_permissions"] = {
+            "default_scope": default_scope or "public_knowledge",
+            "allowed_topics": allowed_topics,
+            "handoff_always": handoff_always,
+        }
     return config
 
 

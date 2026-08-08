@@ -140,6 +140,25 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertTrue(config["enabled"])
         self.assertNotIn("web", config)
 
+    def test_group_permissions_are_normalized_with_defaults(self) -> None:
+        config = normalize_feishu_integration_config(
+            {
+                "group_permissions": {
+                    "default_scope": "project_docs",
+                    "allowed_topics": ["vega", "hlcloud"],
+                    "handoff_always": "payment, legal",
+                }
+            }
+        )
+        self.assertEqual(config["group_permissions"]["default_scope"], "project_docs")
+        self.assertEqual(config["group_permissions"]["allowed_topics"], ["vega", "hlcloud"])
+        self.assertEqual(config["group_permissions"]["handoff_always"], ["payment", "legal"])
+
+        empty = normalize_feishu_integration_config({})
+        self.assertEqual(empty["group_permissions"]["default_scope"], "public_knowledge")
+        self.assertEqual(empty["group_permissions"]["allowed_topics"], [])
+        self.assertEqual(empty["group_permissions"]["handoff_always"], [])
+
     def test_system_route_exposes_feishu_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "aha_cli.web.system_routes.feishu_status",

@@ -69,6 +69,9 @@ SAMPLE_VALUES = {
     "distill_mode_label": "整理",
     "distill_mode_rules": "- Do not add facts.",
     "distill_mode_summary": "Organize the note.",
+    "default_scope": "public_knowledge",
+    "allowed_topics": "none",
+    "handoff_always": "execution, permissions",
     "enabled_channel_count": "1",
     "enabled_paths": "  - /tmp/SKILL.md",
     "error_text": "missing Generated-by",
@@ -188,7 +191,7 @@ def _prompt_template_names() -> list[str]:
     return sorted(
         item.name
         for item in resources.files("aha_cli.prompts").iterdir()
-        if item.name.endswith(".md")
+        if item.name.endswith(".md") and item.name != "README.md"
     )
 
 
@@ -216,6 +219,52 @@ class PromptTemplateTests(unittest.TestCase):
                 self.assertEqual(missing, set())
                 rendered = render_prompt_template(name, **SAMPLE_VALUES)
                 self.assertTrue(rendered.strip())
+
+    def test_prompt_template_placeholders_follow_snake_case(self) -> None:
+        import re
+
+        prompts = resources.files("aha_cli.prompts")
+        for name in _prompt_template_names():
+            with self.subTest(template=name):
+                text = prompts.joinpath(name).read_text(encoding="utf-8")
+                for placeholder in sorted(_placeholders(text)):
+                    self.assertRegex(
+                        placeholder,
+                        r"^[a-z][a-z0-9_]*$",
+                        f"placeholder ${placeholder} in {name} must be snake_case",
+                    )
+
+    def test_prompt_template_names_follow_prefix_convention(self) -> None:
+        readme = resources.files("aha_cli.prompts").joinpath("README.md").read_text(encoding="utf-8")
+        allowed_prefixes = []
+        for line in readme.splitlines():
+            if not line.startswith("| `"):
+                continue
+            cell = line.split("|")[1].strip()
+            prefix = cell.strip("`").rstrip("_")
+            if prefix:
+                allowed_prefixes.append(prefix)
+        for name in _prompt_template_names():
+            if name == "README.md":
+                continue
+            with self.subTest(template=name):
+                self.assertTrue(
+                    any(name.startswith(prefix) for prefix in allowed_prefixes),
+                    f"{name} does not follow a documented prefix in prompts/README.md",
+                )
+
+    def test_readme_documents_every_template(self) -> None:
+        readme = resources.files("aha_cli.prompts").joinpath("README.md").read_text(encoding="utf-8")
+        missing = {
+            name
+            for name in _prompt_template_names()
+            if name[: -len(".md")] not in readme
+        }
+        self.assertEqual(
+            missing,
+            set(),
+            "templates missing from prompts/README.md file inventory",
+        )
 
     def test_migrated_prompt_bodies_are_not_hardcoded_in_python_sources(self) -> None:
         denylist = {

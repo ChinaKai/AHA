@@ -4,6 +4,7 @@ from collections import Counter, deque
 from pathlib import Path
 
 from aha_cli.domain.models import is_feishu_group_task
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.config import load_config
 from aha_cli.store.event_views import event_agent_refs
 from aha_cli.store.filesystem import iter_jsonl_reverse
@@ -279,12 +280,22 @@ def feishu_group_source_index_context(root: Path, run_id: str, task: dict | None
     try:
         config = load_config(root)
         task_id = str((task or {}).get("id") or "")
+        feishu_config = config.get("integrations", {}).get("feishu", {}) if isinstance(config.get("integrations"), dict) else {}
+        permissions = feishu_config.get("group_permissions") if isinstance(feishu_config.get("group_permissions"), dict) else {}
+        permission_context = render_prompt_template(
+            "feishu_group_digital_human_permission.md",
+            default_scope=str(permissions.get("default_scope") or "public_knowledge"),
+            allowed_topics=", ".join(str(item) for item in permissions.get("allowed_topics") or []) or "none",
+            handoff_always=", ".join(str(item) for item in permissions.get("handoff_always") or []) or "execution, commitment, permissions, private/secrets",
+        ).rstrip()
         lines = [
             "Digital-human information source index:",
             "- This is an index, not full source content. Use it to choose minimal KB entries or workspace files to inspect before answering.",
-            "- Early-stage policy: the digital human may read all indexed sources, but must not directly publish secrets, credentials, irreversible-operation guidance, private task content, or uncertain internal details to the group.",
-            "- If an answer can be supported by common knowledge, KB, docs, README, or clearly public project material, answer publicly and concisely.",
-            "- If the answer depends on private source details, secrets, owner judgment, execution, authorization, or uncertain public-safety boundaries, hand off to the owner.",
+            "- The digital human may read all indexed sources, but must not directly publish secrets, credentials, irreversible-operation guidance, private task content, or uncertain internal details to the group.",
+            "- If an answer can be supported by common knowledge, KB, docs, README, or clearly public project material within the permission scope, answer publicly and concisely.",
+            "- If the answer depends on private source details, secrets, owner judgment, execution, authorization, or falls outside the permission scope, hand off to the owner.",
+            "",
+            permission_context,
             "",
             *_kb_index_lines(root, config),
             "",
