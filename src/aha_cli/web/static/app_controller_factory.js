@@ -490,6 +490,8 @@
       promptsDialogEl
     }, {
       apiUrl: deps.apiUrl,
+      closeMobileActionPanel: deps.closeMobileActionPanel,
+      closeMobileSheets: deps.closeMobileSheets,
       fetchWithTimeout: deps.fetchWithTimeout
     });
 

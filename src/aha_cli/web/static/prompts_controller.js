@@ -159,6 +159,8 @@
     async function open() {
       const panel = elements.promptsDialogEl;
       if (!panel) return;
+      deps.closeMobileSheets?.();
+      deps.closeMobileActionPanel?.();
       setOpen(true);
       await loadList();
     }

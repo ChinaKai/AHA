@@ -8854,6 +8854,17 @@ body.empty-run .panel {
   body.settings-home .run-integrations-section {
     grid-column: 1;
   }
+  .prompts-layout {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: none;
+    gap: 8px;
+  }
+  .prompts-nav {
+    max-height: 40vh;
+  }
+  .prompts-preview {
+    min-height: 32vh;
+  }
   body.settings-home .settings-home-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
