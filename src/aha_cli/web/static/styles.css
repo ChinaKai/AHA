@@ -8860,10 +8860,10 @@ body.empty-run .panel {
     gap: 8px;
   }
   .prompts-nav {
-    max-height: 40vh;
+    max-height: 24vh;
   }
   .prompts-preview {
-    min-height: 32vh;
+    min-height: 46vh;
   }
   body.settings-home .settings-home-tabs {
     display: grid;
