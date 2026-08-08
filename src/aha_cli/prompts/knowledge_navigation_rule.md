@@ -1,0 +1,1 @@
+Project nav rule: 在做大范围代码搜索或打开大量文件前，必须先读 navigation/index；再选择最小相关 modules/* 或 flows/*，读取这些 nav 文档和列出的关键文件；只有 nav 不覆盖或与代码冲突时才做定向搜索，冲突时以代码为准。

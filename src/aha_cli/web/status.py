@@ -6,6 +6,7 @@ import time
 from aha_cli.domain.models import utc_now
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.backend_runtime import backend_status
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
@@ -104,7 +105,7 @@ def agent_recovery_context(agent_id: str, reason: str) -> str:
         [
             f"上一轮 agent `{agent_id}` 工作异常中断，AHA 已检测到 backend 停止并恢复任务状态。",
             f"异常原因：{reason}。",
-            "继续前请注意：当前工作区、任务消息、子代理和命令可能已有部分副作用；请先基于当前实际状态检查已有进展，再决定继续、等待、补救或重新创建子代理。",
+            render_prompt_template("backend_recovery_agent_context.md").rstrip("\n"),
         ]
     )
 
@@ -114,7 +115,7 @@ def sub_agent_recovery_notice(agent_id: str, reason: str) -> str:
         [
             f"AHA 检测到你创建的子代理 `{agent_id}` backend 已停止，并已把该子代理标记为 interrupted。",
             f"异常原因：{reason}。",
-            "不要假设它已经完成；它可能已经产生部分文件、日志或分析结论。继续前请检查该子代理的状态、消息和相关输出，再决定重启子代理、接手处理、等待其他子代理，或汇总已有结果。",
+            render_prompt_template("backend_recovery_sub_agent_notice.md").rstrip("\n"),
         ]
     )
 

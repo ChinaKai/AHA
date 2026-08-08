@@ -69,26 +69,12 @@ def _distill_mode_prompt_parts(mode: str) -> dict[str, str]:
         return {
             "distill_mode_label": "生成",
             "distill_mode_summary": "围绕原始 note 拓展生成一篇可直接进入知识库审核的完整文章。",
-            "distill_mode_rules": "\n".join(
-                [
-                    "- 原始 note 是主题、意图和约束来源，但不是唯一信息来源。",
-                    "- 可以使用当前 agent 可访问的公开资料、第三方文档、网页或 API 文档来补充背景、步骤和解释。",
-                    "- 使用原文之外的信息时，在正文中标注“外部资料补充”或给出来源名称；无法确认的内容标注“待确认”。",
-                    "- 不要把未确认的猜测写成事实，不要抹掉原文中的不确定性、限制条件和待办问题。",
-                    "- 不要读取或引用 AHA 知识库、本地私有文件作为事实来源，除非原始 note 明确提供了对应内容或路径。",
-                ]
-            ),
+            "distill_mode_rules": render_prompt_template("knowledge_distill_generate_rules.md").rstrip("\n"),
         }
     return {
         "distill_mode_label": "整理",
         "distill_mode_summary": "把收到的原始 note 整理成一篇逻辑清晰的文章。只做格式、段落和表达顺序整理，不要拓展，不要总结成新的观点，也不要修改核心内容。",
-        "distill_mode_rules": "\n".join(
-            [
-                "- 只做整理、去重、归类和表达顺序调整，不新增原文没有的信息。",
-                "- 只使用下面的标题和正文，不搜索、不读取知识库、不获取第三方信息。",
-                "- 可以删除明显重复、口头禅和无意义闲聊，但不要删除会改变含义的信息。",
-            ]
-        ),
+        "distill_mode_rules": render_prompt_template("knowledge_distill_organize_rules.md").rstrip("\n"),
     }
 
 

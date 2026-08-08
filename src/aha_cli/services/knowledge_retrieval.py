@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Sequence
 
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.knowledge import (
     NAVIGATION_SLUG,
     iter_all_entries,
@@ -192,11 +193,7 @@ def _entry_summary(entry: dict, *, summary_chars: int, include_navigation_body: 
 def _navigation_header(entries: list[dict]) -> list[str]:
     if not any(_is_navigation_entry(e) for e in entries):
         return []
-    return [
-        "⚑ 本项目已有项目导航（navigation/index 置顶）：在做大范围代码搜索或打开大量文件前，必须先读入口；"
-        "再选择最小相关 modules/* 或 flows/*，并读取其列出的关键文件；"
-        "只有 nav 不覆盖或与代码冲突时才做定向搜索。冲突时以代码为准，收尾只回写受影响的 kind:\"navigation\" 文档。"
-    ]
+    return [render_prompt_template("knowledge_navigation_header.md").rstrip("\n")]
 
 
 def _navigation_reference_lines(entries: list[dict], kb_root: Path | None) -> list[str]:
@@ -204,9 +201,7 @@ def _navigation_reference_lines(entries: list[dict], kb_root: Path | None) -> li
     if nav_index is None:
         return []
     path = _entry_path(nav_index, kb_root)
-    lines = [
-        "Project nav rule: 在做大范围代码搜索或打开大量文件前，必须先读 navigation/index；再选择最小相关 modules/* 或 flows/*，读取这些 nav 文档和列出的关键文件；只有 nav 不覆盖或与代码冲突时才做定向搜索，冲突时以代码为准。",
-    ]
+    lines = [render_prompt_template("knowledge_navigation_rule.md").rstrip("\n")]
     if path:
         lines.append(f"Project nav path: {path}")
     return lines

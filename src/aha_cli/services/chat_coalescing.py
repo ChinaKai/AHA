@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from aha_cli.services.prompt_templates import render_prompt_template
+
 
 FEISHU_GROUP_CHANNEL = "group_digital_human"
 MAX_MERGED_GROUP_MESSAGES = 20
@@ -58,17 +60,11 @@ def _merged_group_item(items: list[dict]) -> tuple[dict, dict]:
         suffix = "（内容过长，仅保留末尾）" if latest_truncated and index == len(retained) else ""
         lines.append(f"{index}. {text}{suffix}")
     combined_text = "\n".join(lines).strip() or "-"
-    latest["message"] = "\n".join(
-        [
-            "飞书群聊 @ 数字人请求（忙碌期间合并）",
-            "",
-            "请基于这些 @ 消息的整体上下文判断意图，并只回复一次。能公开直接回答则直接答；"
-            "执行类需求信息不清时先在群里简短追问；需求明确且涉及执行、承诺、权限、争议或私密内容时再触发转管家动作。",
-            "",
-            f"用户在上一轮处理期间连续发送了 {len(items)} 条消息，以下按发送顺序排列：",
-            combined_text,
-        ]
-    )
+    latest["message"] = render_prompt_template(
+        "feishu_group_digital_human_coalesced.md",
+        count=len(items),
+        messages=combined_text,
+    ).rstrip("\n")
     latest["feishu_original_text"] = combined_text
     latest["feishu_merged_count"] = len(items)
     latest["feishu_merged_omitted_count"] = omitted_count

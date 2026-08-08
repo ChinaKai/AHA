@@ -110,6 +110,8 @@ SAMPLE_VALUES = {
     "memo_title": "Memo",
     "message": "hello",
     "messages": "- message",
+    "text": "hello @robot",
+    "count": "3",
     "metadata": "   - round_id: round-001",
     "mode": "research",
     "mode_instruction": "Reply directly.",
@@ -247,6 +249,22 @@ class PromptTemplateTests(unittest.TestCase):
             "src/aha_cli/services/knowledge_navigation.py": [
                 "You are generating the initial AHA project navigation",
                 "Return ONLY valid JSON. The top-level value must be an array of candidates.",
+            ],
+            "src/aha_cli/services/knowledge_retrieval.py": [
+                "Project nav rule:",
+                "本项目已有项目导航（navigation/index 置顶）",
+            ],
+            "src/aha_cli/services/feishu_group.py": [
+                "飞书群聊 @ 数字人请求",
+                "请基于本次 @ 消息判断意图",
+            ],
+            "src/aha_cli/services/chat_coalescing.py": [
+                "飞书群聊 @ 数字人请求（忙碌期间合并）",
+                "请基于这些 @ 消息的整体上下文判断意图",
+            ],
+            "src/aha_cli/web/status.py": [
+                "继续前请注意：当前工作区、任务消息、子代理",
+                "不要假设它已经完成；它可能已经产生部分文件",
             ],
             "src/aha_cli/services/task_skills.py": [
                 "Task skill operating rules:",

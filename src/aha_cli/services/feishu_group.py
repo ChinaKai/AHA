@@ -13,6 +13,7 @@ from aha_cli.domain.models import (
     is_feishu_group_task,
     utc_now,
 )
+from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import create_plan, reopen_task, task_snapshot
 from aha_cli.store.io import write_json
@@ -351,13 +352,10 @@ def group_agent_message(payload: dict, text: str, *, token_limit: int = DEFAULT_
     parent_id = str(payload.get("parent_id") or "").strip()
     thread_id = str(payload.get("thread_id") or "").strip()
     lines = [
-        "飞书群聊 @ 数字人请求",
-        "",
-        "请基于本次 @ 消息判断意图：能公开直接回答则直接答；执行类需求信息不清时先在群里简短追问；"
-        "需求明确且涉及执行、承诺、权限、争议或私密内容时再触发转管家动作。",
-        "",
-        "当前 @ 消息：",
-        str(text or "").strip(),
+        render_prompt_template(
+            "feishu_group_digital_human_message.md",
+            text=str(text or "").strip(),
+        ).rstrip("\n")
     ]
     attachments = payload.get("attachments") if isinstance(payload.get("attachments"), list) else []
     if attachments:
