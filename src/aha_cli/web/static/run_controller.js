@@ -87,6 +87,15 @@
       elements.sessionMenuEl?.classList?.remove("settings-open");
     }
 
+    function closePromptsPanel() {
+      const panel = elements.documentRef?.getElementById?.("prompts-dialog");
+      const trigger = elements.documentRef?.getElementById?.("aha-prompts");
+      if (!panel) return;
+      panel.hidden = true;
+      panel.removeAttribute("open");
+      trigger?.setAttribute("aria-expanded", "false");
+    }
+
     function closeIntegrationPanels(except = "") {
       if (except !== "feishu") deps.setFeishuConsoleOpen?.(false);
       if (except !== "weixin") deps.setWeixinConsoleOpen?.(false);
@@ -99,6 +108,7 @@
 
     function closeExclusiveSettingsPanels(except = "") {
       if (except !== "settings") closeSystemSettingsPanel();
+      if (except !== "prompts") closePromptsPanel();
       if (except !== "upgrade") setWebPublishConsoleOpen(false, { load: false });
       closeIntegrationPanels(except);
     }
@@ -1112,6 +1122,9 @@
       });
       elements.documentRef?.getElementById?.("aha-settings")?.addEventListener("click", () => {
         closeExclusiveSettingsPanels("settings");
+      });
+      elements.documentRef?.getElementById?.("aha-prompts")?.addEventListener("click", () => {
+        closeExclusiveSettingsPanels("prompts");
       });
       elements.webPublishConsoleEl?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;

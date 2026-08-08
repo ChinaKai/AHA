@@ -361,6 +361,14 @@ body.settings-home .session-menu .settings-popover {
   overflow: visible;
   box-shadow: none;
 }
+body.settings-home .session-menu .prompts-popover {
+  grid-column: 1 / -1;
+  position: static;
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+  box-shadow: none;
+}
 body.settings-home .run-more-tools-body {
   display: contents;
 }
@@ -442,7 +450,9 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-manager,
 body.settings-home .session-menu[data-settings-tab="integrations"] .run-settings-panel,
 body.settings-home .session-menu[data-settings-tab="integrations"] .run-system-section,
 body.settings-home .session-menu[data-settings-tab="integrations"] .settings-popover,
-body.settings-home .session-menu[data-settings-tab="run"] .settings-popover {
+body.settings-home .session-menu[data-settings-tab="run"] .settings-popover,
+body.settings-home .session-menu[data-settings-tab="integrations"] .prompts-popover,
+body.settings-home .session-menu[data-settings-tab="run"] .prompts-popover {
   display: none;
 }
 body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrations-section {
@@ -1603,15 +1613,16 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   flex: 0 0 auto;
 }
 .prompts-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(760px, calc(100vw - 32px));
-  max-height: min(calc(var(--app-viewport-height) - 96px), 640px);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 12px;
+  max-height: none;
   min-width: 0;
+  overflow: visible;
   padding: 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: none;
 }
 .prompts-popover-head {
   display: flex;
@@ -1633,19 +1644,16 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   flex: 0 0 auto;
 }
 .prompts-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  margin-top: 12px;
-  flex: 1;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
 }
 .prompts-layout {
   display: grid;
   grid-template-columns: minmax(200px, 260px) 1fr;
   gap: 12px;
-  min-height: 0;
-  overflow: hidden;
-  flex: 1;
+  min-width: 0;
+  max-height: min(calc(var(--app-viewport-height) - 96px), 560px);
 }
 .prompts-nav {
   overflow-y: auto;
