@@ -20,7 +20,7 @@ from aha_cli.store.paths import config_path
 
 _agents_lock = threading.Lock()
 
-PERMISSION_FIELDS = {"default_scope", "allowed_topics", "handoff_always"}
+PERMISSION_FIELDS = {"default_scope", "allowed_topics", "handoff_always", "read_paths"}
 
 _GROUP_KEY = "group_digital_human"
 

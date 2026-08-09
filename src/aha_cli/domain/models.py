@@ -188,6 +188,7 @@ def default_agents_config() -> dict:
                 "default_scope": "public_knowledge",
                 "allowed_topics": [],
                 "handoff_always": [],
+                "read_paths": [],
             }
         }
     }
@@ -206,6 +207,7 @@ def normalize_agents_config(value: object | None = None) -> dict:
                 "default_scope": default_scope or "public_knowledge",
                 "allowed_topics": _normalize_string_list(raw_permissions.get("allowed_topics")),
                 "handoff_always": _normalize_string_list(raw_permissions.get("handoff_always")),
+                "read_paths": _normalize_string_list(raw_permissions.get("read_paths")),
             }
     return config
 

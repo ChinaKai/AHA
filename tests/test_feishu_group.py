@@ -171,6 +171,100 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertNotIn("README BODY SHOULD NOT BE IN PROMPT", prompt)
         self.assertNotIn("GUIDE BODY SHOULD NOT BE IN PROMPT", prompt)
 
+    def test_group_digital_human_prompt_filters_sources_by_read_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace-roots"
+            allowed_project = workspace_root / "allowed-project"
+            (allowed_project / "docs").mkdir(parents=True)
+            (allowed_project / "README.md").write_text("ALLOWED README\n", encoding="utf-8")
+            (allowed_project / "docs" / "guide.md").write_text("ALLOWED GUIDE\n", encoding="utf-8")
+            secret_project = workspace_root / "secret-project"
+            secret_project.mkdir(parents=True)
+            (secret_project / "secret.md").write_text("SECRET BODY\n", encoding="utf-8")
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "workspace_roots": [str(workspace_root)],
+                        "knowledge": {"enabled": True},
+                        "agents": {
+                            "group_digital_human": {
+                                "permissions": {"read_paths": [str(allowed_project)]}
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(root)
+            write_entry(
+                root,
+                config=config,
+                scope="general",
+                kind="wiki",
+                title="Allowed KB Doc",
+                body="ALLOWED KB BODY",
+                slug="allowed-kb",
+            )
+            write_entry(
+                root,
+                config=config,
+                scope="general",
+                kind="wiki",
+                title="Secret KB Doc",
+                body="SECRET KB BODY",
+                slug="secret-kb",
+            )
+            run_id = ensure_feishu_group_run(root, {"backend": "stub"})
+            session_key = "tenant-1:feishu-group-user:ou_requester"
+            task = ensure_feishu_group_task(root, run_id, session_key, {"backend": "stub"})
+            append_message(
+                root,
+                run_id,
+                "main",
+                "飞书群聊 @ 数字人请求\n\n当前 @ 消息：\n能看哪些",
+                sender="feishu",
+                task_id=task["id"],
+                role="main",
+                feishu_channel="group_digital_human",
+                feishu_chat_id="oc_group",
+                feishu_reply_to="om_group_1",
+                feishu_mention_open_id="ou_requester",
+                feishu_tenant_key="tenant-1",
+                feishu_chat_type="group",
+                feishu_message_id="om_group_1",
+                feishu_session_key=session_key,
+                feishu_original_text="能看哪些",
+            )
+
+            prompt = chat_prompt(
+                root,
+                run_id,
+                "main",
+                {
+                    "sender": "feishu",
+                    "message": "飞书群聊 @ 数字人请求\n\n当前 @ 消息：\n能看哪些",
+                    "task_id": task["id"],
+                    "role": "main",
+                },
+                "",
+            )
+
+        # Allowed project is indexed (it is inside the allowlist, even though
+        # its parent workspace root is not).
+        self.assertIn(str(allowed_project), prompt)
+        self.assertIn("allowed-project", prompt)
+        # Secret sibling project is filtered out of the workspace index.
+        self.assertNotIn("secret-project", prompt)
+        self.assertNotIn("SECRET BODY", prompt)
+        # KB entries live outside the allowlist (under .aha/knowledge), so both
+        # are filtered out — the allowlist is the only readable source set.
+        self.assertNotIn("Allowed KB Doc", prompt)
+        self.assertNotIn("Secret KB Doc", prompt)
+        self.assertNotIn("SECRET KB BODY", prompt)
+        self.assertIn("read_paths", prompt)
+
     def test_group_digital_human_prompt_includes_linked_memo_terminal_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -967,6 +1061,92 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertEqual(first_stored["status"], "completed")
         self.assertTrue(first_stored["feishu_group_archived_at"])
         self.assertFalse(first_stored.get("deleted_at"))
+
+
+class FeishuGroupSourcePathFilterTests(unittest.TestCase):
+    """Unit tests for the read_paths allowlist filter."""
+
+    def test_path_allowed_returns_true_without_allowlist(self) -> None:
+        from aha_cli.services.feishu_group_sources import _path_allowed
+
+        self.assertTrue(_path_allowed(Path("/any/path/file.txt"), []))
+        self.assertTrue(_path_allowed(Path("/any/path"), None))
+
+    def test_path_allowed_matches_descendant(self) -> None:
+        from aha_cli.services.feishu_group_sources import _path_allowed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "proj"
+            child = root / "docs" / "readme.md"
+            child.parent.mkdir(parents=True)
+            child.write_text("x", encoding="utf-8")
+            self.assertTrue(_path_allowed(child, [str(root)]))
+            self.assertTrue(_path_allowed(root, [str(root)]))
+            self.assertFalse(_path_allowed(base / "other" / "secret.md", [str(root)]))
+            self.assertFalse(_path_allowed(base, [str(root)]))
+
+    def test_path_allowed_matches_any_configured_root(self) -> None:
+        from aha_cli.services.feishu_group_sources import _path_allowed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            a = base / "a"
+            b = base / "b"
+            b.mkdir(parents=True)
+            target = b / "doc.md"
+            target.write_text("x", encoding="utf-8")
+            self.assertTrue(_path_allowed(target, [str(a), str(b)]))
+            self.assertFalse(_path_allowed(target, [str(a)]))
+
+    def test_path_allowed_rejects_outside_path(self) -> None:
+        from aha_cli.services.feishu_group_sources import _path_allowed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "proj"
+            root.mkdir()
+            sibling = base / "sibling.md"
+            sibling.write_text("x", encoding="utf-8")
+            self.assertFalse(_path_allowed(sibling, [str(root)]))
+
+    def test_workspace_index_keeps_allowlisted_project_under_filtered_root(self) -> None:
+        from aha_cli.services.feishu_group_sources import _workspace_root_lines
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "ws"
+            allowed = workspace_root / "allowed-proj"
+            (allowed / "docs").mkdir(parents=True)
+            (allowed / "README.md").write_text("r", encoding="utf-8")
+            secret = workspace_root / "secret-proj"
+            secret.mkdir()
+            (secret / "secret.md").write_text("s", encoding="utf-8")
+            config = {"workspace_roots": [str(workspace_root)]}
+            lines = _workspace_root_lines(root, config, read_paths=[str(allowed)])
+            text = "\n".join(lines)
+            # The parent root is not in the allowlist, but the allowed project is.
+            self.assertIn("partial, filtered by read_paths", text)
+            self.assertIn(str(allowed), text)
+            self.assertIn("allowed-proj", text)
+            self.assertNotIn("secret-proj", text)
+            self.assertNotIn("secret.md", text)
+
+    def test_workspace_index_full_root_when_root_in_allowlist(self) -> None:
+        from aha_cli.services.feishu_group_sources import _workspace_root_lines
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "ws"
+            child = workspace_root / "child"
+            child.mkdir(parents=True)
+            (child / "README.md").write_text("r", encoding="utf-8")
+            config = {"workspace_roots": [str(workspace_root)]}
+            lines = _workspace_root_lines(root, config, read_paths=[str(workspace_root)])
+            text = "\n".join(lines)
+            self.assertIn("root=" + str(workspace_root), text)
+            self.assertNotIn("partial", text)
+            self.assertNotIn("filtered", text)
 
 
 if __name__ == "__main__":

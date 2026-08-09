@@ -171,6 +171,7 @@ class FeishuRuntimeTests(unittest.TestCase):
                         "default_scope": "workspace_only",
                         "allowed_topics": ["vega", "hlcloud"],
                         "handoff_always": "payment, legal",
+                        "read_paths": "/data/proj\n/data/docs",
                     }
                 }
             }
@@ -179,10 +180,12 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertEqual(group["default_scope"], "workspace_only")
         self.assertEqual(group["allowed_topics"], ["vega", "hlcloud"])
         self.assertEqual(group["handoff_always"], ["payment", "legal"])
+        self.assertEqual(group["read_paths"], ["/data/proj", "/data/docs"])
 
         defaults = normalize_agents_config({})
         self.assertEqual(defaults["group_digital_human"]["permissions"]["default_scope"], "public_knowledge")
         self.assertEqual(defaults["group_digital_human"]["permissions"]["allowed_topics"], [])
+        self.assertEqual(defaults["group_digital_human"]["permissions"]["read_paths"], [])
 
     def test_resolve_group_digital_human_permissions_prefers_agents_over_legacy(self) -> None:
         config = {
