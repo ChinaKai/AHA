@@ -62,6 +62,7 @@
       const defaultScope = escapeHtml(permissions.default_scope || "public_knowledge");
       const allowedTopics = escapeHtml((permissions.allowed_topics || []).join(", "));
       const handoffAlways = escapeHtml((permissions.handoff_always || []).join(", "));
+      const readPaths = escapeHtml((permissions.read_paths || []).join("\n"));
       return `
 <form class="permissions-form" data-permissions-form>
   <label class="permissions-field">
@@ -83,6 +84,11 @@
     <span>${escapeHtml(t("run.permissions_handoff_always", "Always hand off topics"))}</span>
     <textarea name="handoff_always" rows="3" placeholder="${escapeHtml(t("run.permissions_handoff_placeholder", "Comma-separated topics"))}">${handoffAlways}</textarea>
     <em>${escapeHtml(t("run.permissions_handoff_always_hint", "Additional topics that must always hand off to the owner. Empty = baseline only (execution, commitment, permissions, private/secrets)."))}</em>
+  </label>
+  <label class="permissions-field">
+    <span>${escapeHtml(t("run.permissions_read_paths", "Readable paths"))}</span>
+    <textarea name="read_paths" rows="3" placeholder="${escapeHtml(t("run.permissions_read_paths_placeholder", "One absolute path per line"))}">${readPaths}</textarea>
+    <em>${escapeHtml(t("run.permissions_read_paths_hint", "When set, only KB entries and workspace roots under these paths are indexed. Empty = all sources."))}</em>
   </label>
   <div class="permissions-actions">
     <span id="permissions-state" class="meta" aria-live="polite"></span>
@@ -119,10 +125,12 @@
     function readForm(form) {
       const allowedTopics = String(form?.querySelector?.('[name="allowed_topics"]')?.value || "").trim();
       const handoffAlways = String(form?.querySelector?.('[name="handoff_always"]')?.value || "").trim();
+      const readPaths = String(form?.querySelector?.('[name="read_paths"]')?.value || "").trim();
       return {
         default_scope: String(form?.querySelector?.('[name="default_scope"]')?.value || "").trim() || "public_knowledge",
         allowed_topics: allowedTopics ? allowedTopics.split(",").map(item => item.trim()).filter(Boolean) : [],
         handoff_always: handoffAlways ? handoffAlways.split(",").map(item => item.trim()).filter(Boolean) : [],
+        read_paths: readPaths ? readPaths.split(/\r?\n/).map(item => item.trim()).filter(Boolean) : [],
       };
     }
 
