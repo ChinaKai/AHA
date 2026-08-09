@@ -190,7 +190,7 @@
         const payload = await response.json();
         if (!payload.ok) throw new Error(payload.error || "failed to save permissions");
         loaded = true;
-        renderForm(payload.permissions || {});
+        renderForm(payload.permissions || {}, candidates);
         if (stateEl) stateEl.textContent = t("run.permissions_saved", "Saved");
       } catch (error) {
         if (stateEl) stateEl.textContent = `${t("run.permissions_save_error", "Failed to save")}: ${error.message}`;
