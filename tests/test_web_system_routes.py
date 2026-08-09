@@ -69,6 +69,11 @@ class WebSystemRoutesTests(unittest.TestCase):
             self.assertFalse(payload["permissions"]["allow_common_knowledge"])
             self.assertEqual(payload["permissions"]["allowed_topics"], [])
             self.assertEqual(payload["permissions"]["handoff_always"], [])
+            # Auto-detected candidates are returned for the multi-select UI.
+            self.assertIn("candidates", payload)
+            candidate_types = {item["type"] for item in payload["candidates"]}
+            self.assertIn("kb", candidate_types)
+            self.assertIn("digital_human", candidate_types)
 
     def test_group_digital_human_permissions_post_updates_and_mirrors_legacy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

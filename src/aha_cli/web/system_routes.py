@@ -11,6 +11,7 @@ from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
 from aha_cli.services.agents import (
     group_digital_human_permissions,
+    read_path_candidates,
     update_group_digital_human_permissions,
 )
 from aha_cli.services.app_version import aha_version
@@ -657,7 +658,13 @@ def system_route_response(
         prompt_name = str(query.get("name", [""])[0] or "").strip()
         return json_response(prompts_payload(prompt_name))
     if method in {"GET", "HEAD"} and path == "/api/agents/group-digital-human/permissions":
-        return json_response({"ok": True, "permissions": group_digital_human_permissions(root)})
+        return json_response(
+            {
+                "ok": True,
+                "permissions": group_digital_human_permissions(root),
+                "candidates": read_path_candidates(root),
+            }
+        )
     if method == "POST" and path == "/api/agents/group-digital-human/permissions":
         payload = parse_json_body(body) if body.strip() else {}
         try:

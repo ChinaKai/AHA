@@ -16,13 +16,63 @@ from aha_cli.domain.models import (
     resolve_group_digital_human_permissions,
 )
 from aha_cli.store.io import read_json, write_json
-from aha_cli.store.paths import config_path
+from aha_cli.store.knowledge import knowledge_root
+from aha_cli.store.paths import aha_home_path, config_path
+from aha_cli.store.workspaces import list_workspaces
 
 _agents_lock = threading.Lock()
 
 PERMISSION_FIELDS = {"read_paths", "allow_common_knowledge", "allowed_topics", "handoff_always"}
 
 _GROUP_KEY = "group_digital_human"
+
+
+def read_path_candidates(root: Path) -> list[dict]:
+    """Auto-detected candidate paths the digital human may read.
+
+    Returned to the permissions UI so it can offer known paths (AHA KB root,
+    configured workspace roots, registered workspaces, digital-human
+    workspace) as selectable options alongside custom paths.
+    """
+    from aha_cli.store.config import load_config
+
+    config = load_config(root)
+    candidates: list[dict] = []
+    try:
+        kb_root = knowledge_root(root, config)
+        candidates.append({"type": "kb", "path": str(kb_root.resolve()), "label": "AHA Knowledge Base"})
+    except (Exception, SystemExit):
+        pass
+    seen: set[str] = set()
+    for raw in config.get("workspace_roots") or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            resolved = str(Path(text).expanduser().resolve())
+        except OSError:
+            continue
+        if resolved not in seen:
+            seen.add(resolved)
+            candidates.append({"type": "workspace", "path": resolved, "label": f"Workspace root · {resolved}"})
+    try:
+        registered = list_workspaces(root)
+    except (Exception, SystemExit):
+        registered = []
+    for item in registered:
+        raw = str(item.get("path") or "").strip()
+        if not raw:
+            continue
+        try:
+            resolved = str(Path(raw).expanduser().resolve())
+        except OSError:
+            continue
+        if resolved not in seen:
+            seen.add(resolved)
+            candidates.append({"type": "workspace", "path": resolved, "label": f"Registered workspace · {resolved}"})
+    dh_dir = (aha_home_path(root) / "feishu_group_state").resolve()
+    candidates.append({"type": "digital_human", "path": str(dh_dir), "label": "Digital human workspace"})
+    return candidates
 
 
 def group_digital_human_permissions(root: Path) -> dict:

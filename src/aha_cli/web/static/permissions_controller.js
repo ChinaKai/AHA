@@ -6,6 +6,7 @@
 
     let loaded = false;
     let saving = false;
+    let candidates = [];
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -58,17 +59,43 @@
       setOpen(false);
     }
 
-    function formHtml(permissions) {
+    function readPathOptions(candidates, selected) {
+      const selectedPaths = new Set(selected || []);
+      // Known candidates become checkboxes.
+      const known = (candidates || [])
+        .map(candidate => {
+          const path = String(candidate.path || "");
+          const checked = selectedPaths.has(path) ? " checked" : "";
+          const label = escapeHtml(String(candidate.label || path));
+          return `<label class="permissions-path-option"><input type="checkbox" name="read_path" value="${escapeHtml(path)}"${checked}> <span>${label}</span></label>`;
+        })
+        .join("");
+      // Custom paths (selected but not a known candidate) become removable chips.
+      const knownSet = new Set((candidates || []).map(c => String(c.path || "")));
+      const custom = (selected || [])
+        .filter(path => !knownSet.has(path))
+        .map(path => `<span class="permissions-path-chip" data-custom-path="${escapeHtml(path)}">${escapeHtml(path)}<button type="button" class="permissions-path-chip-remove" data-remove-path="${escapeHtml(path)}" aria-label="remove">×</button></span>`)
+        .join("");
+      return `<div class="permissions-path-candidates">${known || '<em class="permissions-empty">No auto-detected paths.</em>'}</div>${custom ? `<div class="permissions-path-custom">${custom}</div>` : ""}`;
+    }
+
+    function formHtml(permissions, candidates) {
       const allowedTopics = escapeHtml((permissions.allowed_topics || []).join(", "));
       const handoffAlways = escapeHtml((permissions.handoff_always || []).join(", "));
-      const readPaths = escapeHtml((permissions.read_paths || []).join("\n"));
+      const readPaths = readPathOptions(candidates, permissions.read_paths || []);
       const allowCommon = Boolean(permissions.allow_common_knowledge);
       return `
 <form class="permissions-form" data-permissions-form>
   <label class="permissions-field">
     <span>${escapeHtml(t("run.permissions_read_paths", "Readable paths"))}</span>
-    <textarea name="read_paths" rows="4" placeholder="${escapeHtml(t("run.permissions_read_paths_placeholder", "One absolute path per line"))}">${readPaths}</textarea>
-    <em>${escapeHtml(t("run.permissions_read_paths_hint", "Knowledge source of the digital human. All files under each path are readable. Empty = AHA KB + workspace roots + digital-human workspace."))}</em>
+    <div class="permissions-read-paths">
+      ${readPaths}
+      <div class="permissions-path-add">
+        <input type="text" name="read_path_custom" placeholder="${escapeHtml(t("run.permissions_read_paths_placeholder", "Add an absolute path…"))}">
+        <button type="button" class="button-ghost" data-add-read-path>${escapeHtml(t("run.permissions_add_path", "Add"))}</button>
+      </div>
+    </div>
+    <em>${escapeHtml(t("run.permissions_read_paths_hint", "Knowledge source of the digital human. All files under each path are readable."))}</em>
   </label>
   <label class="permissions-field permissions-check">
     <span>${escapeHtml(t("run.permissions_allow_common", "Allow common knowledge"))}</span>
@@ -92,10 +119,10 @@
 </form>`;
     }
 
-    function renderForm(permissions) {
+    function renderForm(permissions, candidates) {
       const content = elements.permissionsContentEl;
       if (!content) return;
-      content.innerHTML = formHtml(permissions || {});
+      content.innerHTML = formHtml(permissions || {}, candidates || []);
     }
 
     async function load() {
@@ -111,7 +138,8 @@
         const payload = await response.json();
         if (!payload.ok) throw new Error(payload.error || "failed to load permissions");
         loaded = true;
-        renderForm(payload.permissions || {});
+        candidates = payload.candidates || [];
+        renderForm(payload.permissions || {}, candidates);
       } catch (error) {
         content.innerHTML = `<div class="permissions-empty">${escapeHtml(t("run.permissions_load_error", "Failed to load permissions"))}: ${escapeHtml(error.message)}</div>`;
       }
@@ -120,10 +148,19 @@
     function readForm(form) {
       const allowedTopics = String(form?.querySelector?.('[name="allowed_topics"]')?.value || "").trim();
       const handoffAlways = String(form?.querySelector?.('[name="handoff_always"]')?.value || "").trim();
-      const readPaths = String(form?.querySelector?.('[name="read_paths"]')?.value || "").trim();
       const allowCommon = Boolean(form?.querySelector?.('[name="allow_common_knowledge"]')?.checked);
+      const readPaths = [];
+      form?.querySelectorAll?.('[name="read_path"]:checked')?.forEach(input => {
+        const value = String(input?.value || "").trim();
+        if (value) readPaths.push(value);
+      });
+      // Custom paths are rendered as chips carrying data-path.
+      form?.querySelectorAll?.('[data-custom-path]')?.forEach(chip => {
+        const value = String(chip?.getAttribute?.("data-custom-path") || "").trim();
+        if (value) readPaths.push(value);
+      });
       return {
-        read_paths: readPaths ? readPaths.split(/\r?\n/).map(item => item.trim()).filter(Boolean) : [],
+        read_paths: readPaths,
         allow_common_knowledge: allowCommon,
         allowed_topics: allowedTopics ? allowedTopics.split(",").map(item => item.trim()).filter(Boolean) : [],
         handoff_always: handoffAlways ? handoffAlways.split(",").map(item => item.trim()).filter(Boolean) : [],
@@ -182,6 +219,27 @@
         if (isDialogElement(elements.permissionsDialogEl) && event.target === elements.permissionsDialogEl) {
           close();
         }
+        const addBtn = event.target instanceof Element ? event.target.closest("[data-add-read-path]") : null;
+        if (addBtn) {
+          event.preventDefault();
+          const form = addBtn.closest("[data-permissions-form]");
+          const input = form?.querySelector?.('[name="read_path_custom"]');
+          const value = String(input?.value || "").trim();
+          if (value) {
+            const current = collectReadPaths(form);
+            if (!current.includes(value)) current.push(value);
+            renderForm({ ...readForm(form), read_paths: current }, candidates);
+          }
+          return;
+        }
+        const removeBtn = event.target instanceof Element ? event.target.closest("[data-remove-path]") : null;
+        if (removeBtn) {
+          event.preventDefault();
+          const form = removeBtn.closest("[data-permissions-form]");
+          const value = String(removeBtn.getAttribute("data-remove-path") || "").trim();
+          const current = collectReadPaths(form).filter(path => path !== value);
+          renderForm({ ...readForm(form), read_paths: current }, candidates);
+        }
       });
       elements.permissionsDialogEl?.addEventListener("submit", event => {
         const form = event.target instanceof Element ? event.target.closest("[data-permissions-form]") : null;
@@ -189,6 +247,19 @@
         event.preventDefault();
         void save(form);
       });
+    }
+
+    function collectReadPaths(form) {
+      const paths = [];
+      form?.querySelectorAll?.('[name="read_path"]:checked')?.forEach(input => {
+        const value = String(input?.value || "").trim();
+        if (value) paths.push(value);
+      });
+      form?.querySelectorAll?.('[data-custom-path]')?.forEach(chip => {
+        const value = String(chip?.getAttribute?.("data-custom-path") || "").trim();
+        if (value) paths.push(value);
+      });
+      return paths;
     }
 
     return Object.freeze({
