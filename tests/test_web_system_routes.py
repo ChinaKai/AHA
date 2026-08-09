@@ -14,6 +14,7 @@ from urllib.parse import parse_qs
 
 from aha_cli.cli import append_message, main
 from aha_cli.store.filesystem import append_event, create_plan, event_path, iter_jsonl_from, save_plan
+from aha_cli.store.paths import config_path
 from aha_cli.store.knowledge import write_entry
 from aha_cli.store.knowledge_capture import create_note
 from aha_cli.store.task_memos import create_task_memo
@@ -56,6 +57,57 @@ class WebSystemRoutesTests(unittest.TestCase):
                 system_route_response(root, "", "GET", "/api/prompts", {"name": ["../config.json"]})
             )
             self.assertFalse(traversal["ok"])
+
+    def test_group_digital_human_permissions_get_returns_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = json_response_body(
+                system_route_response(root, "", "GET", "/api/agents/group-digital-human/permissions", {})
+            )
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["permissions"]["default_scope"], "public_knowledge")
+            self.assertEqual(payload["permissions"]["allowed_topics"], [])
+            self.assertEqual(payload["permissions"]["handoff_always"], [])
+
+    def test_group_digital_human_permissions_post_updates_and_mirrors_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            body = json.dumps(
+                {"default_scope": "project_docs", "allowed_topics": ["vega", "hlcloud"], "handoff_always": ["payment"]}
+            ).encode("utf-8")
+            response = json_response_body(
+                system_route_response(root, "", "POST", "/api/agents/group-digital-human/permissions", {}, body=body)
+            )
+            self.assertTrue(response["ok"])
+            permissions = response["permissions"]
+            self.assertEqual(permissions["default_scope"], "project_docs")
+            self.assertEqual(permissions["allowed_topics"], ["vega", "hlcloud"])
+            self.assertEqual(permissions["handoff_always"], ["payment"])
+
+            # Canonical location.
+            config = json.loads(config_path(root).read_text(encoding="utf-8"))
+            self.assertEqual(
+                config["agents"]["group_digital_human"]["permissions"]["default_scope"], "project_docs"
+            )
+            # Legacy mirror stays consistent for pre-migration readers.
+            self.assertEqual(
+                config["integrations"]["feishu"]["group_permissions"]["handoff_always"], ["payment"]
+            )
+
+            # Re-read via GET reflects the persisted values.
+            reread = json_response_body(
+                system_route_response(root, "", "GET", "/api/agents/group-digital-human/permissions", {})
+            )
+            self.assertEqual(reread["permissions"]["allowed_topics"], ["vega", "hlcloud"])
+
+    def test_group_digital_human_permissions_post_rejects_bad_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            body = json.dumps({"unknown_field": 1}).encode("utf-8")
+            raw = system_route_response(root, "", "POST", "/api/agents/group-digital-human/permissions", {}, body=body)
+            self.assertIn(b"400 Bad Request", raw)
+            response = json_response_body(raw)
+            self.assertIn("error", response)
 
     def run_git(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         if not shutil.which("git"):

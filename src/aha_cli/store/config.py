@@ -4,7 +4,11 @@ import os
 from pathlib import Path
 
 from aha_cli import platform
-from aha_cli.domain.models import default_config, normalize_integrations_config
+from aha_cli.domain.models import (
+    default_config,
+    normalize_agents_config_from_loaded,
+    normalize_integrations_config,
+)
 from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.store.io import read_json
 from aha_cli.store.paths import config_path
@@ -18,6 +22,23 @@ def _loaded_proxy(value: object) -> dict[str, object]:
         raw.get("https_proxy"),
         raw.get("no_proxy"),
     )
+
+
+def _legacy_group_digital_human_permissions(loaded: dict) -> dict:
+    """Return the legacy ``integrations.feishu.group_permissions`` block if any.
+
+    The ``agents`` section is the canonical location for identity permissions;
+    this helper supplies the pre-migration fallback so existing configurations
+    keep working until they are written through the new location.
+    """
+    integrations = loaded.get("integrations")
+    if not isinstance(integrations, dict):
+        return {}
+    feishu = integrations.get("feishu")
+    if not isinstance(feishu, dict):
+        return {}
+    permissions = feishu.get("group_permissions")
+    return permissions if isinstance(permissions, dict) else {}
 
 
 def _shared_proxy_config(defaults: dict, loaded: dict) -> dict:
@@ -72,6 +93,10 @@ def load_config(root: Path) -> dict:
     cfg["retention_policy"] = defaults["retention_policy"] | (loaded_retention_policy if isinstance(loaded_retention_policy, dict) else {})
     cfg["knowledge"] = _merge_knowledge_config(defaults["knowledge"], loaded.get("knowledge", {}))
     cfg["integrations"] = normalize_integrations_config(loaded.get("integrations", {}))
+    cfg["agents"] = normalize_agents_config_from_loaded(
+        loaded.get("agents", {}),
+        legacy_permissions=_legacy_group_digital_human_permissions(loaded),
+    )
     if cfg.get("runner_command") and cfg.get("backend") == "stub":
         cfg["backend"] = "command"
     _apply_portable_overrides(cfg)

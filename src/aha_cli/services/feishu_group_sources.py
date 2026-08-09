@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter, deque
 from pathlib import Path
 
-from aha_cli.domain.models import is_feishu_group_task
+from aha_cli.domain.models import is_feishu_group_task, resolve_group_digital_human_permissions
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.config import load_config
 from aha_cli.store.event_views import event_agent_refs
@@ -280,13 +280,19 @@ def feishu_group_source_index_context(root: Path, run_id: str, task: dict | None
     try:
         config = load_config(root)
         task_id = str((task or {}).get("id") or "")
-        feishu_config = config.get("integrations", {}).get("feishu", {}) if isinstance(config.get("integrations"), dict) else {}
-        permissions = feishu_config.get("group_permissions") if isinstance(feishu_config.get("group_permissions"), dict) else {}
+        permissions = resolve_group_digital_human_permissions(config)
+        allowed_topics = ", ".join(str(item) for item in permissions.get("allowed_topics") or []) or "none"
+        # An explicitly empty handoff_always list means "no additional topics
+        # beyond the baseline" — the baseline handoff triggers (execution,
+        # commitment, permissions, private/secrets) live in the identity
+        # template and still apply. Do not re-inject them here, otherwise an
+        # empty list could not express "turn off extra forced handoffs".
+        handoff_always = ", ".join(str(item) for item in permissions.get("handoff_always") or []) or "none (baseline handoff rules from the identity template still apply)"
         permission_context = render_prompt_template(
             "feishu_group_digital_human_permission.md",
             default_scope=str(permissions.get("default_scope") or "public_knowledge"),
-            allowed_topics=", ".join(str(item) for item in permissions.get("allowed_topics") or []) or "none",
-            handoff_always=", ".join(str(item) for item in permissions.get("handoff_always") or []) or "execution, commitment, permissions, private/secrets",
+            allowed_topics=allowed_topics,
+            handoff_always=handoff_always,
         ).rstrip()
         lines = [
             "Digital-human information source index:",

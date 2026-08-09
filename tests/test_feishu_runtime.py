@@ -6,7 +6,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-from aha_cli.domain.models import normalize_feishu_integration_config
+from aha_cli.domain.models import (
+    normalize_agents_config,
+    normalize_feishu_integration_config,
+    resolve_group_digital_human_permissions,
+)
 from aha_cli.services.feishu_runtime import (
     _create_feishu_channel,
     _install_bot_menu_dispatcher,
@@ -158,6 +162,65 @@ class FeishuRuntimeTests(unittest.TestCase):
         self.assertEqual(empty["group_permissions"]["default_scope"], "public_knowledge")
         self.assertEqual(empty["group_permissions"]["allowed_topics"], [])
         self.assertEqual(empty["group_permissions"]["handoff_always"], [])
+
+    def test_agents_section_normalizes_group_digital_human_permissions(self) -> None:
+        config = normalize_agents_config(
+            {
+                "group_digital_human": {
+                    "permissions": {
+                        "default_scope": "workspace_only",
+                        "allowed_topics": ["vega", "hlcloud"],
+                        "handoff_always": "payment, legal",
+                    }
+                }
+            }
+        )
+        group = config["group_digital_human"]["permissions"]
+        self.assertEqual(group["default_scope"], "workspace_only")
+        self.assertEqual(group["allowed_topics"], ["vega", "hlcloud"])
+        self.assertEqual(group["handoff_always"], ["payment", "legal"])
+
+        defaults = normalize_agents_config({})
+        self.assertEqual(defaults["group_digital_human"]["permissions"]["default_scope"], "public_knowledge")
+        self.assertEqual(defaults["group_digital_human"]["permissions"]["allowed_topics"], [])
+
+    def test_resolve_group_digital_human_permissions_prefers_agents_over_legacy(self) -> None:
+        config = {
+            "agents": {
+                "group_digital_human": {
+                    "permissions": {"default_scope": "project_docs", "allowed_topics": ["new"], "handoff_always": []}
+                }
+            },
+            "integrations": {
+                "feishu": {
+                    "group_permissions": {
+                        "default_scope": "public_knowledge",
+                        "allowed_topics": ["legacy"],
+                        "handoff_always": [],
+                    }
+                }
+            },
+        }
+        resolved = resolve_group_digital_human_permissions(config)
+        self.assertEqual(resolved["default_scope"], "project_docs")
+        self.assertEqual(resolved["allowed_topics"], ["new"])
+
+    def test_resolve_group_digital_human_permissions_falls_back_to_legacy(self) -> None:
+        config = {
+            "integrations": {
+                "feishu": {
+                    "group_permissions": {
+                        "default_scope": "restricted",
+                        "allowed_topics": ["legacy-topic"],
+                        "handoff_always": ["legacy-handoff"],
+                    }
+                }
+            }
+        }
+        resolved = resolve_group_digital_human_permissions(config)
+        self.assertEqual(resolved["default_scope"], "restricted")
+        self.assertEqual(resolved["allowed_topics"], ["legacy-topic"])
+        self.assertEqual(resolved["handoff_always"], ["legacy-handoff"])
 
     def test_system_route_exposes_feishu_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch(

@@ -175,6 +175,82 @@ def default_integrations_config() -> dict:
     }
 
 
+def default_agents_config() -> dict:
+    """Channel-agnostic agent identities (digital humans / stewards).
+
+    Permissions here are identity-level: they describe what a given agent may
+    answer directly vs. must hand off. Channel access control (which chats/users
+    can reach an agent) stays with each channel integration config.
+    """
+    return {
+        "group_digital_human": {
+            "permissions": {
+                "default_scope": "public_knowledge",
+                "allowed_topics": [],
+                "handoff_always": [],
+            }
+        }
+    }
+
+
+def normalize_agents_config(value: object | None = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    config = default_agents_config()
+    raw_group = raw.get("group_digital_human")
+    if isinstance(raw_group, dict):
+        raw_permissions = raw_group.get("permissions")
+        default_permissions = config["group_digital_human"]["permissions"]
+        if isinstance(raw_permissions, dict):
+            default_scope = str(raw_permissions.get("default_scope") or default_permissions["default_scope"]).strip()
+            config["group_digital_human"]["permissions"] = {
+                "default_scope": default_scope or "public_knowledge",
+                "allowed_topics": _normalize_string_list(raw_permissions.get("allowed_topics")),
+                "handoff_always": _normalize_string_list(raw_permissions.get("handoff_always")),
+            }
+    return config
+
+
+def normalize_agents_config_from_loaded(
+    value: object | None = None, legacy_permissions: object | None = None
+) -> dict:
+    """Normalize the ``agents`` section, applying the legacy
+    ``integrations.feishu.group_permissions`` location as a fallback when no
+    explicit agent permissions are configured yet.
+
+    ``load_config`` always emits a normalized ``agents`` section, so the legacy
+    fallback must happen here at load time rather than inside
+    :func:`resolve_group_digital_human_permissions` — otherwise the always-
+    present default ``agents`` block would shadow the legacy values.
+    """
+    raw = value if isinstance(value, dict) else {}
+    has_explicit_permissions = bool(
+        isinstance(raw.get("group_digital_human"), dict)
+        and isinstance(raw["group_digital_human"].get("permissions"), dict)
+        and raw["group_digital_human"]["permissions"]
+    )
+    if not has_explicit_permissions and isinstance(legacy_permissions, dict) and legacy_permissions:
+        raw = dict(raw)
+        raw["group_digital_human"] = {"permissions": legacy_permissions}
+    return normalize_agents_config(raw)
+
+
+def resolve_group_digital_human_permissions(config: dict) -> dict:
+    """Resolve the group digital-human identity permissions, preferring the
+    canonical ``agents`` section and falling back to the legacy
+    ``integrations.feishu.group_permissions`` location.
+    """
+    agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+    agents_permissions = agents.get("group_digital_human", {}).get("permissions") if isinstance(agents.get("group_digital_human"), dict) else {}
+    if isinstance(agents_permissions, dict) and agents_permissions:
+        return normalize_agents_config(agents)["group_digital_human"]["permissions"]
+    integrations = config.get("integrations") if isinstance(config.get("integrations"), dict) else {}
+    feishu = integrations.get("feishu") if isinstance(integrations.get("feishu"), dict) else {}
+    legacy = feishu.get("group_permissions") if isinstance(feishu.get("group_permissions"), dict) else {}
+    if legacy:
+        return normalize_feishu_integration_config({"group_permissions": legacy})["group_permissions"]
+    return dict(default_agents_config()["group_digital_human"]["permissions"])
+
+
 def default_config() -> dict:
     return {
         "backend": "stub",
@@ -191,6 +267,7 @@ def default_config() -> dict:
         },
         "context_windows": {},
         "integrations": default_integrations_config(),
+        "agents": default_agents_config(),
         "retention_policy": default_retention_policy_config(),
         "knowledge": default_knowledge_config(),
         "codex": {

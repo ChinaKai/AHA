@@ -9,6 +9,10 @@ import subprocess
 
 from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
+from aha_cli.services.agents import (
+    group_digital_human_permissions,
+    update_group_digital_human_permissions,
+)
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.feishu_runtime import (
@@ -652,6 +656,17 @@ def system_route_response(
     if method in {"GET", "HEAD"} and path == "/api/prompts":
         prompt_name = str(query.get("name", [""])[0] or "").strip()
         return json_response(prompts_payload(prompt_name))
+    if method in {"GET", "HEAD"} and path == "/api/agents/group-digital-human/permissions":
+        return json_response({"ok": True, "permissions": group_digital_human_permissions(root)})
+    if method == "POST" and path == "/api/agents/group-digital-human/permissions":
+        payload = parse_json_body(body) if body.strip() else {}
+        try:
+            permissions = update_group_digital_human_permissions(root, payload)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        except OSError as exc:
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
+        return json_response({"ok": True, "permissions": permissions})
     if method in {"GET", "HEAD"} and path == "/api/global-search":
         try:
             limit = max(1, min(query_int(query, "limit", 50), 100))
