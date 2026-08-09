@@ -241,6 +241,7 @@
       controllers.skillsConsoleController?.()?.bind();
       controllers.tokenUsageController?.()?.bind();
       controllers.promptsController?.()?.bind();
+      controllers.permissionsController?.()?.bind();
     }
 
     function selectedTask() {

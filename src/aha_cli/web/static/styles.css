@@ -361,7 +361,8 @@ body.settings-home .session-menu .settings-popover {
   overflow: visible;
   box-shadow: none;
 }
-body.settings-home .session-menu .prompts-popover {
+body.settings-home .session-menu .prompts-popover,
+body.settings-home .session-menu .permissions-popover {
   grid-column: 1 / -1;
   position: static;
   width: 100%;
@@ -452,7 +453,9 @@ body.settings-home .session-menu[data-settings-tab="integrations"] .run-system-s
 body.settings-home .session-menu[data-settings-tab="integrations"] .settings-popover,
 body.settings-home .session-menu[data-settings-tab="run"] .settings-popover,
 body.settings-home .session-menu[data-settings-tab="integrations"] .prompts-popover,
-body.settings-home .session-menu[data-settings-tab="run"] .prompts-popover {
+body.settings-home .session-menu[data-settings-tab="run"] .prompts-popover,
+body.settings-home .session-menu[data-settings-tab="integrations"] .permissions-popover,
+body.settings-home .session-menu[data-settings-tab="run"] .permissions-popover {
   display: none;
 }
 body.settings-home .session-menu[data-settings-tab="integrations"] .run-integrations-section {
@@ -1648,6 +1651,86 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   gap: 12px;
   min-width: 0;
 }
+.permissions-popover {
+  display: grid;
+  gap: 12px;
+  max-height: none;
+  min-width: 0;
+  overflow: visible;
+  padding: 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: none;
+}
+.permissions-popover-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.permissions-popover-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.permissions-popover-head p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+.permissions-popover-close {
+  flex: 0 0 auto;
+}
+.permissions-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.permissions-form {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.permissions-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.permissions-field span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #1d2939);
+}
+.permissions-field select,
+.permissions-field textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--surface-border, #d0d5dd);
+  border-radius: var(--surface-radius, 6px);
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--text-primary, #1d2939);
+  background: var(--surface-bg, #ffffff);
+}
+.permissions-field em {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+}
+.permissions-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.permissions-empty {
+  color: #667085;
+  font-size: 13px;
+  padding: 8px 0;
+}
 .prompts-layout {
   display: grid;
   grid-template-columns: minmax(200px, 260px) 1fr;
@@ -1865,6 +1948,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
 .session-menu,
 .settings-popover,
 .prompts-popover,
+.permissions-popover,
 .feishu-console-popover,
 .weixin-console-popover,
 .play-console-popover,
@@ -1935,6 +2019,7 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
 .token-usage-popover[hidden],
 .settings-popover[hidden],
 .prompts-popover[hidden],
+.permissions-popover[hidden],
 .run-maintenance-popover[hidden] {
   display: none;
 }

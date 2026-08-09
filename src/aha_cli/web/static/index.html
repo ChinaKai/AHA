@@ -111,6 +111,7 @@
                 <div class="run-admin-actions">
                   <button id="aha-settings" type="button" aria-controls="settings-dialog" aria-expanded="false" data-i18n="common.settings">Settings</button>
                   <button id="aha-prompts" type="button" aria-controls="prompts-dialog" aria-expanded="false" data-i18n="run.prompts">Prompts</button>
+                  <button id="aha-permissions" type="button" aria-controls="permissions-dialog" aria-expanded="false" data-i18n="run.permissions">Digital Human Permissions</button>
                   <button id="auth-logout" class="hidden" type="button" data-i18n="auth.logout">Log out</button>
                   <button id="web-restart" class="button-ghost" type="button" data-i18n="run.restart_web">Restart Web</button>
                   <button id="web-upgrade" class="button-ghost" type="button" hidden aria-controls="web-publish-console" aria-expanded="false" data-i18n="run.upgrade_web">Upgrade</button>
@@ -137,6 +138,16 @@
                   <button id="close-prompts" class="prompts-popover-close" type="button" data-i18n="common.close">Close</button>
                 </div>
                 <div id="prompts-content" class="prompts-body"></div>
+              </div>
+              <div id="permissions-dialog" class="permissions-popover" aria-labelledby="permissions-title" hidden>
+                <div class="permissions-popover-head">
+                  <div>
+                    <h2 id="permissions-title" data-i18n="run.permissions_title">Digital Human Permissions</h2>
+                    <p data-i18n="run.permissions_description">Control what the group digital human may answer directly vs. must hand off. Channel access control stays in the Feishu assistant.</p>
+                  </div>
+                  <button id="close-permissions" class="permissions-popover-close" type="button" data-i18n="common.close">Close</button>
+                </div>
+                <div id="permissions-content" class="permissions-body"></div>
               </div>
               <div class="run-actions-section run-actions-section-secondary run-integrations-section">
                 <span class="run-actions-label" data-i18n="run.section_integrations">Integrations</span>
@@ -1092,15 +1103,16 @@
   <script src="/static/global_search_controller.js?v=global-search-v6"></script>
   <script src="/static/settings_controller.js?v=token-saving-v8"></script>
   <script src="/static/prompts_controller.js?v=prompts-v1"></script>
-  <script src="/static/run_controller.js?v=manual-upgrade-check-v15"></script>
+  <script src="/static/permissions_controller.js?v=permissions-v1"></script>
+  <script src="/static/run_controller.js?v=permissions-v1"></script>
   <script src="/static/message_flow.js?v=hardware-terminal-v1"></script>
   <script src="/static/render_scheduler.js"></script>
   <script src="/static/confirm_dialog.js"></script>
-  <script src="/static/controller_registry.js?v=feishu-agent-v1"></script>
-  <script src="/static/app_bridge.js?v=token-saving-v8"></script>
-  <script src="/static/app_controller_factory.js?v=feishu-agent-v1"></script>
-  <script src="/static/app_runtime_setup.js?v=upgrade-proxy-capability-v5"></script>
-  <script src="/static/app_runtime_wiring.js?v=manual-upgrade-check-v5"></script>
+  <script src="/static/controller_registry.js?v=permissions-v1"></script>
+  <script src="/static/app_bridge.js?v=permissions-v1"></script>
+  <script src="/static/app_controller_factory.js?v=permissions-v1"></script>
+  <script src="/static/app_runtime_setup.js?v=permissions-v1"></script>
+  <script src="/static/app_runtime_wiring.js?v=permissions-v1"></script>
   <script src="/static/browser_options.js?v=browser-options-v1"></script>
   <script src="/static/app.js"></script>
 </body>

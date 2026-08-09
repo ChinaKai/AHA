@@ -394,6 +394,7 @@
       agentRuntimeConfirmDialogEl, agentRuntimeConfirmMessageEl, agentTargetEl, agentsEl,
       ahaSettingsEl, closeSettingsEl, collaborationModeEl, commandMenuEl, messageEl,
       ahaPromptsEl, closePromptsEl, promptsContentEl, promptsDialogEl,
+      ahaPermissionsEl, closePermissionsEl, permissionsContentEl, permissionsDialogEl,
       messageImageFileEl, messageImageUploadEl,
       observeProxyEl, observeProxyPopoverEl, localTerminalEl, localTerminalPopoverEl,
       feishuConsoleEl, feishuConsolePopoverEl,
@@ -488,6 +489,18 @@
       closePromptsEl,
       promptsContentEl,
       promptsDialogEl
+    }, {
+      apiUrl: deps.apiUrl,
+      closeMobileActionPanel: deps.closeMobileActionPanel,
+      closeMobileSheets: deps.closeMobileSheets,
+      fetchWithTimeout: deps.fetchWithTimeout
+    });
+
+    const permissionsController = window.AHAPermissionsController.createPermissionsController({
+      ahaPermissionsEl,
+      closePermissionsEl,
+      permissionsContentEl,
+      permissionsDialogEl
     }, {
       apiUrl: deps.apiUrl,
       closeMobileActionPanel: deps.closeMobileActionPanel,
@@ -851,6 +864,7 @@
       localTerminalController,
       observeProxyController,
       messageComposer,
+      permissionsController,
       playConsoleController,
       promptsController,
       settingsController,

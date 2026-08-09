@@ -775,6 +775,7 @@ const {
   agentConfigController,
   globalSearchController,
   messageComposer,
+  permissionsController,
   promptsController,
   settingsController,
   taskCreateController,

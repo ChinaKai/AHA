@@ -96,6 +96,15 @@
       trigger?.setAttribute("aria-expanded", "false");
     }
 
+    function closePermissionsPanel() {
+      const panel = elements.documentRef?.getElementById?.("permissions-dialog");
+      const trigger = elements.documentRef?.getElementById?.("aha-permissions");
+      if (!panel) return;
+      panel.hidden = true;
+      panel.removeAttribute("open");
+      trigger?.setAttribute("aria-expanded", "false");
+    }
+
     function closeIntegrationPanels(except = "") {
       if (except !== "feishu") deps.setFeishuConsoleOpen?.(false);
       if (except !== "weixin") deps.setWeixinConsoleOpen?.(false);
@@ -109,6 +118,7 @@
     function closeExclusiveSettingsPanels(except = "") {
       if (except !== "settings") closeSystemSettingsPanel();
       if (except !== "prompts") closePromptsPanel();
+      if (except !== "permissions") closePermissionsPanel();
       if (except !== "upgrade") setWebPublishConsoleOpen(false, { load: false });
       closeIntegrationPanels(except);
     }
@@ -138,7 +148,10 @@
         deps.setSkillsConsoleOpen?.(false);
         deps.setTokenUsageOpen?.(false);
       }
-      if (settingsTab !== "system") closeSystemSettingsPanel();
+      if (settingsTab !== "system") {
+        closeSystemSettingsPanel();
+        closePermissionsPanel();
+      }
     }
 
     function currentRunId() {
@@ -1125,6 +1138,9 @@
       });
       elements.documentRef?.getElementById?.("aha-prompts")?.addEventListener("click", () => {
         closeExclusiveSettingsPanels("prompts");
+      });
+      elements.documentRef?.getElementById?.("aha-permissions")?.addEventListener("click", () => {
+        closeExclusiveSettingsPanels("permissions");
       });
       elements.webPublishConsoleEl?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
