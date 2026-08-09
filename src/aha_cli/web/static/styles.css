@@ -9322,7 +9322,20 @@ body.empty-run .panel {
   .weixin-console-grid {
     grid-template-columns: 1fr;
   }
+  body.settings-home .run-admin-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .feishu-console-settings-actions button {
+    width: 100%;
+  }
+  .permissions-popover {
+    max-height: calc(var(--app-viewport-height) - 120px);
+    overflow-y: auto;
+  }
+  .permissions-actions {
+    flex-wrap: wrap;
+  }
+  .permissions-actions .button-ghost {
     width: 100%;
   }
   .feishu-console-popover,
