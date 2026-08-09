@@ -70,12 +70,12 @@
           return `<label class="permissions-path-option"><input type="checkbox" name="read_path" value="${escapeHtml(path)}"${checked}> <span>${label}</span></label>`;
         })
         .join("");
-      // Custom paths (selected but not a known candidate) render as removable
-      // rows matching the checkbox rows, so the whole list has one visual style.
+      // Custom paths (selected but not a known candidate) render as the same
+      // checkbox rows as candidates, so the whole list has one visual style.
       const knownSet = new Set((candidates || []).map(c => String(c.path || "")));
       const custom = (selected || [])
         .filter(path => !knownSet.has(path))
-        .map(path => `<div class="permissions-path-option permissions-path-custom" data-custom-path="${escapeHtml(path)}"><span>${escapeHtml(path)}</span><button type="button" class="permissions-path-remove" data-remove-path="${escapeHtml(path)}" aria-label="remove">${escapeHtml(t("run.permissions_remove", "Remove"))}</button></div>`)
+        .map(path => `<label class="permissions-path-option" data-custom-path="${escapeHtml(path)}"><input type="checkbox" name="read_path" value="${escapeHtml(path)}" checked> <span>${escapeHtml(path)}</span></label>`)
         .join("");
       return `<div class="permissions-path-candidates">${known || '<em class="permissions-empty">No auto-detected paths.</em>'}</div>${custom ? `<div class="permissions-path-custom-list">${custom}</div>` : ""}`;
     }
@@ -155,11 +155,6 @@
         const value = String(input?.value || "").trim();
         if (value) readPaths.push(value);
       });
-      // Custom paths are rendered as chips carrying data-path.
-      form?.querySelectorAll?.('[data-custom-path]')?.forEach(chip => {
-        const value = String(chip?.getAttribute?.("data-custom-path") || "").trim();
-        if (value) readPaths.push(value);
-      });
       return {
         read_paths: readPaths,
         allow_common_knowledge: allowCommon,
@@ -233,14 +228,6 @@
           }
           return;
         }
-        const removeBtn = event.target instanceof Element ? event.target.closest("[data-remove-path]") : null;
-        if (removeBtn) {
-          event.preventDefault();
-          const form = removeBtn.closest("[data-permissions-form]");
-          const value = String(removeBtn.getAttribute("data-remove-path") || "").trim();
-          const current = collectReadPaths(form).filter(path => path !== value);
-          renderForm({ ...readForm(form), read_paths: current }, candidates);
-        }
       });
       elements.permissionsDialogEl?.addEventListener("submit", event => {
         const form = event.target instanceof Element ? event.target.closest("[data-permissions-form]") : null;
@@ -254,10 +241,6 @@
       const paths = [];
       form?.querySelectorAll?.('[name="read_path"]:checked')?.forEach(input => {
         const value = String(input?.value || "").trim();
-        if (value) paths.push(value);
-      });
-      form?.querySelectorAll?.('[data-custom-path]')?.forEach(chip => {
-        const value = String(chip?.getAttribute?.("data-custom-path") || "").trim();
         if (value) paths.push(value);
       });
       return paths;

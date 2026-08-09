@@ -1775,22 +1775,12 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   display: grid;
   gap: 4px;
   min-width: 0;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--surface-border, #d0d5dd);
 }
-.permissions-path-custom.permissions-path-option {
-  justify-content: space-between;
-}
-.permissions-path-remove {
-  flex: 0 0 auto;
-  border: 0;
-  background: transparent;
-  color: #667085;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 4px;
-}
-.permissions-path-remove:hover {
-  color: #d92d20;
-  text-decoration: underline;
+.permissions-path-custom-list .permissions-path-option span {
+  color: var(--text-secondary, #475467);
 }
 .permissions-path-add {
   display: flex;

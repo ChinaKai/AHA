@@ -594,17 +594,17 @@ if (payload.claude.proxy.enabled !== false || Object.keys(payload.claude.proxy).
         self.assertIn('"run.permissions": "Digital Human Permissions"', i18n)
         self.assertIn('"run.permissions": "数字人权限管理"', i18n)
         self.assertIn('"run.permissions_handoff_always_hint"', i18n)
-        # Path multi-select UI: auto-detected candidates + custom paths.
+        # Path multi-select UI: auto-detected candidates + custom paths all use
+        # the same checkbox-row style (no chips, no separate remove buttons).
         controller = (root / "permissions_controller.js").read_text(encoding="utf-8")
         self.assertIn("permissions-path-option", controller)
         self.assertIn("data-add-read-path", controller)
-        self.assertIn("data-remove-path", controller)
         self.assertIn("read_path_custom", controller)
         self.assertIn("collectReadPaths", controller)
         self.assertIn("run.permissions_add_path", i18n)
-        self.assertIn("run.permissions_remove", i18n)
-        # Custom paths render as rows, not chips.
         self.assertNotIn("permissions-path-chip", controller)
+        self.assertNotIn("permissions-path-remove", controller)
+        self.assertNotIn("data-remove-path", controller)
 
     def test_web_upgrade_button_sits_next_to_restart(self) -> None:
         root = static_root()
@@ -1089,8 +1089,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=permissions-v5">', html)
-        self.assertIn('<script src="/static/i18n.js?v=permissions-v5"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=permissions-v6">', html)
+        self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -5461,7 +5461,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=permissions-v5"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=claude-gateway-v3"></script>', html)
