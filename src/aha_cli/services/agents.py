@@ -40,7 +40,8 @@ def read_path_candidates(root: Path) -> list[dict]:
     candidates: list[dict] = []
     try:
         kb_root = knowledge_root(root, config)
-        candidates.append({"type": "kb", "path": str(kb_root.resolve()), "label": "AHA Knowledge Base"})
+        resolved_kb = str(kb_root.resolve())
+        candidates.append({"type": "kb", "path": resolved_kb, "label": f"AHA Knowledge Base · {resolved_kb}"})
     except (Exception, SystemExit):
         pass
     seen: set[str] = set()
@@ -71,7 +72,8 @@ def read_path_candidates(root: Path) -> list[dict]:
             seen.add(resolved)
             candidates.append({"type": "workspace", "path": resolved, "label": f"Registered workspace · {resolved}"})
     dh_dir = (aha_home_path(root) / "feishu_group_state").resolve()
-    candidates.append({"type": "digital_human", "path": str(dh_dir), "label": "Digital human workspace"})
+    resolved_dh = str(dh_dir)
+    candidates.append({"type": "digital_human", "path": resolved_dh, "label": f"Digital human workspace · {resolved_dh}"})
     return candidates
 
 
