@@ -251,19 +251,19 @@ class FeishuGroupTests(unittest.TestCase):
                 "",
             )
 
-        # Allowed project is indexed (it is inside the allowlist, even though
-        # its parent workspace root is not).
+        # Only the allowlisted path is declared; no specific content enumerated.
         self.assertIn(str(allowed_project), prompt)
-        self.assertIn("allowed-project", prompt)
-        # Secret sibling project is filtered out of the workspace index.
+        self.assertIn("Readable paths allowlist", prompt)
+        # Secret sibling project is not declared at all.
+        self.assertNotIn(str(secret_project), prompt)
         self.assertNotIn("secret-project", prompt)
-        self.assertNotIn("SECRET BODY", prompt)
-        # KB entries live outside the allowlist (under .aha/knowledge), so both
-        # are filtered out — the allowlist is the only readable source set.
+        # No KB/workspace enumeration when read_paths is set.
+        self.assertNotIn("AHA Knowledge Base index", prompt)
+        self.assertNotIn("Workspace source index", prompt)
         self.assertNotIn("Allowed KB Doc", prompt)
         self.assertNotIn("Secret KB Doc", prompt)
         self.assertNotIn("SECRET KB BODY", prompt)
-        self.assertIn("read_paths", prompt)
+        self.assertNotIn("SECRET BODY", prompt)
 
     def test_group_digital_human_prompt_includes_linked_memo_terminal_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1064,89 +1064,74 @@ class FeishuGroupTests(unittest.TestCase):
 
 
 class FeishuGroupSourcePathFilterTests(unittest.TestCase):
-    """Unit tests for the read_paths allowlist filter."""
+    """Tests for the read_paths allowlist: give paths only, no enumeration."""
 
-    def test_path_allowed_returns_true_without_allowlist(self) -> None:
-        from aha_cli.services.feishu_group_sources import _path_allowed
-
-        self.assertTrue(_path_allowed(Path("/any/path/file.txt"), []))
-        self.assertTrue(_path_allowed(Path("/any/path"), None))
-
-    def test_path_allowed_matches_descendant(self) -> None:
-        from aha_cli.services.feishu_group_sources import _path_allowed
-
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            root = base / "proj"
-            child = root / "docs" / "readme.md"
-            child.parent.mkdir(parents=True)
-            child.write_text("x", encoding="utf-8")
-            self.assertTrue(_path_allowed(child, [str(root)]))
-            self.assertTrue(_path_allowed(root, [str(root)]))
-            self.assertFalse(_path_allowed(base / "other" / "secret.md", [str(root)]))
-            self.assertFalse(_path_allowed(base, [str(root)]))
-
-    def test_path_allowed_matches_any_configured_root(self) -> None:
-        from aha_cli.services.feishu_group_sources import _path_allowed
-
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            a = base / "a"
-            b = base / "b"
-            b.mkdir(parents=True)
-            target = b / "doc.md"
-            target.write_text("x", encoding="utf-8")
-            self.assertTrue(_path_allowed(target, [str(a), str(b)]))
-            self.assertFalse(_path_allowed(target, [str(a)]))
-
-    def test_path_allowed_rejects_outside_path(self) -> None:
-        from aha_cli.services.feishu_group_sources import _path_allowed
-
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            root = base / "proj"
-            root.mkdir()
-            sibling = base / "sibling.md"
-            sibling.write_text("x", encoding="utf-8")
-            self.assertFalse(_path_allowed(sibling, [str(root)]))
-
-    def test_workspace_index_keeps_allowlisted_project_under_filtered_root(self) -> None:
-        from aha_cli.services.feishu_group_sources import _workspace_root_lines
+    def test_read_paths_context_lists_paths_without_enumeration(self) -> None:
+        from aha_cli.services.feishu_group_sources import feishu_group_source_index_context
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            workspace_root = root / "ws"
-            allowed = workspace_root / "allowed-proj"
-            (allowed / "docs").mkdir(parents=True)
-            (allowed / "README.md").write_text("r", encoding="utf-8")
-            secret = workspace_root / "secret-proj"
+            allowed = root / "allowed-proj"
+            allowed.mkdir(parents=True)
+            secret = root / "secret-proj"
             secret.mkdir()
-            (secret / "secret.md").write_text("s", encoding="utf-8")
-            config = {"workspace_roots": [str(workspace_root)]}
-            lines = _workspace_root_lines(root, config, read_paths=[str(allowed)])
-            text = "\n".join(lines)
-            # The parent root is not in the allowlist, but the allowed project is.
-            self.assertIn("partial, filtered by read_paths", text)
-            self.assertIn(str(allowed), text)
-            self.assertIn("allowed-proj", text)
-            self.assertNotIn("secret-proj", text)
-            self.assertNotIn("secret.md", text)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "workspace_roots": [str(root)],
+                        "knowledge": {"enabled": True},
+                        "agents": {
+                            "group_digital_human": {
+                                "permissions": {"read_paths": [str(allowed)]}
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            task = {"id": "t1", "kind": "feishu_group_digital_human", "system_managed": True}
+            ctx = feishu_group_source_index_context(root, "r1", task)
 
-    def test_workspace_index_full_root_when_root_in_allowlist(self) -> None:
-        from aha_cli.services.feishu_group_sources import _workspace_root_lines
+        # Only the allowlisted path is declared; nothing is enumerated.
+        self.assertIn("Readable paths allowlist", ctx)
+        self.assertIn(str(allowed), ctx)
+        self.assertNotIn(str(secret), ctx)
+        self.assertNotIn("AHA Knowledge Base index", ctx)
+        self.assertNotIn("Workspace source index", ctx)
+        self.assertNotIn("entry_count", ctx)
+        self.assertNotIn("filtered", ctx)
+        self.assertIn("do not attempt to read", ctx.lower())
+        # Permission scope still present.
+        self.assertIn("default answer scope", ctx)
+
+    def test_read_paths_empty_keeps_full_enumeration(self) -> None:
+        from aha_cli.services.feishu_group_sources import feishu_group_source_index_context
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            workspace_root = root / "ws"
-            child = workspace_root / "child"
-            child.mkdir(parents=True)
-            (child / "README.md").write_text("r", encoding="utf-8")
-            config = {"workspace_roots": [str(workspace_root)]}
-            lines = _workspace_root_lines(root, config, read_paths=[str(workspace_root)])
-            text = "\n".join(lines)
-            self.assertIn("root=" + str(workspace_root), text)
-            self.assertNotIn("partial", text)
-            self.assertNotIn("filtered", text)
+            project = root / "proj"
+            (project / "docs").mkdir(parents=True)
+            (project / "README.md").write_text("r", encoding="utf-8")
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "workspace_roots": [str(root)],
+                        "knowledge": {"enabled": True},
+                        "agents": {"group_digital_human": {"permissions": {}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            task = {"id": "t1", "kind": "feishu_group_digital_human", "system_managed": True}
+            ctx = feishu_group_source_index_context(root, "r1", task)
+
+        # No read_paths: the full KB + workspace index is still present.
+        self.assertNotIn("Readable paths allowlist", ctx)
+        self.assertIn("AHA Knowledge Base index", ctx)
+        self.assertIn("Workspace source index", ctx)
+        self.assertIn(str(project), ctx)
 
 
 if __name__ == "__main__":

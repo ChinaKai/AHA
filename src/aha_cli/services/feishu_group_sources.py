@@ -69,40 +69,6 @@ def _clip(value: object, limit: int = MAX_LINE_CHARS) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
-def _path_allowed(path: Path, read_paths: list[str]) -> bool:
-    """Return True when ``path`` falls under any configured read path.
-
-    Used to hard-filter the source index when ``read_paths`` is non-empty. A
-    path is allowed when it is equal to, or a descendant of, one of the
-    configured read roots. Matching is done on resolved absolute paths.
-    """
-    if not read_paths:
-        return True
-    try:
-        candidate = path.resolve()
-    except OSError:
-        return False
-    for raw in read_paths:
-        if not str(raw or "").strip():
-            continue
-        try:
-            root = Path(str(raw)).expanduser().resolve()
-        except OSError:
-            continue
-        try:
-            candidate.relative_to(root)
-            return True
-        except ValueError:
-            continue
-    return False
-
-
-def _filtered_read_paths(config: dict) -> list[str]:
-    """Resolve the configured read path allowlist (raw strings)."""
-    permissions = resolve_group_digital_human_permissions(config)
-    return [str(item) for item in permissions.get("read_paths") or [] if str(item or "").strip()]
-
-
 def _safe_tags(value: object) -> str:
     if not isinstance(value, list):
         return ""
@@ -119,7 +85,7 @@ def _relative_or_absolute(path: Path, base: Path | None) -> str:
     return str(path)
 
 
-def _kb_index_lines(root: Path, config: dict, read_paths: list[str] | None = None) -> list[str]:
+def _kb_index_lines(root: Path, config: dict) -> list[str]:
     cfg = knowledge_config(config)
     kb_root = knowledge_root(root, config)
     if not cfg.get("enabled"):
@@ -129,12 +95,6 @@ def _kb_index_lines(root: Path, config: dict, read_paths: list[str] | None = Non
         key=lambda item: str((item.get("meta") or {}).get("updated_at") or ""),
         reverse=True,
     )
-    if read_paths:
-        allowed = [e for e in entries if _path_allowed(Path(str(e.get("path") or "")), read_paths)]
-        filtered_out = len(entries) - len(allowed)
-        entries = allowed
-    else:
-        filtered_out = 0
     counts = Counter(
         (
             str((entry.get("meta") or {}).get("scope") or "-"),
@@ -147,8 +107,6 @@ def _kb_index_lines(root: Path, config: dict, read_paths: list[str] | None = Non
         f"- kb_root: {kb_root}",
         f"- entry_count: {len(entries)}",
     ]
-    if filtered_out:
-        lines.append(f"- filtered: {filtered_out} entries excluded by read_paths")
     if counts:
         count_text = ", ".join(f"{scope}/{kind}={count}" for (scope, kind), count in sorted(counts.items()))
         lines.append(f"- counts: {count_text}")
@@ -237,7 +195,7 @@ def _project_candidates(root_path: Path) -> tuple[list[dict], bool]:
     return candidates, truncated
 
 
-def _workspace_root_lines(root: Path, config: dict, read_paths: list[str] | None = None) -> list[str]:
+def _workspace_root_lines(root: Path, config: dict) -> list[str]:
     configured_roots = [str(item).strip() for item in (config.get("workspace_roots") or []) if str(item).strip()]
     registered = []
     try:
@@ -249,69 +207,28 @@ def _workspace_root_lines(root: Path, config: dict, read_paths: list[str] | None
     for value in [*configured_roots, *registered_paths]:
         if value and value not in all_roots:
             all_roots.append(value)
-    has_allowlist = bool(read_paths)
     if not all_roots:
-        note = " (filtered by read_paths)" if has_allowlist else ""
-        return [f"Workspace source index: no workspace_roots or registered workspaces configured{note}"]
+        return ["Workspace source index: no workspace_roots or registered workspaces configured"]
     lines = [
         "Workspace source index:",
         "- Roots are internal read-only lookup entrypoints. Do not reveal raw absolute paths in public group replies.",
+        f"- root_count: {len(all_roots)}",
     ]
-    shown_roots = 0
-    filtered_count = 0
-    for raw_path in all_roots[:MAX_WORKSPACE_ROOTS]:
+    for root_index, raw_path in enumerate(all_roots[:MAX_WORKSPACE_ROOTS], start=1):
         path = Path(raw_path).expanduser()
         exists = path.exists()
-        if has_allowlist:
-            # When an allowlist is present, root-level filtering is not enough:
-            # a root may be outside the allowlist while one of its project
-            # candidates is inside it. Expand candidates and keep only those
-            # that match, so e.g. read_paths=/proj/allowed keeps allowed but
-            # hides sibling projects.
-            if not exists:
-                if _path_allowed(path, read_paths):
-                    lines.append(f"- root={path} (missing)")
-                    shown_roots += 1
-                else:
-                    filtered_count += 1
-                continue
-            if _path_allowed(path, read_paths):
-                candidates, truncated = _project_candidates(path)
-                lines.append(f"- root={path} (exists)")
-                shown_roots += 1
-            else:
-                candidates, truncated = _project_candidates(path)
-                allowed_candidates = [c for c in candidates if _path_allowed(Path(c["path"]).expanduser(), read_paths)]
-                if not allowed_candidates:
-                    filtered_count += 1
-                    continue
-                lines.append(f"- root={path} (partial, filtered by read_paths)")
-                shown_roots += 1
-                candidates = allowed_candidates
-            for candidate in candidates:
-                markers = ", ".join(candidate["markers"]) if candidate["markers"] else "-"
-                label = "root" if candidate["depth"] == 0 else "project"
-                lines.append(f"   - {label}: {candidate['path']} | markers={markers}")
-            if truncated:
-                lines.append(f"   - truncated: showing up to {MAX_PROJECT_CANDIDATES_PER_ROOT} candidate paths from this root")
-        else:
-            lines.append(f"- root={path} ({'exists' if exists else 'missing'})")
-            shown_roots += 1
-            if not exists:
-                continue
-            candidates, truncated = _project_candidates(path)
-            for candidate in candidates:
-                markers = ", ".join(candidate["markers"]) if candidate["markers"] else "-"
-                label = "root" if candidate["depth"] == 0 else "project"
-                lines.append(f"   - {label}: {candidate['path']} | markers={markers}")
-            if truncated:
-                lines.append(f"   - truncated: showing up to {MAX_PROJECT_CANDIDATES_PER_ROOT} candidate paths from this root")
-    if filtered_count:
-        lines.append(f"- filtered: {filtered_count} roots excluded by read_paths")
+        lines.append(f"{root_index}. root={path} ({'exists' if exists else 'missing'})")
+        if not exists:
+            continue
+        candidates, truncated = _project_candidates(path)
+        for candidate in candidates:
+            markers = ", ".join(candidate["markers"]) if candidate["markers"] else "-"
+            label = "root" if candidate["depth"] == 0 else "project"
+            lines.append(f"   - {label}: {candidate['path']} | markers={markers}")
+        if truncated:
+            lines.append(f"   - truncated: showing up to {MAX_PROJECT_CANDIDATES_PER_ROOT} candidate paths from this root")
     if len(all_roots) > MAX_WORKSPACE_ROOTS:
         lines.append(f"- truncated_roots: showing {MAX_WORKSPACE_ROOTS} of {len(all_roots)} roots")
-    if not shown_roots:
-        return [f"Workspace source index: no workspace_roots or registered workspaces configured{' (filtered by read_paths)' if has_allowlist else ''}"]
     return lines
 
 
@@ -378,6 +295,24 @@ def feishu_group_source_index_context(root: Path, run_id: str, task: dict | None
             handoff_always=handoff_always,
         ).rstrip()
         read_paths = [str(item) for item in permissions.get("read_paths") or [] if str(item or "").strip()]
+        if read_paths:
+            # read_paths allowlist: give only the paths, not enumerated content.
+            # Everything under each path is readable; do not enumerate specific
+            # KB entries or workspace projects.
+            path_lines = [f"- {item}" for item in read_paths]
+            lines = [
+                "Digital-human information source index:",
+                "- Readable paths allowlist (read_paths): you may read all files and subdirectories under these paths.",
+                *path_lines,
+                "- Only read files under the listed paths. Do not attempt to read or reference paths outside this allowlist.",
+                "- If an answer can be supported by common knowledge or files under the readable paths, answer publicly and concisely.",
+                "- If the answer depends on private source details, secrets, owner judgment, execution, authorization, or falls outside the readable paths, hand off to the owner.",
+                "",
+                permission_context,
+                "",
+                *_recent_group_context_lines(root, run_id, task_id),
+            ]
+            return "\n".join(lines).strip()
         lines = [
             "Digital-human information source index:",
             "- This is an index, not full source content. Use it to choose minimal KB entries or workspace files to inspect before answering.",
@@ -387,14 +322,12 @@ def feishu_group_source_index_context(root: Path, run_id: str, task: dict | None
             "",
             permission_context,
             "",
-            *_kb_index_lines(root, config, read_paths),
+            *_kb_index_lines(root, config),
             "",
-            *_workspace_root_lines(root, config, read_paths),
+            *_workspace_root_lines(root, config),
             "",
             *_recent_group_context_lines(root, run_id, task_id),
         ]
-        if read_paths:
-            lines.insert(3, f"- read_paths: configured — only sources under {', '.join(repr(p) for p in read_paths)} are indexed and readable.")
         return "\n".join(lines).strip()
     except (Exception, SystemExit):
         return "Digital-human information source index: unavailable"
