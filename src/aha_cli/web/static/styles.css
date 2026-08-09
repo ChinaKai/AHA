@@ -1724,8 +1724,10 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   align-items: center;
 }
 .permissions-field.permissions-check input[type="checkbox"] {
-  width: auto;
-  min-width: 0;
+  width: var(--toggle-size);
+  min-width: var(--toggle-size);
+  height: var(--toggle-size);
+  min-height: var(--toggle-size);
   margin: 0;
 }
 .permissions-actions {

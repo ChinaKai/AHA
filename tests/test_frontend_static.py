@@ -1078,7 +1078,7 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=permissions-v2">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=permissions-v3">', html)
         self.assertIn('<script src="/static/i18n.js?v=permissions-v2"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
