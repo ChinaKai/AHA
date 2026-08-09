@@ -1771,38 +1771,26 @@ body.settings-home .session-menu.local-terminal-open .local-terminal-xterm {
   min-height: var(--toggle-size);
   margin: 0;
 }
-.permissions-path-custom {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.permissions-path-custom-list {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
-.permissions-path-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  padding: 3px 8px;
-  border: 1px solid var(--surface-border, #d0d5dd);
-  border-radius: 999px;
-  background: var(--surface-bg-subtle, #f8fafc);
-  font-size: 12px;
-  color: var(--text-primary, #1d2939);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.permissions-path-custom.permissions-path-option {
+  justify-content: space-between;
 }
-.permissions-path-chip-remove {
+.permissions-path-remove {
+  flex: 0 0 auto;
   border: 0;
   background: transparent;
   color: #667085;
-  font-size: 14px;
-  line-height: 1;
+  font-size: 12px;
   cursor: pointer;
-  padding: 0 2px;
+  padding: 2px 4px;
 }
-.permissions-path-chip-remove:hover {
+.permissions-path-remove:hover {
   color: #d92d20;
+  text-decoration: underline;
 }
 .permissions-path-add {
   display: flex;

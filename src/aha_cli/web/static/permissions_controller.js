@@ -70,13 +70,14 @@
           return `<label class="permissions-path-option"><input type="checkbox" name="read_path" value="${escapeHtml(path)}"${checked}> <span>${label}</span></label>`;
         })
         .join("");
-      // Custom paths (selected but not a known candidate) become removable chips.
+      // Custom paths (selected but not a known candidate) render as removable
+      // rows matching the checkbox rows, so the whole list has one visual style.
       const knownSet = new Set((candidates || []).map(c => String(c.path || "")));
       const custom = (selected || [])
         .filter(path => !knownSet.has(path))
-        .map(path => `<span class="permissions-path-chip" data-custom-path="${escapeHtml(path)}">${escapeHtml(path)}<button type="button" class="permissions-path-chip-remove" data-remove-path="${escapeHtml(path)}" aria-label="remove">×</button></span>`)
+        .map(path => `<div class="permissions-path-option permissions-path-custom" data-custom-path="${escapeHtml(path)}"><span>${escapeHtml(path)}</span><button type="button" class="permissions-path-remove" data-remove-path="${escapeHtml(path)}" aria-label="remove">${escapeHtml(t("run.permissions_remove", "Remove"))}</button></div>`)
         .join("");
-      return `<div class="permissions-path-candidates">${known || '<em class="permissions-empty">No auto-detected paths.</em>'}</div>${custom ? `<div class="permissions-path-custom">${custom}</div>` : ""}`;
+      return `<div class="permissions-path-candidates">${known || '<em class="permissions-empty">No auto-detected paths.</em>'}</div>${custom ? `<div class="permissions-path-custom-list">${custom}</div>` : ""}`;
     }
 
     function formHtml(permissions, candidates) {
