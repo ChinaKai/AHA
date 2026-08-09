@@ -59,21 +59,21 @@
     }
 
     function formHtml(permissions) {
-      const defaultScope = escapeHtml(permissions.default_scope || "public_knowledge");
       const allowedTopics = escapeHtml((permissions.allowed_topics || []).join(", "));
       const handoffAlways = escapeHtml((permissions.handoff_always || []).join(", "));
       const readPaths = escapeHtml((permissions.read_paths || []).join("\n"));
+      const allowCommon = Boolean(permissions.allow_common_knowledge);
       return `
 <form class="permissions-form" data-permissions-form>
   <label class="permissions-field">
-    <span>${escapeHtml(t("run.permissions_default_scope", "Default answer scope"))}</span>
-    <select name="default_scope">
-      <option value="public_knowledge"${defaultScope === "public_knowledge" ? " selected" : ""}>${escapeHtml(t("run.permissions_scope_public", "Public knowledge / docs"))}</option>
-      <option value="project_docs"${defaultScope === "project_docs" ? " selected" : ""}>${escapeHtml(t("run.permissions_scope_project", "Project docs"))}</option>
-      <option value="workspace_only"${defaultScope === "workspace_only" ? " selected" : ""}>${escapeHtml(t("run.permissions_scope_workspace", "Workspace only"))}</option>
-      <option value="restricted"${defaultScope === "restricted" ? " selected" : ""}>${escapeHtml(t("run.permissions_scope_restricted", "Restricted"))}</option>
-    </select>
-    <em>${escapeHtml(t("run.permissions_default_scope_hint", "Baseline scope the digital human may answer from."))}</em>
+    <span>${escapeHtml(t("run.permissions_read_paths", "Readable paths"))}</span>
+    <textarea name="read_paths" rows="4" placeholder="${escapeHtml(t("run.permissions_read_paths_placeholder", "One absolute path per line"))}">${readPaths}</textarea>
+    <em>${escapeHtml(t("run.permissions_read_paths_hint", "Knowledge source of the digital human. All files under each path are readable. Empty = AHA KB + workspace roots + digital-human workspace."))}</em>
+  </label>
+  <label class="permissions-field permissions-check">
+    <span>${escapeHtml(t("run.permissions_allow_common", "Allow common knowledge"))}</span>
+    <input type="checkbox" name="allow_common_knowledge"${allowCommon ? " checked" : ""}>
+    <em>${escapeHtml(t("run.permissions_allow_common_hint", "When off, answer only from the readable paths and hand off everything else. When on, casual small talk and generic facts may use common knowledge, but project answers must still come from the paths."))}</em>
   </label>
   <label class="permissions-field">
     <span>${escapeHtml(t("run.permissions_allowed_topics", "Directly answerable topics"))}</span>
@@ -84,11 +84,6 @@
     <span>${escapeHtml(t("run.permissions_handoff_always", "Always hand off topics"))}</span>
     <textarea name="handoff_always" rows="3" placeholder="${escapeHtml(t("run.permissions_handoff_placeholder", "Comma-separated topics"))}">${handoffAlways}</textarea>
     <em>${escapeHtml(t("run.permissions_handoff_always_hint", "Additional topics that must always hand off to the owner. Empty = baseline only (execution, commitment, permissions, private/secrets)."))}</em>
-  </label>
-  <label class="permissions-field">
-    <span>${escapeHtml(t("run.permissions_read_paths", "Readable paths"))}</span>
-    <textarea name="read_paths" rows="3" placeholder="${escapeHtml(t("run.permissions_read_paths_placeholder", "One absolute path per line"))}">${readPaths}</textarea>
-    <em>${escapeHtml(t("run.permissions_read_paths_hint", "When set, only KB entries and workspace roots under these paths are indexed. Empty = all sources."))}</em>
   </label>
   <div class="permissions-actions">
     <span id="permissions-state" class="meta" aria-live="polite"></span>
@@ -126,11 +121,12 @@
       const allowedTopics = String(form?.querySelector?.('[name="allowed_topics"]')?.value || "").trim();
       const handoffAlways = String(form?.querySelector?.('[name="handoff_always"]')?.value || "").trim();
       const readPaths = String(form?.querySelector?.('[name="read_paths"]')?.value || "").trim();
+      const allowCommon = Boolean(form?.querySelector?.('[name="allow_common_knowledge"]')?.checked);
       return {
-        default_scope: String(form?.querySelector?.('[name="default_scope"]')?.value || "").trim() || "public_knowledge",
+        read_paths: readPaths ? readPaths.split(/\r?\n/).map(item => item.trim()).filter(Boolean) : [],
+        allow_common_knowledge: allowCommon,
         allowed_topics: allowedTopics ? allowedTopics.split(",").map(item => item.trim()).filter(Boolean) : [],
         handoff_always: handoffAlways ? handoffAlways.split(",").map(item => item.trim()).filter(Boolean) : [],
-        read_paths: readPaths ? readPaths.split(/\r?\n/).map(item => item.trim()).filter(Boolean) : [],
       };
     }
 

@@ -65,7 +65,8 @@ class WebSystemRoutesTests(unittest.TestCase):
                 system_route_response(root, "", "GET", "/api/agents/group-digital-human/permissions", {})
             )
             self.assertTrue(payload["ok"])
-            self.assertEqual(payload["permissions"]["default_scope"], "public_knowledge")
+            self.assertEqual(payload["permissions"]["read_paths"], [])
+            self.assertFalse(payload["permissions"]["allow_common_knowledge"])
             self.assertEqual(payload["permissions"]["allowed_topics"], [])
             self.assertEqual(payload["permissions"]["handoff_always"], [])
 
@@ -73,21 +74,27 @@ class WebSystemRoutesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             body = json.dumps(
-                {"default_scope": "project_docs", "allowed_topics": ["vega", "hlcloud"], "handoff_always": ["payment"]}
+                {
+                    "read_paths": ["/data/proj", "/data/docs"],
+                    "allow_common_knowledge": True,
+                    "allowed_topics": ["vega", "hlcloud"],
+                    "handoff_always": ["payment"],
+                }
             ).encode("utf-8")
             response = json_response_body(
                 system_route_response(root, "", "POST", "/api/agents/group-digital-human/permissions", {}, body=body)
             )
             self.assertTrue(response["ok"])
             permissions = response["permissions"]
-            self.assertEqual(permissions["default_scope"], "project_docs")
+            self.assertEqual(permissions["read_paths"], ["/data/proj", "/data/docs"])
+            self.assertTrue(permissions["allow_common_knowledge"])
             self.assertEqual(permissions["allowed_topics"], ["vega", "hlcloud"])
             self.assertEqual(permissions["handoff_always"], ["payment"])
 
             # Canonical location.
             config = json.loads(config_path(root).read_text(encoding="utf-8"))
             self.assertEqual(
-                config["agents"]["group_digital_human"]["permissions"]["default_scope"], "project_docs"
+                config["agents"]["group_digital_human"]["permissions"]["read_paths"], ["/data/proj", "/data/docs"]
             )
             # Legacy mirror stays consistent for pre-migration readers.
             self.assertEqual(
@@ -99,6 +106,7 @@ class WebSystemRoutesTests(unittest.TestCase):
                 system_route_response(root, "", "GET", "/api/agents/group-digital-human/permissions", {})
             )
             self.assertEqual(reread["permissions"]["allowed_topics"], ["vega", "hlcloud"])
+            self.assertEqual(reread["permissions"]["read_paths"], ["/data/proj", "/data/docs"])
 
     def test_group_digital_human_permissions_post_rejects_bad_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

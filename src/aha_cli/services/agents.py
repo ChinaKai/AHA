@@ -20,7 +20,7 @@ from aha_cli.store.paths import config_path
 
 _agents_lock = threading.Lock()
 
-PERMISSION_FIELDS = {"default_scope", "allowed_topics", "handoff_always", "read_paths"}
+PERMISSION_FIELDS = {"read_paths", "allow_common_knowledge", "allowed_topics", "handoff_always"}
 
 _GROUP_KEY = "group_digital_human"
 
@@ -52,8 +52,8 @@ def update_group_digital_human_permissions(root: Path, payload: dict) -> dict:
             raise ValueError("AHA config must be a JSON object")
         current = resolve_group_digital_human_permissions(config)
         merged = {**current, **accepted}
-        default_scope = str(merged.get("default_scope") or "").strip() or "public_knowledge"
-        merged["default_scope"] = default_scope
+        merged["read_paths"] = merged.get("read_paths") or []
+        merged["allow_common_knowledge"] = bool(merged.get("allow_common_knowledge"))
         merged["allowed_topics"] = merged.get("allowed_topics") or []
         merged["handoff_always"] = merged.get("handoff_always") or []
         normalized = normalize_agents_config(

@@ -148,18 +148,21 @@ class FeishuRuntimeTests(unittest.TestCase):
         config = normalize_feishu_integration_config(
             {
                 "group_permissions": {
-                    "default_scope": "project_docs",
+                    "read_paths": ["/data/proj"],
+                    "allow_common_knowledge": True,
                     "allowed_topics": ["vega", "hlcloud"],
                     "handoff_always": "payment, legal",
                 }
             }
         )
-        self.assertEqual(config["group_permissions"]["default_scope"], "project_docs")
+        self.assertEqual(config["group_permissions"]["read_paths"], ["/data/proj"])
+        self.assertTrue(config["group_permissions"]["allow_common_knowledge"])
         self.assertEqual(config["group_permissions"]["allowed_topics"], ["vega", "hlcloud"])
         self.assertEqual(config["group_permissions"]["handoff_always"], ["payment", "legal"])
 
         empty = normalize_feishu_integration_config({})
-        self.assertEqual(empty["group_permissions"]["default_scope"], "public_knowledge")
+        self.assertEqual(empty["group_permissions"]["read_paths"], [])
+        self.assertFalse(empty["group_permissions"]["allow_common_knowledge"])
         self.assertEqual(empty["group_permissions"]["allowed_topics"], [])
         self.assertEqual(empty["group_permissions"]["handoff_always"], [])
 
@@ -168,36 +171,36 @@ class FeishuRuntimeTests(unittest.TestCase):
             {
                 "group_digital_human": {
                     "permissions": {
-                        "default_scope": "workspace_only",
+                        "read_paths": "/data/proj\n/data/docs",
+                        "allow_common_knowledge": True,
                         "allowed_topics": ["vega", "hlcloud"],
                         "handoff_always": "payment, legal",
-                        "read_paths": "/data/proj\n/data/docs",
                     }
                 }
             }
         )
         group = config["group_digital_human"]["permissions"]
-        self.assertEqual(group["default_scope"], "workspace_only")
+        self.assertEqual(group["read_paths"], ["/data/proj", "/data/docs"])
+        self.assertTrue(group["allow_common_knowledge"])
         self.assertEqual(group["allowed_topics"], ["vega", "hlcloud"])
         self.assertEqual(group["handoff_always"], ["payment", "legal"])
-        self.assertEqual(group["read_paths"], ["/data/proj", "/data/docs"])
 
         defaults = normalize_agents_config({})
-        self.assertEqual(defaults["group_digital_human"]["permissions"]["default_scope"], "public_knowledge")
-        self.assertEqual(defaults["group_digital_human"]["permissions"]["allowed_topics"], [])
         self.assertEqual(defaults["group_digital_human"]["permissions"]["read_paths"], [])
+        self.assertFalse(defaults["group_digital_human"]["permissions"]["allow_common_knowledge"])
+        self.assertEqual(defaults["group_digital_human"]["permissions"]["allowed_topics"], [])
 
     def test_resolve_group_digital_human_permissions_prefers_agents_over_legacy(self) -> None:
         config = {
             "agents": {
                 "group_digital_human": {
-                    "permissions": {"default_scope": "project_docs", "allowed_topics": ["new"], "handoff_always": []}
+                    "permissions": {"read_paths": ["/new"], "allow_common_knowledge": True, "allowed_topics": ["new"], "handoff_always": []}
                 }
             },
             "integrations": {
                 "feishu": {
                     "group_permissions": {
-                        "default_scope": "public_knowledge",
+                        "read_paths": ["/legacy"],
                         "allowed_topics": ["legacy"],
                         "handoff_always": [],
                     }
@@ -205,7 +208,8 @@ class FeishuRuntimeTests(unittest.TestCase):
             },
         }
         resolved = resolve_group_digital_human_permissions(config)
-        self.assertEqual(resolved["default_scope"], "project_docs")
+        self.assertEqual(resolved["read_paths"], ["/new"])
+        self.assertTrue(resolved["allow_common_knowledge"])
         self.assertEqual(resolved["allowed_topics"], ["new"])
 
     def test_resolve_group_digital_human_permissions_falls_back_to_legacy(self) -> None:
@@ -213,7 +217,8 @@ class FeishuRuntimeTests(unittest.TestCase):
             "integrations": {
                 "feishu": {
                     "group_permissions": {
-                        "default_scope": "restricted",
+                        "read_paths": ["/legacy-path"],
+                        "allow_common_knowledge": True,
                         "allowed_topics": ["legacy-topic"],
                         "handoff_always": ["legacy-handoff"],
                     }
@@ -221,7 +226,8 @@ class FeishuRuntimeTests(unittest.TestCase):
             }
         }
         resolved = resolve_group_digital_human_permissions(config)
-        self.assertEqual(resolved["default_scope"], "restricted")
+        self.assertEqual(resolved["read_paths"], ["/legacy-path"])
+        self.assertTrue(resolved["allow_common_knowledge"])
         self.assertEqual(resolved["allowed_topics"], ["legacy-topic"])
         self.assertEqual(resolved["handoff_always"], ["legacy-handoff"])
 

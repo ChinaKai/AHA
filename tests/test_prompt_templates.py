@@ -70,7 +70,7 @@ SAMPLE_VALUES = {
     "distill_mode_label": "整理",
     "distill_mode_rules": "- Do not add facts.",
     "distill_mode_summary": "Organize the note.",
-    "default_scope": "public_knowledge",
+    "allow_common_knowledge": "disabled",
     "allowed_topics": "none",
     "handoff_always": "execution, permissions",
     "enabled_channel_count": "1",

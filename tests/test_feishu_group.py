@@ -30,7 +30,7 @@ from aha_cli.services.orchestrator import execute_actions
 from aha_cli.services.service_assistant import ensure_service_assistant_run, ensure_service_assistant_task
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_message, create_plan
-from aha_cli.store.knowledge import write_entry
+from aha_cli.store.knowledge import knowledge_root, write_entry
 from aha_cli.store.paths import aha_home_path, mark_aha_home
 from aha_cli.store.runs import require_plan
 from aha_cli.store.task_memos import create_task_memo
@@ -145,6 +145,8 @@ class FeishuGroupTests(unittest.TestCase):
                 feishu_original_text="上一轮问过 pipeline",
             )
 
+            kb_root = knowledge_root(root, config)
+            dh_workspace = (aha_home_path(root) / "feishu_group_state").resolve()
             prompt = chat_prompt(
                 root,
                 run_id,
@@ -158,13 +160,19 @@ class FeishuGroupTests(unittest.TestCase):
                 "",
             )
 
+        # No read_paths: default paths are declared (workspace root + KB root +
+        # digital-human workspace), not enumerated content.
         self.assertIn("Digital-human information source index", prompt)
-        self.assertIn("AHA Knowledge Base index", prompt)
-        self.assertIn("Digital Human FAQ", prompt)
-        self.assertIn("Workspace source index", prompt)
-        self.assertIn(str(project), prompt)
-        self.assertIn("README.md", prompt)
-        self.assertIn("docs/", prompt)
+        self.assertIn("Readable paths", prompt)
+        self.assertIn(str(workspace_root.resolve()), prompt)
+        self.assertIn(str(kb_root.resolve()), prompt)
+        self.assertIn(str(dh_workspace), prompt)
+        # No enumeration of KB entries or workspace projects.
+        self.assertNotIn("AHA Knowledge Base index", prompt)
+        self.assertNotIn("Workspace source index", prompt)
+        self.assertNotIn("Digital Human FAQ", prompt)
+        self.assertNotIn(str(project), prompt)
+        self.assertNotIn("README.md", prompt)
         self.assertIn("Recent group @ context", prompt)
         self.assertIn("上一轮问过 pipeline", prompt)
         self.assertNotIn("KB BODY SHOULD NOT BE IN PROMPT", prompt)
@@ -253,7 +261,7 @@ class FeishuGroupTests(unittest.TestCase):
 
         # Only the allowlisted path is declared; no specific content enumerated.
         self.assertIn(str(allowed_project), prompt)
-        self.assertIn("Readable paths allowlist", prompt)
+        self.assertIn("Readable paths", prompt)
         # Secret sibling project is not declared at all.
         self.assertNotIn(str(secret_project), prompt)
         self.assertNotIn("secret-project", prompt)
@@ -264,6 +272,8 @@ class FeishuGroupTests(unittest.TestCase):
         self.assertNotIn("Secret KB Doc", prompt)
         self.assertNotIn("SECRET KB BODY", prompt)
         self.assertNotIn("SECRET BODY", prompt)
+        # Common knowledge off by default → answer only from paths.
+        self.assertIn("Common knowledge is NOT used", prompt)
 
     def test_group_digital_human_prompt_includes_linked_memo_terminal_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1094,18 +1104,19 @@ class FeishuGroupSourcePathFilterTests(unittest.TestCase):
             ctx = feishu_group_source_index_context(root, "r1", task)
 
         # Only the allowlisted path is declared; nothing is enumerated.
-        self.assertIn("Readable paths allowlist", ctx)
+        self.assertIn("Readable paths", ctx)
         self.assertIn(str(allowed), ctx)
         self.assertNotIn(str(secret), ctx)
         self.assertNotIn("AHA Knowledge Base index", ctx)
         self.assertNotIn("Workspace source index", ctx)
         self.assertNotIn("entry_count", ctx)
         self.assertNotIn("filtered", ctx)
-        self.assertIn("do not attempt to read", ctx.lower())
-        # Permission scope still present.
-        self.assertIn("default answer scope", ctx)
+        # Common knowledge is off by default, so the context says so.
+        self.assertIn("Common knowledge is NOT used", ctx)
+        # Knowledge scope still present.
+        self.assertIn("allow common knowledge", ctx)
 
-    def test_read_paths_empty_keeps_full_enumeration(self) -> None:
+    def test_read_paths_empty_uses_default_paths(self) -> None:
         from aha_cli.services.feishu_group_sources import feishu_group_source_index_context
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1127,11 +1138,40 @@ class FeishuGroupSourcePathFilterTests(unittest.TestCase):
             task = {"id": "t1", "kind": "feishu_group_digital_human", "system_managed": True}
             ctx = feishu_group_source_index_context(root, "r1", task)
 
-        # No read_paths: the full KB + workspace index is still present.
-        self.assertNotIn("Readable paths allowlist", ctx)
-        self.assertIn("AHA Knowledge Base index", ctx)
-        self.assertIn("Workspace source index", ctx)
-        self.assertIn(str(project), ctx)
+        # No read_paths: default paths are declared (workspace root is the
+        # configured root itself, not an enumerated child project).
+        self.assertIn("Readable paths", ctx)
+        self.assertIn(str(root.resolve()), ctx)
+        self.assertNotIn(str(project), ctx)
+        # No enumerated content.
+        self.assertNotIn("AHA Knowledge Base index", ctx)
+        self.assertNotIn("Workspace source index", ctx)
+
+    def test_allow_common_knowledge_toggle_reflected(self) -> None:
+        from aha_cli.services.feishu_group_sources import feishu_group_source_index_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            allowed = root / "allowed-proj"
+            allowed.mkdir(parents=True)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "agents": {
+                            "group_digital_human": {
+                                "permissions": {"read_paths": [str(allowed)], "allow_common_knowledge": True}
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            task = {"id": "t1", "kind": "feishu_group_digital_human", "system_managed": True}
+            ctx = feishu_group_source_index_context(root, "r1", task)
+
+        self.assertIn("Common knowledge is allowed", ctx)
+        self.assertIn("allow common knowledge: enabled", ctx)
 
 
 if __name__ == "__main__":

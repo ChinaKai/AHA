@@ -152,7 +152,8 @@ def default_feishu_integration_config() -> dict:
         "notifications_enabled": True,
         "security_mode": "audit",
         "group_permissions": {
-            "default_scope": "public_knowledge",
+            "read_paths": [],
+            "allow_common_knowledge": False,
             "allowed_topics": [],
             "handoff_always": [],
         },
@@ -185,10 +186,10 @@ def default_agents_config() -> dict:
     return {
         "group_digital_human": {
             "permissions": {
-                "default_scope": "public_knowledge",
+                "read_paths": [],
+                "allow_common_knowledge": False,
                 "allowed_topics": [],
                 "handoff_always": [],
-                "read_paths": [],
             }
         }
     }
@@ -200,14 +201,16 @@ def normalize_agents_config(value: object | None = None) -> dict:
     raw_group = raw.get("group_digital_human")
     if isinstance(raw_group, dict):
         raw_permissions = raw_group.get("permissions")
-        default_permissions = config["group_digital_human"]["permissions"]
         if isinstance(raw_permissions, dict):
-            default_scope = str(raw_permissions.get("default_scope") or default_permissions["default_scope"]).strip()
+            allow_common = raw_permissions.get("allow_common_knowledge")
             config["group_digital_human"]["permissions"] = {
-                "default_scope": default_scope or "public_knowledge",
+                # Legacy default_scope is dropped: the digital human is an
+                # electronic delegate whose knowledge source is read_paths, not
+                # a semantic preset.
+                "read_paths": _normalize_string_list(raw_permissions.get("read_paths")),
+                "allow_common_knowledge": normalize_bool(allow_common, default=False),
                 "allowed_topics": _normalize_string_list(raw_permissions.get("allowed_topics")),
                 "handoff_always": _normalize_string_list(raw_permissions.get("handoff_always")),
-                "read_paths": _normalize_string_list(raw_permissions.get("read_paths")),
             }
     return config
 
@@ -455,14 +458,12 @@ def normalize_feishu_integration_config(value: object | None = None) -> dict:
     config["security_mode"] = security_mode if security_mode in {"compat", "audit", "strict"} else "audit"
     raw_permissions = raw.get("group_permissions")
     if isinstance(raw_permissions, dict):
-        default_permissions = config["group_permissions"]
-        default_scope = str(raw_permissions.get("default_scope") or default_permissions["default_scope"]).strip()
-        allowed_topics = _normalize_string_list(raw_permissions.get("allowed_topics"))
-        handoff_always = _normalize_string_list(raw_permissions.get("handoff_always"))
+        allow_common = raw_permissions.get("allow_common_knowledge")
         config["group_permissions"] = {
-            "default_scope": default_scope or "public_knowledge",
-            "allowed_topics": allowed_topics,
-            "handoff_always": handoff_always,
+            "read_paths": _normalize_string_list(raw_permissions.get("read_paths")),
+            "allow_common_knowledge": normalize_bool(allow_common, default=False),
+            "allowed_topics": _normalize_string_list(raw_permissions.get("allowed_topics")),
+            "handoff_always": _normalize_string_list(raw_permissions.get("handoff_always")),
         }
     return config
 
