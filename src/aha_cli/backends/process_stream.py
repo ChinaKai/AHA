@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import os
 import queue
+import signal
 import subprocess
 import threading
 import time
@@ -11,6 +13,8 @@ import time
 BACKEND_COMPLETION_GRACE_SECONDS = 3.0
 BACKEND_TERMINATION_WAIT_SECONDS = 1.0
 _POLL_SECONDS = 0.05
+
+_WIN = os.name == "nt"
 
 
 @dataclass(frozen=True)
@@ -33,12 +37,43 @@ def _wait_with_timeout(process: subprocess.Popen[str], timeout: float) -> int | 
         return None
 
 
-def _finish_completed_backend_process(process: subprocess.Popen[str]) -> int | None:
-    """Stop only a lingering backend parent after its native completion event.
+def terminate_process_tree(pid: int) -> None:
+    """Kill ``pid`` and its whole descendant tree.
 
-    Do not tree-kill here: a deliberately detached server may be the requested
-    result of the turn. If that descendant merely inherited stdout, the backend
-    parent has normally exited already and its code can be returned immediately.
+    This is used only after a backend's native completion record was seen but
+    stdout did not EOF within the grace window. A descendant that merely
+    inherited the stdout pipe would otherwise keep the backend turn alive
+    indefinitely; the native result is already captured, so killing the tree is
+    safe and does not discard model output.
+    """
+    if not pid or pid <= 0:
+        return
+    if _WIN:
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError:
+            return
+        return
+    try:
+        os.killpg(int(pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _finish_completed_backend_process(process: subprocess.Popen[str]) -> int | None:
+    """Stop a lingering backend parent after its native completion event.
+
+    Prefer not to tree-kill: a deliberately detached server may be the requested
+    result of the turn, and if the parent has already exited its code can be
+    returned immediately. Only when the parent itself stays alive past the grace
+    window do we escalate to a tree kill — the native result is already in hand,
+    and the lingering descendant is holding the stdout pipe open.
     """
     exit_code = _poll(process)
     if exit_code is not None:
@@ -51,6 +86,9 @@ def _finish_completed_backend_process(process: subprocess.Popen[str]) -> int | N
     exit_code = _wait_with_timeout(process, BACKEND_TERMINATION_WAIT_SECONDS)
     if exit_code is not None:
         return exit_code
+    # Escalate: the parent refused to die within the grace window. A descendant
+    # is keeping it (or the pipe) alive, so take down the whole tree.
+    terminate_process_tree(getattr(process, "pid", None))
     try:
         process.kill()
     except (AttributeError, OSError):

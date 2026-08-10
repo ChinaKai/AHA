@@ -1430,3 +1430,63 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual(body["compact_reset"]["old_backend_session_id"], session_id)
         self.assertIsNone(updated["backend_session_id"])
         self.assertEqual(updated["history_backend_sessions"][0]["backend_session_id"], session_id)
+
+
+class ProcessStreamTreeKillTests(unittest.TestCase):
+    """Grace-exceeded backend cleanup must tree-kill a lingering parent.
+
+    Regression for task-010's ``native_completion_without_stdout_eof``: a Claude
+    CLI that completes but keeps its stdout pipe open via an inherited descendant
+    must be reaped together with that descendant, not just the bare parent.
+    """
+
+    def test_finish_completed_backend_tree_kills_when_parent_refuses_to_die(self) -> None:
+        from aha_cli.backends import process_stream
+
+        calls: list[object] = []
+
+        class StubbornProcess:
+            pid = 4242
+
+            def poll(self) -> None:
+                return None  # parent still alive
+
+            def terminate(self) -> None:
+                calls.append("terminate")
+
+            def wait(self, timeout: float) -> None:
+                calls.append(("wait", timeout))
+                import subprocess as _subprocess
+
+                raise _subprocess.TimeoutExpired("fake", timeout)  # does not exit within termination wait
+
+            def kill(self) -> None:
+                calls.append("kill")
+
+        with mock.patch("aha_cli.backends.process_stream.terminate_process_tree") as tree_kill:
+            exit_code = process_stream._finish_completed_backend_process(StubbornProcess())
+
+        tree_kill.assert_called_once_with(4242)
+        self.assertIn("terminate", calls)
+        self.assertIn("kill", calls)
+
+    def test_finish_completed_backend_skips_tree_kill_when_parent_exited(self) -> None:
+        from aha_cli.backends import process_stream
+
+        class ExitedProcess:
+            pid = 4243
+
+            def poll(self) -> int:
+                return 0
+
+            def terminate(self) -> None:
+                raise AssertionError("must not terminate an already-exited parent")
+
+            def wait(self, timeout: float) -> None:
+                raise AssertionError("must not wait on an already-exited parent")
+
+        with mock.patch("aha_cli.backends.process_stream.terminate_process_tree") as tree_kill:
+            exit_code = process_stream._finish_completed_backend_process(ExitedProcess())
+
+        tree_kill.assert_not_called()
+        self.assertEqual(exit_code, 0)

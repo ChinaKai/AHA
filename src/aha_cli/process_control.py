@@ -170,7 +170,10 @@ def assign_parent_death(proc) -> None:
     """
     if not _WIN:
         return
-    _windows_assign_kill_job(proc.pid)
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return
+    _windows_assign_kill_job(int(pid))
 
 
 def terminate_parent_death_children() -> None:

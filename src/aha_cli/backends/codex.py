@@ -15,6 +15,7 @@ from aha_cli.backends.codex_litellm_bridge import start_litellm_responses_bridge
 from aha_cli.backends.process_stream import BACKEND_COMPLETION_GRACE_SECONDS, consume_process_output
 from aha_cli.domain.models import utc_now
 from aha_cli.platform import hidden_subprocess_kwargs, spawn_command
+from aha_cli.process_control import assign_parent_death
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.output_artifacts import save_command_output_artifact
 from aha_cli.services.proxy import apply_proxy_environment
@@ -698,6 +699,11 @@ def run_codex_exec(
             start_new_session=start_new_session,
             **hidden_subprocess_kwargs(),
         )
+        # Bind the CLI and its descendants to the parent-death Job Object on
+        # Windows so a long-running descendant cannot keep the stdout pipe open
+        # after the backend parent exits; the tree is reaped on supervisor exit
+        # or on the grace-exceeded tree kill.
+        assign_parent_death(process)
         if event_callback:
             event_callback(
                 "backend_process_started",
