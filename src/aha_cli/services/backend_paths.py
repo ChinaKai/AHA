@@ -1,26 +1,59 @@
 from __future__ import annotations
 
 import os
+import stat
 import sys
 from pathlib import Path
 
 
-def _aha_cli_dir() -> Path | None:
+def _running_zipapp() -> Path | None:
+    try:
+        from aha_cli.services.onebin import running_zipapp_path
+    except (ImportError, SystemExit):  # pragma: no cover - import fallback
+        return None
+    try:
+        return running_zipapp_path()
+    except Exception:  # pragma: no cover - defensive, never break PATH setup
+        return None
+
+
+def _aha_cli_dir(zipapp_path: Path | None = None) -> Path | None:
     """Directory that exposes the ``aha`` CLI for backend subprocesses.
 
     Prefers the running zipapp (onebin) so a packaged dashboard can hand its own
     ``aha`` command to child processes; otherwise falls back to the current
     Python executable directory (pip console-script / editable installs).
     """
-    try:
-        from aha_cli.services.onebin import running_zipapp_path
-    except (ImportError, SystemExit):  # pragma: no cover - import fallback
-        running_zipapp_path = None
-    zipapp_path = running_zipapp_path() if running_zipapp_path else None
     if zipapp_path is not None:
         return zipapp_path.parent
     executable_dir = Path(sys.executable).parent
     return executable_dir if executable_dir.is_dir() else None
+
+
+def _ensure_windows_python3_shim(zipapp_path: Path | None) -> None:
+    """On Windows, ensure a ``python3`` shim exists next to the onebin.
+
+    The zipapp shebang is ``#!/usr/bin/env python3``; on Windows the bare
+    ``python3`` commonly resolves to the Microsoft Store redirector stub
+    (AppInstallerPythonRedirector.exe), which exits non-zero without a Store
+    install. An extensionless POSIX shim lets ``env`` find a real interpreter in
+    backend shells (Git Bash / MSYS2). Linux and macOS already provide a working
+    ``python3``, so no shim is created there - shadowing the system command in a
+    PATH-prepended directory would be harmful.
+    """
+    if sys.platform != "win32" or zipapp_path is None:
+        return
+    target = str(sys.executable).replace("\\", "/")
+    shim = zipapp_path.parent / "python3"
+    body = f"#!/bin/sh\nexec \"{target}\" \"$@\"\n"
+    try:
+        if not shim.exists() or shim.read_text(encoding="utf-8") != body:
+            shim.write_text(body, encoding="utf-8")
+            shim.chmod(shim.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        # Best-effort: a missing/stale shim only affects `python3` resolution in
+        # backend shells, never AHA itself.
+        pass
 
 
 def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> None:
@@ -33,7 +66,9 @@ def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> 
     if nvm_root.is_dir():
         candidates.extend(sorted(nvm_root.glob("*/bin"), reverse=True))
 
-    aha_dir = _aha_cli_dir()
+    zipapp_path = _running_zipapp()
+    _ensure_windows_python3_shim(zipapp_path)
+    aha_dir = _aha_cli_dir(zipapp_path)
     if aha_dir is not None:
         candidates.insert(0, aha_dir)
 
