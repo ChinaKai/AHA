@@ -68,6 +68,19 @@ claude
 启用飞书助手后，按[飞书助手接入说明](docs/feishu-assistant.md)配置企业自建应用、
 `Allowed open IDs`、长连接事件和 task 状态推送。
 
+飞书开放平台的机器人菜单为事件型菜单，事件订阅选择
+`application.bot.menu_v6`。owner 私聊机器人菜单可配置以下菜单项，
+创建/查询会复用与 Web 一致的表单卡与确认卡：
+
+| 菜单项 | 动作 |
+| --- | --- |
+| `aha_create_memo` | 创建 Memo（附标题与正文输入） |
+| `aha_create_task` | 创建 Task（附标题与正文输入） |
+| `aha_list_memos` | 查询 Memo |
+| `aha_list_tasks` | 查询 Task |
+
+菜单只对 owner 私聊开放；群聊仍只响应 `@机器人`，不开放菜单管理入口。
+
 下载同一份跨平台 Release onebin 并启动：
 
 ```bash
@@ -143,6 +156,19 @@ $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
 
 启用飞书助手后，按[飞书助手接入说明](docs/feishu-assistant.md)配置企业自建应用、
 `Allowed open IDs`、长连接事件和 task 状态推送。
+
+飞书开放平台的机器人菜单为事件型菜单，事件订阅选择
+`application.bot.menu_v6`。owner 私聊机器人菜单可配置以下菜单项，
+创建/查询会复用与 Web 一致的表单卡与确认卡：
+
+| 菜单项 | 动作 |
+| --- | --- |
+| `aha_create_memo` | 创建 Memo（附标题与正文输入） |
+| `aha_create_task` | 创建 Task（附标题与正文输入） |
+| `aha_list_memos` | 查询 Memo |
+| `aha_list_tasks` | 查询 Task |
+
+菜单只对 owner 私聊开放；群聊仍只响应 `@机器人`，不开放菜单管理入口。
 
 也可以跳过安装脚本，手动下载 onebin 并运行托盘。onebin 是 Python zipapp，不是 Windows 原生 `.exe`：
 

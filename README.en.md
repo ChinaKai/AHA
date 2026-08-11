@@ -73,6 +73,20 @@ After installing the Feishu SDK, follow the
 enterprise custom app, `Allowed open IDs`, long-connection events, and task
 status notifications.
 
+The Feishu Open Platform bot menu is an event-type menu; subscribe to the
+`application.bot.menu_v6` menu event. The owner's DM bot menu can define the
+following items, which reuse the same form and confirmation cards as the Web UI:
+
+| Menu item | Action |
+| --- | --- |
+| `aha_create_memo` | Create a memo (with title and body input) |
+| `aha_create_task` | Create a task (with title and body input) |
+| `aha_list_memos` | List memos |
+| `aha_list_tasks` | List tasks |
+
+The menu is owner-DM only; group chats still respond only to `@机器人` (bot
+mentions) and have no menu management entry.
+
 Download the single cross-platform Release onebin and start AHA:
 
 ```bash
@@ -170,6 +184,20 @@ After installing the Feishu SDK, follow the
 [Feishu assistant setup guide](docs/feishu-assistant.md) to configure an
 enterprise custom app, `Allowed open IDs`, long-connection events, and task
 status notifications.
+
+The Feishu Open Platform bot menu is an event-type menu; subscribe to the
+`application.bot.menu_v6` menu event. The owner's DM bot menu can define the
+following items, which reuse the same form and confirmation cards as the Web UI:
+
+| Menu item | Action |
+| --- | --- |
+| `aha_create_memo` | Create a memo (with title and body input) |
+| `aha_create_task` | Create a task (with title and body input) |
+| `aha_list_memos` | List memos |
+| `aha_list_tasks` | List tasks |
+
+The menu is owner-DM only; group chats still respond only to `@机器人` (bot
+mentions) and have no menu management entry.
 
 You can also skip the installer, download the onebin manually, and start the
 tray. The onebin is a Python zipapp, not a native Windows `.exe`:
