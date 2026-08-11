@@ -117,6 +117,10 @@
       syncMobileAction();
     }
 
+    function fileIsImage(file = {}) {
+      return String(file.type || "").toLowerCase().startsWith("image/");
+    }
+
     async function markdownForImage(file, index = 0) {
       if (typeof options.markdownForImage === "function") {
         const markdown = await options.markdownForImage({ file, index });
@@ -127,7 +131,13 @@
       if (typeof options.markdownForImage === "function") {
         return await options.markdownForImage({ dataUrl, file, index });
       }
-      return imagePaste?.imageMarkdown?.(dataUrl, file) || "";
+      if (fileIsImage(file)) {
+        return imagePaste?.imageMarkdown?.(dataUrl, file) || "";
+      }
+      const label = String(file?.name || "attachment")
+        .replace(/[\[\]]/g, "")
+        .trim() || "attachment";
+      return `[Attachment: ${label}](${dataUrl})`;
     }
 
     async function insertImageFiles(files) {
@@ -157,7 +167,7 @@
     function handleImagePaste(event) {
       if (!chatInputActive()) return;
       if (!imageUploadsEnabled()) return;
-      const files = imagePaste?.clipboardImageFiles?.(event) || [];
+      const files = imagePaste?.clipboardFiles?.(event) || imagePaste?.clipboardImageFiles?.(event) || [];
       if (!files.length) return;
       event.preventDefault();
       void insertImageFiles(files);

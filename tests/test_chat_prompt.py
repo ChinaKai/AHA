@@ -2155,9 +2155,34 @@ class ChatPromptTests(unittest.TestCase):
                 )
                 prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
 
-        self.assertIn("AHA input image handling:", prompt)
+        self.assertIn("AHA input file handling:", prompt)
         self.assertIn("task_memo_assets/ab/shot.png", prompt)
-        self.assertIn("inspect the resolved local image", prompt)
+        self.assertIn("Inspect the resolved local file", prompt)
+        self.assertIn("input_image_guidance", metrics["components"])
+
+    def test_full_prompt_includes_attachment_guidance_for_file_attachment_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Attachment input prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                message = "请解析这个文件\n\n[Attachment: notes.pdf](task_memo_assets/ab/memo-1234.pdf)"
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    message,
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertIn("AHA input file handling:", prompt)
+        self.assertIn("task_memo_assets/ab/memo-1234.pdf", prompt)
+        self.assertIn("- attachment[1]: task_memo_assets/ab/memo-1234.pdf", prompt)
         self.assertIn("input_image_guidance", metrics["components"])
 
     def test_full_prompt_expands_coordination_policy_on_delegation_intent(self) -> None:
@@ -2438,7 +2463,7 @@ class ChatPromptTests(unittest.TestCase):
                 prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
 
         self.assertNotEqual(prompt, "继续看图")
-        self.assertIn("AHA input image handling:", prompt)
+        self.assertIn("AHA input file handling:", prompt)
         self.assertIn("task_memo_assets/cd/diagram.png", prompt)
         self.assertIn("User message from browser", prompt)
         self.assertEqual(metrics["prompt_mode"], "sticky_delta")

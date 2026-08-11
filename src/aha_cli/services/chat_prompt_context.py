@@ -126,6 +126,7 @@ ATTACHMENT_OUTPUT_INTENT_TERMS = (
 CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY = "context_fingerprint_updates"
 CONTEXT_PACK_EVIDENCE_METRIC_KEY = "context_pack_evidence"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
 IMAGE_FIELD_KEYS = ("image", "images")
 
 
@@ -535,10 +536,25 @@ def _message_has_image_markdown_or_data_url(message: object) -> bool:
     return bool(MARKDOWN_IMAGE_RE.search(text) or "data:image/" in text.lower())
 
 
+def _message_has_file_attachment(message: object) -> bool:
+    """Detect AHA memo-asset references in message markdown.
+
+    Both image markdown (``![alt](path)``) and attachment markdown
+    (``[Attachment: name](path)``) reference files that live under the run's
+    ``task_memo_assets/`` directory. Any link or image pointing at
+    ``task_memo_assets/`` or ``/api/task-memo-assets/`` counts as a file input
+    the agent should resolve.
+    """
+    text = str(message or "")
+    if "task_memo_assets/" in text or "/api/task-memo-assets/" in text:
+        return True
+    return bool(MARKDOWN_IMAGE_RE.search(text) or "data:image/" in text.lower())
+
+
 def _item_has_image_input(item: dict) -> bool:
     if any(item.get(key) for key in IMAGE_FIELD_KEYS):
         return True
-    return _message_has_image_markdown_or_data_url(item.get("message"))
+    return _message_has_file_attachment(item.get("message"))
 
 
 def _compact_image_ref(value: object, *, label: str = "image") -> list[str]:
@@ -576,9 +592,15 @@ def _input_image_refs_for_prompt(item: dict) -> str:
         refs.append(f"- markdown[{index}]: {path}")
     if "data:image/" in message.lower():
         refs.append("- message: inline data:image URL present")
+    link_refs: list[str] = []
+    for index, match in enumerate(MARKDOWN_LINK_RE.finditer(message), 1):
+        path = str(match.group(1) or "")
+        if "task_memo_assets/" in path or "/api/task-memo-assets/" in path:
+            link_refs.append(f"- attachment[{index}]: {path}")
+    refs.extend(link_refs[:4])
     if not refs:
-        return "- Image input was detected, but no path metadata was available."
-    return "\n".join(refs[:8])
+        return "- File attachment input was detected, but no path metadata was available."
+    return "\n".join(refs[:12])
 
 
 def _input_image_guidance_for_prompt(root: Path, run_id: str, item: dict) -> str:

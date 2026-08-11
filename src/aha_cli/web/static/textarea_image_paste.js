@@ -7,27 +7,31 @@
     return String(value || "").toLowerCase().startsWith("image/");
   }
 
-  function clipboardImageFiles(event) {
+  function clipboardFiles(event) {
     const clipboard = event?.clipboardData;
     if (!clipboard) return [];
     const files = [];
     const seen = new Set();
     const addFile = file => {
-      if (!file || seen.has(file) || !isImageType(file.type)) return;
+      if (!file || seen.has(file)) return;
       seen.add(file);
       files.push(file);
     };
     asArray(clipboard.items).forEach(item => {
-      if (!isImageType(item?.type) || typeof item.getAsFile !== "function") return;
+      if (typeof item.getAsFile !== "function") return;
       addFile(item.getAsFile());
     });
     // DataTransfer.items and DataTransfer.files describe the same clipboard
     // payload. Some browsers expose distinct File wrappers in both collections,
-    // so merging them can insert one pasted image twice. Prefer items and only
-    // use files as the compatibility fallback when no image item was readable.
+    // so merging them can insert one pasted file twice. Prefer items and only
+    // use files as the compatibility fallback when no file item was readable.
     if (files.length) return files;
     asArray(clipboard.files).forEach(addFile);
     return files;
+  }
+
+  function clipboardImageFiles(event) {
+    return clipboardFiles(event).filter(file => isImageType(file.type));
   }
 
   function sanitizeAltText(value) {
@@ -139,6 +143,7 @@
 
   window.AHATextareaImagePaste = Object.freeze({
     attachTextareaImagePaste,
+    clipboardFiles,
     clipboardImageFiles,
     imageMarkdown,
     insertTextareaImageMarkdown,

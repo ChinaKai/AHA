@@ -152,7 +152,9 @@
   }
 
   function createMarkdownLinkNode(documentRef, label, href, options = {}) {
-    const resolveHref = typeof options.linkHref === "function" ? options.linkHref : safeMarkdownLinkHref;
+    const resolveHref = typeof options.linkHref === "function"
+      ? options.linkHref
+      : value => memoAssetHref(value, options.apiUrl) || safeMarkdownLinkHref(value);
     const safeHref = resolveHref(href);
     if (!safeHref) return null;
     const link = documentRef.createElement("a");
