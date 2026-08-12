@@ -447,6 +447,26 @@ def _claude_raw_type(line: str) -> str | None:
     return str(event.get("type")) if isinstance(event, dict) and event.get("type") else None
 
 
+def _is_claude_turn_result(line: str) -> bool:
+    """Return True only for a real Claude turn-completion ``result`` event.
+
+    Claude Code also emits ``result`` events for finished background tasks
+    (``origin.kind == "task-notification"``). Those are not turn boundaries — a
+    resumed turn keeps running after them — so they must not arm the completion
+    grace window (which would otherwise tree-kill the CLI mid-turn).
+    """
+    if _claude_raw_type(line) != "result":
+        return False
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    origin = event.get("origin")
+    if isinstance(origin, dict) and origin.get("kind") == "task-notification":
+        return False
+    return True
+
+
 def run_claude_exec(
     prompt: str,
     *,
@@ -570,7 +590,7 @@ def run_claude_exec(
     stream_result = consume_process_output(
         process,
         handle_line=handle_line,
-        is_completion_line=lambda line: _claude_raw_type(line) == "result",
+        is_completion_line=_is_claude_turn_result,
         completion_grace_seconds=completion_grace_seconds,
     )
     if stream_result.completion_grace_exceeded:

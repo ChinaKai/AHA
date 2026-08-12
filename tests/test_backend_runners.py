@@ -20,6 +20,7 @@ from aha_cli.backends.claude import (
     claude_config_for_model,
     claude_permission_mode,
     handle_claude_event,
+    _is_claude_turn_result,
     run_claude_exec,
 )
 from aha_cli.backends.codex import (
@@ -918,6 +919,68 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertEqual([row["type"] for row in rows], ["agent_usage", "backend_completion_grace_exceeded"])
         self.assertEqual(rows[-1]["data"]["backend"], "claude")
         self.assertEqual(rows[-1]["data"]["process_exit_code"], 137)
+
+    def test_is_claude_turn_result_excludes_task_notifications(self) -> None:
+        self.assertTrue(_is_claude_turn_result(json.dumps({"type": "result", "result": "done"})))
+        self.assertTrue(_is_claude_turn_result(json.dumps({"type": "result", "origin": {}, "result": "done"})))
+        self.assertFalse(
+            _is_claude_turn_result(
+                json.dumps({"type": "result", "origin": {"kind": "task-notification"}, "result": "", "num_turns": 0})
+            )
+        )
+        self.assertFalse(_is_claude_turn_result(json.dumps({"type": "assistant", "message": {}})))
+        self.assertFalse(_is_claude_turn_result("not json"))
+
+    def test_claude_task_notification_result_is_not_a_turn_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "reply.md"
+            events = Path(tmp) / "events.jsonl"
+            task_notification = json.dumps(
+                {"type": "result", "origin": {"kind": "task-notification"}, "result": "", "num_turns": 0}
+            ) + "\n"
+            genuine = json.dumps({"type": "result", "result": "real answer"}) + "\n"
+
+            class SequentialStdout:
+                def __init__(self) -> None:
+                    self.lines = iter([task_notification, genuine])
+
+                def __iter__(self) -> "SequentialStdout":
+                    return self
+
+                def __next__(self) -> str:
+                    return next(self.lines)
+
+            class FakeProcess:
+                pid = 5679
+
+                def __init__(self) -> None:
+                    self.stdin = io.StringIO()
+                    self.stdout = SequentialStdout()
+
+                def wait(self) -> int:
+                    return 0
+
+            process = FakeProcess()
+            with (
+                mock.patch("aha_cli.backends.claude.subprocess.Popen", return_value=process),
+                mock.patch("aha_cli.backends.process_stream._finish_completed_backend_process") as cleanup,
+            ):
+                code, reply, _ = run_claude_exec(
+                    "hello",
+                    cwd=Path(tmp),
+                    output_file=output,
+                    events_file=events,
+                    run_id="run-001",
+                    task_id="task-001",
+                    source="claude-chat",
+                    target="main",
+                )
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(reply, "real answer")
+        cleanup.assert_not_called()
+        self.assertEqual([row["type"] for row in rows], ["agent_usage", "agent_usage"])
 
     def test_backend_completion_with_normal_eof_does_not_force_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
