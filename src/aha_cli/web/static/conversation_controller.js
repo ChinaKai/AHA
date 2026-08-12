@@ -817,7 +817,12 @@
           deps.eventMatchesAgent(event, target) &&
           (conversationFilters[deps.conversationEventCategory(event)] || deps.turnEventTypes.has(event.type))
         ));
-        if (matching.length) stateValue.events = deps.mergeConversationEvents(stateValue.events, matching, false);
+        if (matching.length) {
+          stateValue.events = deps.mergeConversationEvents(stateValue.events, matching, false);
+          // If a virtual list is mounted for this conversation, refresh its item count
+          // incrementally instead of forcing a full panel rebuild.
+          appendVirtualEvents(taskId, target, matching);
+        }
       }
     }
 
@@ -1128,6 +1133,15 @@
       event.preventDefault();
     });
 
+    // Virtualized conversation list, keyed by task id. Used only when the event count
+    // exceeds VIRTUAL_THRESHOLD so short conversations keep the simpler full render.
+    const VIRTUAL_THRESHOLD = 200;
+    const virtualLists = new Map();
+
+    function virtualListKey(taskId, target) {
+      return `${taskId}:${target || "main"}`;
+    }
+
     function renderConversation(taskId) {
       copyTextByKey.clear();
       const stateValue = deps.conversationState(taskId);
@@ -1149,6 +1163,19 @@
       }
       const timer = deps.renderTurnTimer(taskId);
       const metricsDock = timer ? "" : renderPromptMetricsDock(taskId);
+      // Use a virtualized host for long conversations to avoid rebuilding thousands of
+      // DOM nodes on every realtime update.
+      if (events.length > VIRTUAL_THRESHOLD) {
+        return deps.renderConversationPanelHtml({
+          hasMore: stateValue.hasMore,
+          loadingOlder: stateValue.loading,
+          virtual: true,
+          virtualTaskId: taskId,
+          virtualTarget: backendTarget(),
+          timerHtml: timer,
+          metricsDockHtml: metricsDock
+        });
+      }
       return deps.renderConversationPanelHtml({
         hasMore: stateValue.hasMore,
         loadingOlder: stateValue.loading,
@@ -1158,17 +1185,63 @@
       });
     }
 
+    function disposeVirtual(taskId, target) {
+      const list = virtualLists.get(virtualListKey(taskId, target));
+      if (list) {
+        list.unmount();
+        virtualLists.delete(virtualListKey(taskId, target));
+      }
+    }
+
+    // Mount a virtual list into hostEl for the given task's conversation.
+    function mountVirtualConversation(hostEl, taskId, target) {
+      if (!hostEl || !taskId) return null;
+      const key = virtualListKey(taskId, target);
+      disposeVirtual(taskId, target);
+      const list = window.AHAVirtualList?.createVirtualList?.(hostEl, {
+        estimatedItemHeight: 48,
+        anchorBottom: true,
+        overscan: 6
+      });
+      if (!list) return null;
+      const events = deps.taskConversationEvents(taskId);
+      list.setRenderFn((index) => deps.renderTimelineEvent(events[index] || {}));
+      list.setItemCount(events.length);
+      list.setOnRendered(() => {
+        deps.syncExpandedMessageKeysFromDom?.();
+      });
+      list.mount(hostEl);
+      virtualLists.set(key, list);
+      return list;
+    }
+
+    // Update a mounted virtual list with the latest event count instead of a full re-render.
+    function appendVirtualEvents(taskId, target, newEvents) {
+      const list = virtualLists.get(virtualListKey(taskId, target));
+      if (!list || !newEvents.length) return;
+      const stateValue = deps.conversationState(taskId);
+      const events = stateValue ? deps.taskConversationEvents(taskId) : [];
+      list.setItemCount(events.length);
+      // Keep pinned to the newest message when the user was already at the bottom.
+      if (list.isNearBottom()) {
+        list.appendItems(0, true);
+      }
+    }
+
     return Object.freeze({
       appendRealtimeConversationEvents,
       appendRealtimeEvents,
+      appendVirtualEvents,
       captureContextScrollState,
       compactResetLooksComplete,
       contextDetail,
       contextEvidenceDetail,
       conversationBackendSession,
+      disposeVirtual,
       ensureActiveTabData,
       ensureConversationLoaded,
       finalDetail,
+      mountVirtualConversation,
       initializeEventTailOffset,
       latestKnownEventOrder,
       loadContextDetail,

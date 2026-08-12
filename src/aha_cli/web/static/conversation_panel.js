@@ -52,6 +52,10 @@
       const older = view.hasMore
         ? `<button class="load-older" type="button" data-load-older="true">${view.loadingOlder ? "Loading..." : "Load older"}</button>`
         : "";
+      if (view.virtual) {
+        // Virtualized host: the actual message rows are mounted by mountVirtualConversation.
+        return `<div class="conversation timeline">${older}<div class="vl-host" data-vl-task="${escapeHtml(view.virtualTaskId || "")}" data-vl-target="${escapeHtml(view.virtualTarget || "")}"></div>${view.timerHtml || ""}${view.metricsDockHtml || ""}</div>`;
+      }
       return `<div class="conversation timeline">${older}${view.eventsHtml || ""}${view.timerHtml || ""}${view.metricsDockHtml || ""}</div>`;
     }
 

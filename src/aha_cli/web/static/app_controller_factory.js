@@ -326,6 +326,7 @@
       renderFirstRunState: deps.renderFirstRunState,
       renderConversationFilters: deps.renderConversationFilters,
       renderConversation: deps.renderConversation,
+      mountVirtualConversation: deps.mountVirtualConversation,
       renderFinalPanelHtml: deps.renderFinalPanelHtml,
       renderLogsPanelHtml: deps.renderLogsPanelHtml,
       renderHardwareIoPanelHtml: deps.renderHardwareIoPanelHtml,

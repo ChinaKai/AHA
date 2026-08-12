@@ -131,7 +131,11 @@
         const shouldFollow = !metricsPopoverOpen && (conversationAutoFollow() || isPanelNearBottom());
         syncExpandedMessageKeysFromDom();
         panelEl.innerHTML = renderConversation(task.id);
-        if (options.preserveScroll) {
+        const vlHost = panelEl.querySelector(".vl-host");
+        if (vlHost) {
+          deps.mountVirtualConversation?.(vlHost, vlHost.dataset.vlTask || task.id, vlHost.dataset.vlTarget || "");
+          panelEl.scrollTop = panelEl.scrollHeight;
+        } else if (options.preserveScroll) {
           panelEl.scrollTop = panelEl.scrollHeight - previousHeight + previousTop;
         } else if (metricsPopoverOpen) {
           panelEl.scrollTop = previousTop;

@@ -8250,6 +8250,24 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   color: var(--color-text-subtle);
   font-size: var(--fs-sm);
 }
+.vl-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.vl-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  overflow: hidden;
+}
+.vl-spacer {
+  width: 1px;
+  visibility: hidden;
+}
 .command-palette-hints {
   min-height: 22px;
   padding: 4px 14px;
