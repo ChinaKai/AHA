@@ -6,6 +6,8 @@ from aha_cli.backends.registry import agent_backend_names
 from aha_cli.domain.models import normalize_task_supervision, utc_now
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status, start_backend, stop_backend
 from aha_cli.services.session_compact import build_compact_summary, compact_summary_dir, compact_summary_relpath
+from aha_cli.store.agents import UNSET as AGENT_CONFIG_UNSET
+from aha_cli.store.agents import update_agent_config
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_event, append_message, task_snapshot
 from aha_cli.store.io import write_json
@@ -298,6 +300,65 @@ def switch_agent_backend(
     }
 
 
+def sync_assistant_task_backend(
+    root: Path,
+    run_id: str,
+    task: dict,
+    defaults: dict[str, object],
+) -> dict:
+    """Sync an existing service-assistant / feishu-group task's main agent config
+    to the current integration defaults.
+
+    Backend/model drift triggers a backend switch (handoff + optional restart);
+    reasoning_effort/proxy drift is persisted without a handoff. Missing or
+    invalid state is ignored so message routing is never blocked. Returns the
+    (possibly updated) task snapshot.
+    """
+    task_id = str(task.get("id") or "")
+    if not task_id:
+        return task
+    main_agent = next((item for item in task.get("agents", []) if str(item.get("id")) == "main"), None)
+    if main_agent is None:
+        return task
+    new_backend = str(defaults.get("backend") or "").strip() or None
+    new_model = str(defaults.get("model") or "").strip() or None
+    new_effort = str(defaults.get("reasoning_effort") or "").strip() or None
+    new_proxy = defaults.get("proxy_enabled")
+    new_proxy_enabled = new_proxy if isinstance(new_proxy, bool) else None
+    current_backend = str(main_agent.get("backend") or task.get("preferred_backend") or "codex")
+    current_model = str(main_agent.get("model") or "").strip() or None
+    current_effort = str(main_agent.get("reasoning_effort") or "").strip() or None
+    current_proxy = bool(main_agent.get("proxy_enabled"))
+    # Prefer the current task model when the integration does not specify one, so a
+    # backend-only switch keeps the running model instead of clearing it.
+    if new_model is None:
+        new_model = current_model
+    backend_changed = bool(new_backend) and new_backend != current_backend
+    model_changed = new_model != current_model
+    effort_changed = bool(new_effort) and new_effort != current_effort
+    proxy_changed = new_proxy_enabled is not None and new_proxy_enabled != current_proxy
+    if not (backend_changed or model_changed or effort_changed or proxy_changed):
+        return task
+    try:
+        if effort_changed or proxy_changed:
+            update_agent_config(
+                root,
+                run_id,
+                task_id,
+                "main",
+                reasoning_effort=new_effort if effort_changed else AGENT_CONFIG_UNSET,
+                proxy_enabled=new_proxy_enabled if proxy_changed else None,
+            )
+        if backend_changed or model_changed:
+            switch_kwargs: dict[str, object] = {"backend": new_backend or current_backend}
+            if backend_changed or model_changed:
+                switch_kwargs["model"] = new_model
+            switch_agent_backend(root, run_id, task_id, "main", **switch_kwargs)
+        return task_snapshot(root, run_id, task_id)["task"]
+    except (SystemExit, ValueError, OSError):
+        return task
+
+
 def restart_agent_backend(root: Path, run_id: str, task_id: str, agent_id: str) -> dict:
     detail = task_snapshot(root, run_id, task_id)
     task = detail["task"]
@@ -338,4 +399,4 @@ def restart_agent_backend(root: Path, run_id: str, task_id: str, agent_id: str) 
     return {"ok": True, "agent": agent, "stopped_backend": stopped_backend, "backend": backend_state}
 
 
-__all__ = ["restart_agent_backend", "switch_agent_backend"]
+__all__ = ["restart_agent_backend", "switch_agent_backend", "sync_assistant_task_backend"]

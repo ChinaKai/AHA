@@ -68,6 +68,7 @@ from aha_cli.services.service_assistant_actions import (
     resolve_choice,
     resolve_confirmation,
 )
+from aha_cli.services.agent_backend_switch import sync_assistant_task_backend
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import aha_home_path
 from aha_cli.store.runs import require_plan, run_exists
@@ -853,6 +854,7 @@ def _ensure_agent_task(
 ) -> dict:
     active = _active_task(root, run_id, str(binding.get("active_task_id") or ""))
     if active is not None:
+        active = sync_assistant_task_backend(root, run_id, active, _assistant_agent_defaults(root))
         if display_name:
             return ensure_service_assistant_task(
                 root,
@@ -890,6 +892,7 @@ def _ensure_group_agent_task(
 ) -> dict:
     active = _active_group_task(root, run_id, str(binding.get("active_task_id") or ""))
     if active is not None:
+        active = sync_assistant_task_backend(root, run_id, active, _assistant_agent_defaults(root))
         if display_name:
             return ensure_feishu_group_task(
                 root,

@@ -176,7 +176,7 @@
       } else if (tab === "context") {
         const detail = contextDetail(task.id);
         if (!detail) {
-          panelEl.innerHTML = '<div class="empty">Loading context...</div>';
+          panelEl.innerHTML = '<div class="empty loading">Loading context...</div>';
           return;
         }
         const contextScrollState = (options.preserveContextScroll || panelEl.querySelector(".context-view"))

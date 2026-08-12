@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import tempfile
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote
+from urllib.request import Request, urlopen
 
 from aha_cli.backends.claude import CLAUDE_ENV_GROUP_FIELDS
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, normalize_reasoning_effort
@@ -453,6 +456,163 @@ def handle_bootstrap(root: Path, default_run_id: str, method: str, request_heade
     return head_or_response(method, response)
 
 
+def _extract_models(payload: object) -> list[dict[str, object]]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, list):
+        data = payload.get("models")
+    if not isinstance(data, list):
+        return []
+    models: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in data:
+        if isinstance(item, dict):
+            model_id = str(item.get("id") or item.get("name") or "").strip()
+        elif isinstance(item, str):
+            model_id = item.strip()
+        else:
+            model_id = ""
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        max_input = item.get("max_input_tokens") if isinstance(item, dict) else None
+        max_output = item.get("max_output_tokens") if isinstance(item, dict) else None
+        mode = item.get("mode") if isinstance(item, dict) else None
+        entry: dict[str, object] = {"id": model_id}
+        if isinstance(max_input, int) and max_input > 0:
+            entry["max_input_tokens"] = max_input
+        if isinstance(max_output, int) and max_output > 0:
+            entry["max_output_tokens"] = max_output
+        if isinstance(mode, str) and mode.strip():
+            entry["mode"] = mode.strip()
+        models.append(entry)
+    return models
+
+
+def _detect_gateway_models(base_url: str, api_key: str, auth_token: str, timeout: int = 15) -> tuple[list[dict[str, object]], str]:
+    """Query a gateway's /v1/models (OpenAI-style) or /models (Anthropic-style) endpoint.
+
+    Tries several URL/auth combinations because gateways vary: some want
+    ``Authorization: Bearer``, others want ``x-api-key`` (Anthropic-style).
+    Returns the first non-empty model list found (deduplicated in order) plus
+    the auth style that succeeded ("bearer", "x-api-key", or "none").
+    """
+    key = (auth_token or api_key or "").strip()
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        raise ValueError("base_url is required")
+    candidates: list[str] = []
+    if base.endswith("/v1"):
+        candidates.append(f"{base}/models")
+    else:
+        candidates.append(f"{base}/v1/models")
+        candidates.append(f"{base}/models")
+    auth_sets: list[tuple[str, dict[str, str]]] = []
+    if key:
+        auth_sets.append(("bearer", {"Authorization": f"Bearer {key}"}))
+        auth_sets.append(("x-api-key", {"x-api-key": key, "anthropic-version": "2023-06-01"}))
+    else:
+        auth_sets.append(("none", {}))
+    last_error = ""
+    for endpoint in candidates:
+        for auth_style, auth_headers in auth_sets:
+            try:
+                request = Request(endpoint, headers=auth_headers, method="GET")
+                with urlopen(request, timeout=timeout) as response:
+                    payload = json.loads(response.read().decode("utf-8") or "{}")
+                models = _extract_models(payload)
+                if models:
+                    return models, auth_style
+            except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+                last_error = f"{endpoint}: {exc}"
+                continue
+    if last_error:
+        raise ValueError(f"failed to detect models: {last_error}")
+    return [], "none"
+
+
+def _test_gateway_model(
+    base_url: str,
+    api_key: str,
+    auth_token: str,
+    model: str,
+    auth_style: str,
+    timeout: int = 10,
+) -> None:
+    """Send a minimal probe request to verify a model is callable on the gateway.
+
+    Bearer gateways are probed via the OpenAI chat completions endpoint, x-api-key
+    gateways via the Anthropic messages endpoint. Raises ValueError on failure.
+    """
+    key = (auth_token or api_key or "").strip()
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        raise ValueError("base_url is required")
+    if not model:
+        raise ValueError("model is required")
+    body: dict[str, object]
+    if auth_style == "x-api-key":
+        if not key:
+            raise ValueError("api_key or auth_token is required")
+        endpoint = f"{base}/v1/messages" if not base.endswith("/v1") else f"{base}/messages"
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+        body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
+    else:
+        if not key:
+            raise ValueError("api_key or auth_token is required")
+        endpoint = f"{base}/v1/chat/completions" if not base.endswith("/v1") else f"{base}/chat/completions"
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        body = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    try:
+        request = Request(
+            endpoint,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 200) or 200)
+            if status >= 400:
+                raise ValueError(f"gateway returned HTTP {status}")
+    except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"model probe failed: {exc}") from exc
+
+
+def handle_detect_models(root: Path, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    base_url = str(payload.get("base_url") or "").strip()
+    api_key = str(payload.get("api_key") or "").strip()
+    auth_token = str(payload.get("auth_token") or "").strip()
+    if not base_url:
+        return json_response({"error": "base_url is required"}, "400 Bad Request")
+    if not (api_key or auth_token):
+        return json_response({"error": "api_key or auth_token is required"}, "400 Bad Request")
+    try:
+        models, auth_style = _detect_gateway_models(base_url, api_key, auth_token)
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "502 Bad Gateway")
+    if not models:
+        return json_response({"error": "no models found"}, "502 Bad Gateway")
+    return json_response({"models": models, "base_url": base_url, "auth_style": auth_style})
+
+
+def handle_detect_model_test(root: Path, body: bytes) -> bytes:
+    payload = parse_json_body(body)
+    base_url = str(payload.get("base_url") or "").strip()
+    api_key = str(payload.get("api_key") or "").strip()
+    auth_token = str(payload.get("auth_token") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    auth_style = str(payload.get("auth_style") or "").strip() or "bearer"
+    if not base_url or not model:
+        return json_response({"error": "base_url and model are required"}, "400 Bad Request")
+    try:
+        _test_gateway_model(base_url, api_key, auth_token, model, auth_style)
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, "502 Bad Gateway")
+    return json_response({"ok": True, "model": model, "auth_style": auth_style})
+
+
 def _optional_string(value: object) -> str | None:
     text = str(value or "").strip()
     return text or None
@@ -897,6 +1057,10 @@ def handle_run_workspace_route(
         return handle_bootstrap(root, default_run_id, method, headers)
     if method == "POST" and path == "/api/bootstrap":
         return handle_save_bootstrap(root, default_run_id, body)
+    if method == "POST" and path == "/api/detect-models":
+        return handle_detect_models(root, body)
+    if method == "POST" and path == "/api/detect-models/test":
+        return handle_detect_model_test(root, body)
     if method in {"GET", "HEAD"} and path == "/api/integrations/observe-proxy":
         return handle_observe_proxy_status(root, default_run_id, method, query)
     if method == "POST" and path == "/api/runs":
@@ -953,6 +1117,8 @@ __all__ = [
     "handle_bootstrap",
     "handle_create_run",
     "handle_create_workspace",
+    "handle_detect_models",
+    "handle_detect_model_test",
     "handle_update_run",
     "handle_update_run_lifecycle",
     "handle_delete_run",

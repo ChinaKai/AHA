@@ -14,7 +14,8 @@ const {
   skillsConsoleEl, skillsConsolePopoverEl, tokenUsageEl, tokenUsagePopoverEl,
   sessionTitleEl, sessionToggleEl, summaryEl, taskRunContextEl, taskSettingsActionsEl, taskSettingsCloseEl,
   taskSettingsPanelEl, taskSettingsSubtitleEl, tasksEl, taskVisibilityFilterEl,
-  webPublishConsoleEl, webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl
+  webPublishConsoleEl, webRestartEl, webRestartStateEl, webUpgradeEl, weixinConsoleEl, weixinConsolePopoverEl,
+  commandPaletteEl, commandPaletteInputEl, commandPaletteListEl, commandPaletteHintsEl
 } = domRefs;
 let taskController = null;
 const hardwareTerminalController = window.AHAHardwareTerminal.createHardwareTerminalController({
@@ -60,7 +61,7 @@ const initialControllers = window.AHAAppControllerFactory.createInitialControlle
   agentLifecycleStatus,
   agentTargetValue: () => agentTargetEl.value || "main",
   agentWaitingReason,
-  alertError: message => alert(message),
+  alertError: message => window.AHAToast?.error?.(message) || alert(message),
   apiUrl,
   backendStatusData: () => backendStatusData,
   bootstrapConfigData,
@@ -608,7 +609,7 @@ const runActions = window.AHARunActions.createRunActions({
 bootstrapController = window.AHABootstrapController.createBootstrapController({
   panelEl
 }, {
-  alertError: message => alert(message),
+  alertError: message => window.AHAToast?.error?.(message) || alert(message),
   applyBootstrapPayload,
   backendModels: () => runtimeOptions.backendModels(),
   bootstrapConfigHelpers,
@@ -677,6 +678,7 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   activeTab: () => activeTab,
   addBootstrapConfigRow,
   applyBootstrapPayload,
+  detectEnvModels,
   agentBackendProcessStatus,
   agentBackendModelChanged,
   agentConfigLabel,
@@ -1118,7 +1120,8 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   activateTab,
   addBootstrapConfigRow,
   agentController,
-  alertError: message => alert(message),
+  alertError: message => window.AHAToast?.error?.(message) || alert(message),
+  detectEnvModels,
   backendTarget,
   closePromptMetricsBreakdowns: promptMetricsPopover.closeBreakdowns,
   closePromptMetricsPopover: promptMetricsPopover.close,
@@ -1268,6 +1271,128 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   taskMemoController,
   taskController,
   windowRef: window
+});
+
+const commandPalette = window.AHACommandPalette.createCommandPalette({
+  commandPaletteEl,
+  commandPaletteInputEl,
+  commandPaletteListEl,
+  commandPaletteHintsEl
+}, {
+  buildCommands: (query, groupKey) => {
+    const q = String(query || "").trim().toLowerCase();
+    const commands = [];
+    const add = (name, desc, scope, execute, subcommands, key = "") => {
+      if (!q || name.toLowerCase().includes(q) || desc.toLowerCase().includes(q)) {
+        commands.push({ name, desc, scope, execute, key: key || name, subcommands: subcommands?.length ? subcommands : undefined });
+      }
+    };
+    // Returns true when the current view is a "home" page (memo/kb/settings) rather
+    // than the task workspace, so view commands stay hidden on those pages.
+    const onHomePage = () => {
+      const body = document.body;
+      return Boolean(body?.classList?.contains("task-memo-home") || body?.classList?.contains("knowledge-home") || body?.classList?.contains("settings-home"));
+    };
+    // Switch back to the task workspace from any home page.
+    const goToTaskWorkspace = () => {
+      const body = document.body;
+      body?.classList?.remove("task-memo-home", "knowledge-home", "settings-home");
+      const knowledgeHome = document.getElementById("knowledge-home");
+      if (knowledgeHome) knowledgeHome.hidden = true;
+      domRefs.sessionMenuEl?.classList?.add("hidden");
+      domRefs.sessionToggleEl?.setAttribute?.("aria-expanded", "false");
+      domRefs.sessionToggleEl?.setAttribute?.("aria-pressed", "false");
+      domRefs.openTaskViewEl?.setAttribute?.("aria-pressed", "true");
+      domRefs.openTaskMemosEl?.setAttribute?.("aria-pressed", "false");
+      domRefs.openKnowledgeBaseEl?.setAttribute?.("aria-pressed", "false");
+      const memoDialog = document.getElementById("task-memo-dialog");
+      // task-memo-dialog is a <section> toggled by the "open" attribute, not a real <dialog>.
+      if (memoDialog) memoDialog.removeAttribute("open");
+    };
+    const openSettingsTab = tab => {
+      domRefs.sessionToggleEl?.click?.();
+      window.setTimeout(() => { const el = document.querySelector(`[data-settings-tab="${tab}"]`); el?.click?.(); }, 50);
+    };
+    // Settings group: subcommands shown when drilled in (no query + inside group).
+    const settingsSub = [
+      { name: "System", desc: "Open system settings tab", scope: "settings", execute: () => openSettingsTab("system") },
+      { name: "Run", desc: "Open run settings tab", scope: "settings", execute: () => openSettingsTab("run") },
+      { name: "Integrations", desc: "Open integrations settings tab", scope: "settings", execute: () => openSettingsTab("integrations") }
+    ];
+    // Go-to-task group: subcommands are the run's tasks, built lazily.
+    const taskSub = () => {
+      const tasks = statusData?.tasks || [];
+      return tasks.slice(0, 24).map(task => ({
+        name: String(task.title || task.id || ""),
+        desc: String(task.id || ""),
+        scope: "task",
+        execute: () => {
+          goToTaskWorkspace();
+          appActions.selectTask(String(task.id || ""));
+        }
+      }));
+    };
+    // When inside the go-to-task group, list the tasks directly.
+    if (groupKey === "go-task") return taskSub().slice(0, 24);
+    // When inside the settings group, list the settings tabs.
+    if (groupKey === "settings") return settingsSub.filter(item => !q || item.name.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q)).slice(0, 24);
+
+    // View navigation — only in the task workspace, and only when a task is selected.
+    // These stay flat even at the top level because they're the most-used commands.
+    const selectedTaskForPalette = selectedTask();
+    if (selectedTaskForPalette && !onHomePage()) {
+      add("Chat", "Open the conversation view", "view", () => { activeTab = "conversation"; activateTab("conversation"); });
+      add("Logs", "Open the logs view", "view", () => { activeTab = "logs"; activateTab("logs"); });
+      add("Context", "Open the context view", "view", () => { activeTab = "context"; activateTab("context"); });
+      const hardwareEnabled = Boolean(window.AHATaskList?.taskHardwareDebugEnabled?.(selectedTaskForPalette));
+      if (hardwareEnabled) {
+        add("Hardware terminal", "Open the hardware terminal view", "view", () => { activeTab = "hardware"; activateTab("hardware"); });
+      }
+    }
+    // AHA actions (flat)
+    add("New Task", "Create a task (switches to the task workspace)", "aha", () => {
+      goToTaskWorkspace();
+      domRefs.openTaskCreateEl?.click?.();
+    });
+    add("New Memo", "Create a new memo", "aha", () => {
+      domRefs.openTaskMemosEl?.click?.();
+      window.setTimeout(() => domRefs.taskMemoNewEl?.click?.(), 50);
+    });
+    add("Memo", "Open the memo workspace", "aha", () => domRefs.openTaskMemosEl?.click?.());
+    add("Knowledge", "Open the knowledge base", "aha", () => domRefs.openKnowledgeBaseEl?.click?.());
+    // Grouped: Settings and Go to task appear as expandable rows at top level.
+    // When searching, flatten group subcommands so e.g. "system" finds Settings → System.
+    const tasks = statusData?.tasks || [];
+    if (q) {
+      for (const sub of settingsSub) {
+        if (sub.name.toLowerCase().includes(q) || sub.desc.toLowerCase().includes(q)) {
+          add(`Settings → ${sub.name}`, sub.desc, "settings", sub.execute);
+        }
+      }
+      for (const sub of taskSub()) {
+        if (sub.name.toLowerCase().includes(q) || sub.desc.toLowerCase().includes(q)) {
+          add(`Go to ${sub.name}`, sub.desc, "task", sub.execute);
+        }
+      }
+    } else {
+      add("Settings", "Open AHA settings", "aha", () => domRefs.sessionToggleEl?.click?.(), settingsSub, "settings");
+      add("Go to task", `${tasks.length} task(s)`, "task", null, taskSub(), "go-task");
+    }
+    return commands.slice(0, 24);
+  },
+  execute: item => {
+    if (typeof item?.execute === "function") {
+      try { item.execute(); } catch (_err) { /* command failure is non-fatal */ }
+    }
+  }
+});
+commandPalette.bind();
+window.addEventListener("keydown", event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    if (commandPalette.isOpen()) commandPalette.close();
+    else commandPalette.open();
+  }
 });
 
 window.AHAAppRuntime = Object.freeze({

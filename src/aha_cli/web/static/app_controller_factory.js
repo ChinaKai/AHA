@@ -475,6 +475,7 @@
       bootstrapData: deps.bootstrapData,
       closeMobileActionPanel: deps.closeMobileActionPanel,
       closeMobileSheets: deps.closeMobileSheets,
+      detectEnvModels: deps.detectEnvModels,
       dispatchAction: deps.dispatchAction,
       fillBootstrapProxyDefaultFor: deps.fillBootstrapProxyDefaultFor,
       loadBootstrap: deps.loadBootstrap,

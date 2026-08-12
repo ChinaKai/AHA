@@ -132,7 +132,7 @@
       return `
         <div class="message ${cls}"${eventCursorAttr}>
           <div class="message-head">
-            <span class="message-title">${deps.escapeHtml?.(title)}</span>
+            <span class="message-title"><i class="message-sender-dot" aria-hidden="true"></i>${deps.escapeHtml?.(title)}</span>
             <span class="message-actions">
               <time>${deps.escapeHtml?.(ts || "")}</time>
               ${copyButton}

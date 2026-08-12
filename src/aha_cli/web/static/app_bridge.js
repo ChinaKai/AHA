@@ -606,6 +606,10 @@
       controllers.bootstrapController?.()?.removeConfigRow(button);
     }
 
+    async function detectEnvModels(button) {
+      await controllers.bootstrapController?.()?.detectEnvModels(button);
+    }
+
     async function saveBootstrapConfigForm(form) {
       await controllers.bootstrapController?.()?.saveConfigForm(form);
     }
@@ -642,6 +646,7 @@
       createRunFromBootstrapForm,
       currentAppVersion,
       currentRunSummary,
+      detectEnvModels,
       ensureActiveTabData,
       ensureConversationLoaded,
       fallbackCurrentRun,

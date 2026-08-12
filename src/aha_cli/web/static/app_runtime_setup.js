@@ -542,6 +542,7 @@ const {
   createRunFromBootstrapForm,
   currentAppVersion,
   currentRunSummary,
+  detectEnvModels,
   ensureActiveTabData,
   ensureConversationLoaded,
   fallbackCurrentRun,

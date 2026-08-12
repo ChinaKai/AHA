@@ -191,6 +191,12 @@
         handlers.removeBootstrapConfigRow(removeConfigRow);
         return;
       }
+      const detectModels = target?.closest("[data-bootstrap-detect-models]");
+      if (detectModels) {
+        event.preventDefault();
+        void handlers.detectEnvModels?.(detectModels);
+        return;
+      }
       const copyButton = target?.closest("[data-copy-message-key]");
       if (copyButton) {
         event.preventDefault();

@@ -429,16 +429,16 @@ for (const internalField of [
 }
 if (html.includes("hidden-auth-token")) process.exit(1);
 if (!html.includes("data-bootstrap-claude-credential")) process.exit(1);
-if (!html.includes("Role model routing (optional)")) process.exit(1);
+if (html.includes("data-bootstrap-claude-auth-mode")) process.exit(1);
+if (!html.includes("Advanced (optional)")) process.exit(1);
+if (!html.includes('data-bootstrap-env-field="ANTHROPIC_API_KEY"')) process.exit(1);
 if (!html.includes('option value="256000" selected>256K</option>')) process.exit(1);
 
-const values = { ANTHROPIC_MODEL: "claude-custom", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "256000" };
-let authMode = "auth_token";
+const values = { ANTHROPIC_MODEL: "claude-custom", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "256000", ANTHROPIC_API_KEY: "" };
 let credential = "replacement-token";
 const row = {
   querySelector(selector) {
     if (selector === "[data-bootstrap-env-name]") return { value: "gateway" };
-    if (selector === "[data-bootstrap-claude-auth-mode]") return { value: authMode };
     if (selector === "[data-bootstrap-claude-credential]") return { value: credential };
     const match = selector.match(/data-bootstrap-env-field="([^"]+)"/);
     return { value: match ? (values[match[1]] || "") : "" };
@@ -456,19 +456,140 @@ const form = {
     return [];
   }
 };
+// Main Credential input maps to ANTHROPIC_AUTH_TOKEN (Bearer)
 const saved = config.bootstrapConfigPayload(form, { config: { claude: { env: [] } } }).claude.env[0];
 if (saved.ANTHROPIC_AUTH_TOKEN !== "replacement-token" || saved.ANTHROPIC_API_KEY) process.exit(1);
 if (saved.CLAUDE_CODE_MAX_CONTEXT_TOKENS !== "256000") process.exit(1);
+// Blank credential preserves the stored Bearer token in settings mode
 credential = "";
 const preserved = config.bootstrapConfigPayload(form, {
   config: { claude: { env: [{ name: "gateway", ANTHROPIC_AUTH_TOKEN: "stored-token" }] } }
 }).claude.env[0];
 if (preserved.ANTHROPIC_AUTH_TOKEN !== "stored-token") process.exit(1);
-authMode = "none";
-const cleared = config.bootstrapConfigPayload(form, {
-  config: { claude: { env: [{ name: "gateway", ANTHROPIC_AUTH_TOKEN: "stored-token" }] } }
-}).claude.env[0];
-if (cleared.ANTHROPIC_API_KEY || cleared.ANTHROPIC_AUTH_TOKEN) process.exit(1);
+// Advanced x-api-key field stands when the main credential is empty
+values.ANTHROPIC_API_KEY = "xapi-token";
+const xApi = config.bootstrapConfigPayload(form, { config: { claude: { env: [] } } }).claude.env[0];
+if (xApi.ANTHROPIC_API_KEY !== "xapi-token" || xApi.ANTHROPIC_AUTH_TOKEN) process.exit(1);
+// Main Bearer credential wins over the advanced x-api-key field
+credential = "bearer-token";
+const bearerWins = config.bootstrapConfigPayload(form, { config: { claude: { env: [] } } }).claude.env[0];
+if (bearerWins.ANTHROPIC_AUTH_TOKEN !== "bearer-token" || bearerWins.ANTHROPIC_API_KEY) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_bootstrap_env_detect_builds_groups_from_models(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+// Bearer detection writes ANTHROPIC_AUTH_TOKEN
+const groups = config.detectEnvGroupFromModels(
+  "claude",
+  "https://gateway.test/v1",
+  "sk-test",
+  "bearer",
+  ["claude-sonnet-5", "claude-opus-5", "deepseek-v4-flash"]
+);
+if (groups.length !== 3) process.exit(1);
+if (groups[0].name !== "claude-sonnet-5") process.exit(1);
+if (groups[0].ANTHROPIC_BASE_URL !== "https://gateway.test/v1") process.exit(1);
+if (groups[0].ANTHROPIC_MODEL !== "claude-sonnet-5") process.exit(1);
+if (groups[0].ANTHROPIC_AUTH_TOKEN !== "sk-test") process.exit(1);
+if (groups[0].ANTHROPIC_API_KEY !== "") process.exit(1);
+// x-api-key detection writes ANTHROPIC_API_KEY
+const xApiGroups = config.detectEnvGroupFromModels(
+  "claude",
+  "https://gateway.test/v1",
+  "sk-xapi",
+  "x-api-key",
+  ["claude-sonnet-5"]
+);
+if (xApiGroups[0].ANTHROPIC_API_KEY !== "sk-xapi") process.exit(1);
+if (xApiGroups[0].ANTHROPIC_AUTH_TOKEN !== "") process.exit(1);
+// codex stays API-key based
+const apiKeyGroups = config.detectEnvGroupFromModels(
+  "codex",
+  "https://openai.test/v1",
+  "sk-codex",
+  "bearer",
+  ["gpt-5.5"]
+);
+if (apiKeyGroups[0].OPENAI_MODEL !== "gpt-5.5") process.exit(1);
+if (apiKeyGroups[0].OPENAI_API_KEY !== "sk-codex") process.exit(1);
+// Detect card has no credential type selector
+const html = config.bootstrapEnvDetectHtml("claude");
+if (!html.includes("data-bootstrap-detect-models")) process.exit(1);
+if (html.includes("data-bootstrap-detect-credential-type")) process.exit(1);
+// Env group row: main Credential input maps to AUTH_TOKEN, advanced API_KEY field exists
+const rowHtml = config.bootstrapConfigFormHtml({
+  mode: "init",
+  config: {
+    backend: "claude",
+    claude: {
+      env: [{
+        name: "gw",
+        ANTHROPIC_BASE_URL: "https://gw.test",
+        ANTHROPIC_MODEL: "claude-sonnet-5",
+        ANTHROPIC_AUTH_TOKEN: "sk-token"
+      }]
+    }
+  }
+});
+if (!rowHtml.includes("data-bootstrap-claude-credential")) process.exit(1);
+if (rowHtml.includes("data-bootstrap-claude-auth-mode")) process.exit(1);
+if (!rowHtml.includes('data-bootstrap-env-field="ANTHROPIC_API_KEY"')) process.exit(1);
+// Structured model dicts carry context window from the API response only
+const structured = config.detectEnvGroupFromModels(
+  "claude",
+  "https://gateway.test/v1",
+  "sk-test",
+  "bearer",
+  [{ id: "claude-sonnet-5", max_input_tokens: 1000000 }, { id: "kimi-k3" }]
+);
+if (structured[0].CLAUDE_CODE_MAX_CONTEXT_TOKENS !== "1000000") process.exit(1);
+if (structured[1].CLAUDE_CODE_MAX_CONTEXT_TOKENS !== undefined) process.exit(1);
+// No hard-coded map: a model without reported window is 0 and renders NA
+const windowValue = config.modelContextWindow("minimax-m2.7");
+if (windowValue !== 0) process.exit(1);
+if (config.formatContextWindow(0) !== "NA") process.exit(1);
+if (config.formatContextWindow(1000000) !== "1M") process.exit(1);
+if (config.formatContextWindow(262144) !== "262K") process.exit(1);
+// Modal HTML: merged context.output.mode with NA placeholders, Test per row, batch Add only
+const modalHtml = config.detectModelsModalHtml(
+  [
+    { id: "claude-sonnet-5", max_input_tokens: 1000000, max_output_tokens: 64000, mode: "chat" },
+    { id: "kimi-k3" },
+    { id: "gpt-5.3-codex", max_input_tokens: 272000, max_output_tokens: 128000, mode: "responses" }
+  ],
+  "bearer"
+);
+if (!modalHtml.includes("data-bootstrap-detect-model-row")) process.exit(1);
+if (!modalHtml.includes("data-bootstrap-detect-test")) process.exit(1);
+if (!modalHtml.includes("bootstrap-detect-model-meta")) process.exit(1);
+if (!modalHtml.includes(">1M.64K.chat<")) process.exit(1);
+if (!modalHtml.includes(">NA.NA.NA<")) process.exit(1);
+if (!modalHtml.includes(">272K.128K.responses<")) process.exit(1);
+if (modalHtml.includes("data-bootstrap-detect-add\"") || /data-bootstrap-detect-add\b/.test(modalHtml.replace('data-bootstrap-detect-add-selected', ""))) process.exit(1);
+if (!modalHtml.includes("data-bootstrap-detect-add-selected")) process.exit(1);
+if (!modalHtml.includes("Add selected (0)")) process.exit(1);
+// Fuzzy search: substring match
+const filterQuery = "sonnet";
+const filteredIds = ["claude-sonnet-5", "kimi-k3", "gpt-5.3-codex"].filter(id => id.includes(filterQuery));
+if (filteredIds.length !== 1) process.exit(1);
 '''
         result = subprocess.run(
             [node, "-e", assertion],
@@ -2128,7 +2249,7 @@ controller.unmount();
         self.assertIn(".entity-picker-list", styles)
         self.assertIn(".entity-picker[hidden]", styles)
         self.assertIn(".stack-form button.entity-picker-item", styles)
-        self.assertIn("box-shadow: inset 0 0 0 1px #1f6feb;", styles)
+        self.assertIn("box-shadow: inset 0 0 0 1px var(--color-primary);", styles)
         self.assertIn(".entity-link-summary-row", styles)
         self.assertIn(".task-memo-link-state", styles)
 
@@ -2339,7 +2460,7 @@ controller.unmount();
         self.assertIn("background: #12b76a;", styles)
         self.assertIn(".browser-session-status.failed", styles)
         self.assertIn("background: #f04438;", styles)
-        self.assertIn("background: #98a2b3;", styles)
+        self.assertIn("background: var(--color-text-faint);", styles)
         mobile_browser_toolbar = styles[
             styles.index("@media (max-width: 640px)") : styles.index("@media (min-width: 641px)")
         ]
@@ -4254,7 +4375,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn(".task-memo-action-secondary", styles)
         self.assertIn(".task-memo-action-ghost", styles)
         self.assertIn(".task-memo-action-danger", styles)
-        self.assertIn("border-top: 1px solid #eef2f6;", styles)
+        self.assertIn("border-top: 1px solid var(--color-neutral-bg);", styles)
         self.assertIn("body.task-memo-home .task-memo-editor-actions button", styles)
         self.assertIn("height: 34px;", styles)
         self.assertIn(".task-memo-list-panel {\n    min-height: 0;", styles)
@@ -4314,7 +4435,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn(".task-memo-day-count.late", styles)
         self.assertIn(".task-memo-day-count.on-track", styles)
         self.assertIn(".task-memo-day.active::after", styles)
-        self.assertIn("box-shadow: inset 0 0 0 2px #1f6feb", styles)
+        self.assertIn("box-shadow: inset 0 0 0 2px var(--color-primary)", styles)
         self.assertIn(".task-memo-editor-head", styles)
         self.assertIn(".task-memo-editor-column {\n  display: grid;\n  grid-template-rows: auto minmax(0, 1fr);\n  min-height: 0;\n  overflow: hidden;", styles)
         self.assertIn(".task-memo-form {\n  display: grid;\n  grid-template-rows: auto auto auto minmax(260px, 1fr) auto auto auto;\n  gap: 8px;\n  min-height: 0;\n  overflow: hidden;", styles)
@@ -7014,9 +7135,9 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn(".turn-timer.waiting_start", styles)
         self.assertIn(".turn-timer.running .activity-dot,\n.turn-timer.waiting .activity-dot,\n.turn-timer.pending .activity-dot", styles)
         self.assertIn(".turn-timer.waiting_start .activity-dot", styles)
-        self.assertIn("box-shadow: 0 0 0 4px #dcfce7;", styles)
+        self.assertIn("box-shadow: 0 0 0 4px var(--color-success-bg-2);", styles)
         self.assertIn(".turn-timer.busy .activity-dot", styles)
-        self.assertIn("box-shadow: 0 0 0 4px #fef3c7;", styles)
+        self.assertIn("box-shadow: 0 0 0 4px var(--color-warning-bg);", styles)
         self.assertIn("taskAgentCount(task)", task_list_script)
         self.assertIn('url.searchParams.set("lite", "1")', realtime_client_script)
         self.assertIn('url.searchParams.set("selected_task_id", taskId)', realtime_client_script)

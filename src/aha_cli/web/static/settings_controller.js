@@ -85,6 +85,12 @@
         if (removeConfigRow) {
           event.preventDefault();
           deps.removeBootstrapConfigRow?.(removeConfigRow);
+          return;
+        }
+        const detectButton = event.target instanceof Element ? event.target.closest("[data-bootstrap-detect-models]") : null;
+        if (detectButton) {
+          event.preventDefault();
+          void deps.detectEnvModels?.(detectButton);
         }
       });
       elements.settingsDialogEl?.addEventListener("focusin", event => {

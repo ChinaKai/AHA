@@ -1024,6 +1024,17 @@
       </div>
     </form>
   </dialog>
+  <dialog id="command-palette" class="command-palette-dialog" aria-labelledby="command-palette-title">
+    <div class="command-palette-panel">
+      <header class="command-palette-head">
+        <h2 id="command-palette-title" class="sr-only" data-i18n="command_palette.title">Command palette</h2>
+        <input id="command-palette-input" type="search" autocomplete="off" placeholder="Type a command, or search tasks / views..." data-i18n-placeholder="command_palette.placeholder">
+        <span class="command-palette-kbd" aria-hidden="true">Ctrl K</span>
+      </header>
+      <div id="command-palette-list" class="command-palette-list" role="listbox"></div>
+      <footer id="command-palette-hints" class="command-palette-hints"></footer>
+    </div>
+  </dialog>
   <dialog id="action-confirm" class="confirm-dialog" aria-labelledby="action-confirm-title">
     <form method="dialog" class="confirm-dialog-panel">
       <div class="confirm-dialog-head">
@@ -1108,6 +1119,8 @@
   <script src="/static/message_flow.js?v=hardware-terminal-v1"></script>
   <script src="/static/render_scheduler.js"></script>
   <script src="/static/confirm_dialog.js"></script>
+  <script src="/static/toast.js?v=toast-v1"></script>
+  <script src="/static/command_palette.js?v=command-palette-v1"></script>
   <script src="/static/controller_registry.js?v=permissions-v1"></script>
   <script src="/static/app_bridge.js?v=permissions-v1"></script>
   <script src="/static/app_controller_factory.js?v=permissions-v1"></script>

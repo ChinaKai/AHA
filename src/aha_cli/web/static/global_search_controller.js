@@ -397,11 +397,8 @@
       documentRef?.addEventListener("keydown", event => {
         const target = event.target;
         const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable;
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-          event.preventDefault();
-          if (isOpen()) close();
-          else open();
-        } else if (event.key === "/" && !editing && !isOpen()) {
+        // Cmd/Ctrl+K now belongs to the global command palette; global search keeps "/" and the toolbar button.
+        if (event.key === "/" && !editing && !isOpen()) {
           event.preventDefault();
           open();
         }

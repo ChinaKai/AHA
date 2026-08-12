@@ -17,6 +17,66 @@
   const defaultBootstrapHttpsProxy = defaultBootstrapHttpProxy;
   const defaultBootstrapNoProxy = "localhost,127.0.0.1,::1";
 
+  function formatContextWindow(tokens) {
+    const value = Number(tokens);
+    if (!Number.isFinite(value) || value <= 0) return "NA";
+    return value >= 1000000 ? `${Math.round(value / 1000000)}M` : `${Math.round(value / 1000)}K`;
+  }
+
+  // Context window comes only from the gateway's own /v1/models response; no
+  // hard-coded model map. Unknown models show NA.
+  function modelContextWindow(model) {
+    if (model && typeof model === "object") {
+      const reported = Number(model.max_input_tokens);
+      if (Number.isFinite(reported) && reported > 0) return reported;
+    }
+    return 0;
+  }
+
+  function detectModelsModalHtml(models = [], authStyle = "bearer") {
+    const rows = models.map((model, index) => {
+      const id = typeof model === "string" ? model : String(model?.id || "").trim();
+      const windowValue = modelContextWindow(model);
+      const windowLabel = formatContextWindow(windowValue);
+      const outputLabel = formatContextWindow(model?.max_output_tokens);
+      const modeLabel = String(model?.mode || "").trim() || "NA";
+      const metaLabel = `${windowLabel}.${outputLabel}.${modeLabel}`;
+      return `
+        <div class="bootstrap-detect-model-row" data-bootstrap-detect-model-row data-model-id="${escapeHtml(id)}" data-model-index="${index}">
+          <label class="bootstrap-detect-model-check">
+            <input type="checkbox" data-bootstrap-detect-check>
+            <span>${escapeHtml(id)}</span>
+          </label>
+          <span class="bootstrap-detect-model-meta" title="context.output.mode">${escapeHtml(metaLabel)}</span>
+          <span class="bootstrap-detect-model-actions">
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-test>Test</button>
+          </span>
+        </div>
+      `;
+    }).join("");
+    return `
+      <div class="bootstrap-detect-modal-backdrop" data-bootstrap-detect-modal>
+        <div class="bootstrap-detect-modal" role="dialog" aria-label="Detected models">
+          <div class="bootstrap-detect-modal-head">
+            <strong>Detected models</strong>
+            <button class="bootstrap-icon-button" type="button" data-bootstrap-detect-close title="Close">x</button>
+          </div>
+          <label class="field-label">
+            <span>Filter</span>
+            <input data-bootstrap-detect-filter type="search" placeholder="Search models...">
+          </label>
+          <div class="bootstrap-detect-model-list" data-bootstrap-detect-list>
+            ${rows}
+          </div>
+          <div class="bootstrap-detect-modal-foot">
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-add-selected>Add selected (0)</button>
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-close>Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -108,6 +168,67 @@
     const groups = bootstrapEnvGroups(value, backend);
     const rows = groups.length ? groups : [{ name: "" }];
     return rows.map((item, index) => bootstrapConfigRowHtml(`${backend}.env`, item, index, options)).join("");
+  }
+
+  function bootstrapEnvDetectHtml(backend) {
+    return `
+      <div class="bootstrap-env-detect" data-bootstrap-detect-backend="${escapeHtml(backend)}">
+        <details class="bootstrap-env-advanced" open>
+          <summary>Auto-detect models</summary>
+          <div class="bootstrap-env-fields">
+            <label class="field-label">
+              <span>Base URL</span>
+              <input data-bootstrap-detect-url placeholder="${backend === "codex" ? "https://api.openai.com/v1" : "https://api.anthropic.com"}" value="">
+            </label>
+            <label class="field-label">
+              <span>API key / token</span>
+              <input data-bootstrap-detect-key type="password" autocomplete="off" placeholder="sk-...">
+            </label>
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-models>Fetch models</button>
+            <div class="field-help" data-bootstrap-detect-status></div>
+          </div>
+        </details>
+      </div>
+    `;
+  }
+
+  function _setEnvRowFields(row, data, backend) {
+    const nameEl = row.querySelector("[data-bootstrap-env-name]");
+    if (nameEl) nameEl.value = configString(data.name);
+    const fields = envGroupFieldsForBackend(backend);
+    for (const key of fields) {
+      const el = row.querySelector(`[data-bootstrap-env-field="${key}"]`);
+      if (el && data[key] !== undefined) el.value = configString(data[key]);
+    }
+    if (backend === "claude") {
+      const credEl = row.querySelector("[data-bootstrap-claude-credential]");
+      if (credEl) credEl.value = configString(data.ANTHROPIC_AUTH_TOKEN);
+    }
+  }
+
+  function insertDetectedEnvGroups(form, backend, models, baseUrl, credential, authStyle = "bearer", context = {}) {
+    const kind = `${backend}.env`;
+    const list = form.querySelector(`[data-bootstrap-config-list="${kind}"]`);
+    const addButton = list?.querySelector(`[data-bootstrap-add-row="${kind}"]`);
+    if (!list || !addButton) return 0;
+    const groups = detectEnvGroupFromModels(backend, baseUrl, credential, authStyle, models);
+    if (!groups.length) return 0;
+    const existingRows = [...list.querySelectorAll("[data-bootstrap-row]")];
+    let index = existingRows.length;
+    let inserted = 0;
+    let replaced = 0;
+    for (const group of groups) {
+      const existing = existingRows.find(row => configString(row.querySelector("[data-bootstrap-env-name]")?.value) === group.name);
+      if (existing) {
+        _setEnvRowFields(existing, group, backend);
+        replaced += 1;
+      } else {
+        addButton.insertAdjacentHTML("beforebegin", bootstrapConfigRowHtml(kind, group, index + inserted));
+        inserted += 1;
+      }
+    }
+    syncBootstrapModelOptions(form, context);
+    return { inserted, replaced };
   }
 
   function bootstrapBackendProxySwitchHtml(prefix, proxy = {}) {
@@ -297,25 +418,14 @@
               <input data-bootstrap-env-field="${escapeHtml(key)}" type="password" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}">
             </label>`;
       };
-      const claudeAuthMode = configString(data.ANTHROPIC_AUTH_TOKEN)
-        ? "auth_token"
-        : (configString(data.ANTHROPIC_API_KEY) ? "api_key" : "none");
-      const claudeCredential = configString(data[claudeAuthMode === "auth_token" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"]);
-      const credentialModeField = backend === "claude" ? `
-            <label class="field-label">
-              <span>Credential type</span>
-              <select data-bootstrap-claude-auth-mode>
-                <option value="none" ${claudeAuthMode === "none" ? "selected" : ""}>Inherited / none</option>
-                <option value="api_key" ${claudeAuthMode === "api_key" ? "selected" : ""}>API key</option>
-                <option value="auth_token" ${claudeAuthMode === "auth_token" ? "selected" : ""}>Auth token</option>
-              </select>
-            </label>` : "";
+      const claudeAuthToken = configString(data.ANTHROPIC_AUTH_TOKEN);
+      const claudeApiKey = configString(data.ANTHROPIC_API_KEY);
       const credentialFields = backend === "codex" ? secretInput(secretKeys[0], "API key") : `
             <label class="field-label">
               <span>Credential</span>
               <input data-bootstrap-claude-credential type="password"
-                placeholder="${escapeHtml(options.maskSecrets && claudeCredential ? "Configured; leave blank to keep" : "")}"
-                value="${escapeHtml(options.maskSecrets ? "" : claudeCredential)}">
+                placeholder="${escapeHtml(options.maskSecrets && claudeAuthToken ? "Configured; leave blank to keep" : "")}"
+                value="${escapeHtml(options.maskSecrets ? "" : claudeAuthToken)}">
             </label>`;
       const codexExtraFields = backend === "codex" ? `
             <label class="field-label">
@@ -344,8 +454,10 @@
               </select>
             </label>
             <details class="bootstrap-env-advanced">
-              <summary>Role model routing (optional)</summary>
+              <summary>Advanced (optional)</summary>
               <div class="bootstrap-env-fields">
+                ${backend === "codex" ? "" : secretInput("ANTHROPIC_API_KEY", "API key (x-api-key)")}
+                <div class="field-help">Leave blank to use the Bearer credential above. Set only for x-api-key gateways.</div>
                 <label class="field-label">
                   <span>Fable</span>
                   <input data-bootstrap-env-field="ANTHROPIC_DEFAULT_FABLE_MODEL" placeholder="use primary model" value="${escapeHtml(configString(data.ANTHROPIC_DEFAULT_FABLE_MODEL))}">
@@ -385,7 +497,6 @@
               <span>Model</span>
               <input data-bootstrap-env-field="${escapeHtml(modelKey)}" placeholder="${backend === "codex" ? "model-name" : "claude-sonnet-4-5"}" value="${escapeHtml(configString(data[modelKey]))}">
             </label>
-            ${credentialModeField}
             ${credentialFields}
             ${codexExtraFields}
             ${claudeExtraFields}
@@ -474,6 +585,7 @@
           </div>
           <label class="field-label">
             <span>Provider groups</span>
+            ${bootstrapEnvDetectHtml("codex")}
             <div class="bootstrap-config-list" data-bootstrap-config-list="codex.env">
               ${bootstrapEnvRows(codex.env, codex.env_active, { maskSecrets }, "codex")}
               <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="codex.env">Add provider group</button>
@@ -505,6 +617,7 @@
           </div>
           <label class="field-label">
             <span>Gateway groups</span>
+            ${bootstrapEnvDetectHtml("claude")}
             <div class="bootstrap-config-list" data-bootstrap-config-list="claude.env">
               ${bootstrapEnvRows(claude.env, claude.env_active, { maskSecrets })}
               <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="claude.env">Add gateway group</button>
@@ -561,13 +674,13 @@
         }
         let selectedSecretKeys = secretKeys;
         if (backend === "claude") {
-          const authMode = String(row.querySelector("[data-bootstrap-claude-auth-mode]")?.value || "none");
           const credential = String(row.querySelector("[data-bootstrap-claude-credential]")?.value || "").trim();
-          group.ANTHROPIC_API_KEY = authMode === "api_key" ? credential : "";
-          group.ANTHROPIC_AUTH_TOKEN = authMode === "auth_token" ? credential : "";
-          selectedSecretKeys = authMode === "api_key"
-            ? ["ANTHROPIC_API_KEY"]
-            : (authMode === "auth_token" ? ["ANTHROPIC_AUTH_TOKEN"] : []);
+          // The main Credential input maps to the Bearer credential (ANTHROPIC_AUTH_TOKEN);
+          // the advanced x-api-key field is read by the fields loop above. AUTH_TOKEN wins
+          // when both are present, matching runtime priority.
+          group.ANTHROPIC_AUTH_TOKEN = credential;
+          if (credential) group.ANTHROPIC_API_KEY = "";
+          selectedSecretKeys = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
         }
         const hasNonSecretValue = Boolean(rawName || fields.some(key => !secretKeys.includes(key) && group[key]));
         const previous = previousBootstrapEnvGroup(index, group.name, backend, config);
@@ -586,6 +699,42 @@
 
   function bootstrapConfigEnvGroupNames(form, backend = "claude", context = {}) {
     return bootstrapConfigEnvGroups(form, backend, context).map((group, index) => bootstrapEnvGroupName(group, index));
+  }
+
+  function detectEnvGroupFromModel(backend, baseUrl, credential, authStyle = "bearer", model = {}) {
+    const modelId = typeof model === "string" ? model : String(model?.id || model?.name || "").trim();
+    if (!modelId) return null;
+    if (backend === "codex") {
+      return {
+        name: modelId,
+        OPENAI_BASE_URL: baseUrl,
+        OPENAI_MODEL: modelId,
+        OPENAI_API_KEY: credential,
+        CODEX_WIRE_API: "responses",
+        CODEX_ENV_KEY: "OPENAI_API_KEY"
+      };
+    }
+    const group = {
+      name: modelId,
+      ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_MODEL: modelId
+    };
+    if (authStyle === "x-api-key") {
+      group.ANTHROPIC_API_KEY = credential;
+      group.ANTHROPIC_AUTH_TOKEN = "";
+    } else {
+      group.ANTHROPIC_AUTH_TOKEN = credential;
+      group.ANTHROPIC_API_KEY = "";
+    }
+    const windowValue = modelContextWindow(model);
+    if (windowValue > 0) group.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(windowValue);
+    return group;
+  }
+
+  function detectEnvGroupFromModels(backend, baseUrl, credential, authStyle = "bearer", models = []) {
+    return models
+      .map(model => detectEnvGroupFromModel(backend, baseUrl, credential, authStyle, model))
+      .filter(Boolean);
   }
 
   function bootstrapConfigCodexModel(form) {
@@ -639,7 +788,7 @@
     const rows = [...list.querySelectorAll("[data-bootstrap-row]")];
     if (rows.length <= 1) {
       row.querySelectorAll("input, select").forEach(input => {
-        input.value = input.matches?.("[data-bootstrap-claude-auth-mode]") ? "none" : "";
+        input.value = "";
       });
       syncBootstrapModelOptions(list.closest("[data-bootstrap-config-form]"), context);
       return;
@@ -707,13 +856,20 @@
     bootstrapBackendOptions,
     bootstrapEnvGroups,
     bootstrapEnvGroupName,
+    bootstrapEnvDetectHtml,
     bootstrapConfigFormHtml,
     bootstrapConfigMode,
     bootstrapConfigPayload,
+    detectEnvGroupFromModel,
+    detectEnvGroupFromModels,
+    detectModelsModalHtml,
+    formatContextWindow,
+    modelContextWindow,
     syncBootstrapModelOptions,
     fillBootstrapProxyDefaultFor,
     syncBootstrapProxyDefaultsForInput,
     addBootstrapConfigRow,
+    insertDetectedEnvGroups,
     removeBootstrapConfigRow
   });
 }());

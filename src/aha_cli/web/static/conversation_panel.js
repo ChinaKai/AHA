@@ -41,7 +41,7 @@
     }
 
     function renderConversationPanelHtml(view = {}) {
-      if (view.loading) return `<div class="empty">Loading conversation...</div>`;
+      if (view.loading) return `<div class="empty loading">Loading conversation...</div>`;
       if (view.error) {
         return `<div class="empty">Conversation unavailable. Realtime updates will start from the latest event offset.<br><code>${escapeHtml(view.error)}</code></div>`;
       }
@@ -132,7 +132,7 @@
     }
 
     function renderHardwareIoPanelHtml(state = {}) {
-      if (!state.initialized && state.loading) return '<div class="empty">Loading hardware I/O...</div>';
+      if (!state.initialized && state.loading) return '<div class="empty loading">Loading hardware I/O...</div>';
       const toolbar = renderHardwareBridgeToolbarHtml(state);
       const bottomBar = renderHardwareBottomBarHtml(state);
       const key = `${String(state.taskId || "")}:${String(state.transport || "serial")}`;
@@ -469,9 +469,9 @@
 
     function renderContextEvidencePanelHtml(detail = null) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
-      if (!detail) return `<div class="empty">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
+      if (!detail) return `<div class="empty loading">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
       if (detail.error) return `<div class="empty">${escapeHtml(detail.error)}</div>`;
-      if (detail.loading) return `<div class="empty">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
+      if (detail.loading) return `<div class="empty loading">${escapeHtml(t("task.context_evidence_loading", "Loading context evidence..."))}</div>`;
       const payload = detail.payload || { records: [], latest_result: null, maintenance_suggestions: [], maintenance_plan: [] };
       const latest = payload.latest_result || {};
       const diagnostics = latest.navigation_diagnostics || {};
