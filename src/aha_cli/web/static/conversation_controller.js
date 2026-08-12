@@ -1135,7 +1135,8 @@
 
     // Virtualized conversation list, keyed by task id. Used only when the event count
     // exceeds VIRTUAL_THRESHOLD so short conversations keep the simpler full render.
-    const VIRTUAL_THRESHOLD = 200;
+    // TEMP: lowered to 100 for virtualization testing; restore to 200 after.
+    const VIRTUAL_THRESHOLD = 100;
     const virtualLists = new Map();
 
     function virtualListKey(taskId, target) {
